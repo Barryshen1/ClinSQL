@@ -1,0 +1,28 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH\n-- 1. Identify the target cohort: Male ICU patients (88-98) with COPD exacerbation\nTargetCohort AS (\n    SELECT\n        icu.subject_id,\n        icu.hadm_id,\n        icu.stay_id,\n        icu.intime,\n        icu.los,\n        adm.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n        ON icu.subject_id = adm.subject_id AND icu.hadm_id = adm.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON icu.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 88 AND 98\n        -- Filter for COPD exacerbation diagnosis\n        AND EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n            WHERE\n                diag.subject_id = icu.subject_id\n                AND diag.hadm_id = icu.hadm_id\n                AND (\n                    -- Common ICD-9 codes for COPD exacerbation\n                    (diag.icd_version = 9 AND diag.icd_code IN ('49121', '4928', '496'))\n                    -- Common ICD-10 code for COPD with acute exacerbation\n                    OR (diag.icd_version = 10 AND diag.icd_code = 'J441')\n                )\n        )\n),\n-- 2. Count distinct procedures for the target cohort within the first 72 hours of ICU stay\n--    This CTE includes all target cohort stays, even those with 0 procedures in the window.\nTargetCohortProceduresCount AS (\n    SELECT\n        tc.stay_id,\n        COUNT(DISTINCT proc.icd_code) AS distinct_procedures_72hr\n    FROM\n        TargetCohort AS tc\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n        ON tc.subject_id = proc.subject_id\n        AND tc.hadm_id = proc.hadm_id\n        -- Procedures within the first 72 hours of ICU intime.\n        -- Given proc.chartdate is DATE, we use date comparison for approximation.\n        -- This covers procedures on the same day as intime, plus the next two calendar days.\n        AND DATE(proc.chartdate) >= DATE(tc.intime)\n        AND DATE(proc.chartdate) < DATE_ADD(DATE(tc.intime), INTERVAL 3 DAY)\n    GROUP BY\n        tc.stay_id\n),\n-- 3. Intermediate CTE to combine TargetCohort data with procedure counts for ease of aggregation\nTargetCohortFlattened AS (\n    SELECT\n        tc.stay_id,\n        tc.los,\n        tc.hospital_expire_flag,\n        COALESCE(tcp.distinct_procedures_72hr, 0) AS distinct_procedures_72hr_value\n    FROM\n        TargetCohort AS tc\n    LEFT JOIN\n        TargetCohortProceduresCount AS tcp\n        ON tc.stay_id = tcp.stay_id\n),\n-- 4. Identify the age-matched comparison group: All ICU patients (88-98)\nComparisonCohort AS (\n    SELECT\n        icu.subject_id,\n        icu.hadm_id,\n        icu.stay_id,\n        icu.los,\n        adm.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n        ON icu.subject_id = adm.subject_id AND icu.hadm_id = adm.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON icu.subject_id = p.subject_id\n    WHERE\n        p.anchor_age BETWEEN 88 AND 98\n)\n-- Final selection of results\nSELECT\n    -- Target Cohort Results\n    (SELECT APPROX_QUANTILES(tf.distinct_procedures_72hr_value, 100)[OFFSET(75)] FROM TargetCohortFlattened tf) AS target_p75_distinct_procedures_72hr,\n    (SELECT AVG(tf.los) FROM TargetCohortFlattened tf) AS target_mean_icu_los,\n    (SELECT SUM(tf.hospital_expire_flag) * 100.0 / COUNT(tf.stay_id) FROM TargetCohortFlattened tf) AS target_in_hospital_mortality_rate,\n    -- Comparison Cohort Results\n    AVG(cc.los) AS comparison_mean_icu_los,\n    SUM(cc.hospital_expire_flag) * 100.0 / COUNT(DISTINCT cc.stay_id) AS comparison_in_hospital_mortality_rate\nFROM\n    ComparisonCohort AS cc\n-- This last FROM clause is mainly to allow the independent subqueries to aggregate.\n-- Since the subqueries are scalar, they don't depend on the rows of ComparisonCohort for their result,\n-- but a FROM clause is always required in a SELECT statement.\n-- The comparison cohort calculations are also aggregating across the entire cohort.\nLIMIT 1; -- Ensures only one row of results is returned, as all are scalar aggregates.;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references tcp.distinct_procedures_72hr which is neither grouped nor aggregated at [60:34]; reason: invalidQuery, location: query, message: SELECT list expression references tcp.distinct_procedures_72hr which is neither grouped nor aggregated at [60:34]\n\nLocation: US\nJob ID: e46cd8d1-585f-4dff-973f-ea4c2810aca1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f55b0cbc-e422-4f58-bb14-7fc3b3fa4c46\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

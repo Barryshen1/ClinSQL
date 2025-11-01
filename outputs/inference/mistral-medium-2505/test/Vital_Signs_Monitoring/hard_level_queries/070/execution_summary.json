@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83\u2011year\u2011old man to evaluate. Among male ICU patients aged 78\u201388 with HHS, for the top quartile by 24\u2011hour HR/MAP/RR CV sum, report stay instability score, decile, abnormal vital count, ICU LOS, and in\u2011hospital mortality.",
+  "final_sql": "WITH\n-- Get male patients aged 78-88\neligible_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age,\n    anchor_year\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 78 AND 88\n),\n\n-- Identify HHS patients (glucose > 600 mg/dL)\nhhs_patients AS (\n  SELECT DISTINCT\n    l.subject_id,\n    l.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON l.itemid = d.itemid\n  WHERE\n    d.label = 'Glucose'\n    AND l.valuenum > 600\n    AND l.subject_id IN (SELECT subject_id FROM eligible_patients)\n),\n\n-- Get ICU stays for these patients\nicu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.los,\n    TIMESTAMP_DIFF(s.outtime, s.intime, HOUR) AS icu_los_hours\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    hhs_patients h ON s.subject_id = h.subject_id AND s.hadm_id = h.hadm_id\n),\n\n-- Get vital signs data for first 24 hours of each ICU stay\nvital_signs AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.charttime,\n    d.label AS vital_sign,\n    c.valuenum,\n    c.valueuom\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` d ON c.itemid = d.itemid\n  JOIN\n    icu_stays s ON c.subject_id = s.subject_id AND c.hadm_id = s.hadm_id AND c.stay_id = s.stay_id\n  WHERE\n    d.label IN ('Heart Rate', 'Mean Arterial Pressure', 'Respiratory Rate')\n    AND c.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR)\n),\n\n-- Calculate CV for each vital sign per stay\nvital_cv AS (\n  SELECT\n    stay_id,\n    vital_sign,\n    STDDEV(valuenum) / AVG(valuenum) AS cv\n  FROM\n    vital_signs\n  GROUP BY\n    stay_id, vital_sign\n),\n\n-- Sum CVs for each stay (now including subject_id and hadm_id)\nstay_scores AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    v.stay_id,\n    SUM(v.cv) AS instability_score\n  FROM\n    vital_cv v\n  JOIN\n    icu_stays i ON v.stay_id = i.stay_id\n  GROUP BY\n    i.subject_id, i.hadm_id, v.stay_id\n),\n\n-- Calculate quartiles for instability scores\nquartiles AS (\n  SELECT\n    PERCENTILE_CONT(instability_score, 0.75) OVER() AS q75\n  FROM\n    stay_scores\n  LIMIT 1\n),\n\n-- Get top quartile stays\ntop_quartile_stays AS (\n  SELECT\n    s.stay_id,\n    s.instability_score,\n    s.subject_id,\n    s.hadm_id,\n    i.icu_los_hours,\n    a.hospital_expire_flag\n  FROM\n    stay_scores s\n  JOIN\n    icu_stays i ON s.stay_id = i.stay_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON s.subject_id = a.subject_id AND s.hadm_id = a.hadm_id\n  CROSS JOIN\n    quartiles q\n  WHERE\n    s.instability_score >= q.q75\n),\n\n-- Count abnormal vitals per stay\nabnormal_vitals AS (\n  SELECT\n    stay_id,\n    COUNT(DISTINCT\n      CASE\n        WHEN (vital_sign = 'Heart Rate' AND (valuenum < 60 OR valuenum > 100))\n          OR (vital_sign = 'Mean Arterial Pressure' AND (valuenum < 65 OR valuenum > 110))\n          OR (vital_sign = 'Respiratory Rate' AND (valuenum < 12 OR valuenum > 20))\n        THEN vital_sign\n      END\n    ) AS abnormal_count\n  FROM\n    vital_signs\n  GROUP BY\n    stay_id\n)\n\n-- Final result\nSELECT\n  t.stay_id,\n  t.instability_score,\n  NTILE(10) OVER(ORDER BY t.instability_score) AS decile,\n  a.abnormal_count,\n  t.icu_los_hours,\n  t.hospital_expire_flag AS in_hospital_mortality\nFROM\n  top_quartile_stays t\nJOIN\n  abnormal_vitals a ON t.stay_id = a.stay_id\nORDER BY\n  t.instability_score DESC;",
+  "execution_success": true,
+  "row_count": 58,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name subject_id not found inside s at [105:7]; reason: invalidQuery, location: query, message: Name subject_id not found inside s at [105:7]\n\nLocation: US\nJob ID: 6b7b5651-2ee8-4bdb-aca7-8d64a73df5e8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 58,
+      "error": null
+    }
+  ]
+}

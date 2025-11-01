@@ -1,0 +1,28 @@
+{
+  "query": "I have a 63-year-old female. Among female Medicare patients aged 58\u201368 admitted via the ED with a principal femoral neck fracture, what is the 30-day readmission rate, median index LOS for readmitted versus non\u2011readmitted, and percent of initial stays >8 days?",
+  "final_sql": "WITH initial_cohort AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        -- Calculate length of stay in days, cast to FLOAT64 for correct division\n        CAST(DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) AS FLOAT64) / 24.0 AS los\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON adm.subject_id = p.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dicd\n        ON adm.hadm_id = dicd.hadm_id AND adm.subject_id = dicd.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 58 AND 68\n        AND adm.insurance = 'Medicare'\n        AND adm.admission_type = 'EMERGENCY'\n        AND dicd.seq_num = 1 -- Principal diagnosis\n        -- Filter for femoral neck fracture ICD codes\n        AND (\n            -- ICD-9 codes for fracture of neck of femur (e.g., 820.0-820.9)\n            (dicd.icd_version = 9 AND dicd.icd_code LIKE '820%')\n            -- ICD-10 codes for fracture of neck of femur (e.g., S72.0XX)\n            OR (dicd.icd_version = 10 AND dicd.icd_code LIKE 'S720%')\n        )\n        -- Exclude admissions with NULL dischtime, as LOS cannot be calculated\n        AND adm.dischtime IS NOT NULL\n),\n-- Identify the readmission status for each initial admission\ncohort_with_readmission_flag AS (\n    SELECT\n        ic.subject_id,\n        ic.hadm_id,\n        ic.admittime,\n        ic.dischtime,\n        ic.los,\n        -- Determine if this admission is followed by a readmission within 30 days\n        CASE\n            WHEN LEAD(ic.admittime) OVER (PARTITION BY ic.subject_id ORDER BY ic.admittime) IS NOT NULL\n                 AND DATETIME_DIFF(LEAD(ic.admittime) OVER (PARTITION BY ic.subject_id ORDER BY ic.admittime), ic.dischtime, DAY) <= 30\n            THEN TRUE\n            ELSE FALSE\n        END AS is_readmitted_within_30_days\n    FROM\n        initial_cohort ic\n)\n-- Final aggregation to answer all parts of the clinical question\nSELECT\n    COUNT(DISTINCT c.hadm_id) AS total_initial_admissions,\n    ROUND(COUNTIF(c.is_readmitted_within_30_days) * 100.0 / COUNT(DISTINCT c.hadm_id), 2) AS readmission_rate_percent,\n    ROUND(\n        (SELECT APPROX_QUANTILES(los, 100)[OFFSET(50)] FROM cohort_with_readmission_flag WHERE is_readmitted_within_30_days = TRUE),\n    2) AS median_los_readmitted,\n    ROUND(\n        (SELECT APPROX_QUANTILES(los, 100)[OFFSET(50)] FROM cohort_with_readmission_flag WHERE is_readmitted_within_30_days = FALSE),\n    2) AS median_los_non_readmitted,\n    ROUND(COUNTIF(c.los > 8) * 100.0 / COUNT(DISTINCT c.hadm_id), 2) AS percent_stays_over_8_days\nFROM\n    cohort_with_readmission_flag c;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 58a4fad9-ac52-4f29-a861-429a47463d71\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [59:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [59:1]\n\nLocation: US\nJob ID: 3a73b9e1-dadf-48e0-b253-b0b4f0199718\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: b48125f1-4bdc-4f8c-8721-77cfa651f0cd\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 58a4fad9-ac52-4f29-a861-429a47463d71\n"
+    }
+  ]
+}

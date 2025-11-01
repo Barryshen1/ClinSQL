@@ -1,0 +1,22 @@
+{
+  "query": "For my 73\u2011year\u2011old male: among male first\u2011ICU stays aged 68\u201378 with multi\u2011trauma, stratify 24\u2011h vital\u2011sign instability scores into quartiles and report count, mean score, mean ICU LOS, mortality by quartile; for top decile report mean tachycardia, hypotension, tachypnea episodes.",
+  "final_sql": "WITH first_icustays AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING (subject_id)\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    USING (subject_id, hadm_id)\n  QUALIFY ROW_NUMBER() OVER(PARTITION BY icu.subject_id ORDER BY icu.intime) = 1\n),\nmulti_trauma AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    USING (icd_code, icd_version)\n  WHERE LOWER(dd.long_title) LIKE '%trauma%'\n),\ncohort AS (\n  SELECT f.*\n  FROM first_icustays f\n  JOIN multi_trauma mt\n    USING (subject_id, hadm_id)\n  WHERE f.gender = 'M'\n    AND f.anchor_age BETWEEN 68 AND 78\n),\nchartevents_vitals AS (\n  SELECT\n    c.stay_id,\n    ce.itemid,\n    ce.valuenum,\n    ce.charttime\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    USING (subject_id, hadm_id, stay_id)\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON ce.itemid = d.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n    AND (\n      LOWER(d.label) LIKE '%heart rate%' OR\n      LOWER(d.label) LIKE '%respiratory rate%' OR\n      LOWER(d.label) LIKE '%systolic blood pressure%'\n    )\n),\ninstability_flags AS (\n  SELECT\n    stay_id,\n    SUM(CASE WHEN LOWER(d.label) LIKE '%heart rate%' AND ce.valuenum > 100 THEN 1 ELSE 0 END) AS tachycardia_count,\n    SUM(CASE WHEN LOWER(d.label) LIKE '%systolic blood pressure%' AND ce.valuenum < 90 THEN 1 ELSE 0 END) AS hypotension_count,\n    SUM(CASE WHEN LOWER(d.label) LIKE '%respiratory rate%' AND ce.valuenum > 24 THEN 1 ELSE 0 END) AS tachypnea_count\n  FROM chartevents_vitals ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON ce.itemid = d.itemid\n  GROUP BY stay_id\n),\nscores AS (\n  SELECT\n    c.stay_id,\n    c.subject_id,\n    c.hadm_id,\n    c.los,\n    c.hospital_expire_flag,\n    f.tachycardia_count,\n    f.hypotension_count,\n    f.tachypnea_count,\n    (f.tachycardia_count + f.hypotension_count + f.tachypnea_count) AS instability_score\n  FROM cohort c\n  LEFT JOIN instability_flags f\n    USING (stay_id)\n),\nquartiles AS (\n  SELECT *,\n         NTILE(4) OVER (ORDER BY instability_score) AS quartile,\n         NTILE(10) OVER (ORDER BY instability_score) AS decile\n  FROM scores\n),\nquartile_stats AS (\n  SELECT\n    quartile,\n    COUNT(*) AS n_patients,\n    AVG(instability_score) AS mean_score,\n    AVG(los) AS mean_icu_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM quartiles\n  GROUP BY quartile\n  ORDER BY quartile\n),\ntop_decile AS (\n  SELECT\n    AVG(tachycardia_count) AS mean_tachycardia,\n    AVG(hypotension_count) AS mean_hypotension,\n    AVG(tachypnea_count) AS mean_tachypnea\n  FROM quartiles\n  WHERE decile = 10\n)\nSELECT 'quartile_stats' AS table_name, * \nFROM quartile_stats\nUNION ALL\nSELECT 'top_decile', NULL, NULL, NULL, NULL, mean_tachycardia\nFROM top_decile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name itemid not found inside c at [37:7]; reason: invalidQuery, location: query, message: Name itemid not found inside c at [37:7]\n\nLocation: US\nJob ID: 7d36c676-1825-452d-93fb-26dcea0fbc90\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 76\u2011year\u2011old female inpatient with acute pancreatitis. Among female inpatients aged 71\u201381 with acute pancreatitis, compute medication complexity score over the first 72 hours, stratify into tertiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH\n-- Step 1: Find all ICD codes corresponding to \"acute pancreatitis\"\nap_icd_codes AS (\n    SELECT\n        icd_code,\n        icd_version\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n    WHERE\n        LOWER(long_title) LIKE '%acute pancreatitis%'\n),\n\n-- Step 2: Identify the primary cohort of hospital admissions\n-- Female patients, aged 71-81, with an acute pancreatitis diagnosis.\ncohort AS (\n    SELECT DISTINCT\n        p.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n        ON p.subject_id = adm.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n        ON adm.hadm_id = dx.hadm_id\n    INNER JOIN\n        ap_icd_codes AS ap\n        ON dx.icd_code = ap.icd_code AND dx.icd_version = ap.icd_version\n    WHERE\n        p.gender = 'F'\n        AND (p.anchor_age + EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) BETWEEN 71 AND 81\n),\n\n-- Step 3: Calculate medication complexity for each admission in the cohort.\n-- Score is defined as the count of unique medications in the first 72 hours.\nmedication_complexity AS (\n    SELECT\n        c.subject_id,\n        c.hadm_id,\n        c.admittime,\n        c.dischtime,\n        c.hospital_expire_flag,\n        COALESCE(COUNT(DISTINCT em.medication), 0) AS medication_complexity_score\n    FROM\n        cohort AS c\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.emar` AS em\n        ON c.hadm_id = em.hadm_id\n        -- Filter for medications administered in the first 72 hours of admission\n        AND em.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n    GROUP BY\n        c.subject_id,\n        c.hadm_id,\n        c.admittime,\n        c.dischtime,\n        c.hospital_expire_flag\n),\n\n-- Step 4: Get all admissions for the subjects in our cohort to check for readmissions.\nall_subject_admissions AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        admittime,\n        dischtime,\n        -- Find the next admission time for each patient using a window function\n        LEAD(admittime, 1) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions`\n    WHERE\n        subject_id IN (SELECT DISTINCT subject_id FROM cohort)\n),\n\n-- Step 5: Combine cohort data with calculated outcomes (LOS and 30-day readmission).\ncohort_with_outcomes AS (\n    SELECT\n        mc.hadm_id,\n        mc.medication_complexity_score,\n        mc.hospital_expire_flag,\n        -- Calculate hospital length of stay in fractional days for better accuracy\n        DATETIME_DIFF(mc.dischtime, mc.admittime, HOUR) / 24.0 AS los_days,\n        -- Flag 1 if a readmission occurred within 30 days of discharge, otherwise 0\n        CASE\n            WHEN DATETIME_DIFF(asa.next_admittime, mc.dischtime, DAY) BETWEEN 0 AND 30\n                THEN 1\n            ELSE 0\n        END AS readmitted_30_days\n    FROM\n        medication_complexity AS mc\n    LEFT JOIN\n        all_subject_admissions AS asa\n        ON mc.hadm_id = asa.hadm_id\n),\n\n-- Step 6: Stratify the cohort into tertiles based on medication complexity score.\ncohort_with_tertiles AS (\n    SELECT\n        *,\n        NTILE(3) OVER (ORDER BY medication_complexity_score) AS score_tertile\n    FROM\n        cohort_with_outcomes\n)\n\n-- Step 7: Final aggregation to report outcomes per tertile.\nSELECT\n    score_tertile,\n    COUNT(hadm_id) AS number_of_admissions,\n    MIN(medication_complexity_score) AS min_med_score_in_tertile,\n    MAX(medication_complexity_score) AS max_med_score_in_tertile,\n    ROUND(AVG(los_days), 2) AS avg_los_days,\n    ROUND(AVG(hospital_expire_flag) * 100, 2) AS in_hospital_mortality_rate_pct,\n    ROUND(AVG(readmitted_30_days) * 100, 2) AS readmission_30_day_rate_pct\nFROM\n    cohort_with_tertiles\nGROUP BY\n    score_tertile\nORDER BY\n    score_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pancreatitis\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pancreatitis\" at [1:12]\n\nLocation: US\nJob ID: 855bed80-e42c-4dd5-99d1-d07f933464da\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]\n\nLocation: US\nJob ID: bf07c1f6-e783-4043-b817-3205cebda1fe\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

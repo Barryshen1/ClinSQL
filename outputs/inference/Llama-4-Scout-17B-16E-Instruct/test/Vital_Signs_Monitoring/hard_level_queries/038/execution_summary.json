@@ -1,0 +1,28 @@
+{
+  "query": "I have a 68\u2011year\u2011old woman with status epilepticus. For female ICU patients aged 63\u201373 with status epilepticus during the first 72 hours, report mean and P25/50/75/90 vital\u2011instability index, and compare tachycardia, MAP<65 burden, ICU LOS and mortality to general ICU.",
+  "final_sql": "WITH \n-- Identify status epilepticus patients and filter by age and gender\nse_patients AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age,\n    ic.stay_id,\n    ic.intime,\n    ic.outtime\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` ic\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON ic.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F' \n    AND p.anchor_age BETWEEN 63 AND 73\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = p.subject_id \n      AND d.icd_code LIKE '345.3%'  -- Status epilepticus ICD code\n    )\n),\n\n-- Calculate vital-instability index (example: heart rate and MAP)\nvital_instability AS (\n  SELECT \n    subject_id,\n    stay_id,\n    charttime,\n    itemid,\n    valuenum,\n    valueuom\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents`\n  WHERE \n    itemid IN (220050, 220179)  -- Example itemids for heart rate and blood pressure\n    AND charttime BETWEEN intime AND outtime\n),\n\n-- Calculate percentiles and mean of vital-instability index\nvital_stats AS (\n  SELECT \n    subject_id,\n    stay_id,\n    APPROX_QUANTILES(valuenum, 4) AS quantiles,\n    AVG(valuenum) OVER (PARTITION BY subject_id, stay_id) AS mean\n  FROM \n    vital_instability\n  GROUP BY \n    subject_id, stay_id\n),\n\n-- Unpack quantiles\nvital_stats_unpacked AS (\n  SELECT \n    subject_id,\n    stay_id,\n    quantiles[OFFSET(1)] AS p25,\n    quantiles[OFFSET(2)] AS p50,\n    quantiles[OFFSET(3)] AS p75,\n    quantiles[OFFSET(4)] AS p90,\n    mean\n  FROM \n    vital_stats\n),\n\n-- Calculate outcomes for comparison\noutcomes AS (\n  SELECT \n    subject_id,\n    stay_id,\n    intime,\n    outtime,\n    TIMESTAMPDIFF(HOUR, intime, outtime) AS icu_los,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.subject_id = subject_id \n        AND d.icd_code LIKE '345.3%'  \n      ) THEN 'SE Group'\n      ELSE 'General ICU'\n    END AS group_name\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays`\n),\n\n-- Calculate tachycardia and MAP < 65 burden\nburden AS (\n  SELECT \n    subject_id,\n    stay_id,\n    SUM(CASE WHEN valuenum > 100 THEN 1 ELSE 0 END) / COUNT(*) AS tachycardia_burden,\n    SUM(CASE WHEN valuenum < 65 THEN 1 ELSE 0 END) / COUNT(*) AS map_lt_65_burden\n  FROM \n    vital_instability\n  GROUP BY \n    subject_id, stay_id\n)\n\n-- Final query to compare outcomes\nSELECT \n  o.group_name,\n  COUNT(DISTINCT o.subject_id) AS n,\n  AVG(o.icu_los) AS mean_icu_los,\n  COALESCE(b.tachycardia_burden, 0) AS tachycardia_burden,\n  COALESCE(b.map_lt_65_burden, 0) AS map_lt_65_burden,\n  vs.p25 AS vital_instability_p25,\n  vs.p50 AS vital_instability_p50,\n  vs.p75 AS vital_instability_p75,\n  vs.p90 AS vital_instability_p90,\n  vs.mean AS vital_instability_mean\nFROM \n  outcomes o\n  LEFT JOIN vital_stats_unpacked vs \n    ON o.subject_id = vs.subject_id AND o.stay_id = vs.stay_id\n  LEFT JOIN burden b \n    ON o.subject_id = b.subject_id AND o.stay_id = b.stay_id\nGROUP BY \n  o.group_name,\n  vs.p25,\n  vs.p50,\n  vs.p75,\n  vs.p90,\n  vs.mean,\n  b.tachycardia_burden,\n  b.map_lt_65_burden;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: intime at [40:27]; reason: invalidQuery, location: query, message: Unrecognized name: intime at [40:27]\n\nLocation: US\nJob ID: 8870f671-313f-4d4b-a63d-279f314c9c88\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [47:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [47:27]\n\nLocation: US\nJob ID: 3e5ea9bc-0a1a-4018-929a-00a942f7e1be\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 ON clause cannot be used with CROSS JOIN at [67:26]; reason: invalidQuery, location: query, message: ON clause cannot be used with CROSS JOIN at [67:26]\n\nLocation: US\nJob ID: 82df1470-3784-4700-a863-e36f44e8449a\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: intime at [40:27]; reason: invalidQuery, location: query, message: Unrecognized name: intime at [40:27]\n\nLocation: US\nJob ID: 8870f671-313f-4d4b-a63d-279f314c9c88\n"
+    }
+  ]
+}

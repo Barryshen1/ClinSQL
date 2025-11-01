@@ -1,0 +1,28 @@
+{
+  "query": "I have a 60\u2011year\u2011old man in the ICU. In male ICU patients aged 55\u201365 with HFNC within 24 hours versus condition\u2011matched ICU controls, what are the instability score median and p25/p75/p95, tachycardia and hypotension burden, ICU LOS and mortality?",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT \n    p.subject_id, \n    ie.hadm_id, \n    ie.stay_id, \n    p.anchor_age,\n    ie.intime,\n    ie.outtime,\n    CASE WHEN p.anchor_age BETWEEN 55 AND 65 AND p.gender = 'M' THEN 1 ELSE 0 END AS age_gender_match\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` ie ON p.subject_id = ie.subject_id\n),\n\n-- Step 2: Identify HFNC within 24 hours\nhfnc_patients AS (\n  SELECT DISTINCT \n    c.stay_id\n  FROM \n    cohort c\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce ON c.stay_id = ce.stay_id\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  WHERE \n    di.label LIKE '%High Flow%' AND \n    ce.charttime BETWEEN c.intime AND TIMESTAMP_ADD(c.intime, INTERVAL 24 HOUR)\n),\n\n-- Step 3 & 4: Calculate required metrics\nmetrics AS (\n  SELECT \n    c.stay_id,\n    c.age_gender_match,\n    CASE WHEN hp.stay_id IS NOT NULL THEN 1 ELSE 0 END AS hfnc_group,\n    -- ICU LOS\n    TIMESTAMP_DIFF(c.outtime, c.intime, HOUR) AS icu_los,\n    -- Tachycardia and hypotension burden (example for heart rate > 100)\n    (SELECT COUNT(*) FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce \n     JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n     WHERE ce.stay_id = c.stay_id AND di.label LIKE '%Heart Rate%' AND ce.valuenum > 100) AS tachycardia_count,\n    -- Mortality (simplified, assuming hospital_expire_flag indicates mortality)\n    (SELECT hospital_expire_flag FROM `physionet-data.mimiciv_3_1_hosp.admissions` a WHERE a.hadm_id = c.hadm_id) AS mortality\n  FROM \n    cohort c\n  LEFT JOIN \n    hfnc_patients hp ON c.stay_id = hp.stay_id\n),\n\n-- Aggregate metrics by hfnc_group\naggregated_metrics AS (\n  SELECT \n    hfnc_group,\n    APPROX_QUANTILES(icu_los, 100)[OFFSET(50)] AS median_icu_los,\n    APPROX_QUANTILES(icu_los, 100)[OFFSET(25)] AS p25_icu_los,\n    APPROX_QUANTILES(icu_los, 100)[OFFSET(75)] AS p75_icu_los,\n    APPROX_QUANTILES(icu_los, 100)[OFFSET(95)] AS p95_icu_los,\n    AVG(tachycardia_count) AS avg_tachycardia_burden,\n    AVG(mortality) AS avg_mortality,\n    COUNT(*) AS count_stays\n  FROM \n    metrics\n  WHERE \n    age_gender_match = 1\n  GROUP BY \n    hfnc_group\n)\n\n-- Final selection\nSELECT \n  hfnc_group,\n  median_icu_los,\n  p25_icu_los,\n  p75_icu_los,\n  p95_icu_los,\n  avg_tachycardia_burden,\n  avg_mortality,\n  count_stays\nFROM \n  aggregated_metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column icu_los which is neither grouped nor aggregated at [56:19]; reason: invalidQuery, location: query, message: SELECT list expression references column icu_los which is neither grouped nor aggregated at [56:19]\n\nLocation: US\nJob ID: f4ae7b56-4c14-495c-a151-bea8687d23db\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6240539f-431c-498f-8d89-ec1d3960bad5\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

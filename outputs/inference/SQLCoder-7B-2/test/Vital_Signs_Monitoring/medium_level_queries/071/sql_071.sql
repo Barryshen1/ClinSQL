@@ -1,0 +1,1 @@
+SELECT p.subject_id, p.gender, i.intime, i.outtime, l.itemid, l.value, l.valuenum, l.valueuom, percent_rank() OVER (ORDER BY l.value) AS percentile_rank FROM patients p JOIN icustays i ON p.subject_id = i.subject_id JOIN labevents l ON i.stay_id = l.stay_id AND l.itemid = 8716480 WHERE p.gender = 'F' AND p.age >= 38 AND p.age <= 48 AND l.value <= 92;

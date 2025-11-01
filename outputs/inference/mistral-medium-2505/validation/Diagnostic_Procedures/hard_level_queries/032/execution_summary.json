@@ -1,0 +1,22 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH\n-- Define age range and gender\npatient_base AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS hospital_los_hours\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 66 AND 76\n),\n\n-- Identify first ICU stay for each patient\nfirst_icu_stay AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    ROW_NUMBER() OVER (PARTITION BY s.subject_id ORDER BY s.intime) AS icu_stay_rank\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    patient_base p\n  ON\n    s.subject_id = p.subject_id\n    AND s.hadm_id = p.hadm_id\n),\n\n-- Identify sepsis patients (using ICD-10 codes for sepsis)\nsepsis_patients AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n  ON\n    d.icd_code = di.icd_code\n    AND d.icd_version = di.icd_version\n  WHERE\n    -- Common sepsis ICD-10 codes (simplified example)\n    d.icd_code IN (\n      'A419', 'A403', 'A410', 'A411', 'A412', 'A413', 'A414', 'A415',\n      'A418', 'A419', 'R6520', 'R6521', 'R6510', 'R6511'\n    )\n),\n\n-- Count distinct procedures in first 48 hours of ICU stay\nprocedure_counts AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedure_count\n  FROM\n    first_icu_stay f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  ON\n    f.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN f.intime AND TIMESTAMP_ADD(f.intime, INTERVAL 48 HOUR)\n  WHERE\n    f.icu_stay_rank = 1  -- Only first ICU stay\n  GROUP BY\n    f.subject_id, f.hadm_id, f.stay_id\n),\n\n-- Calculate 90th percentile of distinct procedures\npercentile_90 AS (\n  SELECT\n    PERCENTILE_CONT(distinct_procedure_count, 0.9) OVER() AS p90_value\n  FROM\n    procedure_counts\n  LIMIT 1\n),\n\n-- Combine sepsis and non-sepsis groups for comparison\ncomparison_groups AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.hospital_los_hours,\n    p.hospital_expire_flag,\n    CASE WHEN s.subject_id IS NOT NULL THEN 'Sepsis' ELSE 'Control' END AS group_type,\n    pc.distinct_procedure_count\n  FROM\n    patient_base p\n  LEFT JOIN\n    sepsis_patients s\n  ON\n    p.subject_id = s.subject_id\n    AND p.hadm_id = s.hadm_id\n  LEFT JOIN\n    procedure_counts pc\n  ON\n    p.subject_id = pc.subject_id\n    AND p.hadm_id = pc.hadm_id\n  WHERE\n    EXISTS (\n      SELECT 1\n      FROM first_icu_stay f\n      WHERE f.subject_id = p.subject_id\n      AND f.hadm_id = p.hadm_id\n      AND f.icu_stay_rank = 1\n    )\n)\n\n-- Final results\nSELECT\n  group_type,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  AVG(hospital_los_hours) AS avg_hospital_los_hours,\n  SUM(hospital_expire_flag) * 100.0 / COUNT(*) AS mortality_percentage,\n  AVG(distinct_procedure_count) AS avg_distinct_procedures,\n  (SELECT p90_value FROM percentile_90) AS p90_distinct_procedures\nFROM\n  comparison_groups\nGROUP BY\n  group_type\nORDER BY\n  group_type;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [75:12]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [75:12]\n\nLocation: US\nJob ID: 11631237-d0bb-4e42-aa64-a959ff6ca90a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

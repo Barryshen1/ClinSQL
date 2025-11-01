@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 94\u2011year\u2011old man admitted with hemorrhagic stroke. Among male inpatients aged 89\u201399 with hemorrhagic stroke, stratified into quintiles by medication complexity (unique drugs in first 7 hospital days), report LOS, inpatient mortality, and 30\u2011day readmission per quintile.",
+  "final_sql": "WITH hemorrhagic_stroke_adm AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.subject_id = dx.subject_id AND adm.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON dx.icd_code = dd.icd_code AND dx.icd_version = dd.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 89 AND 99\n    AND (\n      LOWER(dd.long_title) LIKE '%hemorrhage%' AND (\n        LOWER(dd.long_title) LIKE '%cerebr%' OR\n        LOWER(dd.long_title) LIKE '%subarachnoid%' OR\n        LOWER(dd.long_title) LIKE '%intracerebr%'\n      )\n    )\n),\ncomplexity AS (\n  SELECT hsa.subject_id, hsa.hadm_id,\n         COUNT(DISTINCT pr.drug) AS unique_drug_count\n  FROM hemorrhagic_stroke_adm hsa\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON hsa.subject_id = pr.subject_id AND hsa.hadm_id = pr.hadm_id\n  WHERE pr.starttime >= hsa.admittime\n    AND pr.starttime < DATETIME_ADD(hsa.admittime, INTERVAL 7 DAY)\n    AND pr.drug IS NOT NULL\n  GROUP BY hsa.subject_id, hsa.hadm_id\n),\nquintiled AS (\n  SELECT hsa.subject_id, hsa.hadm_id, hsa.admittime, hsa.dischtime,\n         hsa.hospital_expire_flag,\n         c.unique_drug_count,\n         NTILE(5) OVER (ORDER BY c.unique_drug_count) AS complexity_quintile,\n         DATETIME_DIFF(hsa.dischtime, hsa.admittime, DAY) AS los\n  FROM hemorrhagic_stroke_adm hsa\n  JOIN complexity c\n    ON hsa.subject_id = c.subject_id AND hsa.hadm_id = c.hadm_id\n),\nreadmission AS (\n  SELECT q.subject_id, q.hadm_id,\n         CASE WHEN COUNT(ra.hadm_id) > 0 THEN 1 ELSE 0 END AS readmit_30d\n  FROM quintiled q\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` ra\n    ON q.subject_id = ra.subject_id\n    AND ra.admittime > q.dischtime\n    AND DATETIME_DIFF(ra.admittime, q.dischtime, DAY) <= 30\n  GROUP BY q.subject_id, q.hadm_id\n)\nSELECT q.complexity_quintile,\n       AVG(q.los) AS avg_los_days,\n       AVG(q.hospital_expire_flag) AS inpatient_mortality_rate,\n       AVG(r.readmit_30d) AS readmit_30d_rate\nFROM quintiled q\nJOIN readmission r\n  ON q.subject_id = r.subject_id AND q.hadm_id = r.hadm_id\nGROUP BY q.complexity_quintile\nORDER BY q.complexity_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 43-year-old female, among women 38\u201348 with heart failure, what's the average 30\u2011day readmission rate after first HF admission?",
+  "final_sql": "WITH\n  -- Step 1: Identify all ICD codes for 'heart failure'\n  hf_icd AS (\n    SELECT\n      icd_code,\n      icd_version\n    FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n    WHERE\n      LOWER(long_title) LIKE '%heart failure%'\n  ),\n  -- Get all hospital admission IDs (hadm_id) with a heart failure diagnosis\n  hf_admissions AS (\n    SELECT DISTINCT\n      hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n      (icd_code, icd_version) IN (\n        SELECT\n          (icd_code, icd_version)\n        FROM hf_icd\n      )\n  ),\n  -- Step 2: For every admission, find the start time of the next one\n  all_admissions_with_next AS (\n    SELECT\n      subject_id,\n      hadm_id,\n      admittime,\n      dischtime,\n      LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  ),\n  -- Step 3: Identify the first HF admission for each patient in the specified cohort\n  cohort_first_hf_admission AS (\n    SELECT\n      all_adm.subject_id,\n      all_adm.dischtime,\n      all_adm.next_admittime,\n      -- Rank HF admissions by time to find the first one for each patient\n      ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY all_adm.admittime) AS rn\n    FROM all_admissions_with_next AS all_adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON all_adm.subject_id = p.subject_id\n    -- This join ensures we only consider heart failure admissions\n    INNER JOIN hf_admissions AS hf\n      ON all_adm.hadm_id = hf.hadm_id\n    WHERE\n      -- Filter for female patients\n      p.gender = 'F'\n      -- Filter for patients aged 38-48 at the time of admission\n      AND DATETIME_DIFF(all_adm.admittime, DATETIME(p.anchor_year, 1, 1, 0, 0, 0), YEAR) + p.anchor_age BETWEEN 38 AND 48\n  ),\n  -- Step 4: For each patient's first HF admission, flag if they were readmitted within 30 days\n  readmission_flags AS (\n    SELECT\n      subject_id,\n      -- If the next admission is within 30 days of discharge, flag as 1, else 0.\n      CASE\n        WHEN next_admittime IS NOT NULL AND DATETIME_DIFF(next_admittime, dischtime, DAY) <= 30\n          THEN 1\n        ELSE 0\n      END AS is_readmitted_30d\n    FROM cohort_first_hf_admission\n    -- We only care about the very first HF admission (rn=1) for each patient\n    WHERE\n      rn = 1\n  )\n-- Step 5: Calculate the average of the flags to get the final rate\nSELECT\n  AVG(is_readmitted_30d) AS avg_30d_readmission_rate\nFROM readmission_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

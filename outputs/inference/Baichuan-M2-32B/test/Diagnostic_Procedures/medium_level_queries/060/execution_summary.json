@@ -1,0 +1,29 @@
+{
+  "query": "Among male patients aged 49\u201359 with primary heart failure (patient is 54), for LOS 1\u20134 vs 5\u20137 days stratified by ICU use, what are admission counts and mean CT/MRI per admission?",
+  "final_sql": "WITH eligible_patients AS (\n    SELECT\n        p.subject_id,\n        p.anchor_year,\n        p.anchor_age,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        EXTRACT(YEAR FROM a.admittime) AS admission_year,\n        (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) AS age_at_admission\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M'\n        AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 49 AND 59\n),\nprimary_hf_admissions AS (\n    SELECT\n        e.subject_id,\n        e.hadm_id,\n        e.admission_year,\n        e.age_at_admission,\n        e.admittime,\n        e.dischtime\n    FROM\n        eligible_patients e\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        ON e.subject_id = d.subject_id AND e.hadm_id = d.hadm_id\n    WHERE\n        d.seq_num = 1\n        AND (d.icd_code LIKE 'I50%' OR d.icd_code LIKE '428%')\n),\nadmissions_with_los AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        admission_year,\n        age_at_admission,\n        admittime,\n        dischtime,\n        TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los_days\n    FROM\n        primary_hf_admissions\n    WHERE\n        TIMESTAMP_DIFF(dischtime, admittime, DAY) BETWEEN 1 AND 7\n),\nicu_flag AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        a.los_days,\n        CASE WHEN i.stay_id IS NOT NULL THEN 'Yes' ELSE 'No' END AS icu_use\n    FROM\n        admissions_with_los a\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` i\n        ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n),\nct_mri_counts AS (\n    SELECT\n        c.subject_id,\n        c.hadm_id,\n        COUNT(DISTINCT c.hcpcs_cd) AS ct_mri_count\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.hcpcsevents` c\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n        ON c.hcpcs_cd = d.code\n    WHERE\n        d.short_description LIKE '%CT%' OR d.short_description LIKE '%MRI%'\n    GROUP BY\n        c.subject_id, c.hadm_id\n),\nfinal_data AS (\n    SELECT\n        i.subject_id,\n        i.hadm_id,\n        i.los_days,\n        i.icu_use,\n        COALESCE(c.ct_mri_count, 0) AS ct_mri_count\n    FROM\n        icu_flag i\n    LEFT JOIN\n        ct_mri_counts c\n        ON i.subject_id = c.subject_id AND i.hadm_id = c.hadm_id\n)\nSELECT\n    icu_use,\n    CASE\n        WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n        WHEN los_days BETWEEN 5 AND 7 THEN '5-7 days'\n    END AS los_group,\n    COUNT(DISTINCT hadm_id) AS admission_count,\n    AVG(ct_mri_count) AS mean_ct_mri_per_admission\nFROM\n    final_data\nGROUP BY\n    icu_use, los_group\nHAVING\n    los_group IS NOT NULL\nORDER BY\n    icu_use, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword LET at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword LET at [1:1]\n\nLocation: US\nJob ID: f6b3b620-794a-4bbe-944c-f307ab712142\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected string literal \"Let's go.\" at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected string literal \"Let's go.\" at [1:6]\n\nLocation: US\nJob ID: 9fe27a5a-6f89-4702-bdcb-071ae9b77b0d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

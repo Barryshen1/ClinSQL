@@ -1,0 +1,16 @@
+{
+  "query": "My 60-year-old female ICU patient has an instability score of 60 from the first 24 hours. Among female ICU patients aged 55\u201365 with pneumonia, what percentile is this score? Also report ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH pneumonia_hadms AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^48[0-6]'))\n    OR \n    (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^J(09|1[0-8])'))\n),\neligible_stays AS (\n  SELECT \n    i.stay_id,\n    i.subject_id,\n    i.hadm_id,\n    i.intime,\n    i.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN pneumonia_hadms pn \n    ON i.hadm_id = pn.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'F' \n    AND p.anchor_age BETWEEN 55 AND 65\n),\nscores AS (\n  SELECT \n    es.stay_id,\n    es.subject_id,\n    es.hadm_id,\n    es.intime,\n    es.los,\n    COUNT(le.labevent_id) AS instability_score\n  FROM eligible_stays es\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.subject_id = es.subject_id\n    AND le.hadm_id = es.hadm_id\n    AND le.charttime >= es.intime\n    AND le.charttime < TIMESTAMP_ADD(es.intime, INTERVAL 1 DAY)\n  GROUP BY \n    es.stay_id, es.subject_id, es.hadm_id, es.intime, es.los\n),\ncohort_with_mort AS (\n  SELECT \n    s.*,\n    a.hospital_expire_flag\n  FROM scores s\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON s.hadm_id = a.hadm_id\n),\npercentile_calc AS (\n  SELECT \n    COUNTIF(instability_score <= 60) * 100.0 / COUNT(*) AS score_percentile\n  FROM cohort_with_mort\n),\ndecile_stays AS (\n  SELECT \n    los,\n    hospital_expire_flag\n  FROM (\n    SELECT \n      los,\n      hospital_expire_flag,\n      NTILE(10) OVER (ORDER BY instability_score DESC) AS ntile_decile\n    FROM cohort_with_mort\n  )\n  WHERE ntile_decile = 1\n),\ndecile_stats AS (\n  SELECT \n    AVG(los) AS avg_icu_los,\n    COUNTIF(hospital_expire_flag = 1) * 100.0 / COUNT(*) AS mortality_pct\n  FROM decile_stays\n)\nSELECT \n  pc.score_percentile,\n  ds.avg_icu_los,\n  ds.mortality_pct\nFROM percentile_calc pc\nCROSS JOIN decile_stats ds;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

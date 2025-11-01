@@ -1,0 +1,29 @@
+{
+  "query": "For a 42-year-old man with heart failure, among male inpatients aged 37\u201347 within the first 72 hours what is the maximum laboratory instability score (unique critically abnormal lab types)? Compare critical-event rate to general inpatients, and report LOS and mortality.",
+  "final_sql": "WITH `heart failure` AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag AS mortality,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND dd.icd_code LIKE 'I50%'\n    AND dd.icd_version = 10\n  ORDER BY a.admittime\n  LIMIT 1\n),\ntarget_lab_instability AS (\n  SELECT \n    hf.hadm_id,\n    COUNT(DISTINCT le.itemid) AS lab_instability_score\n  FROM `heart failure` hf\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON hf.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN hf.admittime \n        AND TIMESTAMP_ADD(hf.admittime, INTERVAL 72 HOUR)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON le.itemid = dl.itemid\n  WHERE \n    (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n  GROUP BY hf.hadm_id\n),\ngroup_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n),\ngroup_lab_instability AS (\n  SELECT \n    ga.hadm_id,\n    COUNT(DISTINCT le.itemid) AS lab_instability_score\n  FROM group_admissions ga\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ga.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN ga.admittime \n        AND TIMESTAMP_ADD(ga.admittime, INTERVAL 72 HOUR)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON le.itemid = dl.itemid\n  WHERE \n    (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n  GROUP BY ga.hadm_id\n),\nicu_transfers AS (\n  SELECT \n    a.hadm_id,\n    CASE WHEN COUNT(i.stay_id) > 0 THEN 1 ELSE 0 END AS has_icu\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  GROUP BY a.hadm_id\n),\ntarget_data AS (\n  SELECT \n    hf.hadm_id,\n    COALESCE(tli.lab_instability_score, 0) AS target_lab_instability,\n    hf.los AS target_los,\n    hf.mortality AS target_mortality\n  FROM `heart failure` hf\n  LEFT JOIN target_lab_instability tli\n    ON hf.hadm_id = tli.hadm_id\n),\ngroup_data AS (\n  SELECT \n    ga.hadm_id,\n    COALESCE(gli.lab_instability_score, 0) AS group_lab_instability,\n    it.has_icu\n  FROM group_admissions ga\n  LEFT JOIN group_lab_instability gli\n    ON ga.hadm_id = gli.hadm_id\n  LEFT JOIN icu_transfers it\n    ON ga.hadm_id = it.hadm_id\n),\ngeneral_icu_rate AS (\n  SELECT \n    SUM(has_icu) * 1.0 / COUNT(DISTINCT a.hadm_id) AS rate\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN icu_transfers it\n    ON a.hadm_id = it.hadm_id\n),\ngroup_icu_rate AS (\n  SELECT \n    SUM(has_icu) * 1.0 / COUNT(DISTINCT gd.hadm_id) AS rate\n  FROM group_data gd\n),\nmax_group_lab_instability AS (\n  SELECT MAX(group_lab_instability) AS max_score\n  FROM group_data\n)\nSELECT \n  td.target_los,\n  td.target_mortality,\n  mgl.max_score AS max_group_lab_instability,\n  gir.rate AS rate_group,\n  gir_general.rate AS rate_general\nFROM target_data td\nCROSS JOIN max_group_lab_instability mgl\nCROSS JOIN group_icu_rate gir\nCROSS JOIN general_icu_rate gir_general;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]\n\nLocation: US\nJob ID: 3f1dc502-0a3e-4599-81ca-079c46f6e1d1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dl at [36:23]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dl at [36:23]\n\nLocation: US\nJob ID: 57fda8c9-051e-4627-abc1-5342b95dde0c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

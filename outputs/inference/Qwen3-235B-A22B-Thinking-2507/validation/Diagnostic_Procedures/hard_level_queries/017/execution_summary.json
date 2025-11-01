@@ -1,0 +1,23 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH first_icu AS (\n  SELECT \n    icu.*,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year) AS age_at_icu\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n),\nfirst_icu_ranked AS (\n  SELECT \n    *,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS stay_rank\n  FROM first_icu\n),\nbase_cohort AS (\n  SELECT *\n  FROM first_icu_ranked\n  WHERE stay_rank = 1\n    AND age_at_icu BETWEEN 83 AND 93\n),\nsepsis_cohort AS (\n  SELECT bc.*\n  FROM base_cohort bc\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n    WHERE diag.hadm_id = bc.hadm_id\n      AND diag.icd_version = 10\n      AND (\n        diag.icd_code LIKE 'A40%' \n        OR diag.icd_code LIKE 'A41%' \n        OR diag.icd_code LIKE 'R652%'\n      )\n  )\n),\nprocedure_counts AS (\n  SELECT \n    sc.subject_id,\n    sc.hadm_id,\n    sc.stay_id,\n    COALESCE(lab_count, 0) + COALESCE(micro_count, 0) AS total_distinct_procedures\n  FROM sepsis_cohort sc\n  LEFT JOIN (\n    SELECT \n      le.subject_id, \n      le.hadm_id, \n      sc.stay_id,\n      COUNT(DISTINCT le.itemid) AS lab_count\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    INNER JOIN sepsis_cohort AS sc\n      ON le.subject_id = sc.subject_id AND le.hadm_id = sc.hadm_id\n    WHERE le.charttime >= sc.intime\n      AND le.charttime <= TIMESTAMP_ADD(sc.intime, INTERVAL 72 HOUR)\n    GROUP BY le.subject_id, le.hadm_id, sc.stay_id\n  ) AS lab ON sc.subject_id = lab.subject_id AND sc.hadm_id = lab.hadm_id AND sc.stay_id = lab.stay_id\n  LEFT JOIN (\n    SELECT \n      me.subject_id, \n      me.hadm_id, \n      sc.stay_id,\n      COUNT(DISTINCT me.test_itemid) AS micro_count\n    FROM `physionet-data.mimiciv_3_1_hosp.microbiologyevents` AS me\n    INNER JOIN sepsis_cohort AS sc\n      ON me.subject_id = sc.subject_id AND me.hadm_id = sc.hadm_id\n    WHERE me.charttime >= sc.intime\n      AND me.charttime <= TIMESTAMP_ADD(sc.intime, INTERVAL 72 HOUR)\n    GROUP BY me.subject_id, me.hadm_id, sc.stay_id\n  ) AS micro ON sc.subject_id = micro.subject_id AND sc.hadm_id = micro.hadm_id AND sc.stay_id = micro.stay_id\n),\ncohort_with_los_mort AS (\n  SELECT \n    pc.subject_id,\n    pc.hadm_id,\n    pc.stay_id,\n    pc.total_distinct_procedures,\n    sc.los,\n    adm.hospital_expire_flag\n  FROM procedure_counts pc\n  INNER JOIN sepsis_cohort sc\n    ON pc.subject_id = sc.subject_id AND pc.hadm_id = sc.hadm_id AND pc.stay_id = sc.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON pc.hadm_id = adm.hadm_id\n),\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY total_distinct_procedures) AS quartile\n  FROM cohort_with_los_mort\n)\nSELECT\n  quartile,\n  AVG(total_distinct_procedures) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_percent\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword ON at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword ON at [1:13]\n\nLocation: US\nJob ID: c886a36e-f737-4961-8180-2ceba3c502c0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

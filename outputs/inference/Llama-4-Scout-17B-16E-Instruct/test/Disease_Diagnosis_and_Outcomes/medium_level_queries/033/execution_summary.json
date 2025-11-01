@@ -1,0 +1,16 @@
+{
+  "query": "87-year-old male: among male patients 82\u201392 with postoperative complications, by ICU vs non\u2011ICU, LOS \u22645 vs >5 and comorbidity bins (0\u20131/2/\u22653), report N, in-hospital mortality (%) and average comorbidity count.",
+  "final_sql": "WITH \n  -- Filter patients and identify postoperative complications\n  patients_filtered AS (\n    SELECT \n      p.subject_id,\n      p.anchor_age,\n      a.hadm_id,\n      a.hospital_expire_flag,\n      CASE \n        WHEN a.admission_type = 'elective' THEN 0\n        ELSE 1\n      END AS postoperative_complication\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON p.subject_id = a.subject_id\n    WHERE \n      p.gender = 'M' AND \n      p.anchor_age BETWEEN 82 AND 92\n  ),\n\n  -- Identify ICU patients and calculate LOS\n  icu_stays AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      outtime,\n      los\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays`\n  ),\n\n  -- Comorbidity count\n  comorbidities AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      COUNT(DISTINCT icd_code) AS comorbidity_count\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    GROUP BY \n      subject_id, hadm_id\n  ),\n\n  -- Final patient data\n  patient_data AS (\n    SELECT \n      pf.subject_id,\n      pf.hadm_id,\n      pf.postoperative_complication,\n      COALESCE(ic.stay_id, NULL) AS icu_stay_id,\n      CASE \n        WHEN ic.los IS NULL THEN 'non-ICU'\n        ELSE 'ICU'\n      END AS care_unit,\n      CASE \n        WHEN ic.los IS NULL THEN NULL\n        ELSE ic.los\n      END AS icu_los,\n      cm.comorbidity_count,\n      pf.hospital_expire_flag\n    FROM \n      patients_filtered pf\n    LEFT JOIN \n      icu_stays ic ON pf.hadm_id = ic.hadm_id\n    JOIN \n      comorbidities cm ON pf.hadm_id = cm.hadm_id AND pf.subject_id = cm.subject_id\n  )\n\n-- Group and calculate outcomes\nSELECT \n  care_unit,\n  CASE \n    WHEN icu_los IS NULL OR icu_los <= 5 THEN 'LOS \u22645'\n    ELSE 'LOS >5'\n  END AS los_category,\n  CASE \n    WHEN comorbidity_count BETWEEN 0 AND 1 THEN '0-1'\n    WHEN comorbidity_count = 2 THEN '2'\n    ELSE '\u22653'\n  END AS comorbidity_bin,\n  COUNT(DISTINCT subject_id) AS N,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(DISTINCT subject_id) * 100 AS in_hospital_mortality_pct,\n  AVG(comorbidity_count) AS avg_comorbidity_count\nFROM \n  patient_data\nWHERE \n  postoperative_complication = 1\nGROUP BY \n  care_unit,\n  los_category,\n  comorbidity_bin\nORDER BY \n  care_unit,\n  los_category,\n  comorbidity_bin;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

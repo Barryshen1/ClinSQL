@@ -1,0 +1,28 @@
+{
+  "query": "My 73\u2011year\u2011old man with lower GI bleeding: among male inpatients aged 68\u201378, what is the 90th\u2011percentile 72\u2011h lab\u2011instability score? For top\u2011tier patients, report mortality, average LOS, and compare critical rates for Cr, K, platelets, Hgb, whole\u2011blood K, and WBC versus all inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR) AS end_72h,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los_days\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age BETWEEN 68 AND 78\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\n\nlab_values AS (\n  SELECT \n    c.hadm_id,\n    d.label,\n    le.valuenum,\n    le.charttime\n  FROM cohort c\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.labevents le\n    ON c.hadm_id = le.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_labitems d\n    ON le.itemid = d.itemid\n  WHERE le.charttime >= c.admittime \n    AND le.charttime <= c.end_72h\n    AND le.valuenum IS NOT NULL\n    AND d.label IN (\n      'Creatinine',\n      'Potassium',\n      'Platelet Count',\n      'Hemoglobin',\n      'Potassium, Whole Blood',\n      'WBC'\n    )\n),\n\nlab_sd_per_admission AS (\n  SELECT \n    hadm_id,\n    STDDEV(valuenum) AS instability_score\n  FROM lab_values\n  GROUP BY hadm_id\n  HAVING COUNT(valuenum) >= 2\n),\n\ninstability_scores AS (\n  SELECT \n    hadm_id,\n    instability_score,\n    PERCENTILE_CONT(instability_score, 0.9) OVER () AS p90_instability\n  FROM lab_sd_per_admission\n),\n\ntop_tier AS (\n  SELECT \n    hadm_id,\n    instability_score >= p90_instability AS is_top_tier\n  FROM instability_scores\n),\n\ncritical_flags AS (\n  SELECT \n    c.hadm_id,\n    lv.label,\n    lv.valuenum,\n    CASE \n      WHEN lv.label = 'Creatinine' AND lv.valuenum > 2.0 THEN 1\n      WHEN lv.label = 'Potassium' AND (lv.valuenum < 3.0 OR lv.valuenum > 5.5) THEN 1\n      WHEN lv.label = 'Platelet Count' AND lv.valuenum < 50 THEN 1\n      WHEN lv.label = 'Hemoglobin' AND lv.valuenum < 7 THEN 1\n      WHEN lv.label = 'Potassium, Whole Blood' AND (lv.valuenum < 3.0 OR lv.valuenum > 5.5) THEN 1\n      WHEN lv.label = 'WBC' AND (lv.valuenum < 3.0 OR lv.valuenum > 15.0) THEN 1\n      ELSE 0\n    END AS is_critical,\n    tt.is_top_tier\n  FROM cohort c\n  INNER JOIN lab_values lv ON c.hadm_id = lv.hadm_id\n  LEFT JOIN top_tier tt ON c.hadm_id = tt.hadm_id\n)\n\nSELECT\n  SUM(CASE WHEN is_top_tier THEN hospital_expire_flag ELSE 0 END) * 1.0 / COUNTIF(is_top_tier) AS top_tier_mortality,\n  AVG(CASE WHEN is_top_tier THEN hospital_los_days END) AS top_tier_avg_los,\n  SUM(CASE WHEN is_top_tier THEN is_critical ELSE 0 END) * 1.0 / COUNTIF(is_top_tier) AS top_tier_critical_rate,\n  SUM(is_critical) * 1.0 / COUNT(*) AS all_cohort_critical_rate\nFROM critical_flags cf\nINNER JOIN cohort c ON cf.hadm_id = c.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword USING at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword USING at [1:19]\n\nLocation: US\nJob ID: 9255bc81-3832-423d-bd3b-e04d2588f140\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function DATETIME\n  Argument types: DATETIME, STRING\n  Signature: DATETIME(INT64, INT64, INT64, INT64, INT64, INT64)\n    Signature requires at least 6 arguments, found 2 arguments\n  Signature: DATETIME(DATE, TIME)\n    Argument 1: Unable to coerce type DATETIME to expected type DATE\n  Signature: DATETIME(TIMESTAMP, [STRING])\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP\n  Signature: DATETIME(DATE)\n    Signature accepts at most 1 argument, found 2 arguments\n  Signature: DATETIME(DATETIME)\n    Signature accepts at most 1 argument, found 2 arguments\n  Signature: DATETIME(STRING)\n    Signature accepts at most 1 argument, found 2 arguments at [9:5]; reason: invalidQuery, location: query, message: No matching signature for function DATETIME\n  Argument types: DATETIME, STRING\n  Signature: DATETIME(INT64, INT64, INT64, INT64, INT64, INT64)\n    Signature requires at least 6 arguments, found 2 arguments\n  Signature: DATETIME(DATE, TIME)\n    Argument 1: Unable to coerce type DATETIME to expected type DATE\n  Signature: DATETIME(TIMESTAMP, [STRING])\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP\n  Signature: DATETIME(DATE)\n    Signature accepts at most 1 argument, found 2 arguments\n  Signature: DATETIME(DATETIME)\n    Signature accepts at most 1 argument, found 2 arguments\n  Signature: DATETIME(STRING)\n    Signature accepts at most 1 argument, found 2 arguments at [9:5]\n\nLocation: US\nJob ID: 85a2152f-1924-48c5-b545-23d6804f550d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

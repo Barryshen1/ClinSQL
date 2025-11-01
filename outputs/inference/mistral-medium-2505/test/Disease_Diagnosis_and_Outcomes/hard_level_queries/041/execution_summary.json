@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old male inpatient with intracranial hemorrhage transferred from ICU. For male patients aged 68\u201378 with ICH post\u2011ICU, report cohort size, 30\u2011day mortality, AKI and ARDS rates, composite risk score 25/50/75th percentiles, and median survival among decedents.",
+  "final_sql": "WITH\n-- Define the cohort: male patients aged 68-78 with ICH post-ICU\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    t.outtime AS icu_discharge_time\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.transfers` t ON a.subject_id = t.subject_id AND a.hadm_id = t.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND t.careunit LIKE '%ICU%'\n    AND t.eventtype = 'discharge'\n    AND (\n      (d.icd_version = 9 AND d.icd_code BETWEEN '430' AND '432') OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I6%')\n    )\n),\n\n-- Calculate 30-day mortality\nmortality AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    CASE\n      WHEN deathtime IS NOT NULL AND TIMESTAMP_DIFF(deathtime, icu_discharge_time, DAY) <= 30 THEN 1\n      ELSE 0\n    END AS died_within_30_days\n  FROM\n    cohort\n),\n\n-- Calculate AKI (using ICD codes)\naki AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    CASE WHEN d.icd_code LIKE 'N17%' THEN 1 ELSE 0 END AS has_aki\n  FROM\n    cohort a\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE\n    d.icd_code LIKE 'N17%'\n),\n\n-- Calculate ARDS (using ICD codes)\nards AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    CASE WHEN d.icd_code LIKE 'J80%' THEN 1 ELSE 0 END AS has_ards\n  FROM\n    cohort a\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE\n    d.icd_code LIKE 'J80%'\n),\n\n-- Calculate composite risk score (simplified example)\nrisk_score AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    -- Example composite score (adjust based on clinical relevance)\n    (c.anchor_age * 0.5) +\n    (COALESCE(a.has_aki, 0) * 10) +\n    (COALESCE(ar.has_ards, 0) * 15) AS composite_score\n  FROM\n    cohort c\n  LEFT JOIN\n    aki a ON c.subject_id = a.subject_id AND c.hadm_id = a.hadm_id\n  LEFT JOIN\n    ards ar ON c.subject_id = ar.subject_id AND c.hadm_id = ar.hadm_id\n),\n\n-- Calculate survival for decedents\nsurvival AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    TIMESTAMP_DIFF(c.deathtime, c.icu_discharge_time, DAY) AS days_until_death\n  FROM\n    cohort c\n  WHERE\n    c.deathtime IS NOT NULL\n)\n\n-- Final results\nSELECT\n  COUNT(DISTINCT c.subject_id) AS cohort_size,\n  SUM(m.died_within_30_days) / COUNT(DISTINCT c.subject_id) AS mortality_30_day_rate,\n  SUM(a.has_aki) / COUNT(DISTINCT c.subject_id) AS aki_rate,\n  SUM(ar.has_ards) / COUNT(DISTINCT c.subject_id) AS ards_rate,\n  (\n    SELECT APPROX_QUANTILES(composite_score, 100)[OFFSET(25)] FROM risk_score\n  ) AS risk_score_25th_percentile,\n  (\n    SELECT APPROX_QUANTILES(composite_score, 100)[OFFSET(50)] FROM risk_score\n  ) AS risk_score_50th_percentile,\n  (\n    SELECT APPROX_QUANTILES(composite_score, 100)[OFFSET(75)] FROM risk_score\n  ) AS risk_score_75th_percentile,\n  (\n    SELECT APPROX_QUANTILES(days_until_death, 100)[OFFSET(50)] FROM survival\n  ) AS median_survival_days\nFROM\n  cohort c\nLEFT JOIN\n  mortality m ON c.subject_id = m.subject_id AND c.hadm_id = m.hadm_id\nLEFT JOIN\n  aki a ON c.subject_id = a.subject_id AND c.hadm_id = a.hadm_id\nLEFT JOIN\n  ards ar ON c.subject_id = ar.subject_id AND c.hadm_id = ar.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [77:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [77:5]\n\nLocation: US\nJob ID: b827c4b5-5c3f-42bd-ad80-741a9fe585c2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 1bf611f8-c74d-4e38-a6b0-62ea216d0f5a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 95\u2011year\u2011old male ICU patient with sepsis. Among male ICU patients age 90\u2013100 with sepsis, what is the SD of diagnostic utilization in the first 24h? Also report p75, p95, in\u2011hospital mortality %, average LOS, and admissions versus overall ICU.",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT DISTINCT icu.subject_id, icu.hadm_id, icu.stay_id,\n         pat.gender, pat.anchor_age,\n         adm.hospital_expire_flag,\n         icu.intime, icu.outtime, icu.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.subject_id = adm.subject_id\n   AND icu.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON icu.subject_id = dx.subject_id\n   AND icu.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddx\n    ON dx.icd_code = ddx.icd_code\n   AND dx.icd_version = ddx.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 90 AND 100\n    AND (\n      (dx.icd_version = 9 AND (\n         dx.icd_code LIKE '038%' OR\n         dx.icd_code LIKE '99591%' OR\n         dx.icd_code LIKE '99592%' OR\n         dx.icd_code LIKE '78552%' /* septic shock ICD9 */\n      ))\n      OR\n      (dx.icd_version = 10 AND (\n         dx.icd_code LIKE 'A40%' OR\n         dx.icd_code LIKE 'A41%'\n      ))\n    )\n),\ndiag_util_per_stay AS (\n  SELECT sc.stay_id,\n         COUNT(DISTINCT lab.itemid) +\n         COUNT(DISTINCT micro.test_itemid) AS diag_count,\n         sc.hospital_expire_flag,\n         sc.los\n  FROM sepsis_cohort sc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` lab\n    ON sc.subject_id = lab.subject_id\n   AND sc.hadm_id = lab.hadm_id\n   AND lab.charttime BETWEEN sc.intime\n                         AND TIMESTAMP_ADD(sc.intime, INTERVAL 24 HOUR)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.microbiologyevents` micro\n    ON sc.subject_id = micro.subject_id\n   AND sc.hadm_id = micro.hadm_id\n   AND micro.charttime BETWEEN sc.intime\n                           AND TIMESTAMP_ADD(sc.intime, INTERVAL 24 HOUR)\n  GROUP BY sc.stay_id, sc.hospital_expire_flag, sc.los\n),\nstats AS (\n  SELECT\n    STDDEV_POP(diag_count) AS diag_sd,\n    APPROX_QUANTILES(diag_count, 100)[75] AS diag_p75,\n    APPROX_QUANTILES(diag_count, 100)[95] AS diag_p95,\n    100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END)/COUNT(*) AS mortality_percent,\n    AVG(los) AS avg_icu_los_days,\n    COUNT(DISTINCT stay_id) AS admissions_count\n  FROM diag_util_per_stay\n)\nSELECT\n  s.diag_sd,\n  s.diag_p75,\n  s.diag_p95,\n  s.mortality_percent,\n  s.avg_icu_los_days,\n  s.admissions_count AS admissions_in_cohort,\n  total_icu.total_stays AS total_icu_stays_overall\nFROM stats s\nCROSS JOIN (\n  SELECT COUNT(*) AS total_stays\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n) total_icu;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

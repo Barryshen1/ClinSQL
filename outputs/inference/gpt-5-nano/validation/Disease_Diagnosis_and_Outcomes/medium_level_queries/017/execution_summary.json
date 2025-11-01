@@ -1,0 +1,28 @@
+{
+  "query": "For a 55-year-old man: among males 50\u201360 with sepsis (excluding septic shock), report in-hospital mortality (%) with 95% CIs and median time-to-death among non-survivors (days) by LOS (<8 vs \u22658 days).",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE WHEN a.deathtime IS NOT NULL THEN TIMESTAMP_DIFF(a.deathtime, a.admittime, DAY) END AS days_to_death\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender IN ('M', 'Male')\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND a.dischtime IS NOT NULL\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND (\n          LOWER(dd.long_title) LIKE '%sepsis%'\n          OR LOWER(dd.long_title) LIKE '%septicemia%'\n          OR di.icd_code LIKE 'A41%'\n          OR di.icd_code LIKE 'A40%'\n          OR di.icd_code LIKE '038%'\n        )\n        AND LOWER(dd.long_title) NOT LIKE '%shock%'\n    )\n)\n\nSELECT\n  base.los_group,\n  base.n,\n  base.deaths,\n  CASE WHEN base.n > 0 THEN SAFE_DIVIDE(base.deaths, base.n) * 100.0 ELSE NULL END AS mortality_percent,\n  CASE\n    WHEN base.n = 0 THEN NULL\n    ELSE (\n      ((SAFE_DIVIDE(base.deaths, base.n) + (1.959963984540054*1.959963984540054)/(2.0*base.n))\n       - 1.959963984540054 * SQRT( (SAFE_DIVIDE(base.deaths, base.n) * (1.0 - SAFE_DIVIDE(base.deaths, base.n)) + (1.959963984540054*1.959963984540054)/(4.0*base.n)) / base.n)\n      ) / (1.0 + (1.959963984540054*1.959963984540054)/base.n)\n    ) * 100.0\n  END AS lower_ci_percent,\n  CASE\n    WHEN base.n = 0 THEN NULL\n    ELSE (\n      ((SAFE_DIVIDE(base.deaths, base.n) + (1.959963984540054*1.959963984540054)/(2.0*base.n))\n       + 1.959963984540054 * SQRT( (SAFE_DIVIDE(base.deaths, base.n) * (1.0 - SAFE_DIVIDE(base.deaths, base.n)) + (1.959963984540054*1.959963984540054)/(4.0*base.n)) / base.n)\n      ) / (1.0 + (1.959963984540054*1.959963984540054)/base.n)\n    ) * 100.0\n  END AS upper_ci_percent,\n  med.median_days_to_death\nFROM (\n  SELECT\n    CASE WHEN los_days < 8 THEN '<8' ELSE '>=8' END AS los_group,\n    COUNT(*) AS n,\n    SUM(CASE WHEN deathtime IS NOT NULL THEN 1 ELSE 0 END) AS deaths\n  FROM sepsis_cohort\n  GROUP BY CASE WHEN los_days < 8 THEN '<8' ELSE '>=8' END\n) AS base\nLEFT JOIN (\n  SELECT\n    CASE WHEN los_days < 8 THEN '<8' ELSE '>=8' END AS los_group,\n    APPROX_QUANTILES(days_to_death, 2)[OFFSET(1)] AS median_days_to_death\n  FROM sepsis_cohort\n  WHERE deathtime IS NOT NULL\n  GROUP BY CASE WHEN los_days < 8 THEN '<8' ELSE '>=8' END\n) AS med\n  ON base.los_group = med.los_group\nORDER BY base.los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [70:5]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [70:5]\n\nLocation: US\nJob ID: d1bfd907-4b08-4f18-ac11-2aced5b98c08\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name los_group is ambiguous at [36:3]; reason: invalidQuery, location: query, message: Column name los_group is ambiguous at [36:3]\n\nLocation: US\nJob ID: 3cc93b1d-3918-4413-ba88-313f506e991e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

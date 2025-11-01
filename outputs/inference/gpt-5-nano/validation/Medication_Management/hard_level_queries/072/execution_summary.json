@@ -1,0 +1,28 @@
+{
+  "query": "89-year-old woman with DKA. Among female inpatients 84\u201394 with DKA during first 48h, compare those with vs without hyperkalemia\u2011risk drug interactions: mean medication complexity and percentile, LOS and mortality; report LOS and mortality for top complexity quartile.",
+  "final_sql": "WITH dkadmitted AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    CASE\n      WHEN p.anchor_age IS NOT NULL THEN\n        p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)\n      ELSE NULL\n    END AS age_at_adm\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND (\n         (di.icd_version = 9 AND di.icd_code LIKE '250.1%')\n         OR (di.icd_version = 10 AND (\n              di.icd_code LIKE 'E10.1%' OR di.icd_code LIKE 'E11.1%' OR di.icd_code LIKE 'E13.1%'\n         ))\n        )\n),\ncohort AS (\n  SELECT *\n  FROM dkadmitted\n  WHERE age_at_adm BETWEEN 84 AND 94\n),\nmeds AS (\n  -- compute medication complexity per admission: count distinct drugs started in first 48h\n  SELECT\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    c.age_at_adm,\n    COUNT(DISTINCT pr.drug) AS med_complexity,\n    MAX(\n      CASE\n        WHEN LOWER(pr.drug) LIKE '%spironolactone%' OR\n             LOWER(pr.drug) LIKE '%triamterene%' OR\n             LOWER(pr.drug) LIKE '%amiloride%' OR\n             LOWER(pr.drug) LIKE '%eplerenone%' OR\n             LOWER(pr.drug) LIKE '%losartan%' OR\n             LOWER(pr.drug) LIKE '%lisinopril%' OR\n             LOWER(pr.drug) LIKE '%enalapril%' OR\n             LOWER(pr.drug) LIKE '%ramipril%' OR\n             LOWER(pr.drug) LIKE '%ACE inhibitor%' OR\n             LOWER(pr.drug) LIKE '%ARB%' OR\n             LOWER(pr.drug) LIKE '%potassium chloride%' OR\n             LOWER(pr.drug) LIKE '%heparin%'\n        THEN 1\n        ELSE 0\n      END\n    ) AS has_potential_risk\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON pr.subject_id = c.subject_id\n   AND pr.hadm_id = c.hadm_id\n   AND pr.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY\n    c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag, c.age_at_adm\n),\nquartiled AS (\n  -- assign quartiles by medication complexity (ascending order -> top quartile has highest complexity)\n  SELECT m.*,\n         NTILE(4) OVER (ORDER BY med_complexity ASC) AS quartile4\n  FROM meds m\n),\nagg AS (\n  -- Group by risk exposure (Yes/No) to summarize mean complexity and percentiles\n  SELECT\n    CASE WHEN has_potential_risk = 1 THEN 'Yes' ELSE 'No' END AS risk_group,\n    med_complexity\n  FROM quartiled\n),\ntopq AS (\n  SELECT quartile4, admittime, dischtime, hospital_expire_flag\n  FROM quartiled\n  WHERE quartile4 = 4\n),\nlos_and_mort AS (\n  SELECT\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 3600.0 / 24.0) AS avg_los_topquartile_days,\n    AVG(CASE WHEN hospital_expire_flag = 1 THEN 1.0 ELSE 0.0 END) AS mortality_topquartile_rate\n  FROM topq\n),\nquant AS (\n  SELECT risk_group,\n         APPROX_QUANTILES(med_complexity, 4) AS q\n  FROM agg\n  GROUP BY risk_group\n)\nSELECT\n  a.risk_group,\n  AVG(a.med_complexity) AS mean_complexity,\n  q.q[OFFSET(1)] AS p25_complexity,\n  q.q[OFFSET(2)] AS median_complexity,\n  q.q[OFFSET(3)] AS p75_complexity,\n  NULL AS los_topquartile_days,\n  NULL AS mortality_topquartile\nFROM agg a\nJOIN quant q ON a.risk_group = q.risk_group\nGROUP BY a.risk_group, q.q\nUNION ALL\nSELECT\n  'Top quartile' AS risk_group,\n  NULL AS mean_complexity,\n  NULL AS p25_complexity,\n  NULL AS median_complexity,\n  NULL AS p75_complexity,\n  avg_los_topquartile_days AS los_topquartile_days,\n  mortality_topquartile\nFROM los_and_mort;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: mortality_topquartile; Did you mean mortality_topquartile_rate? at [116:3]; reason: invalidQuery, location: query, message: Unrecognized name: mortality_topquartile; Did you mean mortality_topquartile_rate? at [116:3]\n\nLocation: US\nJob ID: a2e90a95-041b-4ebd-8e0d-12cb0d6d56e2\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 6b979870-3b50-4d33-924d-3fd320d3c775\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [94:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [94:3]\n\nLocation: US\nJob ID: 9fb11a0f-f89c-41f8-b54b-22295f2a655f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: mortality_topquartile; Did you mean mortality_topquartile_rate? at [116:3]; reason: invalidQuery, location: query, message: Unrecognized name: mortality_topquartile; Did you mean mortality_topquartile_rate? at [116:3]\n\nLocation: US\nJob ID: a2e90a95-041b-4ebd-8e0d-12cb0d6d56e2\n"
+    }
+  ]
+}

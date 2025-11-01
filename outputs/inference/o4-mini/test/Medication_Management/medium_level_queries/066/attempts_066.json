@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\nt2 AS (\n  SELECT DISTINCT\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%type 2 diabetes%'\n),\nhf AS (\n  SELECT DISTINCT\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%heart failure%'\n),\ncohort2 AS (\n  SELECT\n    c.*\n  FROM\n    cohort c\n  WHERE\n    c.hadm_id IN (SELECT hadm_id FROM t2)\n    AND c.hadm_id IN (SELECT hadm_id FROM hf)\n),\nglp_flags AS (\n  SELECT\n    c.hadm_id,\n    MAX(CASE\n      WHEN pr.starttime BETWEEN c.admittime \n                            AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n      THEN 1 ELSE 0 END) AS first72_flag,\n    MAX(CASE\n      WHEN pr.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR)\n                            AND c.dischtime\n      THEN 1 ELSE 0 END) AS last12_flag\n  FROM\n    cohort2 c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n      ON pr.hadm_id = c.hadm_id\n      AND (\n        LOWER(pr.drug) LIKE '%exenatide%'\n        OR LOWER(pr.drug) LIKE '%liraglutide%'\n        OR LOWER(pr.drug) LIKE '%dulaglutide%'\n        OR LOWER(pr.drug) LIKE '%semaglutide%'\n        OR LOWER(pr.drug) LIKE '%lixisenatide%'\n      )\n  GROUP BY\n    c.hadm_id\n)\nSELECT\n  COUNT(1) AS total_admissions,\n  SUM(first72_flag) AS n_started_first72h,\n  SUM(last12_flag) AS n_started_last12h,\n  ROUND(100.0 * SUM(first72_flag) / COUNT(1), 2) AS pct_first72h,\n  ROUND(100.0 * SUM(last12_flag) / COUNT(1), 2) AS pct_last12h,\n  ROUND(ABS(\n    100.0 * SUM(first72_flag) / COUNT(1)\n    - 100.0 * SUM(last12_flag) / COUNT(1)\n  ), 2) AS abs_diff_percentage_points\nFROM\n  glp_flags;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

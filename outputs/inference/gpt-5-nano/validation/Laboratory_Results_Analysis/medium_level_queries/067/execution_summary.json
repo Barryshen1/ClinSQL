@@ -1,0 +1,16 @@
+{
+  "query": "For my 57-year-old female patient: among women 52\u201362 admitted with AMI whose first Troponin T >0.01 ng/mL, report patient/admission counts, mean age, LOS, first troponin stats, and in-hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_adm,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dicd\n    ON di.icd_code = dicd.icd_code AND di.icd_version = dicd.icd_version\n  WHERE\n    p.gender = 'Female'\n    AND p.anchor_age IS NOT NULL\n    AND p.anchor_year IS NOT NULL\n    -- Age at admission between 52 and 62 inclusive\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 52 AND 62\n    -- AMI: myocardial infarction (ICD long title)\n    AND LOWER(dicd.long_title) LIKE '%myocardial infarction%'\n),\nfirst_troponin AS (\n  SELECT\n    lv.hadm_id,\n    lv.subject_id,\n    (ARRAY_AGG(lv.valuenum ORDER BY lv.charttime ASC LIMIT 1))[OFFSET(0)] AS first_troponin_valuenum,\n    (ARRAY_AGG(lv.charttime ORDER BY lv.charttime ASC LIMIT 1))[OFFSET(0)] AS first_charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS lv\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n    ON lv.itemid = dli.itemid\n  WHERE\n    (\n      LOWER(dli.label) LIKE '%troponin t%'\n      OR LOWER(dli.label) LIKE '%troponin_t%'\n    )\n  GROUP BY lv.hadm_id, lv.subject_id\n)\nSELECT\n  COUNT(DISTINCT c.subject_id) AS patient_count,\n  COUNT(DISTINCT c.hadm_id) AS admission_count,\n  AVG(c.age_at_adm) AS mean_age_at_admission,\n  AVG(c.los_days) AS mean_los_days,\n  AVG(ft.first_troponin_valuenum) AS first_troponin_valuenum_avg,\n  MIN(ft.first_troponin_valuenum) AS first_troponin_valuenum_min,\n  MAX(ft.first_troponin_valuenum) AS first_troponin_valuenum_max,\n  MIN(ft.first_charttime) AS first_troponin_charttime_min,\n  AVG(CASE WHEN c.hospital_expire_flag = 1 THEN 1.0 ELSE 0.0 END) AS in_hospital_mortality_rate\nFROM cohort AS c\nJOIN first_troponin AS ft\n  ON c.subject_id = ft.subject_id\n  AND c.hadm_id = ft.hadm_id\nWHERE ft.first_troponin_valuenum > 0.01;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

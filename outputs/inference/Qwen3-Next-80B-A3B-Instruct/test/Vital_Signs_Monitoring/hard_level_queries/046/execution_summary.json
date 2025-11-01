@@ -1,0 +1,22 @@
+{
+  "query": "89-year-old male ICU patient with ischemic stroke: among male ICU patients aged 84\u201394 with ischemic stroke, what percentile is a first 72 hours vital-sign instability score of 80? Also report ICU LOS and mortality for the top instability quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, p.gender, d.hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON p.subject_id = d.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 84 AND 94\n    AND (LOWER(di.long_title) LIKE '%ischemic stroke%'\n         OR LOWER(di.long_title) LIKE '%cerebral infarction%')\n),\n\nfirst_icu_stay AS (\n  SELECT i.subject_id, i.hadm_id, i.stay_id, i.intime, i.outtime, i.los\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN cohort c ON i.subject_id = c.subject_id AND i.hadm_id = c.hadm_id\n  WHERE i.intime IS NOT NULL\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) = 1\n),\n\nvital_signs AS (\n  SELECT \n    c.stay_id,\n    c.charttime,\n    c.itemid,\n    c.valuenum,\n    CASE \n      WHEN c.itemid = 220045 AND c.valuenum IS NOT NULL AND (c.valuenum < 40 OR c.valuenum > 130) THEN 1  -- Heart Rate\n      WHEN c.itemid = 220050 AND c.valuenum IS NOT NULL AND (c.valuenum < 90 OR c.valuenum > 200) THEN 1  -- Systolic BP\n      WHEN c.itemid = 220051 AND c.valuenum IS NOT NULL AND (c.valuenum < 60 OR c.valuenum > 120) THEN 1  -- Diastolic BP\n      WHEN c.itemid = 220052 AND c.valuenum IS NOT NULL AND (c.valuenum < 70 OR c.valuenum > 140) THEN 1  -- Mean BP\n      WHEN c.itemid = 220210 AND c.valuenum IS NOT NULL AND (c.valuenum < 8 OR c.valuenum > 35) THEN 1   -- Respiratory Rate\n      WHEN c.itemid = 220277 AND c.valuenum IS NOT NULL AND c.valuenum < 90 THEN 1                       -- SpO2\n      WHEN c.itemid = 223761 AND c.valuenum IS NOT NULL AND (c.valuenum < 35 OR c.valuenum > 39) THEN 1  -- Temperature\n      ELSE 0\n    END AS is_abnormal\n  FROM physionet-data.mimiciv_3_1_icu.chartevents c\n  INNER JOIN first_icu_stay fis ON c.stay_id = fis.stay_id\n  WHERE c.charttime >= fis.intime\n    AND c.charttime <= TIMESTAMP_ADD(fis.intime, INTERVAL 72 HOUR)\n),\n\ninstability_score AS (\n  SELECT \n    fis.stay_id,\n    fis.subject_id,\n    fis.hadm_id,\n    SUM(vs.is_abnormal) AS instability_score,\n    fis.los\n  FROM first_icu_stay fis\n  LEFT JOIN vital_signs vs ON fis.stay_id = vs.stay_id\n  GROUP BY fis.stay_id, fis.subject_id, fis.hadm_id, fis.los\n),\n\nmortality_data AS (\n  SELECT \n    iscore.subject_id,\n    iscore.hadm_id,\n    iscore.instability_score,\n    iscore.los,\n    a.hospital_expire_flag\n  FROM instability_score iscore\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a \n    ON iscore.subject_id = a.subject_id AND iscore.hadm_id = a.hadm_id\n),\n\npercentile_80 AS (\n  SELECT PERCENTILE_CONT(instability_score, 0.75) OVER () AS p75_score\n  FROM mortality_data\n  WHERE instability_score IS NOT NULL\n  LIMIT 1\n),\n\ntop_quartile AS (\n  SELECT \n    md.instability_score,\n    md.los,\n    md.hospital_expire_flag\n  FROM mortality_data md\n  CROSS JOIN percentile_80 p\n  WHERE md.instability_score >= p.p75_score\n)\n\nSELECT \n  (SELECT PERCENT_RANK() OVER (ORDER BY instability_score) * 100 \n   FROM mortality_data \n   WHERE instability_score = 80 \n   LIMIT 1) AS percentile_of_80,\n  AVG(tq.los) AS avg_icu_los_top_quartile,\n  AVG(tq.hospital_expire_flag) AS mortality_rate_top_quartile\nFROM top_quartile tq\nWHERE tq.instability_score IS NOT NULL;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:15]\n\nLocation: US\nJob ID: 6c6ae255-6cac-433e-b580-2ced9694f7e2\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

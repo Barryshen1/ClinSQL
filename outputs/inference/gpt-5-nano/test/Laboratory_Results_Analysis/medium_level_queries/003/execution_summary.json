@@ -1,0 +1,22 @@
+{
+  "query": "I have a 41-year-old woman; among female patients aged 36\u201346 admitted with ischemic heart disease whose initial high-sensitivity Troponin T was >ULN, what are p25, p50, p75 and min\u2013max?",
+  "final_sql": "with initial_values AS (\n  SELECT\n    le.hadm_id,\n    le.subject_id,\n    le.charttime,\n    le.valuenum,\n    le.ref_range_upper\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS di\n    ON di.itemid = le.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = le.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n    ON diag.subject_id = le.subject_id AND diag.hadm_id = le.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON dd.icd_code = diag.icd_code AND dd.icd_version = diag.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 36 AND 46\n    -- Ischemic heart disease / myocardial infarction themes\n    AND (LOWER(dd.long_title) LIKE '%ischemic%' OR LOWER(dd.long_title) LIKE '%myocardial infarction%')\n    -- Troponin T hs test label variants (robust coverage)\n    AND (\n      LOWER(di.label) LIKE '%troponin t%' OR\n      LOWER(di.label) LIKE '%troponin_t%' OR\n      LOWER(di.label) LIKE '%hs troponin t%' OR\n      LOWER(di.label) LIKE '%high sensitivity troponin t%' OR\n      LOWER(di.label) LIKE '%hs_troponin t%' OR\n      LOWER(di.label) LIKE '%troponin%hs%'\n    )\n    -- Valid numeric value and ULN context\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n),\nordered AS (\n  SELECT\n    hadm_id,\n    valuenum,\n    charttime,\n    ref_range_upper,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC) AS rn\n  FROM initial_values\n),\nfirst_measurements AS (\n  -- Take the initial measurement per admission that is above ULN\n  SELECT valuenum\n  FROM ordered\n  WHERE rn = 1\n    AND valuenum > ref_range_upper\n),\nquantiles AS (\n  SELECT APPROX_QUANTILES(valuenum, 4) AS q\n  FROM first_measurements\n)\nSELECT\n  q[OFFSET(0)] AS min_value,\n  q[OFFSET(1)] AS p25,\n  q[OFFSET(2)] AS p50,\n  q[OFFSET(3)] AS p75,\n  q[OFFSET(4)] AS max_value\nFROM quantiles;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"heart\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"heart\" at [1:15]\n\nLocation: US\nJob ID: 85e1cf4b-96ff-4036-8c0b-17cf1ade5967\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

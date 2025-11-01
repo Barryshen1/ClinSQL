@@ -1,0 +1,22 @@
+{
+  "query": "I have an 82-year-old male. Among male patients age 77\u201387 admitted with AMI, what's the distribution of initial hs\u2011TnT (normal / borderline / myocardial injury)? Report counts and percentages.",
+  "final_sql": "WITH ami_adms AS (\n  -- Admissions for male patients age 77-87 with an AMI diagnosis on that admission\n  SELECT a.subject_id, a.hadm_id, a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 77 AND 87\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          -- ICD-9 AMI codes typically start with 410\n          (d.icd_version = 9 AND d.icd_code LIKE '410%')\n          -- ICD-10 AMI codes: I21 (acute MI) and I22 (subsequent MI)\n          OR (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'))\n        )\n    )\n),\n\ntrop_first AS (\n  -- For each AMI admission, find the first troponin lab (by charttime) within 24 hours of admission\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    -- take the earliest troponin lab row (charttime, valuenum, label) using ARRAY_AGG\n    ARRAY_AGG(STRUCT(le.charttime AS charttime, le.valuenum AS valuenum, li.label AS label)\n              ORDER BY le.charttime ASC)[OFFSET(0)] AS first_le\n  FROM ami_adms a\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` li\n    ON le.itemid = li.itemid\n  WHERE le.charttime >= a.admittime\n    AND le.charttime < TIMESTAMP_ADD(a.admittime, INTERVAL 24 HOUR)\n    AND le.valuenum IS NOT NULL\n    -- try to identify troponin T / high-sensitivity troponin by label heuristics\n    AND (\n      REGEXP_CONTAINS(LOWER(li.label), r'troponin\\s*t') OR\n      REGEXP_CONTAINS(LOWER(li.label), r'hs[\\s-]?troponin') OR\n      REGEXP_CONTAINS(LOWER(li.label), r'high[\\s-]?sensitivity.*troponin') OR\n      REGEXP_CONTAINS(LOWER(li.label), r'trop\\s*t')\n    )\n  GROUP BY a.hadm_id, a.subject_id\n)\n\nSELECT\n  category,\n  COUNT(*) AS count,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS percent\nFROM (\n  SELECT\n    hadm_id,\n    subject_id,\n    first_le.valuenum AS valuenum,\n    CASE\n      WHEN first_le.valuenum < 14 THEN 'Normal (<14 ng/L)'\n      WHEN first_le.valuenum >= 14 AND first_le.valuenum < 52 THEN 'Borderline (14\u201351 ng/L)'\n      ELSE 'Myocardial injury (>=52 ng/L)'\n    END AS category\n  FROM trop_first\n)\nGROUP BY category\nORDER BY\n  -- put Normal first, Borderline second, Myocardial injury third\n  CASE\n    WHEN category LIKE 'Normal%' THEN 1\n    WHEN category LIKE 'Borderline%' THEN 2\n    ELSE 3\n  END;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword WITH at [2:1]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword WITH at [2:1]\n\nLocation: US\nJob ID: f1a778db-0bb4-4d28-8677-5b8259c0224e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

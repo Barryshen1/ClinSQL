@@ -1,0 +1,2 @@
+with minimal changes to ensure the query runs in BigQuery and answers the clinical question accurately.
+- The final query groups by LOS bins and ICU status, providing in-hospital mortality rates and median days to death for the specified cohort.;

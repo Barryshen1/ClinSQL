@@ -1,0 +1,1 @@
+SELECT COUNT(DISTINCT a.hadm_id) AS total_index_admissions FROM admissions a JOIN patients p ON a.subject_id = p.subject_id WHERE p.gender = 'F' AND p.anchor_year_group = '75-79' AND a.admission_type = 'ED' AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2012 AND 2018 AND a.hadm_id IN (SELECT d.hadm_id FROM diagnoses_icd d WHERE d.icd_code = 'J450.0' AND d.icd_version = '2016');

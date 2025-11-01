@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46-year-old female in ICU. Among female ICU patients aged 41\u201351, what are patient counts and stroke rates for each per-measurement MAP category: <65, 65\u201374, 75\u201384, \u226585 mmHg?",
+  "final_sql": "WITH map_item AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%map%'\n    AND LOWER(category) LIKE '%vital signs%'\n),\ncohort AS (\n  SELECT DISTINCT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.valuenum AS map_value,\n    FLOOR(p.anchor_age + (EXTRACT(YEAR FROM ce.charttime) - p.anchor_year)) AS age_at_charttime,\n    CASE\n      WHEN ce.valuenum < 65 THEN '<65'\n      WHEN ce.valuenum >= 65 AND ce.valuenum <= 74 THEN '65-74'\n      WHEN ce.valuenum >= 75 AND ce.valuenum <= 84 THEN '75-84'\n      WHEN ce.valuenum >= 85 THEN '>=85'\n      ELSE NULL\n    END AS map_category\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN map_item mi ON ce.itemid = mi.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` s ON ce.stay_id = s.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON s.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= s.intime AND ce.charttime <= s.outtime\n),\ncohort_filtered AS (\n  SELECT *\n  FROM cohort\n  WHERE age_at_charttime BETWEEN 41 AND 51\n    AND map_category IS NOT NULL\n),\nstroke_diagnoses AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_version = 10\n    AND (\n      d.icd_code LIKE 'I63%' OR\n      d.icd_code = 'I64'\n    )\n),\npatient_stroke_status AS (\n  SELECT\n    cf.subject_id,\n    cf.map_category,\n    MAX(CASE WHEN sd.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS had_stroke\n  FROM cohort_filtered cf\n  LEFT JOIN stroke_diagnoses sd ON cf.hadm_id = sd.hadm_id\n  GROUP BY cf.subject_id, cf.map_category\n),\nsummary AS (\n  SELECT\n    map_category,\n    COUNT(*) AS patient_count,\n    AVG(had_stroke) AS stroke_rate\n  FROM patient_stroke_status\n  GROUP BY map_category\n  ORDER BY\n    CASE map_category\n      WHEN '<65' THEN 1\n      WHEN '65-74' THEN 2\n      WHEN '75-84' THEN 3\n      WHEN '>=85' THEN 4\n    END\n)\nSELECT\n  map_category,\n  patient_count,\n  stroke_rate\nFROM summary;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

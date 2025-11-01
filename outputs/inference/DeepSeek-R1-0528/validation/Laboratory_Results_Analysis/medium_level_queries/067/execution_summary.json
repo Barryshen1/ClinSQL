@@ -1,0 +1,16 @@
+{
+  "query": "For my 57-year-old female patient: among women 52\u201362 admitted with AMI whose first Troponin T >0.01 ng/mL, report patient/admission counts, mean age, LOS, first troponin stats, and in-hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS admission_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n),\nami_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 10 AND (icd_code LIKE 'I21%' OR icd_code LIKE 'I22%'))\n    OR (icd_version = 9 AND icd_code LIKE '410%')\n),\ncohort_ami AS (\n  SELECT c.*\n  FROM cohort c\n  INNER JOIN ami_admissions aa\n    ON c.hadm_id = aa.hadm_id\n  WHERE c.admission_age BETWEEN 52 AND 62\n),\ntroponin_t AS (\n  SELECT\n    l.hadm_id,\n    l.charttime,\n    l.valuenum AS troponin_value,\n    l.valueuom,\n    l.labevent_id,\n    ROW_NUMBER() OVER (\n      PARTITION BY l.hadm_id\n      ORDER BY l.charttime, l.labevent_id\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN cohort_ami c\n    ON l.hadm_id = c.hadm_id\n    AND l.charttime BETWEEN c.admittime AND c.dischtime\n  WHERE\n    l.itemid IN (51003, 50911)  -- Troponin T item IDs\n    AND l.valuenum IS NOT NULL\n    AND LOWER(l.valueuom) IN ('ng/ml', 'ug/l')  -- Valid units\n),\nfirst_troponin AS (\n  SELECT\n    hadm_id,\n    troponin_value,\n    valueuom\n  FROM troponin_t\n  WHERE rn = 1 AND troponin_value > 0.01\n)\nSELECT\n  COUNT(DISTINCT c.subject_id) AS patient_count,\n  COUNT(DISTINCT c.hadm_id) AS admission_count,\n  ROUND(AVG(c.admission_age), 1) AS mean_age,\n  ROUND(AVG(DATETIME_DIFF(c.dischtime, c.admittime, DAY)), 1) AS mean_los_days,\n  ROUND(AVG(ft.troponin_value), 3) AS mean_first_troponin,\n  ROUND(STDDEV(ft.troponin_value), 3) AS std_first_troponin,\n  MIN(ft.troponin_value) AS min_first_troponin,\n  MAX(ft.troponin_value) AS max_first_troponin,\n  ROUND(AVG(CAST(c.hospital_expire_flag AS FLOAT64)), 4) AS in_hospital_mortality_rate\nFROM cohort_ami c\nINNER JOIN first_troponin ft\n  ON c.hadm_id = ft.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

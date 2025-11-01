@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH surgical_pts AS (\n  -- Identify female surgical inpatients age 70\u201380\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    -- require at least one procedure to define a surgical admission\n    JOIN (\n      SELECT DISTINCT hadm_id, subject_id\n      FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd`\n    ) proc\n      ON a.hadm_id = proc.hadm_id\n      AND a.subject_id = proc.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n),\ncategorized AS (\n  -- Assign discharge category and filter to the three of interest\n  SELECT\n    hadm_id,\n    los,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN UPPER(discharge_location) LIKE '%HOME%' THEN 'Home'\n      WHEN UPPER(discharge_location) LIKE '%SNF%'\n        OR UPPER(discharge_location) LIKE '%REHAB%'\n        OR UPPER(discharge_location) LIKE '%LTACH%' THEN 'Facility'\n      ELSE NULL\n    END AS discharge_category\n  FROM surgical_pts\n  WHERE\n    -- keep only the three specified categories\n    hospital_expire_flag = 1\n    OR UPPER(discharge_location) LIKE '%HOME%'\n    OR UPPER(discharge_location) LIKE '%SNF%'\n    OR UPPER(discharge_location) LIKE '%REHAB%'\n    OR UPPER(discharge_location) LIKE '%LTACH%'\n),\ncounts AS (\n  -- Compute counts by discharge category\n  SELECT\n    discharge_category,\n    COUNT(*) AS n_total_category,\n    SUM(CASE WHEN los >= 7 THEN 1 ELSE 0 END) AS n_ge_7,\n    SUM(CASE WHEN los >= 14 THEN 1 ELSE 0 END) AS n_ge_14\n  FROM categorized\n  GROUP BY discharge_category\n),\noverall AS (\n  -- Compute overall cohort size\n  SELECT COUNT(*) AS n_overall\n  FROM categorized\n)\n-- Final: proportions relative to the overall cohort\nSELECT\n  c.discharge_category,\n  c.n_total_category,\n  c.n_ge_7,\n  c.n_ge_14,\n  ROUND(c.n_ge_7    / o.n_overall, 4) AS prop_ge_7,\n  ROUND(c.n_ge_14   / o.n_overall, 4) AS prop_ge_14\nFROM counts c\nCROSS JOIN overall o\nORDER BY\n  CASE c.discharge_category\n    WHEN 'In-hospital death' THEN 1\n    WHEN 'Home'              THEN 2\n    WHEN 'Facility'          THEN 3\n    ELSE 4\n  END;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

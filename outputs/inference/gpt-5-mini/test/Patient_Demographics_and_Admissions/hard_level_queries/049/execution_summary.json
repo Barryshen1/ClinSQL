@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 66\u2011year\u2011old woman. Among female Medicare patients 61\u201371 admitted from SNF with a principal diagnosis of acute kidney injury, what's the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >6 days?",
+  "final_sql": "WITH index_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    -- precise LOS in fractional days using DATETIME arithmetic\n    DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code\n   AND d.icd_version = dicd.icd_version\n  WHERE\n    d.seq_num = 1\n    -- principal diagnosis text contains 'acute kidney injury'\n    AND LOWER(COALESCE(dicd.long_title, '')) LIKE '%acute kidney injury%'\n    -- female patients\n    AND (p.gender = 'F' OR LOWER(p.gender) LIKE 'f%')\n    -- age 61-71\n    AND p.anchor_age BETWEEN 61 AND 71\n    -- Medicare insurance\n    AND LOWER(COALESCE(a.insurance, '')) LIKE '%medicare%'\n    -- admitted from SNF (pragmatic match)\n    AND LOWER(COALESCE(a.admission_location, '')) LIKE '%snf%'\n    -- require timestamps\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\n\nindex_with_readmit AS (\n  SELECT\n    ia.*,\n    -- flag if there exists a subsequent admission for same subject within 30 days after discharge\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = ia.subject_id\n        AND a2.admittime > ia.dischtime\n        AND a2.admittime <= DATETIME_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) AS has_readmit_30d\n  FROM index_admissions ia\n)\n\nSELECT\n  COUNT(*) AS total_index_admissions,\n  SUM(CASE WHEN has_readmit_30d THEN 1 ELSE 0 END) AS readmit_30d_count,\n  SAFE_DIVIDE(SUM(CASE WHEN has_readmit_30d THEN 1 ELSE 0 END), COUNT(*)) AS readmit_30d_rate,\n  -- median LOS among index admissions that were readmitted within 30 days\n  APPROX_QUANTILES(CASE WHEN has_readmit_30d THEN los_days ELSE NULL END, 2)[OFFSET(1)] AS median_los_readmitted_days,\n  -- median LOS among index admissions that were NOT readmitted within 30 days\n  APPROX_QUANTILES(CASE WHEN NOT has_readmit_30d THEN los_days ELSE NULL END, 2)[OFFSET(1)] AS median_los_not_readmitted_days,\n  -- percent of index stays with LOS > 6 days (overall)\n  SAFE_MULTIPLY(100.0, SAFE_DIVIDE(SUM(CASE WHEN los_days > 6 THEN 1 ELSE 0 END), COUNT(*))) AS pct_index_stays_gt_6_days\nFROM index_with_readmit;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [8:6]; reason: invalidQuery, location: query, message: No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [8:6]\n\nLocation: US\nJob ID: e63d6e63-2dae-449f-a1b6-e470d1112eb3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

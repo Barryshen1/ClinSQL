@@ -1,0 +1,22 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH cohort AS (\n  -- Identify female ICU patients aged 44-54 with AMI diagnosis\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime AS icu_intime,\n    icu.outtime AS icu_outtime,\n    pat.anchor_age,\n    pat.gender\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON icu.subject_id = pat.subject_id\n    JOIN (\n      -- AMI diagnosis: ICD-9 410.*, ICD-10 I21.*, I22.*\n      SELECT DISTINCT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE\n        (diag.icd_version = 9 AND diag.icd_code LIKE '410%')\n        OR (diag.icd_version = 10 AND (diag.icd_code LIKE 'I21%' OR diag.icd_code LIKE 'I22%'))\n    ) ami\n      ON icu.hadm_id = ami.hadm_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 44 AND 54\n),\nfirst_icu_stay AS (\n  -- Get first ICU stay per hospital admission\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    icu_intime,\n    icu_outtime\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY icu_intime) AS rn\n    FROM cohort\n  )\n  WHERE rn = 1\n),\nicu_proc_count AS (\n  -- Count ICU procedures in first 72h of ICU stay\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    COUNT(*) AS icu_proc_count\n  FROM first_icu_stay f\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n      ON f.subject_id = pe.subject_id\n      AND f.hadm_id = pe.hadm_id\n      AND f.stay_id = pe.stay_id\n      AND pe.starttime >= f.icu_intime\n      AND pe.starttime < DATETIME_ADD(f.icu_intime, INTERVAL 72 HOUR)\n  GROUP BY f.subject_id, f.hadm_id\n),\nhosp_proc_count AS (\n  -- Count hospital procedures in first 72h of ICU stay\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    COUNT(pr.icd_code) AS hosp_proc_count\n  FROM first_icu_stay f\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n      ON f.subject_id = pr.subject_id\n      AND f.hadm_id = pr.hadm_id\n      AND pr.chartdate >= DATE(f.icu_intime)\n      AND pr.chartdate < DATE_ADD(DATE(f.icu_intime), INTERVAL 3 DAY)\n  GROUP BY f.subject_id, f.hadm_id\n),\nproc_burden AS (\n  -- Sum ICU and hospital procedures\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    COALESCE(i.icu_proc_count, 0) + COALESCE(h.hosp_proc_count, 0) AS procedure_count\n  FROM first_icu_stay f\n    LEFT JOIN icu_proc_count i\n      ON f.subject_id = i.subject_id AND f.hadm_id = i.hadm_id\n    LEFT JOIN hosp_proc_count h\n      ON f.subject_id = h.subject_id AND f.hadm_id = h.hadm_id\n),\nfinal AS (\n  -- Add LOS and mortality\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.procedure_count,\n    a.dischtime,\n    a.admittime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los\n  FROM proc_burden p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id AND p.hadm_id = a.hadm_id\n),\nquartiled AS (\n  -- Assign quartiles by procedure count\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS proc_quartile\n  FROM final\n)\nSELECT\n  proc_quartile AS procedure_burden_quartile,\n  COUNT(*) AS n_patients,\n  ROUND(AVG(procedure_count),2) AS mean_procedure_count,\n  ROUND(AVG(hospital_los),2) AS mean_hospital_los_days,\n  ROUND(100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*),2) AS in_hospital_mortality_percent\nFROM quartiled\nGROUP BY proc_quartile\nORDER BY proc_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name procedureevents_id not found inside pe at [49:14]; reason: invalidQuery, location: query, message: Name procedureevents_id not found inside pe at [49:14]\n\nLocation: US\nJob ID: 4aeb79be-7a59-45a3-9b35-b00387859fd0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

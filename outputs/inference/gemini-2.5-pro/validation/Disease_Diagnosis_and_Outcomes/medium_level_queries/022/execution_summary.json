@@ -1,0 +1,16 @@
+{
+  "query": "For a 55-year-old man, among male patients 50\u201360 with sepsis (no septic shock), report in\u2011hospital mortality (%) and median LOS by LOS \u22647 vs >7 days and day\u20111 ICU status.",
+  "final_sql": "WITH\n  -- CTE to define the patient cohort with sepsis (but not septic shock),\n  -- and calculate key variables like LOS and day-1 ICU status.\n  cohort_data AS (\n    SELECT\n      adm.hadm_id,\n      adm.hospital_expire_flag,\n      DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS hospital_los_days,\n      -- Check if an ICU stay started within 24 hours of hospital admission\n      CASE\n        WHEN EXISTS (\n          SELECT\n            1\n          FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n          WHERE\n            icu.hadm_id = adm.hadm_id\n            AND icu.intime <= DATETIME_ADD(adm.admittime, INTERVAL 24 HOUR)\n        )\n        THEN 'ICU on Day 1'\n        ELSE 'No ICU on Day 1'\n      END AS day1_icu_status\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      ON pat.subject_id = adm.subject_id\n    WHERE\n      -- 1. Filter for patient demographics\n      pat.gender = 'M'\n      AND pat.anchor_age BETWEEN 50 AND 60\n      AND adm.dischtime IS NOT NULL -- Ensure LOS can be calculated\n      -- 2. Filter for admissions with a sepsis diagnosis\n      AND EXISTS (\n        SELECT\n          1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n        WHERE\n          dx.hadm_id = adm.hadm_id\n          AND (\n            (dx.icd_version = 9 AND dx.icd_code = '99591') -- Sepsis\n            OR (dx.icd_version = 10 AND (dx.icd_code LIKE 'A41%' OR dx.icd_code = 'R6520')) -- Sepsis / Severe sepsis\n          )\n      )\n      -- 3. Exclude admissions with a septic shock diagnosis\n      AND NOT EXISTS (\n        SELECT\n          1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n        WHERE\n          dx.hadm_id = adm.hadm_id\n          AND (\n            (dx.icd_version = 9 AND dx.icd_code = '78552') -- Septic shock\n            OR (dx.icd_version = 10 AND dx.icd_code = 'R6521') -- Severe sepsis with septic shock\n          )\n      )\n  )\n-- Final aggregation to report metrics by the specified groups\nSELECT\n  CASE\n    WHEN hospital_los_days <= 7 THEN 'LOS <= 7 Days'\n    ELSE 'LOS > 7 Days'\n  END AS los_group,\n  day1_icu_status,\n  COUNT(hadm_id) AS num_admissions,\n  -- Calculate in-hospital mortality percentage\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS in_hospital_mortality_pct,\n  -- Calculate median hospital LOS using approximate quantiles\n  APPROX_QUANTILES(hospital_los_days, 100)[OFFSET(50)] AS median_hospital_los_days\nFROM cohort_data\nGROUP BY\n  los_group,\n  day1_icu_status\nORDER BY\n  los_group,\n  day1_icu_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "I have a 76-year-old man. Among male inpatients with ARDS aged 71\u201381, what is the 90th\u2011percentile instability score in the first 72 hours? For patients at/above that threshold, report mortality, mean LOS, and compare critical lab rates to general inpatients.",
+  "final_sql": "WITH admissions_with_age AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n),\nards_cohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.age_at_admit\n  FROM admissions_with_age a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE d.icd_code = 'J80' \n    AND d.icd_version = 10\n    AND a.gender = 'M'\n    AND a.age_at_admit BETWEEN 71 AND 81\n),\ninstability_scores AS (\n  SELECT \n    a.hadm_id,\n    COUNT(l.labevent_id) AS instability_score\n  FROM ards_cohort a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime >= a.admittime\n    AND l.charttime <= DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND l.flag = 'abnormal'\n  GROUP BY a.hadm_id\n),\nthreshold AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 1000)[OFFSET(900)] AS p90_instability\n  FROM instability_scores\n),\nhigh_instability_patients AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.age_at_admit,\n    i.instability_score\n  FROM ards_cohort a\n  INNER JOIN instability_scores i\n    ON a.hadm_id = i.hadm_id\n  CROSS JOIN threshold t\n  WHERE i.instability_score >= t.p90_instability\n),\nhigh_instability_metrics AS (\n  SELECT \n    h.hadm_id,\n    h.hospital_expire_flag,\n    TIMESTAMP_DIFF(h.dischtime, h.admittime, SECOND) / 86400.0 AS los_days,\n    (SELECT COUNT(*) \n     FROM `physionet-data.mimiciv_3_1_hosp.labevents` l \n     WHERE l.hadm_id = h.hadm_id \n       AND l.charttime >= h.admittime \n       AND l.charttime <= h.dischtime \n       AND l.flag = 'abnormal') AS total_abnormal_labs\n  FROM high_instability_patients h\n),\ngeneral_inpatients_metrics AS (\n  SELECT \n    a.hadm_id,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days,\n    (SELECT COUNT(*) \n     FROM `physionet-data.mimiciv_3_1_hosp.labevents` l \n     WHERE l.hadm_id = a.hadm_id \n       AND l.charttime >= a.admittime \n       AND l.charttime <= a.dischtime \n       AND l.flag = 'abnormal') AS total_abnormal_labs\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n)\nSELECT \n  (SELECT p90_instability FROM threshold) AS p90_instability,\n  AVG(h.hospital_expire_flag) AS mortality_rate,\n  AVG(h.los_days) AS mean_los_days,\n  SUM(h.total_abnormal_labs) / NULLIF(SUM(h.los_days), 0) AS critical_lab_rate_group,\n  (SELECT SUM(total_abnormal_labs) / NULLIF(SUM(los_days), 0)\n   FROM general_inpatients_metrics) AS critical_lab_rate_general\nFROM high_instability_metrics h\nWHERE h.los_days > 0;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"aged\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"aged\" at [1:11]\n\nLocation: US\nJob ID: 78733175-de29-4d36-9597-7e3a854f9358\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

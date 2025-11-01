@@ -1,0 +1,22 @@
+{
+  "query": "For my 93\u2011yo female with TIA: among women 88\u201398 with TIA, what's the median (IQR) CT/MRI studies per admission for 1\u20133 vs 4\u20137 day stays, stratified by ICU use?",
+  "final_sql": "WITH tia_admissions AS (\n  -- Get admissions for women aged 88-98 with TIA\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.gender\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    JOIN physionet-data.mimiciv_3_1_hosp.patients p\n      ON a.subject_id = p.subject_id\n    JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      ON a.hadm_id = d.hadm_id\n    JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n      ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 88 AND 98\n    AND (\n      -- ICD-10 TIA: G45.x\n      (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^G45'))\n      -- ICD-9 TIA: 435.x\n      OR (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^435'))\n    )\n),\nadmission_los AS (\n  -- Calculate LOS and bin\n  SELECT\n    ta.subject_id,\n    ta.hadm_id,\n    ta.admittime,\n    ta.dischtime,\n    IFNULL(\n      SAFE_CAST(TIMESTAMP_DIFF(ta.dischtime, ta.admittime, DAY) AS INT64),\n      NULL\n    ) AS los_days\n  FROM tia_admissions ta\n),\nlos_binned AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days,\n    CASE\n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n      ELSE NULL\n    END AS los_bin\n  FROM admission_los\n  WHERE los_days BETWEEN 1 AND 7\n),\nicu_flag AS (\n  -- ICU use per admission\n  SELECT\n    hadm_id,\n    COUNT(*) AS icu_stays\n  FROM physionet-data.mimiciv_3_1_icu.icustays\n  GROUP BY hadm_id\n),\nadmissions_with_icu AS (\n  SELECT\n    lb.subject_id,\n    lb.hadm_id,\n    lb.los_bin,\n    IF(IFNULL(icu_flag.icu_stays, 0) > 0, 'Yes', 'No') AS icu_use\n  FROM los_binned lb\n  LEFT JOIN icu_flag\n    ON lb.hadm_id = icu_flag.hadm_id\n  WHERE lb.los_bin IS NOT NULL\n),\nct_mri_procedures AS (\n  -- CT/MRI procedures from procedures_icd\n  SELECT\n    hadm_id,\n    COUNT(*) AS proc_ct_mri\n  FROM physionet-data.mimiciv_3_1_hosp.procedures_icd p\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_procedures dp\n    ON p.icd_code = dp.icd_code AND p.icd_version = dp.icd_version\n  WHERE\n    (\n      -- ICD-9: CT/MRI codes (head CT: 88.91, MRI: 88.91, etc.)\n      (p.icd_version = 9 AND (\n        REGEXP_CONTAINS(p.icd_code, r'^88\\.9[1-7]') -- CT/MRI\n      ))\n      -- ICD-10: B030ZZZ, B031ZZZ, etc. (brain imaging)\n      OR (p.icd_version = 10 AND (\n        REGEXP_CONTAINS(p.icd_code, r'^B03[0-9]ZZZ')\n      ))\n    )\n  GROUP BY hadm_id\n),\nct_mri_hcpcs AS (\n  -- CT/MRI studies from hcpcsevents (CPT codes)\n  SELECT\n    hadm_id,\n    COUNT(*) AS hcpcs_ct_mri\n  FROM physionet-data.mimiciv_3_1_hosp.hcpcsevents h\n  WHERE\n    -- Common CPT codes for CT/MRI brain\n    h.hcpcs_cd IN ('70450', '70460', '70470', '70551', '70552', '70553')\n  GROUP BY hadm_id\n),\nct_mri_counts AS (\n  -- Sum CT/MRI counts per admission\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.los_bin,\n    a.icu_use,\n    COALESCE(p.proc_ct_mri, 0) + COALESCE(h.hcpcs_ct_mri, 0) AS ct_mri_count\n  FROM admissions_with_icu a\n  LEFT JOIN ct_mri_procedures p\n    ON a.hadm_id = p.hadm_id\n  LEFT JOIN ct_mri_hcpcs h\n    ON a.hadm_id = h.hadm_id\n)\nSELECT\n  los_bin,\n  icu_use,\n  APPROX_QUANTILES(ct_mri_count, 4)[OFFSET(2)] AS median_ct_mri,\n  APPROX_QUANTILES(ct_mri_count, 4)[OFFSET(1)] AS iqr_ct_mri_low,\n  APPROX_QUANTILES(ct_mri_count, 4)[OFFSET(3)] AS iqr_ct_mri_high,\n  COUNT(*) AS n_admissions\nFROM ct_mri_counts\nGROUP BY los_bin, icu_use\nORDER BY los_bin, icu_use;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [36:64]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [36:64]\n\nLocation: US\nJob ID: e6db026c-a6db-4052-8dd1-f52112580ff1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

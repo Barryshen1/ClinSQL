@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 60\u2011year\u2011old woman. In female Medicare patients aged 55\u201365 admitted from the ED with principal cellulitis, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >7 days?",
+  "final_sql": "WITH \ncohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS admission_num,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 55 AND 65\n    AND a.admission_location = 'EMERGENCY ROOM ADMIT'\n    AND a.insurance = 'Medicare'\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n      WHERE d.hadm_id = a.hadm_id AND d.seq_num = 1 AND dicd.long_title LIKE '%Cellulitis%'\n    )\n),\nindex_admissions AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_hours\n  FROM \n    cohort\n  WHERE \n    admission_num = 1\n),\nreadmissions AS (\n  SELECT DISTINCT \n    c.subject_id\n  FROM \n    cohort c\n  INNER JOIN \n    index_admissions ia ON c.subject_id = ia.subject_id\n  WHERE \n    c.admission_num > 1\n    AND DATETIME_DIFF(c.admittime, ia.dischtime, DAY) BETWEEN 0 AND 30\n)\nSELECT \n  SAFE_DIVIDE(COUNT(DISTINCT r.subject_id), COUNT(DISTINCT ia.subject_id)) AS readmission_rate,\n  APPROX_QUANTILES(CASE WHEN ia.subject_id IN (SELECT subject_id FROM readmissions) THEN ia.los_hours END, 100)[OFFSET(50)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN ia.subject_id NOT IN (SELECT subject_id FROM readmissions) THEN ia.los_hours END, 100)[OFFSET(50)] AS median_los_not_readmitted,\n  SAFE_DIVIDE(SUM(CASE WHEN ia.los_hours > 7 * 24 THEN 1 ELSE 0 END), COUNT(DISTINCT ia.hadm_id)) AS percent_long_stay\nFROM \n  index_admissions ia\n  LEFT JOIN readmissions r ON ia.subject_id = r.subject_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/67724d65-681c-431f-8166-9c9ee48c5d2c?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: 67724d65-681c-431f-8166-9c9ee48c5d2c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

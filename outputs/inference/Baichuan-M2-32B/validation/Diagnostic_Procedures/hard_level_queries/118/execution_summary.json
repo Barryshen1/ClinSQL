@@ -1,0 +1,17 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH ami_admissions AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE \n    (d.icd_code LIKE '410%' AND d.icd_version = 9) \n    OR (d.icd_code LIKE 'I21%' AND d.icd_version = 10)\n),\nbase_cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_hospital_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN ami_admissions ami\n    ON a.subject_id = ami.subject_id AND a.hadm_id = ami.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n),\nfirst_icu_stays AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN base_cohort b\n    ON i.subject_id = b.subject_id AND i.hadm_id = b.hadm_id\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY i.hadm_id \n    ORDER BY i.intime\n  ) = 1\n),\nprocedure_counts AS (\n  SELECT \n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    COALESCE(COUNT(p.starttime), 0) AS procedure_count\n  FROM first_icu_stays f\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON f.subject_id = p.subject_id \n    AND f.hadm_id = p.hadm_id \n    AND f.stay_id = p.stay_id\n    AND p.starttime BETWEEN f.intime AND f.intime + INTERVAL 72 HOUR\n  GROUP BY f.subject_id, f.hadm_id, f.stay_id, f.intime\n),\nfinal_data AS (\n  SELECT \n    b.subject_id,\n    b.hadm_id,\n    b.los_hospital_days,\n    b.hospital_expire_flag,\n    pc.procedure_count\n  FROM base_cohort b\n  INNER JOIN procedure_counts pc\n    ON b.subject_id = pc.subject_id AND b.hadm_id = pc.hadm_id\n),\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM final_data\n)\nSELECT \n  quartile,\n  COUNT(*) AS n,\n  AVG(procedure_count) AS mean_procedure_count,\n  COALESCE(AVG(los_hospital_days), 0) AS mean_los_days,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_percent\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

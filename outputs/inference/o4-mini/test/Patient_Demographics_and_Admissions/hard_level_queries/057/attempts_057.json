@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH index_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    LEAD(a.admittime) OVER (\n      PARTITION BY a.subject_id\n      ORDER BY a.admittime\n    ) AS next_admittime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      ON a.subject_id = d.subject_id\n      AND a.hadm_id = d.hadm_id\n      AND d.seq_num = 1\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 60 AND 70\n    AND a.insurance = 'MEDICARE'\n    AND a.admission_location = 'EMERGENCY'\n    AND (\n      (d.icd_version = 9 AND d.icd_code = '5990')\n      OR (d.icd_version = 10 AND d.icd_code = 'N39.0')\n    )\n),\nflagged AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    los_days,\n    CASE\n      WHEN next_admittime IS NOT NULL\n       AND TIMESTAMP_DIFF(next_admittime, dischtime, DAY) BETWEEN 1 AND 30\n      THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM\n    index_admissions\n),\nsummary AS (\n  SELECT\n    COUNT(*) AS total_idx,\n    SUM(readmitted_30d) AS num_readmit,\n    -- Readmission rate\n    SAFE_DIVIDE(SUM(readmitted_30d), COUNT(*)) AS readmit_rate,\n    -- Median LOS for readmitted\n    APPROX_QUANTILES(\n      CASE WHEN readmitted_30d = 1 THEN los_days ELSE NULL END, 2\n    )[OFFSET(1)] AS median_los_readmit,\n    -- Median LOS for non-readmitted\n    APPROX_QUANTILES(\n      CASE WHEN readmitted_30d = 0 THEN los_days ELSE NULL END, 2\n    )[OFFSET(1)] AS median_los_nonreadmit,\n    -- Percent with LOS > 9 in readmitted\n    SAFE_DIVIDE(\n      SUM(CASE WHEN readmitted_30d = 1 AND los_days > 9 THEN 1 ELSE 0 END),\n      SUM(CASE WHEN readmitted_30d = 1 THEN 1 ELSE 0 END)\n    ) AS pct_los_gt9_readmit,\n    -- Percent with LOS > 9 in non-readmitted\n    SAFE_DIVIDE(\n      SUM(CASE WHEN readmitted_30d = 0 AND los_days > 9 THEN 1 ELSE 0 END),\n      SUM(CASE WHEN readmitted_30d = 0 THEN 1 ELSE 0 END)\n    ) AS pct_los_gt9_nonreadmit\n  FROM\n    flagged\n)\nSELECT\n  total_idx,\n  num_readmit,\n  ROUND(readmit_rate * 100, 2) AS readmission_rate_pct,\n  median_los_readmit,\n  median_los_nonreadmit,\n  ROUND(pct_los_gt9_readmit * 100, 2) AS pct_los_gt9_readmit,\n  ROUND(pct_los_gt9_nonreadmit * 100, 2) AS pct_los_gt9_nonreadmit\nFROM\n  summary;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

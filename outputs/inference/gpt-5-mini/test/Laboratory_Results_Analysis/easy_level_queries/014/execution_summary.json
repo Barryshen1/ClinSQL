@@ -1,0 +1,16 @@
+{
+  "query": "For a 45-year-old female like mine admitted with GI bleeding, what is the 75th percentile of discharge-day hemoglobin (g/dL)?",
+  "final_sql": "WITH hemoglobin_items AS (\n  -- pick lab itemids that represent hemoglobin (exclude A1c variants)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%hemoglobin%'\n    AND LOWER(label) NOT LIKE '%a1c%'\n    AND LOWER(label) NOT LIKE '%hba1c%'\n),\n\ngi_admissions AS (\n  -- admissions that have any diagnosis suggesting GI bleeding\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE (\n        (LOWER(dd.long_title) LIKE '%gastrointestinal%' AND LOWER(dd.long_title) LIKE '%hemorrhag%')\n     OR LOWER(dd.long_title) LIKE '%gastrointestinal bleeding%'\n     OR LOWER(dd.long_title) LIKE '%gi bleed%'\n     OR LOWER(dd.long_title) LIKE '%melena%'\n     OR LOWER(dd.long_title) LIKE '%hematemesis%'\n  )\n),\n\ndischarge_day_hgb AS (\n  -- for each eligible admission, pick the last hemoglobin measured on the discharge date (<= dischtime)\n  SELECT\n    le.hadm_id,\n    le.valuenum AS hgb_g_per_dl,\n    le.charttime,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime DESC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN hemoglobin_items hi\n    ON le.itemid = hi.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON le.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON le.subject_id = p.subject_id\n  JOIN gi_admissions g\n    ON le.hadm_id = g.hadm_id\n  WHERE p.anchor_age = 45\n    AND p.gender = 'F'\n    AND le.valuenum IS NOT NULL\n    -- restrict to lab measurements occurring on the discharge date and not after the discharge time\n    AND DATE(le.charttime) = DATE(a.dischtime)\n    AND le.charttime <= a.dischtime\n    -- prefer measurements in g/dL when unit available; allow null units (some rows omit units)\n    AND (\n         LOWER(IFNULL(le.valueuom, '')) LIKE '%g/dl%'\n         OR le.valueuom IS NULL\n        )\n)\nSELECT\n  -- approximate 75th percentile of discharge-day hemoglobin (g/dL)\n  APPROX_QUANTILES(hgb_g_per_dl, 100)[OFFSET(75)] AS discharge_day_hgb_75th_percentile_g_per_dL,\n  COUNT(1) AS admissions_count_used\nFROM (\n  -- take only the last measurement per admission (rn = 1)\n  SELECT hadm_id, hgb_g_per_dl\n  FROM discharge_day_hgb\n  WHERE rn = 1\n) t;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

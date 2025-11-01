@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 92\u2011year\u2011old man with sepsis without shock. Among male patients 87\u201397 (sepsis, no septic shock), what is mean diagnostic procedures for admissions lasting 1\u20133 vs 4\u20137 days?",
+  "final_sql": "WITH\n  -- 1) Filter to male patients aged 87-97\n  patient_filter AS (\n    SELECT subject_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE gender = 'Male'\n      AND anchor_age BETWEEN 87 AND 97\n  ),\n\n  -- 2) Admissions with computed length of stay\n  admissions_age AS (\n    SELECT a.hadm_id,\n           a.subject_id,\n           a.admittime,\n           a.dischtime,\n           TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) + 1 AS length_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN patient_filter pf ON a.subject_id = pf.subject_id\n    -- Note: dischtime is expected to be non-null for complete admissions\n    WHERE a.dischtime IS NOT NULL\n  ),\n\n  -- 3) Sepsis flags per admission (has_sepsis, has_septic_shock)\n  sepsis_flags AS (\n    SELECT aa.hadm_id,\n           MAX(CASE WHEN dd.long_title LIKE '%sepsis%' THEN 1 ELSE 0 END) AS has_sepsis,\n           MAX(CASE WHEN dd.long_title LIKE '%septic shock%' THEN 1 ELSE 0 END) AS has_septic_shock\n    FROM admissions_age aa\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON aa.subject_id = di.subject_id\n     AND aa.hadm_id = di.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON di.icd_code = dd.icd_code\n     AND di.icd_version = dd.icd_version\n    GROUP BY aa.hadm_id\n  ),\n\n  -- 4) Admissions with sepsis and no septic shock\n  admissions_with_sepsis AS (\n    SELECT aa.hadm_id,\n           aa.subject_id,\n           aa.admittime,\n           aa.dischtime,\n           aa.length_days\n    FROM admissions_age aa\n    JOIN sepsis_flags sf\n      ON aa.hadm_id = sf.hadm_id\n    WHERE sf.has_sepsis = 1\n      AND sf.has_septic_shock = 0\n  ),\n\n  -- 5) Diagnostic procedure counts per admission\n  diagnostic_counts AS (\n    SELECT a.hadm_id,\n           COUNT(dp.icd_code) AS diag_proc_count\n    FROM admissions_with_sepsis a\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pc\n       ON a.subject_id = pc.subject_id\n      AND a.hadm_id = pc.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n       ON pc.icd_code = dp.icd_code\n      AND pc.icd_version = dp.icd_version\n      AND (dp.long_title LIKE '%diagnostic%' \n           OR dp.long_title LIKE '%diagnosis%' \n           OR dp.long_title LIKE '%diagnostic procedure%')\n    GROUP BY a.hadm_id\n  )\n\nSELECT\n  CASE\n    WHEN a.length_days BETWEEN 1 AND 3 THEN '1-3 days'\n    WHEN a.length_days BETWEEN 4 AND 7 THEN '4-7 days'\n  END AS stay_bin,\n  AVG(COALESCE(dc.diag_proc_count, 0)) AS mean_diagnostic_procedures\nFROM admissions_with_sepsis a\nLEFT JOIN diagnostic_counts dc\n  ON a.hadm_id = dc.hadm_id\nWHERE a.length_days BETWEEN 1 AND 7\nGROUP BY stay_bin\nORDER BY stay_bin;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"user_filter\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: user_filter, message: Table \"user_filter\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: f57417cb-ba70-43be-bc36-0f2d2dce5255\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

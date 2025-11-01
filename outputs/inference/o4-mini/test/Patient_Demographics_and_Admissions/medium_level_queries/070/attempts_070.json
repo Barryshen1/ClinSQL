@@ -1,0 +1,20 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH base AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    -- LOS in days (fractional)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    CASE\n      WHEN a.hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN UPPER(a.discharge_location) LIKE '%HOSPICE%' THEN 'Hospice'\n      WHEN UPPER(a.discharge_location) LIKE 'HOME%' THEN 'Home'\n      ELSE NULL\n    END AS category\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      USING (subject_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 57 AND 67\n    AND a.admission_type = 'EMERGENCY'\n)\nSELECT\n  category,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  -- exact percentiles approximated via 100\u2010quantile array\n  (SELECT q[OFFSET(50)] FROM UNNEST(APPROX_QUANTILES(los_days, 100)) AS q) AS p50_los_days,\n  (SELECT q[OFFSET(75)] FROM UNNEST(APPROX_QUANTILES(los_days, 100)) AS q) AS p75_los_days,\n  (SELECT q[OFFSET(90)] FROM UNNEST(APPROX_QUANTILES(los_days, 100)) AS q) AS p90_los_days,\n  ROUND(100.0 * SUM(CASE WHEN los_days <= 10 THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_rank_10d\nFROM\n  base\nWHERE\n  category IS NOT NULL\nGROUP BY\n  category\nORDER BY\n  category;",
+      "success": false,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [26:37]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [26:37]\n\nLocation: US\nJob ID: dba0abaf-7934-43c3-a797-add84bb6441a\n",
+      "row_count": 0
+    },
+    {
+      "attempt": 2,
+      "sql": "WITH base AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    -- LOS in days (fractional)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    CASE\n      WHEN a.hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN UPPER(a.discharge_location) LIKE '%HOSPICE%' THEN 'Hospice'\n      WHEN UPPER(a.discharge_location) LIKE 'HOME%' THEN 'Home'\n      ELSE NULL\n    END AS category\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      USING (subject_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 57 AND 67\n    AND a.admission_type = 'EMERGENCY'\n),\nstats AS (\n  SELECT\n    category,\n    -- ARRAY of 101 quantiles (0th through 100th percentile)\n    APPROX_QUANTILES(los_days, 100) AS qs,\n    AVG(los_days) AS mean_los_days,\n    SUM(CASE WHEN los_days <= 10 THEN 1 ELSE 0 END) AS cnt_le_10,\n    COUNT(*) AS total_count\n  FROM\n    base\n  WHERE\n    category IS NOT NULL\n  GROUP BY\n    category\n)\nSELECT\n  category,\n  ROUND(mean_los_days, 2) AS mean_los_days,\n  qs[OFFSET(50)] AS p50_los_days,\n  qs[OFFSET(75)] AS p75_los_days,\n  qs[OFFSET(90)] AS p90_los_days,\n  ROUND(100.0 * cnt_le_10 / total_count, 2) AS pct_rank_10d\nFROM\n  stats\nORDER BY\n  category;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

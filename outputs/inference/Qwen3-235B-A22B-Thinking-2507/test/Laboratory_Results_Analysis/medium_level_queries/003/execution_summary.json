@@ -1,0 +1,17 @@
+{
+  "query": "I have a 41-year-old woman; among female patients aged 36\u201346 admitted with ischemic heart disease whose initial high-sensitivity Troponin T was >ULN, what are p25, p50, p75 and min\u2013max?",
+  "final_sql": "WITH \n-- Step 1: Calculate age at admission for all patients\nadmissions_with_age AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n),\n\n-- Step 2: Filter for female patients aged 36-46\nfiltered_admissions AS (\n  SELECT *\n  FROM admissions_with_age\n  WHERE gender = 'F'\n    AND age_at_admission BETWEEN 36 AND 46\n),\n\n-- Step 3: Get admissions with primary ischemic heart disease diagnosis (I20-I25)\nischemic_admissions AS (\n  SELECT \n    f.hadm_id,\n    f.admittime,\n    f.dischtime\n  FROM filtered_admissions f\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON f.hadm_id = d.hadm_id\n  WHERE d.seq_num = 1  -- Primary diagnosis\n    AND (\n      d.icd_code LIKE 'I20%' OR\n      d.icd_code LIKE 'I21%' OR\n      d.icd_code LIKE 'I22%' OR\n      d.icd_code LIKE 'I23%' OR\n      d.icd_code LIKE 'I24%' OR\n      d.icd_code LIKE 'I25%'\n    )\n),\n\n-- Step 4: Get first Troponin T (hs) measurement per admission\nfirst_troponin AS (\n  SELECT \n    l.hadm_id,\n    l.valuenum AS troponin_value,\n    ROW_NUMBER() OVER (\n      PARTITION BY l.hadm_id \n      ORDER BY l.charttime\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN ischemic_admissions i\n    ON l.hadm_id = i.hadm_id\n  WHERE l.itemid = 50341  -- High-sensitivity Troponin T\n    AND l.charttime >= i.admittime\n    AND l.charttime <= i.dischtime\n    AND l.valuenum IS NOT NULL  -- Exclude non-numeric values\n),\n\n-- Step 5: Filter for initial Troponin > ULN\nqualifying_admissions AS (\n  SELECT \n    troponin_value\n  FROM first_troponin\n  WHERE rn = 1  -- First measurement\n    AND troponin_value > (\n      SELECT ref_range_upper \n      FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` \n      WHERE itemid = 50341\n    )\n)\n\n-- Step 6: Calculate statistics on qualifying Troponin values\nSELECT \n  MIN(troponin_value) OVER () AS min_value,\n  MAX(troponin_value) OVER () AS max_value,\n  PERCENTILE_CONT(troponin_value, 0.25) OVER () AS p25,\n  PERCENTILE_CONT(troponin_value, 0.50) OVER () AS p50,\n  PERCENTILE_CONT(troponin_value, 0.75) OVER () AS p75\nFROM qualifying_admissions\nLIMIT 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: ref_range_upper at [69:14]; reason: invalidQuery, location: query, message: Unrecognized name: ref_range_upper at [69:14]\n\nLocation: US\nJob ID: 96caa9e2-9b8d-46f5-bfb4-0050001a8ccb\n",
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: ref_range_upper at [69:14]; reason: invalidQuery, location: query, message: Unrecognized name: ref_range_upper at [69:14]\n\nLocation: US\nJob ID: 96caa9e2-9b8d-46f5-bfb4-0050001a8ccb\n"
+    }
+  ]
+}

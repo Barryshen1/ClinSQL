@@ -1,0 +1,16 @@
+{
+  "query": "For a 69-year-old man: among male patients aged 64\u201374 admitted with chest pain whose first hs-Troponin T exceeded the 99th percentile, provide summary statistics and in-hospital mortality rate.",
+  "final_sql": "WITH p99_threshold AS (\n  -- Step 1: Calculate the 99th percentile threshold for hs-Troponin T across all patients\n  SELECT\n    APPROX_QUANTILES(le.valuenum, 100)[OFFSET(99)] AS p99_val\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  WHERE\n    le.itemid = 52554 -- hs-Troponin T\n    AND le.valuenum IS NOT NULL\n),\nfirst_troponin AS (\n  -- Step 2: Identify the first hs-Troponin T measurement for each hospital admission\n  SELECT\n    hadm_id,\n    valuenum\n  FROM\n    (\n      SELECT\n        hadm_id,\n        valuenum,\n        ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC) AS rn\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.labevents`\n      WHERE\n        itemid = 52554 -- hs-Troponin T\n        AND valuenum IS NOT NULL\n    )\n  WHERE\n    rn = 1\n),\nchest_pain_adms AS (\n  -- Step 3: Identify hospital admissions with a diagnosis of 'chest pain'\n  SELECT DISTINCT\n    diag.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_diag\n    ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE\n    LOWER(d_diag.long_title) LIKE '%chest pain%'\n)\n-- Step 4: Combine the filters and calculate final statistics\nSELECT\n  COUNT(DISTINCT pat.subject_id) AS number_of_patients,\n  COUNT(DISTINCT adm.hadm_id) AS number_of_admissions,\n  AVG(adm.hospital_expire_flag) * 100 AS in_hospital_mortality_rate_percent,\n  MIN(ft.valuenum) AS min_first_troponin_in_cohort,\n  AVG(ft.valuenum) AS avg_first_troponin_in_cohort,\n  APPROX_QUANTILES(ft.valuenum, 100)[OFFSET(50)] AS median_first_troponin_in_cohort,\n  MAX(ft.valuenum) AS max_first_troponin_in_cohort,\n  p99.p99_val AS p99_troponin_t_threshold\nFROM\n  `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\nINNER JOIN\n  `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n  ON adm.subject_id = pat.subject_id\nINNER JOIN\n  chest_pain_adms AS cpa\n  ON adm.hadm_id = cpa.hadm_id\nINNER JOIN\n  first_troponin AS ft\n  ON adm.hadm_id = ft.hadm_id\nCROSS JOIN\n  p99_threshold AS p99\nWHERE\n  -- Filter for male patients aged 64-74 at admission\n  pat.gender = 'M'\n  AND (\n    pat.anchor_age + EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year\n  ) BETWEEN 64 AND 74\n  -- Filter for patients whose first troponin exceeded the 99th percentile\n  AND ft.valuenum > p99.p99_val\nGROUP BY\n  p99.p99_val;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

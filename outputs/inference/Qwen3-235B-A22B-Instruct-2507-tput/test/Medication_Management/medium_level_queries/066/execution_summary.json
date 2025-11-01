@@ -1,0 +1,22 @@
+{
+  "query": "For a 63\u2011year\u2011old male patient: among male inpatients 58\u201368 with T2DM and heart failure (admissions \u226572h), report % started on GLP\u20111 agonists in first 72h versus final 12h and absolute difference (pp).",
+  "final_sql": "WITH eligible_diagnoses AS (\n  SELECT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_version = 10\n    AND (d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'I50%')\n  GROUP BY di.hadm_id\n  HAVING \n    SUM(CASE WHEN d.icd_code LIKE 'E11%' THEN 1 ELSE 0 END) > 0\n    AND SUM(CASE WHEN d.icd_code LIKE 'I50%' THEN 1 ELSE 0 END) > 0\n),\neligible_admissions AS (\n  SELECT a.hadm_id, a.subject_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN eligible_diagnoses ed\n    ON a.hadm_id = ed.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND a.dischtime IS NOT NULL\n    AND DATETIME_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\nglp1_drugs AS (\n  SELECT LOWER(drug) AS drug\n  FROM UNNEST([\n    'exenatide', 'liraglutide', 'dulaglutide', \n    'semaglutide', 'lixisenatide'\n  ]) AS drug\n),\ndrug_exposure AS (\n  SELECT \n    ea.hadm_id,\n    MAX(CASE \n      WHEN p.starttime >= ea.admittime \n       AND p.starttime <= DATETIME_ADD(ea.admittime, INTERVAL 72 HOUR)\n      THEN 1 ELSE 0 END) AS started_early,\n    MAX(CASE \n      WHEN p.starttime >= DATETIME_SUB(ea.dischtime, INTERVAL 12 HOUR)\n       AND p.starttime <= ea.dischtime\n      THEN 1 ELSE 0 END) AS started_late\n  FROM eligible_admissions ea\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON ea.hadm_id = p.hadm_id\n    AND p.starttime IS NOT NULL\n  INNER JOIN glp1_drugs g\n    ON LOWER(p.drug) = g.drug\n  GROUP BY ea.hadm_id\n),\nsummary_stats AS (\n  SELECT\n    AVG(started_early) * 100 AS pct_started_early,\n    AVG(started_late) * 100 AS pct_started_late\n  FROM drug_exposure\n)\nSELECT\n  ROUND(pct_started_early, 2) AS pct_started_early,\n  ROUND(pct_started_late, 2) AS pct_started_late,\n  ROUND(pct_started_early - pct_started_late, 2) AS absolute_difference\nFROM summary_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 IN subquery is not supported inside join predicate.; reason: invalidQuery, location: query, message: IN subquery is not supported inside join predicate.\n\nLocation: US\nJob ID: b08b02c4-33e8-4cb2-99e4-171d7c45d204\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For my 44\u2011y\u2011old female: among 39\u201349\u2011y females with T2DM and heart failure (LOS\u226572h), report percent initiating basal, bolus, basal\u2013bolus, sliding\u2011scale insulin in first 72h vs final 48h, with absolute percentage\u2011point differences.",
+  "final_sql": "WITH \n-- Step 1: Filter patients based on age, gender, diagnoses, and LOS\npatients AS (\n  SELECT p.subject_id, p.gender, p.anchor_age, a.hadm_id, icu.stay_id, \n         icu.intime, icu.outtime, DATETIME_DIFF(icu.outtime, icu.intime, HOUR) AS los_hours\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON a.hadm_id = icu.hadm_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 39 AND 49\n    AND DATETIME_DIFF(icu.outtime, icu.intime, HOUR) >= 72\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n      WHERE d.subject_id = p.subject_id AND d.hadm_id = a.hadm_id\n        AND (dicd.long_title LIKE '%Type 2 diabetes mellitus%' OR dicd.long_title LIKE '%Heart failure%')\n    )\n),\n\n-- Step 2: Identify insulin administrations\ninsulin_administrations AS (\n  SELECT i.subject_id, i.stay_id, i.starttime, i.itemid, di.label\n  FROM `physionet-data.mimiciv_3_1_icu.inputevents` i\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON i.itemid = di.itemid\n  WHERE di.label LIKE '%Insulin%' \n),\n\n-- Step 3: Classify insulin therapy types for each patient stay\ninsulin_therapy AS (\n  SELECT it.stay_id, it.starttime,\n         CASE\n           WHEN di.label LIKE '%Basal%' THEN 'Basal'\n           WHEN di.label LIKE '%Bolus%' THEN 'Bolus'\n           WHEN di.label LIKE '%Sliding%' THEN 'Sliding-scale'\n           ELSE 'Other'\n         END AS therapy_type\n  FROM insulin_administrations it\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON it.itemid = di.itemid\n  JOIN patients p ON it.stay_id = p.stay_id\n  WHERE it.starttime BETWEEN p.intime AND p.outtime\n),\n\n-- Step 4: Analyze insulin therapy in the first 72 hours and final 48 hours\ntherapy_analysis AS (\n  SELECT it.stay_id,\n         COUNT(DISTINCT CASE WHEN it.starttime <= p.intime + INTERVAL 72 HOUR THEN it.therapy_type END) AS therapy_types_first_72h,\n         COUNT(DISTINCT CASE WHEN it.starttime >= p.outtime - INTERVAL 48 HOUR THEN it.therapy_type END) AS therapy_types_last_48h\n  FROM insulin_therapy it\n  JOIN patients p ON it.stay_id = p.stay_id\n  GROUP BY it.stay_id\n),\n\n-- Step 5: Calculate percentages and differences\ntherapy_counts AS (\n  SELECT stay_id,\n         MAX(CASE WHEN therapy_type = 'Basal' THEN 1 ELSE 0 END) AS Basal,\n         MAX(CASE WHEN therapy_type = 'Bolus' THEN 1 ELSE 0 END) AS Bolus,\n         MAX(CASE WHEN therapy_type = 'Sliding-scale' THEN 1 ELSE 0 END) AS Sliding_scale\n  FROM insulin_therapy\n  GROUP BY stay_id\n)\n\nSELECT \n  'Basal' AS therapy_type,\n  COUNT(CASE WHEN Basal = 1 THEN 1 END) / COUNT(*) * 100 AS percent_total,\n  COUNT(CASE WHEN Basal = 1 AND therapy_types_first_72h > 0 THEN 1 END) / COUNT(*) * 100 AS percent_first_72h,\n  COUNT(CASE WHEN Basal = 1 AND therapy_types_last_48h > 0 THEN 1 END) / COUNT(*) * 100 AS percent_last_48h,\n  (COUNT(CASE WHEN Basal = 1 AND therapy_types_last_48h > 0 THEN 1 END) / COUNT(*) * 100) - \n  (COUNT(CASE WHEN Basal = 1 AND therapy_types_first_72h > 0 THEN 1 END) / COUNT(*) * 100) AS percentage_point_diff\nFROM therapy_counts\nJOIN therapy_analysis ON therapy_counts.stay_id = therapy_analysis.stay_id\nUNION ALL\nSELECT \n  'Bolus',\n  COUNT(CASE WHEN Bolus = 1 THEN 1 END) / COUNT(*) * 100,\n  COUNT(CASE WHEN Bolus = 1 AND therapy_types_first_72h > 0 THEN 1 END) / COUNT(*) * 100,\n  COUNT(CASE WHEN Bolus = 1 AND therapy_types_last_48h > 0 THEN 1 END) / COUNT(*) * 100,\n  (COUNT(CASE WHEN Bolus = 1 AND therapy_types_last_48h > 0 THEN 1 END) / COUNT(*) * 100) - \n  (COUNT(CASE WHEN Bolus = 1 AND therapy_types_first_72h > 0 THEN 1 END) / COUNT(*) * 100)\nFROM therapy_counts\nJOIN therapy_analysis ON therapy_counts.stay_id = therapy_analysis.stay_id\nUNION ALL\nSELECT \n  'Sliding-scale',\n  COUNT(CASE WHEN Sliding_scale = 1 THEN 1 END) / COUNT(*) * 100,\n  COUNT(CASE WHEN Sliding_scale = 1 AND therapy_types_first_72h > 0 THEN 1 END) / COUNT(*) * 100,\n  COUNT(CASE WHEN Sliding_scale = 1 AND therapy_types_last_48h > 0 THEN 1 END) / COUNT(*) * 100,\n  (COUNT(CASE WHEN Sliding_scale = 1 AND therapy_types_last_48h > 0 THEN 1 END) / COUNT(*) * 100) - \n  (COUNT(CASE WHEN Sliding_scale = 1 AND therapy_types_first_72h > 0 THEN 1 END) / COUNT(*) * 100)\nFROM therapy_counts\nJOIN therapy_analysis ON therapy_counts.stay_id = therapy_analysis.stay_id;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [43:10]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [43:10]\n\nLocation: US\nJob ID: 9cb2f042-793f-4ad8-9158-acb8b2a2669b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [45:10]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [45:10]\n\nLocation: US\nJob ID: 59af49cc-46b2-4514-8efc-22b167b76e26\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

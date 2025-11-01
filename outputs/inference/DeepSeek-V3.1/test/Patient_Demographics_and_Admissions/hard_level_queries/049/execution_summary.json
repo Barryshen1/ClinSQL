@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 66\u2011year\u2011old woman. Among female Medicare patients 61\u201371 admitted from SNF with a principal diagnosis of acute kidney injury, what's the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >6 days?",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id AS index_hadm, \n        adm.admittime, \n        adm.dischtime,\n        DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n        p.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON adm.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id AND adm.subject_id = diag.subject_id\n    WHERE p.gender = 'F'\n        AND p.anchor_age BETWEEN 61 AND 71\n        AND adm.insurance = 'Medicare'\n        AND adm.admission_location LIKE '%SNF%'\n        AND diag.seq_num = 1  -- principal diagnosis\n        AND (\n            (diag.icd_version = 10 AND diag.icd_code LIKE 'N17%') OR\n            (diag.icd_version = 9 AND diag.icd_code LIKE '584%')\n        )\n        AND adm.hospital_expire_flag = 0  -- exclude deaths during index admission\n),\n\nreadmissions AS (\n    SELECT \n        c.subject_id,\n        c.index_hadm,\n        c.admittime,\n        c.dischtime,\n        c.los_days,\n        MAX(CASE WHEN readm.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS readmitted_30d\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` readm\n        ON c.subject_id = readm.subject_id\n        AND readm.admittime > c.dischtime\n        AND readm.admittime <= DATE_ADD(c.dischtime, INTERVAL 30 DAY)\n        AND readm.admission_type != 'NEWBORN'  -- ensure valid readmission\n    GROUP BY c.subject_id, c.index_hadm, c.admittime, c.dischtime, c.los_days\n)\n\nSELECT\n    COUNT(*) AS total_index_admissions,\n    SUM(readmitted_30d) AS readmitted_count,\n    ROUND(100.0 * SUM(readmitted_30d) / COUNT(*), 2) AS readmission_rate_percent,\n    -- Median LOS for readmitted vs non-readmitted\n    APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted,\n    APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los_days END, 100)[OFFSET(50)] AS median_los_non_readmitted,\n    -- Percentage of index stays with LOS > 6 days\n    ROUND(100.0 * SUM(CASE WHEN los_days > 6 THEN 1 ELSE 0 END) / COUNT(*), 2) AS percent_los_gt_6_days\nFROM readmissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [47:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [47:5]\n\nLocation: US\nJob ID: 0549f4fa-103b-4119-aee5-8bf63ac42f85\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

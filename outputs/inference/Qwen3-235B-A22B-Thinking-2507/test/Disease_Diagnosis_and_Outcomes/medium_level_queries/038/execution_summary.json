@@ -1,0 +1,17 @@
+{
+  "query": "I have an 85\u2011year\u2011old woman. Among females 80\u201390 with heart failure, stratified ICU vs non\u2011ICU and LOS <8 vs \u22658 days, report in\u2011hospital mortality (%) and CKD and diabetes prevalence.",
+  "final_sql": "WITH base AS (\n  SELECT \n    a.hadm_id,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS hospital_los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 80 AND 90\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE \n        d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '428%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n        )\n    )\n),\nwith_icu AS (\n  SELECT \n    b.*,\n    CASE WHEN i.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_icu\n  FROM base b\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id \n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) i ON b.hadm_id = i.hadm_id\n),\nwith_comorbidities AS (\n  SELECT \n    w.hadm_id,\n    w.hospital_expire_flag,\n    w.hospital_los,\n    w.has_icu,\n    MAX(CASE \n      WHEN (d.icd_version = 9 AND d.icd_code LIKE '585%') \n        OR (d.icd_version = 10 AND d.icd_code LIKE 'N18%') \n      THEN 1 ELSE 0 \n    END) AS has_ckd,\n    MAX(CASE \n      WHEN (d.icd_version = 9 AND d.icd_code LIKE '250%')\n        OR (d.icd_version = 10 AND (\n          d.icd_code LIKE 'E08%' \n          OR d.icd_code LIKE 'E09%' \n          OR d.icd_code LIKE 'E10%' \n          OR d.icd_code LIKE 'E11%' \n          OR d.icd_code LIKE 'E13%'\n        ))\n      THEN 1 ELSE 0 \n    END) AS has_diabetes\n  FROM with_icu w\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON w.hadm_id = d.hadm_id\n  GROUP BY w.hadm_id, w.hospital_expire_flag, w.hospital_los, w.has_icu\n)\nSELECT\n  CASE WHEN has_icu = 1 THEN 'ICU' ELSE 'non-ICU' END AS icu_status,\n  CASE WHEN hospital_los < 8 THEN '<8' ELSE '>=8' END AS los_category,\n  COUNT(*) AS total_patients,\n  AVG(hospital_expire_flag) * 100 AS mortality_pct,\n  AVG(has_ckd) * 100 AS ckd_pct,\n  AVG(has_diabetes) * 100 AS diabetes_pct\nFROM with_comorbidities\nGROUP BY icu_status, los_category\nORDER BY icu_status, los_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

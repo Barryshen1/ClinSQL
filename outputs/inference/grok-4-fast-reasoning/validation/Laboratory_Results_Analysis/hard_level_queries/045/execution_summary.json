@@ -1,0 +1,28 @@
+{
+  "query": "I have a 57\u2011year\u2011old man admitted with asthma exacerbation. Among male inpatients aged 52\u201362 with asthma exacerbation, what is the 90th\u2011percentile 72\u2011hour lab instability score? For the top decile, report mortality, mean LOS, average critical lab events, and compare to age\u2011matched males.",
+  "final_sql": "WITH cohort AS (\n  -- Define cohort: male, age 52-62 at admission, primary asthma diagnosis\n  SELECT DISTINCT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 52 AND 62\n    AND d.seq_num = 1\n    AND (\n      (d.icd_version = 10 AND d.icd_code LIKE 'J45%') \n      OR (d.icd_version = 9 AND d.icd_code LIKE '493%')\n    )\n),\nlab_scores AS (\n  -- Compute instability score: count of flagged abnormal labs in first 72h\n  SELECT \n    le.subject_id, \n    le.hadm_id, \n    COUNT(*) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN cohort c \n    ON le.subject_id = c.subject_id \n    AND le.hadm_id = c.hadm_id\n  WHERE le.charttime >= c.admittime\n    AND le.charttime < TIMESTAMP_ADD(c.admittime, INTERVAL 3 DAY)\n    AND le.flag IN ('abnormal', 'high', 'low')\n  GROUP BY le.subject_id, le.hadm_id\n),\nscores AS (\n  -- Attach scores to cohort (0 if no labs)\n  SELECT \n    c.*,\n    COALESCE(ls.instability_score, 0) AS score,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR) / 24.0 AS los_days\n  FROM cohort c\n  LEFT JOIN lab_scores ls \n    ON c.hadm_id = ls.hadm_id\n),\np90 AS (\n  -- Compute 90th percentile score\n  SELECT \n    approx_quantiles(score, [0.9])[OFFSET(0)] AS p90_score\n  FROM scores\n),\nclassified AS (\n  -- Classify into top decile vs rest; cross join for scalar p90\n  SELECT \n    s.*,\n    CASE \n      WHEN s.score >= p.p90_score THEN 'Top Decile'\n      ELSE 'Non-Top Decile'\n    END AS group_label,\n    p.p90_score\n  FROM scores s\n  CROSS JOIN p90 p\n)\n-- Aggregate metrics by group; p90 is constant\nSELECT \n  group_label,\n  p90_score,\n  COUNT(*) AS n_admissions,\n  AVG(CAST(hospital_expire_flag AS FLOAT)) AS mortality_rate,\n  AVG(los_days) AS mean_los_days,\n  AVG(score) AS avg_critical_lab_events\nFROM classified\nGROUP BY group_label, p90_score\nORDER BY \n  CASE WHEN group_label = 'Top Decile' THEN 1 ELSE 2 END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, ARRAY<FLOAT64>\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type ARRAY<FLOAT64> to expected type INT64 at [51:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, ARRAY<FLOAT64>\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type ARRAY<FLOAT64> to expected type INT64 at [51:5]\n\nLocation: US\nJob ID: ef786d1e-d392-490f-bcbf-2ddf0f8dc645\n",
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [17:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [17:8]\n\nLocation: US\nJob ID: fdf469e3-151a-451b-91b2-e12d6276b0e3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [50:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [50:5]\n\nLocation: US\nJob ID: a293bb92-d8cf-4445-89ed-597e4927f046\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, ARRAY<FLOAT64>\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type ARRAY<FLOAT64> to expected type INT64 at [51:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, ARRAY<FLOAT64>\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type ARRAY<FLOAT64> to expected type INT64 at [51:5]\n\nLocation: US\nJob ID: ef786d1e-d392-490f-bcbf-2ddf0f8dc645\n"
+    }
+  ]
+}

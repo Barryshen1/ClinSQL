@@ -1,0 +1,28 @@
+{
+  "query": "For my 43\u2011year\u2011old male with heart failure: among male HF patients 38\u201348, report in\u2011hospital mortality (%) with 95% CI and mean comorbidity count, stratified by ICU vs no ICU, LOS (1\u20133/4\u20137/\u22658), Charlson (\u22643/4\u20135/>5).",
+  "final_sql": "WITH\n-- Male patients aged 38-48 with heart failure admissions\nhf_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND (EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age)) BETWEEN 38 AND 48\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '428%')\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n    )\n  GROUP BY p.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n),\n\n-- Charlson comorbidity mapping (simplified example)\ncharlson_map AS (\n  SELECT '410%' AS icd_code, 9 AS icd_version, 1 AS weight, 'MI' AS category\n  UNION ALL SELECT '412%', 9, 1, 'MI'\n  UNION ALL SELECT 'I21%', 10, 1, 'MI'\n  UNION ALL SELECT 'I22%', 10, 1, 'MI'\n  UNION ALL SELECT 'I252', 10, 1, 'MI'\n  UNION ALL SELECT '428%', 9, 1, 'CHF'\n  UNION ALL SELECT 'I50%', 10, 1, 'CHF'\n  UNION ALL SELECT '250.00' , 9, 1, 'DM'\n  UNION ALL SELECT 'E10%', 10, 1, 'DM'\n  -- Add all other categories here\n),\n\n-- Calculate Charlson index per admission\ncharlson_data AS (\n  SELECT\n    hf.hadm_id,\n    COALESCE(SUM(cm.weight), 0) AS charlson_index,\n    COUNT(DISTINCT cm.category) AS comorbidity_count\n  FROM hf_admissions hf\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON hf.hadm_id = d.hadm_id\n  LEFT JOIN charlson_map cm\n    ON d.icd_code LIKE cm.icd_code\n    AND d.icd_version = cm.icd_version\n  GROUP BY hf.hadm_id\n),\n\n-- Add ICU flag, LOS, and Charlson groups\ncohort AS (\n  SELECT\n    hf.*,\n    cd.charlson_index,\n    cd.comorbidity_count,\n    CASE\n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_icu.icustays` i \n        WHERE i.hadm_id = hf.hadm_id\n      ) THEN 'ICU'\n      ELSE 'no ICU'\n    END AS icu_flag,\n    DATE_DIFF(hf.dischtime, hf.admittime, DAY) AS los_days,\n    CASE\n      WHEN DATE_DIFF(hf.dischtime, hf.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3'\n      WHEN DATE_DIFF(hf.dischtime, hf.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7'\n      WHEN DATE_DIFF(hf.dischtime, hf.admittime, DAY) >= 8 THEN '>=8'\n      ELSE 'Other'\n    END AS los_group,\n    CASE\n      WHEN cd.charlson_index <= 3 THEN '<=3'\n      WHEN cd.charlson_index BETWEEN 4 AND 5 THEN '4-5'\n      WHEN cd.charlson_index > 5 THEN '>5'\n    END AS charlson_group\n  FROM hf_admissions hf\n  LEFT JOIN charlson_data cd\n    ON hf.hadm_id = cd.hadm_id\n)\n\n-- Final aggregation with corrected CI calculations\nSELECT\n  icu_flag,\n  los_group,\n  charlson_group,\n  COUNT(*) AS total_admissions,\n  SUM(hospital_expire_flag) AS deaths,\n  AVG(hospital_expire_flag) * 100 AS mortality_percent,\n  ( \n    AVG(hospital_expire_flag) \n    - 1.96 * SQRT( (AVG(hospital_expire_flag) * (1 - AVG(hospital_expire_flag)) / COUNT(*) ) \n  ) * 100 AS lower_ci_95,\n  ( \n    AVG(hospital_expire_flag) \n    + 1.96 * SQRT( (AVG(hospital_expire_flag) * (1 - AVG(hospital_expire_flag)) / COUNT(*) ) \n  ) * 100 AS upper_ci_95,\n  AVG(comorbidity_count) AS mean_comorbidity_count\nFROM cohort\nGROUP BY icu_flag, los_group, charlson_group\nORDER BY icu_flag, los_group, charlson_group;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \",\" but got keyword AS at [96:11]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got keyword AS at [96:11]\n\nLocation: US\nJob ID: d9166f38-6899-48d1-af49-ac287d7fa316\n",
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got keyword AS at [93:124]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got keyword AS at [93:124]\n\nLocation: US\nJob ID: 9e6c05dc-bb3f-4697-9d98-62f6d80bf66a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got keyword AS at [93:122]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got keyword AS at [93:122]\n\nLocation: US\nJob ID: f1cf7ac9-9a5c-41dd-9c90-f70f914908f8\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got keyword AS at [96:11]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got keyword AS at [96:11]\n\nLocation: US\nJob ID: d9166f38-6899-48d1-af49-ac287d7fa316\n"
+    }
+  ]
+}

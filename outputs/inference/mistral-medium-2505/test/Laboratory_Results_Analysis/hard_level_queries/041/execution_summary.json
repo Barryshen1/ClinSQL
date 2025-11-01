@@ -1,0 +1,28 @@
+{
+  "query": "Evaluating a 59-year-old male inpatient: among male inpatients aged 54\u201364 with heart failure, what is the 95th\u2011percentile laboratory instability score in first 48h? For patients \u2265that threshold, report in\u2011hospital mortality, mean LOS, and compare critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH\n-- Define heart failure ICD codes\nheart_failure_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code LIKE 'I50.%'\n),\n\n-- Get male patients aged 54-64 with heart failure\ntarget_patients AS (\n  SELECT DISTINCT p.subject_id, p.gender, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON p.subject_id = d.subject_id\n  JOIN heart_failure_codes hf ON d.icd_code = hf.icd_code\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n),\n\n-- Get critical lab items (example selection)\ncritical_labs AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE label IN (\n    'Potassium', 'Sodium', 'Creatinine', 'Glucose', 'Hemoglobin'\n  )\n),\n\n-- Calculate lab instability scores for first 48h\nlab_instability AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    a.admittime,\n    SUM(\n      CASE\n        WHEN l.valuenum < l.ref_range_lower THEN POWER(l.ref_range_lower - l.valuenum, 2)\n        WHEN l.valuenum > l.ref_range_upper THEN POWER(l.valuenum - l.ref_range_upper, 2)\n        ELSE 0\n      END\n    ) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON l.hadm_id = a.hadm_id\n  JOIN target_patients p ON l.subject_id = p.subject_id\n  JOIN critical_labs cl ON l.itemid = cl.itemid\n  WHERE l.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n    AND l.valuenum IS NOT NULL\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n  GROUP BY l.subject_id, l.hadm_id, a.admittime\n),\n\n-- Calculate 95th percentile threshold\npercentile_threshold AS (\n  SELECT PERCENTILE_CONT(instability_score, 0.95) OVER() AS threshold\n  FROM lab_instability\n  LIMIT 1\n),\n\n-- Get patients above threshold\nhigh_risk_patients AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.instability_score,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours\n  FROM lab_instability l\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON l.hadm_id = a.hadm_id\n  CROSS JOIN percentile_threshold p\n  WHERE l.instability_score >= p.threshold\n),\n\n-- Get age-matched controls (no heart failure)\ncontrol_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n    AND p.subject_id NOT IN (SELECT subject_id FROM target_patients)\n),\n\n-- Calculate critical lab rates for high-risk patients\nhigh_risk_lab_rates AS (\n  SELECT\n    COUNT(DISTINCT l.subject_id) AS patient_count,\n    COUNT(l.labevent_id) AS total_labs,\n    COUNT(CASE WHEN l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper THEN 1 END) AS abnormal_labs\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN high_risk_patients h ON l.subject_id = h.subject_id\n  JOIN critical_labs cl ON l.itemid = cl.itemid\n  WHERE l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n),\n\n-- Calculate critical lab rates for controls\ncontrol_lab_rates AS (\n  SELECT\n    COUNT(DISTINCT l.subject_id) AS patient_count,\n    COUNT(l.labevent_id) AS total_labs,\n    COUNT(CASE WHEN l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper THEN 1 END) AS abnormal_labs\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN control_patients c ON l.subject_id = c.subject_id\n  JOIN critical_labs cl ON l.itemid = cl.itemid\n  WHERE l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n)\n\n-- Final results\nSELECT\n  -- High-risk patient outcomes\n  (SELECT COUNT(*) FROM high_risk_patients WHERE hospital_expire_flag = 1) AS high_risk_mortality_count,\n  (SELECT COUNT(*) FROM high_risk_patients) AS high_risk_patient_count,\n  (SELECT AVG(los_hours) FROM high_risk_patients) AS avg_los_hours,\n\n  -- Lab comparison\n  (SELECT abnormal_labs/NULLIF(total_labs, 0) FROM high_risk_lab_rates) AS high_risk_abnormal_rate,\n  (SELECT abnormal_labs/NULLIF(total_labs, 0) FROM control_lab_rates) AS control_abnormal_rate,\n\n  -- 95th percentile threshold\n  (SELECT threshold FROM percentile_threshold) AS instability_threshold;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside d at [48:11]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside d at [48:11]\n\nLocation: US\nJob ID: 253479ac-c271-492c-b546-36d0b556fec1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/0bf9a4ff-f1dc-4ff3-8353-72b57bd1e75e?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: 0bf9a4ff-f1dc-4ff3-8353-72b57bd1e75e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

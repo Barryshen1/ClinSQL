@@ -1,0 +1,17 @@
+{
+  "query": "I have a 55-year-old female with intracranial hemorrhage. In female ICU patients aged 50\u201360 with ICH, what are the 25th, 50th, 90th percentiles and maximum procedure burden in initial 72 hours? Compare hospital LOS and in-hospital mortality to general ICU.",
+  "final_sql": "WITH ich_cohort AS (\n  SELECT\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON p.subject_id = d.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON d.hadm_id = i.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON d.hadm_id = a.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND d.icd_version = 10\n    AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%')\n    AND dd.long_title LIKE '%hemorrhage%'\n),\n\nprocedure_counts AS (\n  SELECT\n    i.stay_id,\n    COUNT(pe.itemid) AS procedure_count\n  FROM ich_cohort i\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON i.stay_id = pe.stay_id\n    AND pe.starttime >= i.intime\n    AND pe.starttime <= i.intime + INTERVAL '72' HOUR\n  GROUP BY i.stay_id\n),\n\nich_procedure_stats AS (\n  SELECT\n    APPROX_QUANTILES(procedure_count, 100)[OFFSET(25)] AS p25,\n    APPROX_QUANTILES(procedure_count, 100)[OFFSET(50)] AS p50,\n    APPROX_QUANTILES(procedure_count, 100)[OFFSET(90)] AS p90,\n    MAX(procedure_count) AS max_procedure\n  FROM procedure_counts\n),\n\nich_los_mortality AS (\n  SELECT\n    AVG(DATE_DIFF(dischtime, admittime, DAY)) AS avg_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM ich_cohort\n),\n\ngeneral_icu AS (\n  SELECT\n    a.hadm_id,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  GROUP BY a.hadm_id, a.dischtime, a.admittime, a.hospital_expire_flag\n),\n\ngeneral_los_mortality AS (\n  SELECT\n    AVG(los_days) AS avg_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM general_icu\n)\n\nSELECT\n  p.p25,\n  p.p50,\n  p.p90,\n  p.max_procedure,\n  i.avg_los AS ich_avg_los,\n  i.mortality_rate AS ich_mortality_rate,\n  g.avg_los AS general_avg_los,\n  g.mortality_rate AS general_mortality_rate\nFROM ich_procedure_stats p\nCROSS JOIN ich_los_mortality i\nCROSS JOIN general_los_mortality g;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For an 84-year-old man: among male ICU patients aged 79\u201389 with pulmonary embolism, what is the 75th percentile of diagnostic utilization score in first 24h, and how do their ICU LOS and in\u2011hospital mortality compare to the general ICU population?",
+  "final_sql": "with pe_cohort as (\n  select\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.los\n  from `physionet-data.mimiciv_3_1_icu.icustays` as s\n  join `physionet-data.mimiciv_3_1_hosp.patients` as p\n    on s.subject_id = p.subject_id\n  join `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` as diags\n    on diags.subject_id = s.subject_id and diags.hadm_id = s.hadm_id\n  join `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` as dd\n    on diags.icd_code = dd.icd_code and diags.icd_version = dd.icd_version\n  where\n    p.gender = 'M'\n    and p.anchor_age between 79 and 89\n    and lower(dd.long_title) like '%pulmonary embolism%'\n),\n\n-- 2) Diagnostic utilization score: count of lab tests in first 24h of ICU stay\nscores as (\n  select\n    pc.subject_id,\n    pc.hadm_id,\n    pc.stay_id,\n    count(le.itemid) AS diagnostic_utilization_score\n  from pe_cohort pc\n  left join `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.subject_id = pc.subject_id\n   AND le.hadm_id = pc.hadm_id\n   AND le.charttime >= pc.intime\n   AND le.charttime < TIMESTAMP_ADD(pc.intime, INTERVAL 24 HOUR)\n  GROUP BY pc.subject_id, pc.hadm_id, pc.stay_id\n),\n\n-- 3) 75th percentile of the diagnostic utilization score in the PE cohort\npercentile_75 AS (\n  SELECT\n    quantiles[OFFSET(75)] AS percentile_75\n  FROM (\n    SELECT APPROX_QUANTILES(diagnostic_utilization_score, 100) AS quantiles\n    FROM scores\n  )\n),\n\n-- 4) PE cohort metrics: approximate median ICU LOS and in-hospital mortality\npe_metrics AS (\n  -- approximate median ICU LOS for PE cohort using 100-quantile approach\n  SELECT quantiles[OFFSET(50)] AS pe_median_los\n  FROM (\n    SELECT APPROX_QUANTILES(los, 100) AS quantiles\n    FROM pe_cohort pc\n  )\n),\npe_mortality AS (\n  -- in-hospital mortality for PE cohort\n  SELECT AVG(CASE\n               WHEN a.deathtime IS NOT NULL OR a.hospital_expire_flag = 1 THEN 1\n               ELSE 0\n             END) AS pe_inhospital_mortality\n  FROM pe_cohort pc\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON pc.hadm_id = a.hadm_id\n),\n\n-- 5) General ICU population metrics (all icustays)\ngeneral_metrics AS (\n  -- approximate median ICU LOS for all ICU stays\n  SELECT quantiles[OFFSET(50)] AS general_median_los\n  FROM (\n    SELECT APPROX_QUANTILES(s.los, 100) AS quantiles\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS s\n  )\n),\ngeneral_mortality AS (\n  -- in-hospital mortality for all ICU admissions\n  SELECT AVG(\n           CASE\n             WHEN a.deathtime IS NOT NULL OR a.hospital_expire_flag = 1 THEN 1\n             ELSE 0\n           END\n         ) AS general_inhospital_mortality\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS s\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON s.hadm_id = a.hadm_id\n)\n\n-- 6) Combine results into a single row\nSELECT\n  percentile_75.percentile_75 AS percentile_75_diagnostic_utilization,\n  pe_metrics.pe_median_los AS pe_median_icu_los,\n  pe_mortality.pe_inhospital_mortality AS pe_inhospital_mortality_rate,\n  general_metrics.general_median_los AS general_median_icu_los,\n  general_mortality.general_inhospital_mortality AS general_inhospital_mortality_rate\nFROM percentile_75\nCROSS JOIN pe_metrics\nCROSS JOIN pe_mortality\nCROSS JOIN general_metrics\nCROSS JOIN general_mortality;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]\n\nLocation: US\nJob ID: 23cd7a64-0c31-424b-9cea-3c446edac39f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [51:10]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [51:10]\n\nLocation: US\nJob ID: 517ec707-d3d2-435c-b861-feb8746cd09f\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

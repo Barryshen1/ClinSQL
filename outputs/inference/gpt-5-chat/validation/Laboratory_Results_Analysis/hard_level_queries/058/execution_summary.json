@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 45\u2011year\u2011old woman admitted with ACS. Among female inpatients age 40\u201350 with ACS, what is the 90th\u2011percentile first\u201148\u2011hour laboratory instability score? For patients at/above that threshold report mortality, mean LOS, and critical\u2011lab rate versus general inpatients.",
+  "final_sql": "WITH acs_female_40_50 AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, p.anchor_age, p.gender,\n    a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND (\n      (d.icd_version = 9 AND (\n          d.icd_code LIKE '410%' OR\n          d.icd_code LIKE '411%'))\n      OR\n      (d.icd_version = 10 AND (\n          d.icd_code LIKE 'I20.0%' OR\n          d.icd_code LIKE 'I21%' OR\n          d.icd_code LIKE 'I22%'))\n    )\n),\ninstability_scores AS (\n  SELECT\n    af.subject_id,\n    af.hadm_id,\n    COUNTIF(le.flag = 'abnormal') AS instability_score\n  FROM acs_female_40_50 af\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON af.subject_id = le.subject_id\n    AND af.hadm_id = le.hadm_id\n    AND le.charttime >= af.admittime\n    AND le.charttime < DATETIME_ADD(af.admittime, INTERVAL 48 HOUR)\n  GROUP BY af.subject_id, af.hadm_id\n),\nscore_percentile AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS p90_score\n  FROM instability_scores\n),\nhigh_instability_acs AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.instability_score,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM instability_scores s\n  JOIN acs_female_40_50 a\n    ON s.subject_id = a.subject_id AND s.hadm_id = a.hadm_id\n  CROSS JOIN score_percentile p\n  WHERE s.instability_score >= p.p90_score\n),\nall_labs AS (\n  SELECT\n    hadm_id,\n    COUNT(*) AS total_labs,\n    COUNTIF(flag = 'abnormal') AS abnormal_labs\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n  GROUP BY hadm_id\n),\nmetrics_high AS (\n  SELECT\n    'High Instability ACS' AS group_name,\n    AVG(CAST(h.hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(DATETIME_DIFF(h.dischtime, h.admittime, DAY)) AS mean_los_days,\n    AVG(CAST(al.abnormal_labs AS FLOAT64) / NULLIF(al.total_labs,0)) AS abnormal_lab_rate\n  FROM high_instability_acs h\n  LEFT JOIN all_labs al\n    ON h.hadm_id = al.hadm_id\n),\nmetrics_all AS (\n  SELECT\n    'All Inpatients' AS group_name,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS mean_los_days,\n    AVG(CAST(al.abnormal_labs AS FLOAT64) / NULLIF(al.total_labs,0)) AS abnormal_lab_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  LEFT JOIN all_labs al\n    ON adm.hadm_id = al.hadm_id\n)\nSELECT * FROM metrics_high\nUNION ALL\nSELECT * FROM metrics_all;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

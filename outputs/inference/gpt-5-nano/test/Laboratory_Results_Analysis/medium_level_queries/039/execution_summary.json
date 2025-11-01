@@ -1,0 +1,22 @@
+{
+  "query": "For my 92\u2011year\u2011old female patient: among female patients 87\u201397 admitted with chest pain, report counts, percentages, and mean, median, IQR of index hs\u2011TnT by category (Normal\u22640.04; Borderline 0.04\u20130.1; Injury>0.1).",
+  "final_sql": "WITH chest_pain_admits AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE LOWER(p.gender) IN ('f', 'female')\n    AND p.anchor_age BETWEEN 87 AND 97\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n      WHERE diag.subject_id = a.subject_id\n        AND diag.hadm_id = a.hadm_id\n        AND (\n          (diag.icd_version = 9  AND diag.icd_code LIKE '786.5%') OR\n          (diag.icd_version = 10 AND diag.icd_code LIKE 'R07.9%')\n        )\n    )\n),\nindex_hstnt AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    l.charttime,\n    l.valuenum AS tnt_value\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS d\n    ON l.itemid = d.itemid\n  JOIN chest_pain_admits AS a\n    ON a.subject_id = l.subject_id AND a.hadm_id = l.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE (\n        LOWER(d.label) LIKE '%troponin%'\n        OR LOWER(d.label) LIKE '%hs-troponin%'\n        OR LOWER(d.label) LIKE '%troponin t%'\n        OR LOWER(d.label) LIKE '%high-sensitivity%'\n      )\n    AND l.valuenum IS NOT NULL\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY a.subject_id, a.hadm_id ORDER BY l.charttime) = 1\n),\nindex_by_category AS (\n  SELECT\n    CASE\n      WHEN tnt_value <= 0.04 THEN 'Normal'\n      WHEN tnt_value <= 0.1  THEN 'Borderline'\n      ELSE 'Injury'\n    END AS category,\n    tnt_value\n  FROM index_hstnt\n  WHERE tnt_value IS NOT NULL\n),\nsummary AS (\n  SELECT\n    category,\n    COUNT(*) AS n,\n    100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS pct,\n    AVG(tnt_value) AS mean_value,\n    -- Approximate median using 50th percentile from 100 quantiles\n    APPROX_QUANTILES(tnt_value, 100)[OFFSET(50)] AS median_value,\n    -- Precompute quantiles for IQR (75th and 25th percentiles)\n    APPROX_QUANTILES(tnt_value, 100) AS q\n  FROM index_by_category\n  GROUP BY category\n)\nSELECT\n  category,\n  n AS count,\n  ROUND(pct, 2) AS percent,\n  ROUND(mean_value, 4) AS mean_value,\n  median_value AS median_value,\n  (q[OFFSET(75)] - q[OFFSET(25)]) AS iqr_approx\nFROM summary\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [60:5]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [60:5]\n\nLocation: US\nJob ID: a701df7a-f418-4a61-a373-050a099bb685\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

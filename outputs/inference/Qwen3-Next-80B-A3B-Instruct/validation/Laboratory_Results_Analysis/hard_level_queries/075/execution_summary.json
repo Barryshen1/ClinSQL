@@ -1,0 +1,28 @@
+{
+  "query": "As a consultant for a 47\u2011year\u2011old man, among male inpatients aged 42\u201352 with DVT, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u226595th percentile report mortality, mean LOS, and compare critical lab rates to all inpatients.",
+  "final_sql": "WITH dvt_cohort AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, p.gender, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a ON p.subject_id = a.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON a.hadm_id = d.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_icd ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 42 AND 52\n    AND (LOWER(d_icd.long_title) LIKE '%deep vein thrombosis%'\n         OR LOWER(d_icd.long_title) LIKE '%dvt%'\n         OR d.icd_code LIKE 'I82%')\n),\n\nlab_abnormal_72h AS (\n  SELECT \n    dc.subject_id,\n    dc.hadm_id,\n    COUNT(*) AS lab_instability_score\n  FROM dvt_cohort dc\n  JOIN physionet-data.mimiciv_3_1_hosp.labevents le ON dc.hadm_id = le.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_labitems dl ON le.itemid = dl.itemid\n  WHERE le.charttime >= dc.admittime\n    AND le.charttime <= dc.admittime + INTERVAL 72 HOUR\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n    AND (le.flag = 'abnormal' \n         OR le.valuenum < le.ref_range_lower \n         OR le.valuenum > le.ref_range_upper)\n  GROUP BY dc.subject_id, dc.hadm_id\n),\n\npercentile_95 AS (\n  SELECT PERCENTILE_CONT(lab_instability_score, 0.95) AS p95_score\n  FROM lab_abnormal_72h\n),\n\ntop_5_percent AS (\n  SELECT \n    la.subject_id,\n    la.hadm_id,\n    la.lab_instability_score,\n    dc.hospital_expire_flag,\n    DATETIME_DIFF(dc.dischtime, dc.admittime, HOUR) / 24.0 AS hospital_los,\n    CASE WHEN la.lab_instability_score >= p95.p95_score THEN 1 ELSE 0 END AS is_top_5_percent\n  FROM lab_abnormal_72h la\n  JOIN dvt_cohort dc ON la.subject_id = dc.subject_id AND la.hadm_id = dc.hadm_id\n  CROSS JOIN percentile_95 p95\n),\n\ntop_5_metrics AS (\n  SELECT \n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(hospital_los) AS mean_los,\n    AVG(CASE WHEN lab_instability_score >= (SELECT p95_score FROM percentile_95) THEN 1.0 ELSE 0.0 END) AS prop_with_abnormal_lab_top5\n  FROM top_5_percent\n  WHERE is_top_5_percent = 1\n),\n\nall_inpatients_baseline AS (\n  SELECT \n    AVG(CASE WHEN la.lab_instability_score >= (SELECT p95_score FROM percentile_95) THEN 1.0 ELSE 0.0 END) AS prop_with_abnormal_lab_all\n  FROM (\n    SELECT \n      a.hadm_id,\n      COUNT(*) AS lab_instability_score\n    FROM physionet-data.mimiciv_3_1_hosp.admissions a\n    JOIN physionet-data.mimiciv_3_1_hosp.labevents le ON a.hadm_id = le.hadm_id\n    JOIN physionet-data.mimiciv_3_1_hosp.d_labitems dl ON le.itemid = dl.itemid\n    WHERE le.charttime >= a.admittime\n      AND le.charttime <= a.admittime + INTERVAL 72 HOUR\n      AND le.valuenum IS NOT NULL\n      AND le.ref_range_lower IS NOT NULL\n      AND le.ref_range_upper IS NOT NULL\n      AND (le.flag = 'abnormal' \n           OR le.valuenum < le.ref_range_lower \n           OR le.valuenum > le.ref_range_upper)\n    GROUP BY a.hadm_id\n  ) AS la\n)\n\nSELECT \n  t.mortality_rate,\n  t.mean_los,\n  t.prop_with_abnormal_lab_top5,\n  b.prop_with_abnormal_lab_all\nFROM top_5_metrics t\nCROSS JOIN all_inpatients_baseline b;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: dd7a402c-1abf-4b3c-b119-036cda44d726\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: d7697264-ead4-4514-b338-161ec3c984b0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [30:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [30:3]\n\nLocation: US\nJob ID: 161f1126-c114-4018-b0b6-761b69aff4b6\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: dd7a402c-1abf-4b3c-b119-036cda44d726\n"
+    }
+  ]
+}

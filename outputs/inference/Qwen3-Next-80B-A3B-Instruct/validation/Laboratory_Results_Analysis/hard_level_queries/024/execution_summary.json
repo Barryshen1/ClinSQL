@@ -1,0 +1,28 @@
+{
+  "query": "I have a 58-year-old woman after cardiac arrest. Among female inpatients 53\u201363 with post\u2011arrest, what is the 90th percentile 48\u2011hour lab instability score? For those \u2265 that value, report count, mortality, mean LOS, and compare critical lab frequency to all inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    i.stay_id,\n    i.intime,\n    i.los,\n    a.hospital_expire_flag,\n    a.hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_icu.icustays i ON p.subject_id = i.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a ON p.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON p.subject_id = d.subject_id AND i.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses did ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND LOWER(did.long_title) LIKE '%cardiac arrest%'\n    AND i.intime IS NOT NULL\n),\n\nlab_48h AS (\n  SELECT\n    c.stay_id,\n    le.valuenum,\n    le.charttime,\n    di.ref_range_lower,\n    di.ref_range_upper\n  FROM cohort c\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.labevents le ON c.subject_id = le.subject_id AND c.hadm_id = le.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_labitems di ON le.itemid = di.itemid\n  WHERE le.charttime >= c.intime\n    AND le.charttime <= TIMESTAMP_ADD(c.intime, INTERVAL 48 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND di.ref_range_lower IS NOT NULL\n    AND di.ref_range_upper IS NOT NULL\n),\n\nlab_instability AS (\n  SELECT\n    stay_id,\n    STDDEV(valuenum) AS lab_instability_score\n  FROM lab_48h\n  GROUP BY stay_id\n  HAVING STDDEV(valuenum) IS NOT NULL\n),\n\np90 AS (\n  SELECT PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY lab_instability_score) AS p90_score\n  FROM lab_instability\n),\n\nhigh_instability AS (\n  SELECT\n    li.stay_id,\n    li.lab_instability_score,\n    c.hospital_expire_flag,\n    c.los\n  FROM lab_instability li\n  INNER JOIN cohort c ON li.stay_id = c.stay_id\n  CROSS JOIN p90\n  WHERE li.lab_instability_score >= p90.p90_score\n),\n\ncritical_labs_all AS (\n  SELECT\n    c.stay_id,\n    COUNT(*) AS critical_lab_count\n  FROM cohort c\n  INNER JOIN lab_48h l ON c.stay_id = l.stay_id\n  WHERE l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper\n  GROUP BY c.stay_id\n),\n\ncritical_labs_high AS (\n  SELECT\n    hi.stay_id,\n    cla.critical_lab_count\n  FROM high_instability hi\n  INNER JOIN critical_labs_all cla ON hi.stay_id = cla.stay_id\n)\n\nSELECT\n  COUNT(*) AS count_high_instability,\n  SUM(hi.hospital_expire_flag) AS mortality_high_instability,\n  AVG(hi.los) AS mean_los_high_instability,\n  AVG(clh.critical_lab_count) AS mean_critical_labs_high_instability,\n  (SELECT AVG(cla.critical_lab_count) FROM critical_labs_all cla) AS mean_critical_labs_all_cohort\nFROM high_instability hi\nLEFT JOIN critical_labs_high clh ON hi.stay_id = clh.stay_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [48:31]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [48:31]\n\nLocation: US\nJob ID: d1fd2856-c840-4ede-8a3b-6bd724747871\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [16:24]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [16:24]\n\nLocation: US\nJob ID: c18a86ae-1f2e-4d7c-b41d-81fa6be8d877\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \")\" at [35:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \")\" at [35:1]\n\nLocation: US\nJob ID: 58b955c2-d577-43af-a8c0-3742fcc9ee74\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [48:31]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [48:31]\n\nLocation: US\nJob ID: d1fd2856-c840-4ede-8a3b-6bd724747871\n"
+    }
+  ]
+}

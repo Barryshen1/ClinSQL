@@ -1,0 +1,28 @@
+{
+  "query": "I have a 66-year-old man with chest pain. Among male patients aged 61\u201371 admitted for chest pain, what's the percent distribution of initial hs\u2011TnT: normal, borderline, myocardial injury?",
+  "final_sql": "WITH hs_tnt_items AS (\n  -- find lab itemids that look like high-sensitivity Troponin T\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n    AND (LOWER(label) LIKE '%hs%' OR LOWER(label) LIKE '%high%')\n),\n\nchest_pain_hadm AS (\n  -- admissions for male patients aged 61-71 with a diagnosis whose description includes \"chest pain\"\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dic\n    ON di.icd_code = dic.icd_code AND di.icd_version = dic.icd_version\n  WHERE LOWER(p.gender) IN ('m', 'male')\n    AND p.anchor_age BETWEEN 61 AND 71\n    AND LOWER(dic.long_title) LIKE '%chest pain%'\n),\n\ninitial_tnt AS (\n  -- earliest hs-TnT per admission (first charttime for matching hs-TnT itemids)\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    le.itemid,\n    le.charttime,\n    le.valuenum\n  FROM chest_pain_hadm c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = c.hadm_id\n  JOIN hs_tnt_items i\n    ON le.itemid = i.itemid\n  WHERE le.valuenum IS NOT NULL\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY c.hadm_id ORDER BY le.charttime) = 1\n),\n\ncategorized AS (\n  -- categorize initial hs-TnT using chosen thresholds:\n  -- normal: valuenum < 14 ng/L\n  -- borderline: 14 <= valuenum <= 52 ng/L\n  -- myocardial injury: valuenum > 52 ng/L\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum,\n    CASE\n      WHEN valuenum < 14 THEN 'normal'\n      WHEN valuenum BETWEEN 14 AND 52 THEN 'borderline'\n      WHEN valuenum > 52 THEN 'myocardial injury'\n      ELSE 'unknown'\n    END AS category\n  FROM initial_tnt\n)\n\nSELECT\n  category,\n  COUNT(*) AS n,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percent_of_admissions_with_test\nFROM categorized\nGROUP BY category\nORDER BY CASE category\n         WHEN 'normal' THEN 1\n         WHEN 'borderline' THEN 2\n         WHEN 'myocardial injury' THEN 3\n         ELSE 4 END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"chest\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"chest\" at [1:8]\n\nLocation: US\nJob ID: 3adcc727-d804-4376-9f66-7c20a97f5634\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: loinc_code at [3:25]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [3:25]\n\nLocation: US\nJob ID: c3114590-8d16-4e9e-8ebe-6fe11cf535a6\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

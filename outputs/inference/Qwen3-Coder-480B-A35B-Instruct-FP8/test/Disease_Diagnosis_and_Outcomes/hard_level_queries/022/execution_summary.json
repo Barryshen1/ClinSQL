@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating a 45\u2011year\u2011old woman with AKI. Among female inpatients 40\u201350 with AKI, stratify by composite risk (5\u00d7comorbidities +50 if ARDS) into quintiles and report per quintile: N; 30\u2011day post\u2011discharge mortality %; ARDS co\u2011occurrence %; median survivor LOS (days).",
+  "final_sql": "WITH aki_patients AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    p.dod,\n    p.anchor_age\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%acute kidney injury%'\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n),\n\n-- Comorbidities\ncomorbidities AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT CASE\n      WHEN LOWER(dd.long_title) LIKE '%diabetes%' THEN d.icd_code\n      WHEN LOWER(dd.long_title) LIKE '%hypertension%' THEN d.icd_code\n      WHEN LOWER(dd.long_title) LIKE '%congestive heart failure%' THEN d.icd_code\n      WHEN LOWER(dd.long_title) LIKE '%chronic obstructive pulmonary%' THEN d.icd_code\n      WHEN LOWER(dd.long_title) LIKE '%myocardial infarction%' THEN d.icd_code\n    END) AS comorbidity_count\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    d.hadm_id IN (SELECT hadm_id FROM aki_patients)\n  GROUP BY\n    hadm_id\n),\n\n-- ARDS flag\nards_flag AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%ards%' THEN 1 ELSE 0 END) AS has_ards\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    d.hadm_id IN (SELECT hadm_id FROM aki_patients)\n  GROUP BY\n    hadm_id\n),\n\n-- Composite risk score\nrisk_score AS (\n  SELECT\n    a.hadm_id,\n    a.dischtime,\n    a.los,\n    a.dod,\n    COALESCE(c.comorbidity_count, 0) AS comorbidities,\n    COALESCE(ar.has_ards, 0) AS ards,\n    (5 * COALESCE(c.comorbidity_count, 0)) + (50 * COALESCE(ar.has_ards, 0)) AS risk_score\n  FROM\n    aki_patients a\n  LEFT JOIN\n    comorbidities c ON a.hadm_id = c.hadm_id\n  LEFT JOIN\n    ards_flag ar ON a.hadm_id = ar.hadm_id\n),\n\n-- Quintiles\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY risk_score.risk_score) AS risk_quintile\n  FROM\n    risk_score\n),\n\n-- Outcomes\noutcomes AS (\n  SELECT\n    risk_quintile,\n    COUNT(*) AS n,\n    AVG(CASE\n      WHEN dod IS NOT NULL AND dod <= DATETIME_ADD(dischtime, INTERVAL 30 DAY) THEN 1\n      ELSE 0\n    END) * 100 AS mortality_30d_pct,\n    AVG(ards) * 100 AS ards_pct,\n    APPROX_QUANTILES(\n      CASE\n        WHEN dod IS NULL OR dod > DATETIME_ADD(dischtime, INTERVAL 30 DAY) THEN los\n        ELSE NULL\n      END, 2)[OFFSET(1)] AS median_survivor_los\n  FROM\n    quintiles\n  GROUP BY\n    risk_quintile\n)\n\nSELECT\n  risk_quintile,\n  n,\n  ROUND(mortality_30d_pct, 2) AS mortality_30d_pct,\n  ROUND(ards_pct, 2) AS ards_pct,\n  median_survivor_los\nFROM\n  outcomes\nORDER BY\n  risk_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [6:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [6:7]\n\nLocation: US\nJob ID: 6ebb1a56-a048-494f-84e8-fa9ccac08dbd\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [87:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [87:29]\n\nLocation: US\nJob ID: b2c3bcc2-20c2-4c99-9fe4-c61fea461409\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

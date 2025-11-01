@@ -1,0 +1,23 @@
+{
+  "query": "I'm managing a 66\u2011year\u2011old man hospitalized with hemorrhagic stroke. For male inpatients aged 61\u201371, stratified into quintiles by first\u201124\u2011hour medication complexity score, report per quintile: number of patients, mean complexity score, average LOS, in\u2011hospital mortality, and 30\u2011day readmission rate.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 61 AND 71\n),\n\ncomplexity AS (\n  SELECT \n    b.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM base_cohort b\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON b.hadm_id = pr.hadm_id\n    AND pr.starttime >= b.admittime\n    AND pr.starttime <= DATETIME_ADD(b.admittime, INTERVAL 24 HOUR)\n  GROUP BY b.hadm_id\n),\n\nadmissions_with_los AS (\n  SELECT \n    hadm_id,\n    subject_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag,\n    DATETIME_DIFF(dischtime, admittime, SECOND) / (24*60*60) AS los_days\n  FROM base_cohort\n),\n\nadmissions_with_next AS (\n  SELECT \n    *,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n  FROM admissions_with_los\n),\n\nadmissions_with_readmission AS (\n  SELECT \n    *,\n    CASE \n      WHEN hospital_expire_flag = 1 THEN 0\n      WHEN next_admittime IS NOT NULL AND next_admittime <= DATETIME_ADD(dischtime, INTERVAL 30 DAY) THEN 1\n      ELSE 0\n    END AS readmission_30d\n  FROM admissions_with_next\n),\n\nfull_data AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    COALESCE(c.complexity_score, 0) AS complexity_score,\n    a.los_days,\n    a.hospital_expire_flag,\n    a.readmission_30d\n  FROM admissions_with_readmission a\n  LEFT JOIN complexity c\n    ON a.hadm_id = c.hadm_id\n),\n\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY complexity_score) AS quintile\n  FROM full_data\n)\n\nSELECT \n  quintile,\n  COUNT(*) AS num_patients,\n  AVG(complexity_score) AS mean_complexity_score,\n  AVG(los_days) AS avg_los,\n  AVG(hospital_expire_flag) AS in_hospital_mortality,\n  AVG(readmission_30d) AS readmission_30d_rate\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:18]\n\nLocation: US\nJob ID: 76082518-1843-41cc-b942-ae722f5d6dab\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

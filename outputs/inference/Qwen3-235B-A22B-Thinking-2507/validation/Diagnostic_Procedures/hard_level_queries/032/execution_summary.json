@@ -1,0 +1,23 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH sepsis_patients AS (\n  SELECT \n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE \n    (d.icd_version = 9 AND (d.icd_code LIKE '038%' OR d.icd_code IN ('99591', '99592')))\n    OR (d.icd_version = 10 AND (d.icd_code LIKE 'A40%' OR d.icd_code LIKE 'A41%' OR d.icd_code LIKE 'R652%'))\n  GROUP BY d.hadm_id\n),\n\nfiltered_patients AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    -- Calculate age at admission using MIMIC-IV standard approach\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 66 AND 76\n),\n\nfirst_icu_stays AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS icu_stay_order\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n),\n\ncohort AS (\n  SELECT \n    fps.subject_id,\n    fps.hadm_id,\n    fis.stay_id,\n    fis.intime\n  FROM filtered_patients fps\n  INNER JOIN sepsis_patients sp ON fps.hadm_id = sp.hadm_id\n  INNER JOIN first_icu_stays fis ON fps.subject_id = fis.subject_id AND fps.hadm_id = fis.hadm_id\n  WHERE fis.icu_stay_order = 1\n),\n\nprocedure_counts AS (\n  SELECT \n    c.stay_id,\n    COUNT(DISTINCT p.itemid) AS distinct_procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p \n    ON c.stay_id = p.stay_id\n    AND p.starttime >= c.intime \n    AND p.starttime < DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY c.stay_id\n)\n\nSELECT \n  APPROX_QUANTILES(distinct_procedure_count, 1000)[OFFSET(900)] AS percentile_90\nFROM procedure_counts;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:12]\n\nLocation: US\nJob ID: 676b0188-b0a0-409c-88c3-f492bcc6f719\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

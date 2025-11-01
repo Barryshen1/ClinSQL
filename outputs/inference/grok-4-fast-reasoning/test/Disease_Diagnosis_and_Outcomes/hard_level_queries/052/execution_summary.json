@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 80-year-old woman with COPD exacerbation. For female inpatients 75\u201385 with COPD exacerbation, stratified into quartiles by the composite risk score, report per quartile: 90-day mortality, major complication rate, median survivor LOS, and broader 75\u201385 female 90-day mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    p.dod,\n    (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 75 AND 85\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = a.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 10 AND d.icd_code IN ('J440', 'J441'))\n          OR\n          (d.icd_version = 9 AND d.icd_code = '49121')\n        )\n    )\n),\n\ncohort_with_quartile AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY age) AS quartile\n  FROM cohort\n),\n\ncomplications AS (\n  SELECT\n    c.*,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.subject_id = c.subject_id\n          AND d.hadm_id = c.hadm_id\n          AND (\n            (d.icd_version = 10 AND d.icd_code LIKE 'J96%')\n            OR\n            (d.icd_version = 9 AND d.icd_code = '51881')\n          )\n      ) THEN 1\n      ELSE 0\n    END AS major_complication\n  FROM cohort_with_quartile c\n),\n\nmetrics AS (\n  SELECT\n    *,\n    CASE\n      WHEN dod IS NOT NULL\n        AND dod <= DATE_ADD(DATE(admittime), INTERVAL 90 DAY)\n      THEN 1.0\n      ELSE 0.0\n    END AS ninetyd_mort,\n    major_complication * 1.0 AS major_comp_rate,\n    CASE\n      WHEN dod IS NULL\n        OR dod > DATE_ADD(DATE(admittime), INTERVAL 90 DAY)\n      THEN TIMESTAMP_DIFF(dischtime, admittime, DAY)\n      ELSE NULL\n    END AS survivor_los_days\n  FROM complications\n),\n\nbroader_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    p.dod,\n    (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 75 AND 85\n),\n\nbroader_mortality AS (\n  SELECT\n    COUNT(*) AS total_admissions,\n    COUNTIF(\n      dod IS NOT NULL AND dod <= DATE_ADD(DATE(admittime), INTERVAL 90 DAY)\n    ) AS total_deaths\n  FROM broader_cohort\n)\n\nSELECT\n  m.quartile,\n  COUNT(*) AS n_per_quartile,\n  AVG(m.ninetyd_mort) AS ninetyd_mortality_rate,\n  AVG(m.major_comp_rate) AS major_complication_rate,\n  APPROX_QUANTILES(m.survivor_los_days, 2)[OFFSET(1)] AS median_survivor_los_days,\n  bm.total_deaths * 1.0 / bm.total_admissions AS broader_75_85_female_ninetyd_mortality\nFROM metrics m\nCROSS JOIN broader_mortality bm\nGROUP BY m.quartile, bm.total_deaths, bm.total_admissions\nORDER BY m.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:12]\n\nLocation: US\nJob ID: 2414b96b-b1ac-43f4-9da7-219e1eeb115f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: c189a420-74b7-43e8-816f-d1702d67894b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

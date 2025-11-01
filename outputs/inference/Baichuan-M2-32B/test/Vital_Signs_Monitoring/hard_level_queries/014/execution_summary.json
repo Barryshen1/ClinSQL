@@ -1,0 +1,29 @@
+{
+  "query": "For a 93\u2011year\u2011old male ICU patient on RRT: among male ICU patients aged 88\u201398, what percentile is an instability score of 85 in the first 72 hours, and what are ICU LOS and hospital mortality for the most unstable quartile?",
+  "final_sql": "WITH\n  eligible_patients AS (\n    SELECT subject_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE gender = 'M'\n      AND anchor_age BETWEEN 88 AND 98\n  ),\n  first_icu_stays AS (\n    SELECT \n      i.subject_id, \n      i.hadm_id, \n      i.stay_id, \n      i.intime, \n      i.outtime, \n      i.los\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN eligible_patients e ON i.subject_id = e.subject_id\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) = 1\n  ),\n  rrt_patients AS (\n    SELECT DISTINCT\n      s.subject_id, \n      s.hadm_id, \n      s.stay_id\n    FROM first_icu_stays s\n    JOIN `physionet-data.mimiciv_3_1_icu.inputevents` ie\n      ON s.subject_id = ie.subject_id \n      AND s.hadm_id = ie.hadm_id \n      AND s.stay_id = ie.stay_id\n    WHERE ie.itemid IN (222083, 222084, 222085, 222086, 222087)\n      AND ie.starttime BETWEEN s.intime AND s.outtime\n  ),\n  hr_data AS (\n    SELECT \n      s.subject_id, \n      s.hadm_id, \n      s.stay_id,\n      ce.valuenum AS hr_value\n    FROM rrt_patients s\n    JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      ON s.subject_id = ce.subject_id \n      AND s.hadm_id = ce.hadm_id \n      AND s.stay_id = ce.stay_id\n    WHERE ce.itemid = 220045  -- heart rate\n      AND ce.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 72 HOUR)\n      AND ce.charttime <= s.outtime  -- Ensure within ICU stay\n      AND ce.valuenum IS NOT NULL\n  ),\n  instability_scores AS (\n    SELECT \n      subject_id, \n      hadm_id, \n      stay_id,\n      STDDEV_SAMP(hr_value) AS instability_score\n    FROM hr_data\n    GROUP BY subject_id, hadm_id, stay_id\n    HAVING COUNT(hr_value) >= 2  -- at least two measurements to compute std dev\n  ),\n  cohort AS (\n    SELECT \n      i.subject_id, \n      i.hadm_id, \n      i.stay_id, \n      i.los,\n      a.hospital_expire_flag,\n      s.instability_score\n    FROM instability_scores s\n    JOIN first_icu_stays i \n      ON s.subject_id = i.subject_id \n      AND s.hadm_id = i.hadm_id \n      AND s.stay_id = i.stay_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON i.subject_id = a.subject_id \n      AND i.hadm_id = a.hadm_id\n  ),\n  percentile_85 AS (\n    SELECT \n      (SELECT COUNT(*) FROM cohort WHERE instability_score <= 85) * 100.0 / (SELECT COUNT(*) FROM cohort) AS percentile_85\n  ),\n  quartile_groups AS (\n    SELECT \n      *,\n      NTILE(4) OVER (ORDER BY instability_score DESC) AS quartile\n    FROM cohort\n  ),\n  top_quartile AS (\n    SELECT \n      AVG(los / 24.0) AS avg_icu_los_days,  -- convert to days\n      AVG(hospital_expire_flag) AS mortality_rate  -- Directly average the boolean\n    FROM quartile_groups\n    WHERE quartile = 1  -- top quartile (highest instability)\n  )\nSELECT \n  (SELECT percentile_85 FROM percentile_85) AS instability_score_percentile_85,\n  (SELECT avg_icu_los_days FROM top_quartile) AS avg_icu_los_days_top_quartile,\n  (SELECT mortality_rate FROM top_quartile) AS mortality_rate_top_quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name intime not found inside s at [45:34]; reason: invalidQuery, location: query, message: Name intime not found inside s at [45:34]\n\nLocation: US\nJob ID: d8d565a4-9b46-4d31-83fa-ffd0ae3d4a9b\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside s at [45:34]; reason: invalidQuery, location: query, message: Name intime not found inside s at [45:34]\n\nLocation: US\nJob ID: 762e5a13-a1d9-44eb-835f-8ce8e6f50ad9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [89:40]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [89:40]\n\nLocation: US\nJob ID: 6182c3c8-5e4c-43dc-a91a-19b20a0d6720\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside s at [45:34]; reason: invalidQuery, location: query, message: Name intime not found inside s at [45:34]\n\nLocation: US\nJob ID: d8d565a4-9b46-4d31-83fa-ffd0ae3d4a9b\n"
+    }
+  ]
+}

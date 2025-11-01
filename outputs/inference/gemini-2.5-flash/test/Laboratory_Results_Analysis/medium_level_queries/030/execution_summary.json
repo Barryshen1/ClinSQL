@@ -1,0 +1,28 @@
+{
+  "query": "I have a 69-year-old woman. Among female patients age 64\u201374 hospitalized for AMI, what percentage had index high-sensitivity troponin T categorized as Normal (\u22640.014), Borderline (0.015\u20130.052), or Myocardial Injury (>0.052)?",
+  "final_sql": "WITH ami_cohort AS (\n    SELECT DISTINCT\n        p.subject_id,\n        ad.hadm_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON p.subject_id = ad.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON ad.hadm_id = di.hadm_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 64 AND 74\n        -- ICD-10 codes for Acute Myocardial Infarction (AMI)\n        AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%')\n        AND di.icd_version = 10\n),\nfirst_troponin_t AS (\n    SELECT\n        ac.subject_id,\n        ac.hadm_id,\n        le.valuenum,\n        ROW_NUMBER() OVER (PARTITION BY ac.subject_id, ac.hadm_id ORDER BY le.charttime) AS rn\n    FROM\n        ami_cohort ac\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON ac.subject_id = le.subject_id AND ac.hadm_id = le.hadm_id\n    WHERE\n        le.itemid = 50993 -- Itemid for Troponin T (a common high-sensitivity troponin T in MIMIC-IV)\n        AND le.valuenum IS NOT NULL\n        AND le.valuenum >= 0 -- Exclude potential erroneous negative values\n),\ncategorized_troponin AS (\n    SELECT\n        fct.subject_id,\n        fct.hadm_id,\n        fct.valuenum,\n        CASE\n            WHEN fct.valuenum <= 0.014 THEN 'Normal'\n            WHEN fct.valuenum BETWEEN 0.015 AND 0.052 THEN 'Borderline' -- Changed to BETWEEN for clarity, although >= 0.015 AND <= 0.052 is equivalent\n            WHEN fct.valuenum > 0.052 THEN 'Myocardial Injury'\n            ELSE 'Uncategorized' -- Should ideally not be reached with proper filtering\n        END AS troponin_category\n    FROM\n        first_troponin_t fct\n    WHERE\n        fct.rn = 1 -- Select the first Troponin T measurement for each admission\n)\nSELECT\n    ct.troponin_category,\n    COUNT(*) AS num_admissions, -- Changed from COUNT(DISTINCT (ct.subject_id, ct.hadm_id)) to COUNT(*)\n    ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM categorized_troponin), 2) AS percentage -- Changed from COUNT(DISTINCT (subject_id, hadm_id)) to COUNT(*)\nFROM\n    categorized_troponin ct\nGROUP BY\n    ct.troponin_category\nORDER BY\n    CASE ct.troponin_category\n        WHEN 'Normal' THEN 1\n        WHEN 'Borderline' THEN 2\n        WHEN 'Myocardial Injury' THEN 3\n        ELSE 4\n    END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function COUNT\n  Argument types: INT64, INT64\n  Signature: COUNT(T1)\n    Signature accepts at most 1 argument, found 2 arguments at [54:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function COUNT\n  Argument types: INT64, INT64\n  Signature: COUNT(T1)\n    Signature accepts at most 1 argument, found 2 arguments at [54:5]\n\nLocation: US\nJob ID: ae7c500e-79d9-496d-9cdd-00854f83a264\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregate functions with DISTINCT cannot be used with arguments of type STRUCT; reason: invalidQuery, location: query, message: Aggregate functions with DISTINCT cannot be used with arguments of type STRUCT\n\nLocation: US\nJob ID: 4b0ddf96-d1a1-40e5-8d57-e3204586c9ac\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

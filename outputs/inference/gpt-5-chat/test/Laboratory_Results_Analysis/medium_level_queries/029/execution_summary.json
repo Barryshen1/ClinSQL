@@ -1,0 +1,28 @@
+{
+  "query": "For context on my 63-year-old male: among males aged 58\u201368 admitted with chest pain or AMI with initial Troponin T >0.04 ng/mL, give summary statistics including in-hospital mortality rate.",
+  "final_sql": "WITH troponin_first AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    ARRAY_AGG(le.valuenum ORDER BY le.charttime ASC LIMIT 1)[OFFSET(0)] AS first_trop_value,\n    MIN(le.charttime) AS first_trop_time\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` di\n    ON le.itemid = di.itemid\n  WHERE LOWER(di.label) = 'troponin t'\n    AND le.valuenum IS NOT NULL\n  GROUP BY le.subject_id, le.hadm_id\n),\ndx_filtered AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%chest pain%'\n     OR LOWER(dd.long_title) LIKE '%myocardial infarction%'\n),\ncohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    tf.first_trop_value,\n    a.hospital_expire_flag\n  FROM dx_filtered dx\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON dx.subject_id = a.subject_id\n    AND dx.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN troponin_first tf\n    ON a.subject_id = tf.subject_id\n    AND a.hadm_id = tf.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND tf.first_trop_value > 0.04\n)\nSELECT\n  COUNT(*) AS num_admissions,\n  COUNT(DISTINCT subject_id) AS num_unique_patients,\n  MIN(anchor_age) AS min_age,\n  MAX(anchor_age) AS max_age,\n  AVG(anchor_age) AS avg_age,\n  AVG(first_trop_value) AS avg_first_troponin,\n  APPROX_QUANTILES(first_trop_value, 2)[OFFSET(1)] AS median_first_troponin,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS num_deaths,\n  SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)) AS mortality_rate\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column first_trop_value which is neither grouped nor aggregated at [51:19]; reason: invalidQuery, location: query, message: SELECT list expression references column first_trop_value which is neither grouped nor aggregated at [51:19]\n\nLocation: US\nJob ID: 7a935dc3-2528-46ca-bc56-b1d36acfe5a1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 2a8b014c-e2df-4669-904e-5714c5bd1323\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

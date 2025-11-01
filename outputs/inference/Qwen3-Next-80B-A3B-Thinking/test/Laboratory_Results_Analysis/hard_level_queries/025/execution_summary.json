@@ -1,0 +1,23 @@
+{
+  "query": "53\u2011year\u2011old female inpatient. Among female inpatients 48\u201358 with hemorrhagic stroke, what is the 90th\u2011percentile lab\u2011instability score (lab systems with critical values in first 72 h)? For patients \u2265P90 report mortality%, mean LOS, and avg critical labs/patient vs age\u2011matched cohort.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('430', '431', '432'))\n      OR\n      (d.icd_version = 10 AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%'))\n    )\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 48 AND 58\n),\n\nlab_scores AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT l.itemid) AS lab_score\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n  WHERE\n    l.charttime BETWEEN c.admittime AND c.admittime + INTERVAL '72' HOUR\n    AND l.valuenum IS NOT NULL\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n    AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n  GROUP BY\n    c.subject_id, c.hadm_id\n),\n\npercentile AS (\n  SELECT\n    PERCENTILE_CONT(lab_score, 0.9) OVER () AS p90\n  FROM\n    lab_scores\n),\n\nrisk_groups AS (\n  SELECT\n    ls.subject_id,\n    ls.hadm_id,\n    ls.lab_score,\n    CASE WHEN ls.lab_score >= p.p90 THEN 'high-risk' ELSE 'low-risk' END AS risk_group\n  FROM\n    lab_scores ls\n  CROSS JOIN\n    percentile p\n)\n\nSELECT\n  risk_group,\n  SUM(CASE WHEN c.hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS mortality_percent,\n  AVG(DATE_DIFF(c.dischtime, c.admittime, DAY)) AS mean_los,\n  AVG(rg.lab_score) AS avg_critical_labs\nFROM\n  risk_groups rg\nJOIN\n  cohort c\n  ON rg.subject_id = c.subject_id AND rg.hadm_id = c.hadm_id\nGROUP BY\n  risk_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: ls at [71:7]; reason: invalidQuery, location: query, message: Unrecognized name: ls at [71:7]\n\nLocation: US\nJob ID: 40cc0bf4-a3f7-41a3-9394-d81ac740ca12\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

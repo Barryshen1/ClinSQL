@@ -1,0 +1,22 @@
+{
+  "query": "I have a 57\u2011year\u2011old man admitted with asthma exacerbation. Among male inpatients aged 52\u201362 with asthma exacerbation, what is the 90th\u2011percentile 72\u2011hour lab instability score? For the top decile, report mortality, mean LOS, average critical lab events, and compare to age\u2011matched males.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 52 AND 62\n),\n\nasthma_exacerbation AS (\n  SELECT DISTINCT pa.subject_id, pa.hadm_id, pa.admittime, pa.dischtime, pa.hospital_expire_flag, pa.deathtime\n  FROM patient_admissions pa\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%asthma exacerbation%'\n     OR d.icd_code IN ('493.91', 'J45.901') -- Common codes for asthma exacerbation\n),\n\nlab_abnormalities_72h AS (\n  SELECT\n    ae.hadm_id,\n    COUNT(*) AS critical_lab_count\n  FROM asthma_exacerbation ae\n  JOIN `physionet-data.mimiciv_3_1_hosp`.labevents l\n    ON ae.hadm_id = l.hadm_id\n  WHERE l.charttime >= ae.admittime\n    AND l.charttime <= ae.admittime + INTERVAL '72' HOUR\n    AND (\n      l.flag = 'abnormal'\n      OR (l.valuenum IS NOT NULL AND l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower)\n      OR (l.valuenum IS NOT NULL AND l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper)\n    )\n  GROUP BY ae.hadm_id\n),\n\ncohort_with_scores AS (\n  SELECT\n    ae.subject_id,\n    ae.hadm_id,\n    ae.admittime,\n    ae.dischtime,\n    ae.hospital_expire_flag,\n    ae.deathtime,\n    COALESCE(lab.critical_lab_count, 0) AS critical_lab_count\n  FROM asthma_exacerbation ae\n  LEFT JOIN lab_abnormalities_72h lab\n    ON ae.hadm_id = lab.hadm_id\n),\n\npercentile_threshold AS (\n  SELECT\n    APPROX_QUANTILES(critical_lab_count, 100)[OFFSET(90)] AS p90_score\n  FROM cohort_with_scores\n),\n\ncohort_with_group AS (\n  SELECT\n    cs.*,\n    CASE\n      WHEN cs.critical_lab_count >= pt.p90_score THEN 'Top Decile'\n      ELSE 'Other'\n    END AS risk_group\n  FROM cohort_with_scores cs\n  CROSS JOIN percentile_threshold pt\n)\n\nSELECT\n  risk_group,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n  AVG(critical_lab_count) AS avg_critical_lab_events,\n  COUNT(*) AS patient_count\nFROM cohort_with_group\nGROUP BY risk_group\nORDER BY risk_group DESC;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [79:7]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [79:7]\n\nLocation: US\nJob ID: 98b61d40-6284-47f5-b79d-03efa90dda0f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

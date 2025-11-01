@@ -1,0 +1,16 @@
+{
+  "query": "For my 55-year-old female inpatient: among women aged 50\u201360 with type 2 diabetes and heart failure admitted \u226572 hours, what were first 12\u2011hour GLP\u20111 initiation, final 72\u2011hour prevalence, and net percentage\u2011point change?",
+  "final_sql": "WITH cohort AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\ndiag_t2dm AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE ( (d.icd_version = 9 AND (d.icd_code LIKE '250%0' OR d.icd_code LIKE '250%2'))\n       OR (d.icd_version = 10 AND d.icd_code LIKE 'E11%') )\n),\ndiag_hf AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE ( (d.icd_version = 9 AND d.icd_code LIKE '428%')\n       OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%') )\n),\ncohort_diag AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN diag_t2dm t2 ON c.hadm_id = t2.hadm_id\n  JOIN diag_hf hf ON c.hadm_id = hf.hadm_id\n),\nglp1_admin AS (\n  SELECT cd.hadm_id,\n         MIN(TIMESTAMP_DIFF(pr.starttime, cd.admittime, HOUR)) AS first_admin_hr\n  FROM cohort_diag cd\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON cd.hadm_id = pr.hadm_id\n  WHERE LOWER(pr.drug) LIKE '%exenatide%'\n     OR LOWER(pr.drug) LIKE '%liraglutide%'\n     OR LOWER(pr.drug) LIKE '%dulaglutide%'\n     OR LOWER(pr.drug) LIKE '%semaglutide%'\n     OR LOWER(pr.drug) LIKE '%lixisenatide%'\n  GROUP BY cd.hadm_id\n),\nrates AS (\n  SELECT\n    COUNT(DISTINCT cd.hadm_id) AS cohort_size,\n    COUNT(DISTINCT CASE WHEN ga.first_admin_hr IS NOT NULL AND ga.first_admin_hr <= 12 THEN cd.hadm_id END) AS first12h_count,\n    COUNT(DISTINCT CASE WHEN ga.first_admin_hr IS NOT NULL AND ga.first_admin_hr <= 72 THEN cd.hadm_id END) AS final72h_count\n  FROM cohort_diag cd\n  LEFT JOIN glp1_admin ga\n    ON cd.hadm_id = ga.hadm_id\n)\nSELECT\n  cohort_size,\n  ROUND(100.0 * first12h_count / cohort_size, 2) AS first12h_initiation_pct,\n  ROUND(100.0 * final72h_count / cohort_size, 2) AS final72h_prevalence_pct,\n  ROUND( (100.0 * final72h_count / cohort_size) - (100.0 * first12h_count / cohort_size), 2 ) AS net_pct_point_change\nFROM rates;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

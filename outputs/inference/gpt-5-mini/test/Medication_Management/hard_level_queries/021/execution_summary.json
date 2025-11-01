@@ -1,0 +1,22 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH diag_flags AS (\n  SELECT\n    di.hadm_id,\n    MAX(IF(COALESCE(LOWER(d.long_title), '') LIKE '%neutropen%', 1, 0)) AS has_neutropenia,\n    MAX(IF(\n      COALESCE(LOWER(d.long_title), '') LIKE '%fever%'\n      OR COALESCE(LOWER(d.long_title), '') LIKE '%pyrexia%',\n      1, 0)) AS has_fever\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n      ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  GROUP BY\n    di.hadm_id\n),\n\nmed_counts AS (\n  -- Count distinct medication names prescribed within first 48 hours of admission\n  SELECT\n    a.hadm_id,\n    COUNT(DISTINCT TRIM(LOWER(p.drug))) AS med_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n      ON p.hadm_id = a.hadm_id\n      AND p.starttime IS NOT NULL\n      AND p.starttime >= a.admittime\n      AND p.starttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n      AND TRIM(COALESCE(p.drug, '')) != ''\n  GROUP BY\n    a.hadm_id\n),\n\ncohort_base AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    COALESCE(mc.med_count, 0) AS med_count,\n    -- LOS in fractional days\n    (TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0) AS los_days,\n    -- 30-day readmission indicator as 0/1\n    IF(\n      EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = a.subject_id\n          AND a2.hadm_id != a.hadm_id\n          AND a2.admittime > a.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(a.dischtime, INTERVAL 30 DAY)\n      ), 1, 0) AS has_readmit30\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    LEFT JOIN diag_flags df\n      ON a.hadm_id = df.hadm_id\n    LEFT JOIN med_counts mc\n      ON a.hadm_id = mc.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 41 AND 51\n    -- require both neutropenia and fever diagnosis in this admission\n    AND df.has_neutropenia = 1\n    AND df.has_fever = 1\n),\n\ncohort_with_tertile AS (\n  SELECT\n    cb.*,\n    NTILE(3) OVER (ORDER BY cb.med_count, cb.hadm_id) AS tertile\n  FROM\n    cohort_base cb\n)\n\nSELECT\n  tertile,\n  COUNT(*) AS n_admissions,\n  -- median LOS (approximate)\n  (APPROX_QUANTILES(los_days, 100)[OFFSET(50)]) AS median_los_days,\n  -- mean LOS for context\n  AVG(los_days) AS mean_los_days,\n  -- in-hospital mortality percent\n  100.0 * AVG(CAST(hospital_expire_flag AS FLOAT64)) AS in_hospital_mortality_pct,\n  -- 30-day readmission percent\n  100.0 * AVG(CAST(has_readmit30 AS FLOAT64)) AS readmit_30day_pct,\n  -- medication count summary per tertile\n  MIN(med_count) AS med_count_min,\n  CAST(APPROX_QUANTILES(med_count, 100)[OFFSET(50)] AS INT64) AS med_count_median,\n  MAX(med_count) AS med_count_max\nFROM\n  cohort_with_tertile\nGROUP BY\n  tertile\nORDER BY\n  tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword OF at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword OF at [1:16]\n\nLocation: US\nJob ID: 12e8abca-a45d-4e58-9b0e-cbb92b8ade88\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

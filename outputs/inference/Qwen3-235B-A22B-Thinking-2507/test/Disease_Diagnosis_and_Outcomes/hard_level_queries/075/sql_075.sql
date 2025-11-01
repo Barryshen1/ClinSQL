@@ -1,0 +1,1 @@
+APPROX_QUANTILES(IF(hospital_expire_flag = 0, los_days, NULL), 2)[OFFSET(1)] AS median_survivor_los;

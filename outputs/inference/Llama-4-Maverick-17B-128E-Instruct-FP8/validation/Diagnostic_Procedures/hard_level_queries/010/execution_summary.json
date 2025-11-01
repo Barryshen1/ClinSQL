@@ -1,0 +1,16 @@
+{
+  "query": "I have a 45-year-old man. Among male ICU patients aged 40\u201350, comparing those with hemorrhagic stroke versus other males 40\u201350, what is the 90th percentile of diagnostic procedures in the first 72 hours, and associated ICU LOS and in-hospital mortality?",
+  "final_sql": "WITH \neligible_patients AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 40 AND 50\n),\nhemorrhagic_stroke AS (\n  SELECT DISTINCT d.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE (d.icd_version = 9 AND d.icd_code BETWEEN '430' AND '432') \n     OR (d.icd_version = 10 AND d.icd_code BETWEEN 'I60' AND 'I62')\n),\nicu_stays AS (\n  SELECT i.subject_id, i.stay_id, i.intime, \n         TIMESTAMP_DIFF(i.outtime, i.intime, HOUR) AS icu_los_hours,\n         COUNT(pe.itemid) AS num_diagnostic_procedures\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe \n    ON i.stay_id = pe.stay_id \n    AND pe.starttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 72 HOUR)\n  GROUP BY i.subject_id, i.stay_id, i.intime, i.outtime\n),\nmortality AS (\n  SELECT a.subject_id, a.hadm_id, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\ncombined_data AS (\n  SELECT \n    ep.subject_id,\n    icu.stay_id,\n    icu.num_diagnostic_procedures,\n    icu.icu_los_hours,\n    m.hospital_expire_flag,\n    CASE WHEN hs.subject_id IS NOT NULL THEN 1 ELSE 0 END AS has_hemorrhagic_stroke\n  FROM eligible_patients ep\n  JOIN icu_stays icu ON ep.subject_id = icu.subject_id\n  JOIN mortality m ON ep.subject_id = m.subject_id\n  LEFT JOIN hemorrhagic_stroke hs ON ep.subject_id = hs.subject_id\n)\nSELECT \n  has_hemorrhagic_stroke,\n  APPROX_QUANTILES(num_diagnostic_procedures, 100)[OFFSET(90)] AS percentile_90_diagnostic_procedures,\n  APPROX_QUANTILES(icu_los_hours, 100)[OFFSET(90)] AS percentile_90_icu_los_hours,\n  AVG(hospital_expire_flag) AS in_hospital_mortality\nFROM combined_data\nGROUP BY has_hemorrhagic_stroke;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

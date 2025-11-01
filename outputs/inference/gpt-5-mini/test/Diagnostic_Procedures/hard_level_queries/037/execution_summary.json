@@ -1,0 +1,16 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH sepsis_hadms AS (\n  -- admissions with any diagnosis whose description contains \"sepsis\"\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dic\n    ON d.icd_code = dic.icd_code\n   AND d.icd_version = dic.icd_version\n  WHERE LOWER(dic.long_title) LIKE '%sepsis%'\n),\n\nicu_sepsis_stays AS (\n  -- ICU stays for admissions flagged with sepsis and patients aged 53-63 (anchor_age)\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON icu.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE icu.hadm_id IN (SELECT hadm_id FROM sepsis_hadms)\n    AND p.anchor_age BETWEEN 53 AND 63\n),\n\nproc_counts_per_stay AS (\n  -- Count procedureevents occurring within first 24 hours of ICU intime.\n  -- Use LEFT JOIN so stays without procedures get proc_count = 0.\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.gender,\n    s.anchor_age,\n    s.los,\n    s.hospital_expire_flag,\n    COUNT(pe.starttime) AS proc_count_first_24h\n  FROM icu_sepsis_stays s\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON pe.stay_id = s.stay_id\n   AND pe.starttime IS NOT NULL\n   AND pe.starttime >= s.intime\n   AND pe.starttime <= TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR)\n  GROUP BY\n    s.subject_id, s.hadm_id, s.stay_id, s.gender, s.anchor_age, s.los, s.hospital_expire_flag\n),\n\naggregated AS (\n  -- Prepare cohort-level aggregates: female vs all (age-matched)\n  SELECT\n    'Female (53-63, sepsis)' AS cohort,\n    COUNT(*) AS n_stays,\n    -- 75th and 90th percentiles via APPROX_QUANTILES (100 buckets -> offsets 75 and 90)\n    APPROX_QUANTILES(proc_count_first_24h, 100)[OFFSET(75)] AS proc_count_p75,\n    APPROX_QUANTILES(proc_count_first_24h, 100)[OFFSET(90)] AS proc_count_p90,\n    AVG(los) AS avg_icu_los_hours,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS hospital_mortality_rate\n  FROM proc_counts_per_stay\n  WHERE gender = 'F'\n\n  UNION ALL\n\n  SELECT\n    'All sexes (53-63, sepsis)' AS cohort,\n    COUNT(*) AS n_stays,\n    APPROX_QUANTILES(proc_count_first_24h, 100)[OFFSET(75)] AS proc_count_p75,\n    APPROX_QUANTILES(proc_count_first_24h, 100)[OFFSET(90)] AS proc_count_p90,\n    AVG(los) AS avg_icu_los_hours,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS hospital_mortality_rate\n  FROM proc_counts_per_stay\n)\n\nSELECT *\nFROM aggregated\nORDER BY cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

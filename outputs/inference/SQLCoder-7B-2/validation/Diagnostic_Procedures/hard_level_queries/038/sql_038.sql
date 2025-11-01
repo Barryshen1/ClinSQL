@@ -1,0 +1,1 @@
+SELECT hrp75.procedures_75th_percentile, alos.avg_los, m.mortality_rate FROM high_risk_procedures_75th_percentile hrp75 JOIN avg_los alos ON 1=1 JOIN mortality m ON 1=1;

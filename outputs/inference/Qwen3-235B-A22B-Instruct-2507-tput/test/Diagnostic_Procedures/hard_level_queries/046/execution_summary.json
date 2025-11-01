@@ -1,0 +1,22 @@
+{
+  "query": "My 42\u2011year\u2011old female: among female ICU patients aged 37\u201347 with ARDS (first ICU stay), what is the minimum diagnostic utilization (distinct procedures during first 72 hours)? Compare to all ICU patients and report P75/P90, mean hospital LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH ards_code AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%acute respiratory distress syndrome%'\n    AND icd_version = 10\n),\nfirst_icu_stays AS (\n  SELECT \n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ROW_NUMBER() OVER (PARTITION BY ie.subject_id ORDER BY ie.intime) AS stay_order\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n),\nards_patients AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    fis.stay_id,\n    fis.intime,\n    fis.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  INNER JOIN ards_code ac\n    ON di.icd_code = ac.icd_code AND di.icd_version = 10\n  INNER JOIN first_icu_stays fis\n    ON a.hadm_id = fis.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND fis.stay_order = 1\n),\nprocedure_counts AS (\n  SELECT \n    fis.stay_id,\n    fis.subject_id,\n    fis.intime,\n    fis.outtime,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedure_count\n  FROM first_icu_stays fis\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON fis.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON fis.stay_id = pe.stay_id\n    AND pe.starttime >= fis.intime\n    AND pe.starttime <= DATETIME_ADD(fis.intime, INTERVAL 72 HOUR)\n    AND pe.starttime <= COALESCE(fis.outtime, DATETIME_ADD(fis.intime, INTERVAL 72 HOUR))\n  WHERE fis.stay_order = 1\n  GROUP BY fis.stay_id, fis.subject_id, fis.intime, fis.outtime, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n),\nards_cohort_stats AS (\n  SELECT \n    MIN(pc.distinct_procedure_count) AS min_diagnostic_utilization\n  FROM procedure_counts pc\n  INNER JOIN ards_patients ap\n    ON pc.stay_id = ap.stay_id\n),\nall_icu_stats AS (\n  SELECT \n    APPROX_QUANTILES(pc.distinct_procedure_count, 1000)[OFFSET(750)] AS p75_procedures,\n    APPROX_QUANTILES(pc.distinct_procedure_count, 1000)[OFFSET(900)] AS p90_procedures,\n    AVG(DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(a.hospital_expire_flag) AS in_hospital_mortality_rate\n  FROM procedure_counts pc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON pc.hadm_id = a.hadm_id\n)\nSELECT \n  acs.min_diagnostic_utilization,\n  ais.p75_procedures,\n  ais.p90_procedures,\n  ais.mean_los_days,\n  ais.in_hospital_mortality_rate\nFROM ards_cohort_stats acs\nCROSS JOIN all_icu_stats ais;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [54:12]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [54:12]\n\nLocation: US\nJob ID: cc6c7315-3f0e-487b-b3a3-3fd2f5f5df99\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

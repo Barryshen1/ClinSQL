@@ -1,0 +1,16 @@
+{
+  "query": "For my 63\u2011year\u2011old female patient: among females 58\u201368 with hemorrhagic stroke and COPD exacerbation, what's the hospital LOS IQR?",
+  "final_sql": "WITH cohort_diagnoses AS (\n  -- First, find all hospital admissions that have diagnoses for BOTH conditions.\n  SELECT\n    hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY\n    hadm_id\n  HAVING\n    -- Condition 1: Hemorrhagic Stroke (ICD-9: 430, 431, 432*; ICD-10: I60*, I61*, I62*)\n    MAX(CASE\n      WHEN (icd_version = 9 AND icd_code IN ('430', '431')) THEN 1\n      WHEN (icd_version = 9 AND icd_code LIKE '432%') THEN 1\n      WHEN (icd_version = 10 AND icd_code LIKE 'I60%') THEN 1\n      WHEN (icd_version = 10 AND icd_code LIKE 'I61%') THEN 1\n      WHEN (icd_version = 10 AND icd_code LIKE 'I62%') THEN 1\n      ELSE 0\n    END) = 1\n    AND\n    -- Condition 2: COPD Exacerbation (ICD-9: 49121; ICD-10: J441)\n    MAX(CASE\n      WHEN icd_version = 9 AND icd_code = '49121' THEN 1\n      WHEN icd_version = 10 AND icd_code = 'J441' THEN 1\n      ELSE 0\n    END) = 1\n),\ncohort_los AS (\n  -- Second, filter for patient demographics and calculate LOS for the relevant admissions.\n  SELECT\n    adm.hadm_id,\n    -- Calculate hospital length of stay in fractional days for more precision.\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON p.subject_id = adm.subject_id\n  INNER JOIN\n    cohort_diagnoses AS dx\n    ON adm.hadm_id = dx.hadm_id\n  WHERE\n    -- Filter for female patients\n    p.gender = 'F'\n    -- Filter for patients aged 58-68 at the time of admission\n    AND (p.anchor_age + EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) BETWEEN 58 AND 68\n    -- Ensure dischtime and admittime are valid for LOS calculation\n    AND adm.dischtime IS NOT NULL AND adm.admittime IS NOT NULL\n)\n-- Finally, calculate the Interquartile Range (IQR) of the hospital LOS.\nSELECT\n  -- IQR = 75th percentile (Q3) - 25th percentile (Q1)\n  -- APPROX_QUANTILES returns an array; we access elements by OFFSET (0-indexed).\n  (APPROX_QUANTILES(los_days, 100)[OFFSET(75)] - APPROX_QUANTILES(los_days, 100)[OFFSET(25)]) AS hospital_los_iqr\nFROM\n  cohort_los\nWHERE\n  -- Exclude admissions with zero or negative LOS\n  los_days > 0;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

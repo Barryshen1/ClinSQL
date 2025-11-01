@@ -1,0 +1,28 @@
+{
+  "query": "For a 63\u2011year\u2011old female ICU patient: among women 58\u201368 on renal replacement therapy, in the first 72h report IQR and 25th/50th/75th/90th percentiles of the vital\u2011instability index (avg concurrent MAP<65, HR>100) and compare hypotensive/tachycardic hours, ICU LOS, mortality to other RRT patients.",
+  "final_sql": "WITH rrt_patients AS (\n  SELECT DISTINCT\n    i.stay_id,\n    i.subject_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM `physionet-data`.mimiciv_3_1_icu.icustays i\n  INNER JOIN `physionet-data`.mimiciv_3_1_hosp.patients p\n    ON i.subject_id = p.subject_id\n  INNER JOIN `physionet-data`.mimiciv_3_1_hosp.admissions a\n    ON i.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data`.mimiciv_3_1_icu.procedureevents pe\n    ON i.stay_id = pe.stay_id\n  INNER JOIN `physionet-data`.mimiciv_3_1_icu.d_items di\n    ON pe.itemid = di.itemid\n  WHERE LOWER(di.label) IN (\n    'dialysis', 'crrt', 'hemodialysis', 'renal replacement therapy',\n    'renal replacement', 'rrt', 'continuous renal replacement therapy'\n  )\n),\n\nvital_events AS (\n  SELECT\n    rrt.stay_id,\n    rrt.intime,\n    ce.charttime,\n    ce.itemid,\n    ce.valuenum,\n    di.label AS vital_sign\n  FROM rrt_patients rrt\n  INNER JOIN `physionet-data`.mimiciv_3_1_icu.chartevents ce\n    ON rrt.stay_id = ce.stay_id\n  INNER JOIN `physionet-data`.mimiciv_3_1_icu.d_items di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime >= rrt.intime\n    AND ce.charttime <= DATETIME_ADD(rrt.intime, INTERVAL 72 HOUR)\n    AND di.label IN ('MAP', 'Heart Rate')\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n),\n\nhourly_vitals AS (\n  SELECT\n    stay_id,\n    DATETIME_TRUNC(charttime, HOUR) AS hour_bin,\n    MAX(CASE WHEN vital_sign = 'MAP' THEN valuenum END) AS map_val,\n    MAX(CASE WHEN vital_sign = 'Heart Rate' THEN valuenum END) AS hr_val\n  FROM vital_events\n  GROUP BY stay_id, DATETIME_TRUNC(charttime, HOUR)\n),\n\nvital_instability AS (\n  SELECT\n    stay_id,\n    SUM(CASE WHEN map_val < 65 AND hr_val > 100 THEN 1 ELSE 0 END) AS vii_hours\n  FROM hourly_vitals\n  GROUP BY stay_id\n),\n\ngrouped_stats AS (\n  SELECT\n    CASE \n      WHEN rp.gender = 'F' AND rp.anchor_age BETWEEN 58 AND 68 THEN 'Target (F, 58-68)'\n      ELSE 'Other RRT'\n    END AS group_label,\n    vi.vii_hours,\n    rp.los,\n    rp.hospital_expire_flag\n  FROM rrt_patients rp\n  INNER JOIN vital_instability vi\n    ON rp.stay_id = vi.stay_id\n)\n\nSELECT\n  group_label,\n  PERCENTILE_CONT(vii_hours, 0.25) AS vii_25th,\n  PERCENTILE_CONT(vii_hours, 0.50) AS vii_50th,\n  PERCENTILE_CONT(vii_hours, 0.75) AS vii_75th,\n  PERCENTILE_CONT(vii_hours, 0.90) AS vii_90th,\n  PERCENTILE_CONT(vii_hours, 0.75) - PERCENTILE_CONT(vii_hours, 0.25) AS vii_iqr,\n  AVG(los) AS avg_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM grouped_stats\nGROUP BY group_label\nORDER BY group_label;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 2bce0ffb-8d98-4eb1-9c40-ee942aa6f97b\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"a\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"a\" at [1:16]\n\nLocation: US\nJob ID: c6c819cf-8775-4774-82d2-8b7c9766edb3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column vii_hours which is neither grouped nor aggregated at [81:19]; reason: invalidQuery, location: query, message: SELECT list expression references column vii_hours which is neither grouped nor aggregated at [81:19]\n\nLocation: US\nJob ID: 97cc48af-80a0-43ca-9eb1-902b761c4d6b\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 2bce0ffb-8d98-4eb1-9c40-ee942aa6f97b\n"
+    }
+  ]
+}

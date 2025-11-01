@@ -1,0 +1,29 @@
+{
+  "query": "For a 42\u2011year\u2011old man with a postoperative ICU admission, among male inpatients aged 37\u201347, compute medication complexity over the first 72 hours, stratify into quintiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per quintile and estimate his risk.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n    ON a.hadm_id = proc.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 37 AND 47\n),\nicu_stays AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los\n  FROM eligible_admissions e\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON e.hadm_id = i.hadm_id\n),\nmeds AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,  -- Added to propagate ICU length of stay\n    COUNT(DISTINCT COALESCE(p.formulary_drug_cd, p.drug)) AS medication_count\n  FROM icu_stays i\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON i.subject_id = p.subject_id\n    AND i.hadm_id = p.hadm_id\n    AND p.starttime >= i.intime\n    AND p.starttime < i.intime + INTERVAL 72 HOUR\n  GROUP BY i.subject_id, i.hadm_id, i.stay_id, i.intime, i.los  -- Added i.los to GROUP BY\n),\nquintiles AS (\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.stay_id,\n    m.medication_count,\n    m.los,  -- Now available from meds\n    NTILE(5) OVER (ORDER BY m.medication_count) AS quintile\n  FROM meds m\n),\nadm_outcomes AS (\n  SELECT\n    a.hadm_id,\n    a.hospital_expire_flag,\n    CASE \n      WHEN MIN(a2.admittime) IS NOT NULL \n        AND MIN(a2.admittime) <= a.dischtime + INTERVAL 30 DAY \n      THEN 1 \n      ELSE 0 \n    END AS readmitted\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a.subject_id = a2.subject_id\n    AND a2.admittime > a.dischtime\n    AND a2.admittime <= a.dischtime + INTERVAL 30 DAY\n  WHERE a.hadm_id IN (SELECT hadm_id FROM quintiles)\n  GROUP BY a.hadm_id, a.hospital_expire_flag\n)\nSELECT\n  q.quintile,\n  AVG(q.los) AS avg_los,\n  100 * COUNT(DISTINCT CASE WHEN o.hospital_expire_flag = 1 THEN q.hadm_id END) / COUNT(DISTINCT q.hadm_id) AS mortality_rate_percent,\n  100 * COUNT(DISTINCT CASE WHEN o.readmitted = 1 THEN q.hadm_id END) / COUNT(DISTINCT q.hadm_id) AS readmission_rate_percent\nFROM quintiles q\nINNER JOIN adm_outcomes o\n  ON q.hadm_id = o.hadm_id\nGROUP BY q.quintile\nORDER BY q.quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references a.dischtime which is neither grouped nor aggregated at [61:34]; reason: invalidQuery, location: query, message: SELECT list expression references a.dischtime which is neither grouped nor aggregated at [61:34]\n\nLocation: US\nJob ID: 4711dda3-f357-4910-acdb-a3bc48c779e9\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"postoperative\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"postoperative\" at [1:8]\n\nLocation: US\nJob ID: 09561f08-0191-4838-bed9-fee4fca743e4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside m at [50:7]; reason: invalidQuery, location: query, message: Name los not found inside m at [50:7]\n\nLocation: US\nJob ID: aad7e4ad-c875-4c08-862e-2a1b1d65b66b\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references a.dischtime which is neither grouped nor aggregated at [61:34]; reason: invalidQuery, location: query, message: SELECT list expression references a.dischtime which is neither grouped nor aggregated at [61:34]\n\nLocation: US\nJob ID: 4711dda3-f357-4910-acdb-a3bc48c779e9\n"
+    }
+  ]
+}

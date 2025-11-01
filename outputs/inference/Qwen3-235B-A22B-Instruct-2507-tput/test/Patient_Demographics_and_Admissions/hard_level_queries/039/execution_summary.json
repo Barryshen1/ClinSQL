@@ -1,0 +1,28 @@
+{
+  "query": "I have a 70-year-old male patient. Among male Medicare patients aged 65\u201375 admitted from the ED with a principal diagnosis of acute respiratory failure, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent LOS >9 days?",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  -- Join to get principal diagnosis\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag\n    ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE\n    -- Male\n    p.gender = 'M'\n    -- Age 65\u201375 at admission\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 65 AND 75\n    -- Insurance: Medicare\n    AND LOWER(a.insurance) = 'medicare'\n    -- Admitted from ED\n    AND LOWER(a.admission_location) LIKE 'emergency room%'\n    -- Principal diagnosis (seq_num = 1)\n    AND diag.seq_num = 1\n    -- Diagnosis: acute respiratory failure (case-insensitive)\n    AND LOWER(d_diag.long_title) LIKE '%acute respiratory failure%'\n    -- Valid admission and discharge times\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    -- Exclude in-hospital deaths (cannot be readmitted)\n    AND a.hospital_expire_flag = 0\n),\nreadmission_flag AS (\n  SELECT\n    e.*,\n    -- Check if there is a next admission within 30 days\n    LEAD(e.admittime) OVER (PARTITION BY e.subject_id ORDER BY e.admittime) AS next_admittime,\n    CASE\n      WHEN LEAD(e.admittime) OVER (PARTITION BY e.subject_id ORDER BY e.admittime) <= DATETIME_ADD(e.dischtime, INTERVAL 30 DAY)\n        THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM eligible_admissions e\n),\nsummary_stats AS (\n  SELECT\n    readmitted_30d,\n    los_days,\n    -- Flag if LOS > 9 days\n    CASE WHEN los_days > 9 THEN 1 ELSE 0 END AS los_gt_9\n  FROM readmission_flag\n)\nSELECT\n  -- 30-day readmission rate\n  AVG(CAST(readmitted_30d AS FLOAT64)) AS readmission_rate_30d,\n  -- Median index LOS for readmitted (readmitted_30d = 1)\n  APPROX_QUANTILES(IF(readmitted_30d = 1, los_days, NULL), 100)[OFFSET(50)] AS median_los_readmitted,\n  -- Median index LOS for non-readmitted (readmitted_30d = 0)\n  APPROX_QUANTILES(IF(readmitted_30d = 0, los_days, NULL), 100)[OFFSET(50)] AS median_los_non_readmitted,\n  -- Percent of index admissions with LOS > 9 days\n  AVG(CAST(los_gt_9 AS FLOAT64)) * 100 AS percent_los_gt_9_days\nFROM summary_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column readmitted_30d which is neither grouped nor aggregated at [62:29]; reason: invalidQuery, location: query, message: SELECT list expression references column readmitted_30d which is neither grouped nor aggregated at [62:29]\n\nLocation: US\nJob ID: c6733fc8-b447-4fa0-854c-dc867e95b4c9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 51df5aaa-bf29-4a4f-b49e-5f6ff7a45587\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

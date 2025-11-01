@@ -1,0 +1,28 @@
+{
+  "query": "I have a 67-year-old female ICU patient. Among female ICU patients aged 62\u201372, show first-24h per-measurement temperature categories (<36.0 / 36.0\u201337.9 / \u226538.0\u00b0C) with mean, median, IQR and AKI rate.",
+  "final_sql": "WITH\n-- Get female ICU patients aged 62-72\nfemale_icu_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    p.anchor_age + EXTRACT(YEAR FROM s.intime - DATE(p.anchor_year, 1, 1)) AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    s.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age + EXTRACT(YEAR FROM s.intime - DATE(p.anchor_year, 1, 1)) BETWEEN 62 AND 72\n),\n\n-- Get temperature measurements in first 24 hours\nfirst_24h_temps AS (\n  SELECT\n    f.subject_id,\n    f.stay_id,\n    c.charttime,\n    CASE\n      WHEN c.itemid = 223761 THEN (c.valuenum - 32) * 5/9  -- Convert F to C\n      WHEN c.itemid = 223762 THEN c.valuenum  -- Already in C\n    END AS temp_c,\n    CASE\n      WHEN (c.itemid = 223761 AND (c.valuenum - 32) * 5/9 < 36.0) OR\n           (c.itemid = 223762 AND c.valuenum < 36.0) THEN '<36.0'\n      WHEN (c.itemid = 223761 AND (c.valuenum - 32) * 5/9 BETWEEN 36.0 AND 37.9) OR\n           (c.itemid = 223762 AND c.valuenum BETWEEN 36.0 AND 37.9) THEN '36.0-37.9'\n      WHEN (c.itemid = 223761 AND (c.valuenum - 32) * 5/9 >= 38.0) OR\n           (c.itemid = 223762 AND c.valuenum >= 38.0) THEN '>=38.0'\n    END AS temp_category\n  FROM\n    female_icu_patients f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  ON\n    f.subject_id = c.subject_id AND f.stay_id = c.stay_id\n  WHERE\n    c.itemid IN (223761, 223762)  -- Temperature F and C\n    AND c.charttime BETWEEN f.intime AND TIMESTAMP_ADD(f.intime, INTERVAL 24 HOUR)\n    AND c.valuenum IS NOT NULL\n),\n\n-- Identify patients with AKI (simplified approach)\naki_patients AS (\n  SELECT DISTINCT\n    l.subject_id,\n    l.hadm_id,\n    f.stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    female_icu_patients f\n  ON\n    l.subject_id = f.subject_id AND l.hadm_id = f.hadm_id\n  WHERE\n    l.itemid = 50912  -- Creatinine\n    AND l.valuenum IS NOT NULL\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.labevents` l2\n      WHERE\n        l2.subject_id = l.subject_id\n        AND l2.hadm_id = l.hadm_id\n        AND l2.itemid = 50912\n        AND l2.charttime > l.charttime\n        AND l2.charttime <= TIMESTAMP_ADD(l.charttime, INTERVAL 48 HOUR)\n        AND (l2.valuenum - l.valuenum) >= 0.3  -- KDIGO criterion 1\n    )\n    OR EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.labevents` l2\n      WHERE\n        l2.subject_id = l.subject_id\n        AND l2.hadm_id = l.hadm_id\n        AND l2.itemid = 50912\n        AND l2.charttime > l.charttime\n        AND l2.charttime <= TIMESTAMP_ADD(l.charttime, INTERVAL 7 DAY)\n        AND l2.valuenum >= 1.5 * l.valuenum  -- KDIGO criterion 2\n    )\n)\n\n-- Final aggregation\nSELECT\n  temp_category,\n  COUNT(*) AS measurement_count,\n  ROUND(AVG(temp_c), 2) AS mean_temp,\n  ROUND(PERCENTILE_CONT(temp_c, 0.5), 2) AS median_temp,\n  ROUND(PERCENTILE_CONT(temp_c, 0.25), 2) AS q1_temp,\n  ROUND(PERCENTILE_CONT(temp_c, 0.75), 2) AS q3_temp,\n  ROUND((COUNT(DISTINCT CASE WHEN a.subject_id IS NOT NULL THEN t.subject_id END) /\n         COUNT(DISTINCT t.subject_id)) * 100, 2) AS aki_rate_percentage\nFROM\n  first_24h_temps t\nLEFT JOIN\n  aki_patients a\nON\n  t.subject_id = a.subject_id\nGROUP BY\n  temp_category\nORDER BY\n  temp_category;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 0c44bbac-005f-40f6-bcb2-3854540374be\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MAKE_DATE at [20:53]; reason: invalidQuery, location: query, message: Function not found: MAKE_DATE at [20:53]\n\nLocation: US\nJob ID: 9a0fb4ea-e90f-456d-a0b2-fbf2ccbcf3c1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name stay_id not found inside l at [58:7]; reason: invalidQuery, location: query, message: Name stay_id not found inside l at [58:7]\n\nLocation: US\nJob ID: c9c48fae-238b-4c94-9380-f690cbf3ff66\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 0c44bbac-005f-40f6-bcb2-3854540374be\n"
+    }
+  ]
+}

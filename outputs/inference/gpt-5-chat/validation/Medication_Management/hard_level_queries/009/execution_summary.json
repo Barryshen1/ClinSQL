@@ -1,0 +1,22 @@
+{
+  "query": "I have an 89\u2011year\u2011old female inpatient with AKI. Among female admissions aged 84\u201394 with AKI, stratified into quintiles by medication complexity score over the entire admission, report per quintile: LOS, inpatient mortality %, 30\u2011day readmission %, and anticoagulant\u2013opioid coadministration counts.",
+  "final_sql": "WITH aki_cohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, pat.anchor_age, pat.gender,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.subject_id = dx.subject_id\n    AND adm.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddx\n    ON dx.icd_code = ddx.icd_code AND dx.icd_version = ddx.icd_version\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 84 AND 94\n    AND (\n      ddx.long_title LIKE '%acute kidney%' \n      OR dx.icd_code LIKE '584%'  -- ICD-9 AKI\n      OR dx.icd_code LIKE 'N17%'  -- ICD-10 AKI\n    )\n),\ncomplexity AS (\n  SELECT hadm_id, COUNT(DISTINCT LOWER(drug)) AS med_complexity\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  GROUP BY hadm_id\n),\naki_with_complexity AS (\n  SELECT a.*, c.med_complexity,\n         NTILE(5) OVER (ORDER BY c.med_complexity) AS complexity_quintile\n  FROM aki_cohort a\n  LEFT JOIN complexity c\n    ON a.hadm_id = c.hadm_id\n),\nreadmissions AS (\n  SELECT curr.hadm_id,\n         CASE WHEN MIN(TIMESTAMP_DIFF(next.admittime, curr.dischtime, DAY)) <= 30\n              THEN 1 ELSE 0 END AS readmit_30d\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` curr\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` next\n    ON curr.subject_id = next.subject_id\n   AND next.admittime > curr.dischtime\n   AND TIMESTAMP_DIFF(next.admittime, curr.dischtime, DAY) <= 30\n  GROUP BY curr.hadm_id\n),\ncoa AS (\n  -- Find overlapping anticoagulant and opioid drugs within same admission\n  SELECT DISTINCT p1.hadm_id,\n    COUNT(*) AS coadmin_count\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p1\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p2\n    ON p1.hadm_id = p2.hadm_id\n   AND p1.starttime IS NOT NULL AND p2.starttime IS NOT NULL\n   AND p1.stoptime IS NOT NULL AND p2.stoptime IS NOT NULL\n   AND p1.starttime < p2.stoptime\n   AND p2.starttime < p1.stoptime\n   AND REGEXP_CONTAINS(LOWER(p1.drug), '(warfarin|heparin|enoxaparin|dabigatran|rivaroxaban|apixaban)')\n   AND REGEXP_CONTAINS(LOWER(p2.drug), '(morphine|oxycodone|hydromorphone|fentanyl|codeine|methadone|tramadol)')\n  GROUP BY p1.hadm_id\n),\nfinal AS (\n  SELECT awc.complexity_quintile,\n         COUNT(*) AS admissions,\n         AVG(awc.los_days) AS avg_los_days,\n         100 * SUM(CASE WHEN awc.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_pct,\n         100 * SUM(r.readmit_30d) / COUNT(*) AS readmit_30d_pct,\n         COALESCE(SUM(co.coadmin_count),0) AS coadmin_events\n  FROM aki_with_complexity awc\n  LEFT JOIN readmissions r  ON awc.hadm_id = r.hadm_id\n  LEFT JOIN coa co          ON awc.hadm_id = co.hadm_id\n  GROUP BY awc.complexity_quintile\n)\nSELECT * FROM final\nORDER BY complexity_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"REGEXP\" at [55:23]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"REGEXP\" at [55:23]\n\nLocation: US\nJob ID: bae4ed3f-97d4-4bee-b81e-2d9eb46f3237\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

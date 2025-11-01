@@ -1,0 +1,28 @@
+{
+  "query": "For a 56-year-old male: among men 51\u201361 admitted with postoperative complications, stratified by ICU vs non\u2011ICU, LOS (1\u20132/3\u20135/6\u20139/\u226510) and Charlson comorbidity (0\u20131/2/\u22653), report mortality (%), median LOS, CKD and diabetes prevalence.",
+  "final_sql": "WITH \n  -- Patient selection and basic information\n  patients_base AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      p.anchor_age,\n      p.gender,\n      a.admission_type,\n      CASE \n        WHEN ic.stay_id IS NOT NULL THEN 'ICU'\n        ELSE 'Non-ICU'\n      END AS care_type,\n      a.hospital_expire_flag,\n      a.deathtime,\n      EXTRACT(DAY FROM a.dischtime - a.admittime) AS los_days\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n    LEFT JOIN \n      `physionet-data.mimiciv_3_1_icu.icustays` ic \n      ON a.hadm_id = ic.hadm_id\n    WHERE \n      p.gender = 'M' \n      AND p.anchor_age BETWEEN 51 AND 61\n      AND a.admission_type = 'postoperative'\n  ),\n  \n  -- LOS categorization\n  patients_los AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      care_type,\n      hospital_expire_flag,\n      deathtime,\n      los_days,\n      CASE \n        WHEN los_days BETWEEN 1 AND 2 THEN '1-2'\n        WHEN los_days BETWEEN 3 AND 5 THEN '3-5'\n        WHEN los_days BETWEEN 6 AND 9 THEN '6-9'\n        ELSE '>=10'\n      END AS los_category\n    FROM \n      patients_base\n  ),\n  \n  -- Charlson comorbidity index approximation (simplified)\n  charlson_index AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      -- Simplified example, actual calculation is more complex\n      COUNT(DISTINCT icd_code) AS charlson_score\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    GROUP BY \n      subject_id, hadm_id\n  ),\n  \n  -- CKD and Diabetes prevalence\n  comorbidities AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      CASE \n        WHEN icd_code LIKE '%585%' THEN 'CKD'\n        WHEN icd_code LIKE '%250%' THEN 'Diabetes'\n        ELSE NULL\n      END AS comorbidity\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  ),\n  \n  -- Final patient data with outcomes\n  patient_outcomes AS (\n    SELECT \n      pl.subject_id,\n      pl.hadm_id,\n      pl.care_type,\n      pl.los_category,\n      ci.charlson_score,\n      pl.hospital_expire_flag,\n      pl.deathtime,\n      pl.los_days,\n      c.comorbidity\n    FROM \n      patients_los pl\n    LEFT JOIN \n      charlson_index ci \n      ON pl.subject_id = ci.subject_id AND pl.hadm_id = ci.hadm_id\n    LEFT JOIN \n      comorbidities c \n      ON pl.subject_id = c.subject_id AND pl.hadm_id = c.hadm_id\n  )\n\n-- Final query for mortality, median LOS, CKD, and diabetes prevalence\nSELECT \n  care_type,\n  los_category,\n  -- Charlson comorbidity categories\n  CASE \n    WHEN charlson_score BETWEEN 0 AND 1 THEN '0-1'\n    WHEN charlson_score = 2 THEN '2'\n    ELSE '>=3'\n  END AS charlson_category,\n  COUNT(DISTINCT CASE WHEN hospital_expire_flag = 1 OR deathtime IS NOT NULL THEN hadm_id END) / COUNT(DISTINCT hadm_id) * 100 AS mortality_pct,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los,\n  COUNT(DISTINCT CASE WHEN comorbidity = 'CKD' THEN hadm_id END) / COUNT(DISTINCT hadm_id) * 100 AS ckd_prevalence,\n  COUNT(DISTINCT CASE WHEN comorbidity = 'Diabetes' THEN hadm_id END) / COUNT(DISTINCT hadm_id) * 100 AS diabetes_prevalence\nFROM \n  patient_outcomes\nGROUP BY \n  care_type,\n  los_category,\n  CASE \n    WHEN charlson_score BETWEEN 0 AND 1 THEN '0-1'\n    WHEN charlson_score = 2 THEN '2'\n    ELSE '>=3'\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [110:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [110:24]\n\nLocation: US\nJob ID: 5be1b645-e8e4-4966-8e05-009c3b0f9a3e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [110:3]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [110:3]\n\nLocation: US\nJob ID: b45e707a-2a1f-4605-a023-02f60fb4374d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

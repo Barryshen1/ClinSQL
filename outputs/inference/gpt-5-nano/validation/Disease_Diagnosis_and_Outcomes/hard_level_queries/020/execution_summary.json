@@ -1,0 +1,22 @@
+{
+  "query": "I have a 51-year-old male inpatient. Among male inpatients 46\u201356 with acute myocardial infarction, stratify by the composite risk score (age plus major complications) into quintiles and report in-hospital mortality%, major complication%, and median survivor LOS per quintile.",
+  "final_sql": "WITH mi_admissions AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE (dd.long_title LIKE '%myocardial infarction%')\n     OR (di.icd_version = 9 AND di.icd_code LIKE '410%')\n     OR (di.icd_version = 9 AND di.icd_code LIKE '412%')\n     OR (di.icd_version = 10 AND di.icd_code LIKE 'I21%')\n     OR (di.icd_version = 10 AND di.icd_code LIKE 'I22%')\n),\ncohort_base AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_adm,\n    (TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0) AS los_days,\n    CASE WHEN a.deathtime IS NOT NULL OR a.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS in_hosp_mort,\n    COALESCE(mc.major_complications_count, 0) AS major_complications_count\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = a.subject_id\n  LEFT JOIN (\n    -- Major complications: counts of diagnoses whose long_title contains key terms\n    SELECT di.hadm_id, COUNT(*) AS major_complications_count\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON di.icd_code = dd.icd_code\n     AND di.icd_version = dd.icd_version\n    WHERE LOWER(dd.long_title) LIKE '%shock%'\n       OR LOWER(dd.long_title) LIKE '%heart failure%'\n       OR LOWER(dd.long_title) LIKE '%arrhythmia%'\n       OR LOWER(dd.long_title) LIKE '%arrest%'\n       OR LOWER(dd.long_title) LIKE '%renal%'\n       OR LOWER(dd.long_title) LIKE '%kidney%'\n       OR LOWER(dd.long_title) LIKE '%embolism%'\n       OR LOWER(dd.long_title) LIKE '%infection%'\n    GROUP BY di.hadm_id\n  ) mc ON mc.hadm_id = a.hadm_id\n  WHERE a.hadm_id IN (SELECT hadm_id FROM mi_admissions)\n    AND LOWER(p.gender) = 'm'\n    -- age at admission between 46 and 56 inclusive\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 46 AND 56\n    -- ensure discharge times exist\n    AND a.dischtime IS NOT NULL\n),\ncohort_with_risk AS (\n  SELECT\n    *,\n    (age_at_adm + major_complications_count) AS risk_score\n  FROM cohort_base\n),\nquintiled AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY risk_score) AS quintile\n  FROM cohort_with_risk\n)\nSELECT\n  q.quintile,\n  ROUND(AVG(q.in_hosp_mort) * 100, 2) AS in_hospital_mortality_pct,\n  ROUND(AVG(CASE WHEN q.major_complications_count > 0 THEN 1 ELSE 0 END) * 100, 2) AS major_complication_pct,\n  med.median_survivor_los_days\nFROM quintiled q\nLEFT JOIN (\n  -- Median LOS among survivors (in_hosp_mort = 0) per quintile using approximate quantiles\n  SELECT quintile,\n         APPROX_QUANTILES(los_days, 1001)[OFFSET(500)] AS median_survivor_los_days\n  FROM quintiled\n  WHERE in_hosp_mort = 0\n  GROUP BY quintile\n) AS med\n  ON med.quintile = q.quintile\nGROUP BY q.quintile, med.median_survivor_los_days\nORDER BY q.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [63:3]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [63:3]\n\nLocation: US\nJob ID: 6977089a-18f6-40be-a2f7-df9b275a8c15\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

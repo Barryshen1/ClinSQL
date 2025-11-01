@@ -1,0 +1,16 @@
+{
+  "query": "I have a 58-year-old woman. For females 53\u201363 admitted with upper GI bleeding (1\u20138 day stays), what are p25, p50, p75 diagnostic procedures per admission for 1\u20134 vs 5\u20138 days?",
+  "final_sql": "WITH\n-- Get female patients aged 53-63\nfemale_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 53 AND 63\n),\n\n-- Get admissions with upper GI bleeding and 1-8 day stays\nupper_gi_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN female_patients fp ON a.subject_id = fp.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  WHERE\n    -- Upper GI bleeding ICD codes (K25-K28 or K92.0-K92.2)\n    (di.icd_code LIKE 'K25%' OR di.icd_code LIKE 'K26%' OR di.icd_code LIKE 'K27%'\n     OR di.icd_code LIKE 'K28%' OR di.icd_code LIKE 'K92.0%' OR di.icd_code LIKE 'K92.1%'\n     OR di.icd_code LIKE 'K92.2%')\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 8\n    AND a.hospital_expire_flag = 0  -- Exclude patients who died in hospital\n),\n\n-- Count diagnostic procedures per admission\nprocedure_counts AS (\n  SELECT\n    uga.hadm_id,\n    uga.los_days,\n    COUNT(DISTINCT pi.icd_code) AS procedure_count\n  FROM upper_gi_admissions uga\n  JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi ON uga.hadm_id = pi.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dip ON pi.icd_code = dip.icd_code\n  WHERE\n    -- Filter for diagnostic procedures (this is a simplified approach)\n    -- In a real scenario, you'd need a more comprehensive list of diagnostic procedure codes\n    dip.long_title LIKE '%diagnostic%' OR\n    dip.long_title LIKE '%endoscopy%' OR\n    dip.long_title LIKE '%imaging%' OR\n    dip.long_title LIKE '%radiology%' OR\n    dip.long_title LIKE '%biopsy%'\n  GROUP BY uga.hadm_id, uga.los_days\n),\n\n-- Categorize by LOS duration\nlos_categories AS (\n  SELECT\n    hadm_id,\n    procedure_count,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 8 THEN '5-8 days'\n    END AS los_category\n  FROM procedure_counts\n)\n\n-- Calculate percentiles\nSELECT\n  los_category,\n  APPROX_QUANTILES(procedure_count, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(procedure_count, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(procedure_count, 4)[OFFSET(3)] AS p75\nFROM los_categories\nGROUP BY los_category\nORDER BY los_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

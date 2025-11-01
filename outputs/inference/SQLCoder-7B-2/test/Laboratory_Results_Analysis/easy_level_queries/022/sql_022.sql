@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY ph) - percentile_cont(0.25) within GROUP (ORDER BY ph) AS interquartile_range FROM (SELECT l.value AS ph, MAX(l.charttime) AS max_charttime FROM labevents l JOIN male_icu_patients mp ON l.subject_id = mp.subject_id WHERE l.itemid = 11181 AND l.value IS NOT NULL GROUP BY l.subject_id) AS arterial_blood_gas_ph;

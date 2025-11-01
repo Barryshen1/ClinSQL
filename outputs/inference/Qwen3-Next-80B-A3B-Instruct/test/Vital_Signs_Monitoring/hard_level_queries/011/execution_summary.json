@@ -1,0 +1,28 @@
+{
+  "query": "My 60-year-old female ICU patient has an instability score of 60 from the first 24 hours. Among female ICU patients aged 55\u201365 with pneumonia, what percentile is this score? Also report ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH pneumonia_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON p.subject_id = d.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  JOIN physionet-data.mimiciv_3_1_icu.icustays i ON p.subject_id = i.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a ON p.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 55 AND 65\n    AND LOWER(di.long_title) LIKE '%pneumonia%'\n),\nmap_first_24h AS (\n  SELECT\n    pp.subject_id,\n    pp.stay_id,\n    AVG(ce.valuenum) AS mean_map_24h\n  FROM pneumonia_patients pp\n  JOIN physionet-data.mimiciv_3_1_icu.chartevents ce\n    ON pp.stay_id = ce.stay_id\n  JOIN physionet-data.mimiciv_3_1_icu.d_items di\n    ON ce.itemid = di.itemid\n  WHERE di.label = 'MAP'\n    AND ce.charttime >= pp.intime\n    AND ce.charttime < TIMESTAMP_ADD(pp.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY pp.subject_id, pp.stay_id\n),\npercentile_calc AS (\n  SELECT\n    mean_map_24h,\n    CUME_DIST() OVER (ORDER BY mean_map_24h) AS percentile_rank\n  FROM map_first_24h\n)\nSELECT\n  (SELECT percentile_rank FROM percentile_calc WHERE mean_map_24h <= 60 ORDER BY mean_map_24h DESC LIMIT 1) AS percentile_of_60,\n  AVG(pp.los) AS avg_los_most_unstable,\n  AVG(CAST(pp.hospital_expire_flag AS FLOAT64)) AS mortality_rate_most_unstable\nFROM map_first_24h m\nJOIN pneumonia_patients pp ON m.stay_id = pp.stay_id\nWHERE m.mean_map_24h <= (SELECT PERCENTILE_CONT(mean_map_24h, 0.1) OVER () FROM map_first_24h LIMIT 1);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:15]\n\nLocation: US\nJob ID: 9fa79b80-ad2e-4e78-80fb-2e1723f66810\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [18:23]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [18:23]\n\nLocation: US\nJob ID: 3636d092-bb89-4a34-be9b-913029818fc0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

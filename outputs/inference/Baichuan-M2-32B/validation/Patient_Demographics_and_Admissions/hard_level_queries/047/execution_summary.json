@@ -1,0 +1,23 @@
+{
+  "query": "I have a 73-year-old female Medicare patient. Among female Medicare patients aged 68\u201378 admitted from the ED with a principal hemorrhagic stroke, what are the 30-day readmission rate, median index LOS for readmitted vs non-readmitted, and % with LOS >4 days?",
+  "final_sql": "WITH target_patients AS (\n  SELECT\n    p.subject_id,\n    p.anchor_year,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'F'\n),\npatient_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.insurance,\n    a.admission_location,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN target_patients p ON a.subject_id = p.subject_id\n  WHERE\n    a.dischtime IS NOT NULL\n    AND a.hospital_expire_flag = 0\n    AND a.insurance LIKE '%Medicare%'\n    AND a.admission_location LIKE '%EMERGENCY%'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 68 AND 78\n),\nadmissions_with_next AS (\n  SELECT\n    *,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admit\n  FROM patient_admissions\n),\nindex_admissions AS (\n  SELECT\n    a.*,\n    d.icd_code,\n    d.icd_version,\n    CASE\n      WHEN next_admit IS NOT NULL AND next_admit <= dischtime + INTERVAL 30 DAY THEN 1\n      ELSE 0\n    END AS readmitted\n  FROM admissions_with_next a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE\n    d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND d.icd_code BETWEEN 'I60' AND 'I62') \n      OR \n      (d.icd_version = 10 AND d.icd_code BETWEEN 'I60' AND 'I62')\n    )\n),\nmetrics AS (\n  SELECT\n    COUNT(*) AS total_admissions,\n    COUNT(CASE WHEN readmitted = 1 THEN 1 END) AS readmitted_count,\n    APPROX_QUANTILES(los, 100)[OFFSET(50)] AS median_los_readmitted,\n    (SELECT APPROX_QUANTILES(los, 100)[OFFSET(50)] FROM index_admissions WHERE readmitted = 0) AS median_los_non_readmitted,\n    COUNT(CASE WHEN los > 4 THEN 1 END) AS los_gt4_count\n  FROM index_admissions\n)\nSELECT\n  (readmitted_count * 100.0 / total_admissions) AS readmission_rate,\n  median_los_readmitted,\n  median_los_non_readmitted,\n  (los_gt4_count * 100.0 / total_admissions) AS percent_los_gt4\nFROM metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \">\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \">\" at [1:10]\n\nLocation: US\nJob ID: 6c464fad-1731-48fb-8554-678f8edcb1f5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      USING (subject_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.hadm_id = d.hadm_id\n         AND d.icd_version = 10\n         AND d.seq_num = 1\n         AND d.icd_code LIKE 'I21%'\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 64 AND 74\n),\n\ntroponin_item AS (\n  -- Identify the itemid(s) for high-sensitivity troponin T\n  SELECT\n    itemid\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE\n    LOWER(label) LIKE '%troponin t%'\n    AND LOWER(label) LIKE '%high-sensitivity%'\n),\n\nfirst_troponin AS (\n  -- For each admission, find the first troponin measurement\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum,\n    le.charttime,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM\n    cohort\n    JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      USING (subject_id, hadm_id)\n    JOIN troponin_item ti\n      USING (itemid)\n  WHERE\n    le.valuenum IS NOT NULL\n)\n\nSELECT\n  CASE\n    WHEN ft.valuenum <= 0.014 THEN 'Normal (\u22640.014)'\n    WHEN ft.valuenum <= 0.052 THEN 'Borderline (0.015\u20130.052)'\n    ELSE 'Myocardial Injury (>0.052)'\n  END AS troponin_category,\n  COUNT(*) AS n_patients,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct_of_cohort\nFROM\n  first_troponin ft\nWHERE\n  ft.rn = 1\nGROUP BY\n  troponin_category\nORDER BY\n  troponin_category;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

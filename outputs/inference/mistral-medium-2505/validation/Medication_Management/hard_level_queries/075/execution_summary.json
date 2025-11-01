@@ -1,0 +1,28 @@
+{
+  "query": "I have a 63\u2011year\u2011old man admitted for COPD exacerbation. Among male patients 58\u201368, stratified into tertiles by medication complexity during the first 72h, report for each tertile: n, min/max and mean complexity score, mean LOS, mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH\n-- Step 1: Identify male patients aged 58-68 with COPD exacerbation\ncopd_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND di.icd_code IN ('J440', 'J441', 'J449') -- COPD exacerbation codes\n    AND a.admission_type != 'NEWBORN' -- Exclude newborns\n),\n\n-- Step 2: Calculate medication complexity in first 72 hours\nmed_complexity AS (\n  SELECT\n    ph.subject_id,\n    ph.hadm_id,\n    COUNT(DISTINCT medication) AS distinct_med_count,\n    COUNT(DISTINCT route) AS distinct_route_count,\n    COUNT(DISTINCT frequency) AS distinct_frequency_count,\n    COUNT(DISTINCT medication) + COUNT(DISTINCT route) + COUNT(DISTINCT frequency) AS complexity_score\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.pharmacy` ph\n  JOIN\n    copd_patients c ON ph.subject_id = c.subject_id AND ph.hadm_id = c.hadm_id\n  WHERE\n    TIMESTAMP_DIFF(ph.starttime, c.admittime, HOUR) <= 72\n  GROUP BY\n    ph.subject_id, ph.hadm_id\n),\n\n-- Step 3: Assign tertiles based on complexity score\npatient_tertile AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    m.complexity_score,\n    NTILE(3) OVER (ORDER BY m.complexity_score) AS tertile\n  FROM\n    copd_patients c\n  JOIN\n    med_complexity m ON c.subject_id = m.subject_id AND c.hadm_id = m.hadm_id\n),\n\n-- Step 4: Calculate 30-day readmission\nreadmission_30d AS (\n  SELECT\n    pt.subject_id,\n    pt.hadm_id,\n    CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM\n    patient_tertile pt\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a2 ON pt.subject_id = a2.subject_id\n    AND a2.admittime > pt.dischtime\n    AND a2.admittime <= TIMESTAMP_ADD(pt.dischtime, INTERVAL 30 DAY)\n    AND pt.hadm_id != a2.hadm_id\n)\n\n-- Final aggregation by tertile\nSELECT\n  tertile,\n  COUNT(*) AS n,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  ROUND(AVG(complexity_score), 2) AS mean_complexity,\n  ROUND(AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)), 2) AS mean_los,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_pct,\n  ROUND(100 * SUM(readmitted_30d) / COUNT(*), 2) AS readmission_30d_pct\nFROM\n  patient_tertile pt\nJOIN\n  readmission_30d r ON pt.subject_id = r.subject_id AND pt.hadm_id = r.hadm_id\nGROUP BY\n  tertile\nORDER BY\n  tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Subquery of type IN must have only one output column at [38:31]; reason: invalidQuery, location: query, message: Subquery of type IN must have only one output column at [38:31]\n\nLocation: US\nJob ID: 49135812-0ce3-40ce-a227-d676bd75daef\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside ph at [40:23]; reason: invalidQuery, location: query, message: Name charttime not found inside ph at [40:23]\n\nLocation: US\nJob ID: c018b185-615a-4da7-9e87-7dffc492a778\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

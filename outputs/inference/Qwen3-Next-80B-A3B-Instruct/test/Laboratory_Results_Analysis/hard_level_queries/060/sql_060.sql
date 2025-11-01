@@ -1,0 +1,1 @@
+with post-cardiac arrest, and compute the IQR (Q1, median) of an “instability score” in the first 48 hours. Then compare this cohort to general inpatients on LOS and mortality.;

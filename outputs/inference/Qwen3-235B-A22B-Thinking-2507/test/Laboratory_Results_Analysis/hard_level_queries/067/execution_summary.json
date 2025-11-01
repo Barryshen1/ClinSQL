@@ -1,0 +1,17 @@
+{
+  "query": "58-year-old woman with ACS: among female inpatients 53\u201363 with ACS, compute a 72\u2011hour lab instability score (count of critical lab categories), split into quartiles, report mortality (%) and avg LOS per quartile, and compare critical lab rates to age\u2011matched controls",
+  "final_sql": "WITH patients_age AS (\n  SELECT \n    subject_id,\n    EXTRACT(YEAR FROM admittime) - anchor_year + anchor_age AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` USING (subject_id)\n),\nacs_cohort AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / (60 * 60 * 24) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN patients_age pa ON a.subject_id = pa.subject_id\n  WHERE \n    pa.age_at_admission BETWEEN 53 AND 63\n    AND a.hospital_expire_flag IS NOT NULL\n    AND a.subject_id IN (\n      SELECT subject_id \n      FROM `physionet-data.mimiciv_3_1_hosp.patients` \n      WHERE gender = 'F'\n    )\n    AND a.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE \n        icd_version = 10 \n        AND (icd_code LIKE 'I20%' OR icd_code LIKE 'I21%' OR icd_code LIKE 'I22%')\n    )\n),\nlabs_72h AS (\n  SELECT \n    l.hadm_id,\n    MAX(CASE WHEN d.label = 'Potassium' AND (l.valuenum < 3.0 OR l.valuenum > 6.0) THEN 1 ELSE 0 END) AS has_critical_k,\n    MAX(CASE WHEN d.label = 'Sodium' AND (l.valuenum < 120 OR l.valuenum > 160) THEN 1 ELSE 0 END) AS has_critical_na,\n    MAX(CASE WHEN d.label = 'Glucose' AND (l.valuenum < 40 OR l.valuenum > 600) THEN 1 ELSE 0 END) AS has_critical_glucose,\n    MAX(CASE WHEN d.label = 'Creatinine' AND l.valuenum > 3.0 THEN 1 ELSE 0 END) AS has_critical_creat,\n    MAX(CASE WHEN d.label = 'BUN' AND l.valuenum > 60 THEN 1 ELSE 0 END) AS has_critical_bun\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON l.itemid = d.itemid\n  INNER JOIN acs_cohort a ON l.hadm_id = a.hadm_id\n  WHERE \n    l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND d.label IN ('Potassium', 'Sodium', 'Glucose', 'Creatinine', 'BUN')\n    AND l.valuenum IS NOT NULL\n  GROUP BY l.hadm_id\n),\ninstability AS (\n  SELECT \n    a.hadm_id,\n    a.hospital_expire_flag,\n    a.los_days,\n    COALESCE(has_critical_k, 0) + \n    COALESCE(has_critical_na, 0) + \n    COALESCE(has_critical_glucose, 0) + \n    COALESCE(has_critical_creat, 0) + \n    COALESCE(has_critical_bun, 0) AS instability_score\n  FROM acs_cohort a\n  LEFT JOIN labs_72h l ON a.hadm_id = l.hadm_id\n),\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM instability\n)\nSELECT \n  quartile,\n  AVG(hospital_expire_flag) * 100 AS mortality_rate,\n  AVG(los_days) AS avg_los_days\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

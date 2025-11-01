@@ -1,0 +1,28 @@
+{
+  "query": "For my 85-year-old male inpatient: among male inpatients aged 80\u201390 with non-emergency admissions, report LOS distribution (mean, p25, median, p75, p90) and percent \u226414 days for home, hospice, and in\u2011hospital death.",
+  "final_sql": "WITH admissions_cohort AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        -- Calculate Length of Stay in days.\n        -- DATE_DIFF(DATE_TRUNC(timestamp_expression, DAY), DATE_TRUNC(timestamp_expression, DAY), DAY)\n        -- is preferred for \"days stayed\" as an integer, where a stay crossing day boundary counts as 1 day.\n        DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days,\n        -- Categorize discharge outcomes based on the question's requirements\n        CASE\n            WHEN a.hospital_expire_flag = 1 THEN 'In-hospital Death'\n            WHEN a.discharge_location IN ('HOME', 'HOME HEALTH CARE') THEN 'Home'\n            WHEN a.discharge_location = 'HOSPICE' THEN 'Hospice'\n            ELSE NULL -- Filter out other discharge locations later\n        END AS discharge_group\n    FROM\n        `physionet-data.mimiciv_3_1_hosp`.admissions AS a\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp`.patients AS p\n        ON a.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M' -- Male patients\n        AND p.anchor_age BETWEEN 80 AND 90 -- Aged 80-90 years\n        AND a.admission_type != 'EMERGENCY' -- Non-emergency admissions\n        AND a.dischtime IS NOT NULL -- Ensure valid discharge time for LOS calculation\n        AND a.admittime IS NOT NULL -- Ensure valid admission time for LOS calculation\n        AND DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) >= 0 -- Ensure LOS is non-negative\n)\nSELECT\n    discharge_group,\n    COUNT(hadm_id) AS total_admissions,\n    ROUND(AVG(los_days), 2) AS mean_los_days,\n    -- Calculate approximate percentiles for LOS distribution using APPROX_QUANTILES\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(25)], 2) AS p25_los_days,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS median_los_days,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(75)], 2) AS p75_los_days,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(90)], 2) AS p90_los_days,\n    -- Calculate percentage of stays <= 14 days\n    ROUND(SUM(CASE WHEN los_days <= 14 THEN 1 ELSE 0 END) * 100.0 / COUNT(los_days), 2) AS percent_los_le_14_days\nFROM\n    admissions_cohort\nWHERE\n    discharge_group IS NOT NULL -- Only include 'Home', 'Hospice', and 'In-hospital Death'\nGROUP BY\n    discharge_group\nORDER BY\n    discharge_group;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [34:27]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [34:27]\n\nLocation: US\nJob ID: f572f288-8042-4d67-8250-c9eceb6e4efd\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 505c834f-38e7-4d7a-98d5-d33a94dfc912\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

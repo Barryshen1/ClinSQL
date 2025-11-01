@@ -1,0 +1,22 @@
+{
+  "query": "For my 49-year-old female, among hospitalized women 44\u201354 on DAPT, what is the SD of single antiplatelet prescription duration?",
+  "final_sql": "WITH\n-- Define common antiplatelet medications\nantiplatelet_drugs AS (\n  SELECT DISTINCT drug\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE LOWER(drug) IN (\n    'aspirin', 'clopidogrel', 'prasugrel', 'ticagrelor',\n    'aspirin/extended release dipyridamole', 'dipyridamole',\n    'cilostazol', 'ticlopidine'\n  )\n),\n\n-- Get all antiplatelet prescriptions with patient and admission info\nantiplatelet_rx AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.drug,\n    p.starttime,\n    p.stoptime,\n    p.dose_val_rx,\n    p.dose_unit_rx,\n    p.route,\n    a.admittime,\n    a.dischtime,\n    pat.gender,\n    pat.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON p.subject_id = pat.subject_id\n  JOIN antiplatelet_drugs ad\n    ON LOWER(p.drug) = LOWER(ad.drug)\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 44 AND 54\n),\n\n-- Identify patients on DAPT (2+ distinct antiplatelets in same admission)\ndapt_patients AS (\n  SELECT\n    subject_id,\n    hadm_id\n  FROM antiplatelet_rx\n  GROUP BY subject_id, hadm_id\n  HAVING COUNT(DISTINCT drug) >= 2\n),\n\n-- Get single antiplatelet prescriptions (not part of DAPT)\nsingle_antiplatelet_rx AS (\n  SELECT\n    ar.subject_id,\n    ar.hadm_id,\n    ar.drug,\n    ar.starttime,\n    ar.stoptime,\n    ar.admittime,\n    ar.dischtime,\n    -- Calculate duration in hours (with type conversion)\n    TIMESTAMP_DIFF(\n      COALESCE(\n        TIMESTAMP(ar.stoptime),\n        TIMESTAMP(ar.dischtime),\n        CURRENT_TIMESTAMP\n      ),\n      TIMESTAMP(ar.starttime),\n      HOUR\n    ) AS duration_hours\n  FROM antiplatelet_rx ar\n  LEFT JOIN dapt_patients dp\n    ON ar.subject_id = dp.subject_id AND ar.hadm_id = dp.hadm_id\n  WHERE dp.subject_id IS NULL  -- Not in DAPT group\n    AND ar.starttime IS NOT NULL\n    AND (ar.stoptime IS NOT NULL OR ar.dischtime IS NOT NULL)\n)\n\n-- Calculate standard deviation of single antiplatelet prescription durations\nSELECT\n  'Single Antiplatelet Prescription Duration' AS metric,\n  COUNT(*) AS prescription_count,\n  AVG(duration_hours) AS mean_duration_hours,\n  STDDEV(duration_hours) AS stddev_duration_hours,\n  MIN(duration_hours) AS min_duration_hours,\n  MAX(duration_hours) AS max_duration_hours\nFROM single_antiplatelet_rx\nWHERE duration_hours > 0  -- Exclude zero or negative durations;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function COALESCE\n  Argument types: DATETIME, DATETIME, TIMESTAMP\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [61:7]; reason: invalidQuery, location: query, message: No matching signature for function COALESCE\n  Argument types: DATETIME, DATETIME, TIMESTAMP\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [61:7]\n\nLocation: US\nJob ID: 741b85ce-278a-4c1c-b2a5-a884f5c53c24\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

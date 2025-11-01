@@ -1,0 +1,22 @@
+{
+  "query": "For my 50-year-old male inpatient, among 45\u201355-year-old males with type 2 diabetes and heart failure (\u226548 h stay), report percentages only for Insulin versus Oral agents in first 48 h and final 24 h.",
+  "final_sql": "WITH\n-- Step 1: Find hospital admissions with both Type 2 Diabetes and Heart Failure diagnoses\nDiagnosedHadms AS (\n  SELECT\n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY\n    hadm_id\n  HAVING\n    -- Check for at least one Type 2 Diabetes diagnosis code\n    COUNTIF(\n        (icd_version = 9 AND SUBSTR(icd_code, 1, 3) = '250') OR\n        (icd_version = 10 AND SUBSTR(icd_code, 1, 3) = 'E11')\n    ) > 0\n    AND\n    -- Check for at least one Heart Failure diagnosis code\n    COUNTIF(\n        (icd_version = 9 AND SUBSTR(icd_code, 1, 3) = '428') OR\n        (icd_version = 10 AND SUBSTR(icd_code, 1, 3) = 'I50')\n    ) > 0\n),\n\n-- Step 2: Define the final patient cohort based on demographics and stay length\nCohort AS (\n  SELECT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  INNER JOIN DiagnosedHadms AS dh\n    ON a.hadm_id = dh.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 48\n),\n\n-- Step 3: Identify, categorize, and tag relevant diabetes medications by time window for the cohort\nPatientMedsInWindow AS (\n  SELECT\n    c.hadm_id,\n    CASE\n      WHEN pr.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n        THEN 'First 48 Hours'\n      WHEN pr.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 24 HOUR) AND c.dischtime\n        THEN 'Final 24 Hours'\n      ELSE NULL\n    END AS time_window,\n    CASE\n      WHEN LOWER(pr.drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN LOWER(pr.drug) LIKE '%metformin%'\n        OR LOWER(pr.drug) LIKE '%glipizide%'\n        OR LOWER(pr.drug) LIKE '%glyburide%'\n        OR LOWER(pr.drug) LIKE '%glimepiride%'\n        OR LOWER(pr.drug) LIKE '%pioglitazone%'\n        OR LOWER(pr.drug) LIKE '%rosiglitazone%'\n        OR LOWER(pr.drug) LIKE '%sitagliptin%'\n        OR LOWER(pr.drug) LIKE '%acarbose%'\n        OR LOWER(pr.drug) LIKE '%repaglinide%'\n        OR LOWER(pr.drug) LIKE '%nateglinide%'\n        OR LOWER(pr.drug) LIKE '%canagliflozin%'\n        OR LOWER(pr.drug) LIKE '%dapagliflozin%'\n        OR LOWER(pr.drug) LIKE '%empagliflozin%'\n      THEN 'Oral'\n      ELSE NULL\n    END AS med_category\n  FROM Cohort AS c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n    ON c.hadm_id = pr.hadm_id\n  WHERE\n    pr.starttime IS NOT NULL\n),\n\n-- Step 4: Calculate total cohort size for percentage calculations\nCohortSize AS (\n  SELECT COUNT(DISTINCT hadm_id) AS total_patients FROM Cohort\n)\n\n-- Final Step: Aggregate results by time window and calculate percentages\nSELECT\n  pm.time_window,\n  -- Pct of patients in cohort receiving Insulin in the window\n  SAFE_DIVIDE(\n    COUNT(DISTINCT CASE WHEN pm.med_category = 'Insulin' THEN pm.hadm_id END),\n    cs.total_patients\n  ) * 100 AS percentage_receiving_insulin,\n  -- Pct of patients in cohort receiving Oral agents in the window\n  SAFE_DIVIDE(\n    COUNT(DISTINCT CASE WHEN pm.med_category = 'Oral' THEN pm.hadm_id END),\n    cs.total_patients\n  ) * 100 AS percentage_receiving_oral_agents\nFROM PatientMedsInWindow AS pm\nCROSS JOIN CohortSize AS cs\nWHERE\n  pm.time_window IS NOT NULL\n  AND pm.med_category IS NOT NULL\nGROUP BY\n  pm.time_window, cs.total_patients\nORDER BY\n  pm.time_window DESC;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword FILTER at [121:41]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword FILTER at [121:41]\n\nLocation: US\nJob ID: dec90756-83fa-4bbe-a00c-21cff7d1d8c8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

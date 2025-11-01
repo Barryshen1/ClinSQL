@@ -1,0 +1,16 @@
+{
+  "query": "For a 63\u2011year\u2011old male patient: among male inpatients 58\u201368 with T2DM and heart failure (admissions \u226572h), report % started on GLP\u20111 agonists in first 72h versus final 12h and absolute difference (pp).",
+  "final_sql": "WITH eligible AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\ndiags AS (\n  SELECT\n    e.hadm_id,\n    MAX(CASE\n          WHEN LOWER(dc.long_title) LIKE '%type 2 diabetes%' \n               OR LOWER(dc.long_title) LIKE '%diabetes mellitus type 2%'\n               OR LOWER(dc.long_title) LIKE '%diabetes type 2%'\n          THEN 1 ELSE 0 END) AS has_diabetes,\n    MAX(CASE\n          WHEN LOWER(dc.long_title) LIKE '%heart failure%' \n               OR LOWER(dc.long_title) LIKE '%congestive heart failure%'\n          THEN 1 ELSE 0 END) AS has_heart_failure\n  FROM eligible e\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n    ON e.subject_id = diag.subject_id AND e.hadm_id = diag.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dc\n    ON diag.icd_code = dc.icd_code AND diag.icd_version = dc.icd_version\n  GROUP BY e.hadm_id\n),\nglp1_early AS (\n  SELECT e.hadm_id,\n         MAX(CASE WHEN p.starttime IS NOT NULL\n                   AND p.starttime BETWEEN e.admittime AND TIMESTAMP_ADD(e.admittime, INTERVAL 72 HOUR)\n                   THEN 1 ELSE 0 END) AS has_early_glp1\n  FROM eligible e\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    ON e.subject_id = p.subject_id AND e.hadm_id = p.hadm_id\n  GROUP BY e.hadm_id\n),\nglp1_late AS (\n  SELECT e.hadm_id,\n         MAX(CASE WHEN p.starttime IS NOT NULL\n                   AND p.starttime BETWEEN TIMESTAMP_SUB(e.dischtime, INTERVAL 12 HOUR) AND e.dischtime\n                   THEN 1 ELSE 0 END) AS has_late_glp1\n  FROM eligible e\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    ON e.subject_id = p.subject_id AND e.hadm_id = p.hadm_id\n  GROUP BY e.hadm_id\n)\n, summary AS (\n  SELECT\n    COUNT(*) AS total_admissions,\n    SUM(ge.has_early_glp1) AS early_count,\n    SUM(gl.has_late_glp1) AS late_count\n  FROM eligible e\n  JOIN diags d ON e.hadm_id = d.hadm_id\n  LEFT JOIN glp1_early ge ON e.hadm_id = ge.hadm_id\n  LEFT JOIN glp1_late gl ON e.hadm_id = gl.hadm_id\n  WHERE d.has_diabetes = 1\n    AND d.has_heart_failure = 1\n)\nSELECT\n  total_admissions,\n  ROUND(100.0 * early_count / total_admissions, 2) AS p_first72_percent,\n  ROUND(100.0 * late_count / total_admissions, 2) AS p_final12_percent,\n  ROUND(ABS((100.0 * early_count / total_admissions) - (100.0 * late_count / total_admissions)), 2) AS diff_pp\nFROM summary;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

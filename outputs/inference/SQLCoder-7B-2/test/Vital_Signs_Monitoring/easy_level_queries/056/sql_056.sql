@@ -1,0 +1,1 @@
+SELECT (SELECT percentile_cont(0.75) within GROUP (ORDER BY value) FROM labevents WHERE subject_id = 51 AND hadm_id = 51 AND itemid = 101 AND charttime BETWEEN 0 AND 24 * 60 * 60) - (SELECT percentile_cont(0.25) within GROUP (ORDER BY value) FROM labevents WHERE subject_id = 51 AND hadm_id = 51 AND itemid = 101 AND charttime BETWEEN 0 AND 24 * 60 * 60) AS median_temperature;

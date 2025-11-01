@@ -1,0 +1,28 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  WHERE i.stay_id IN (\n    SELECT stay_id\n    FROM (\n      SELECT\n        subject_id,\n        stay_id,\n        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n      FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    )\n    WHERE rn = 1\n  )\n),\nsepsis_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%sepsis%'\n),\neligible_patients AS (\n  SELECT p.subject_id, p.anchor_age, p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 83 AND 93\n),\nfirst_icu_sepsis AS (\n  SELECT f.*\n  FROM first_icu_stays f\n  JOIN sepsis_admissions s ON f.hadm_id = s.hadm_id\n  JOIN eligible_patients ep ON f.subject_id = ep.subject_id\n),\nprocedure_counts AS (\n  SELECT\n    f.stay_id,\n    f.los,\n    f.hospital_expire_flag,\n    COUNT(DISTINCT p.itemid) AS distinct_procedures\n  FROM first_icu_sepsis f\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON f.stay_id = p.stay_id\n    AND p.starttime >= f.intime\n    AND p.starttime <= DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY f.stay_id, f.los, f.hospital_expire_flag\n),\nquartiles AS (\n  SELECT *,\n    NTILE(4) OVER (ORDER BY distinct_procedures) AS procedure_quartile\n  FROM procedure_counts\n)\nSELECT\n  procedure_quartile,\n  AVG(distinct_procedures) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent\nFROM quartiles\nGROUP BY procedure_quartile\nORDER BY procedure_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside p at [53:11]; reason: invalidQuery, location: query, message: Name charttime not found inside p at [53:11]\n\nLocation: US\nJob ID: 62604783-0177-4afe-9c5d-0ba3897f2ce7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [66:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [66:36]\n\nLocation: US\nJob ID: 35229412-db0a-44b3-b867-c7d7cf8cd9f1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

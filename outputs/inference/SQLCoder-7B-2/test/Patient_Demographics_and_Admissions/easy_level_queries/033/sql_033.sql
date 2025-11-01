@@ -1,0 +1,1 @@
+SELECT stddev(icustays.los) AS standard_deviation FROM patients JOIN icustays ON patients.subject_id = icustays.subject_id WHERE patients.gender = 'M' AND patients.anchor_age = 49 AND patients.anchor_year_group = '44-54' AND icustays.stay_id IN (SELECT stay_id FROM admissions WHERE admission_type = 'dialysis');

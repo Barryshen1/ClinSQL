@@ -1,0 +1,16 @@
+{
+  "query": "I'm managing a 66\u2011year\u2011old man hospitalized with hemorrhagic stroke. For male inpatients aged 61\u201371, stratified into quintiles by first\u201124\u2011hour medication complexity score, report per quintile: number of patients, mean complexity score, average LOS, in\u2011hospital mortality, and 30\u2011day readmission rate.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 61 AND 71\n),\n\nmeds_first24 AS (\n  SELECT\n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  ON\n    c.hadm_id = pr.hadm_id\n  WHERE\n    pr.starttime >= c.admittime\n    AND pr.starttime <= DATETIME_ADD(c.admittime, INTERVAL 24 HOUR)\n  GROUP BY\n    c.hadm_id\n),\n\nreadmissions AS (\n  SELECT\n    c1.hadm_id,\n    CASE\n      WHEN c2.admittime IS NOT NULL\n        AND DATETIME_DIFF(c2.admittime, c1.dischtime, DAY) <= 30 THEN 1\n      ELSE 0\n    END AS readmit_30_days\n  FROM\n    cohort c1\n  LEFT JOIN\n    cohort c2\n  ON\n    c1.subject_id = c2.subject_id\n    AND c2.admittime > c1.dischtime\n    AND DATETIME_DIFF(c2.admittime, c1.dischtime, DAY) <= 30\n  QUALIFY\n    ROW_NUMBER() OVER (PARTITION BY c1.hadm_id ORDER BY c2.admittime ASC) = 1\n),\n\nfinal_data AS (\n  SELECT\n    c.hadm_id,\n    m.complexity_score,\n    NTILE(5) OVER (ORDER BY m.complexity_score) AS quintile,\n    DATETIME_DIFF(c.dischtime, c.admittime, HOUR) / 24.0 AS los_days,\n    c.hospital_expire_flag AS died_in_hosp,\n    COALESCE(r.readmit_30_days, 0) AS readmit_30_days\n  FROM\n    cohort c\n  JOIN\n    meds_first24 m\n  ON\n    c.hadm_id = m.hadm_id\n  LEFT JOIN\n    readmissions r\n  ON\n    c.hadm_id = r.hadm_id\n)\n\nSELECT\n  quintile,\n  COUNT(*) AS n_patients,\n  AVG(complexity_score) AS mean_complexity_score,\n  AVG(los_days) AS avg_los_days,\n  AVG(died_in_hosp) AS in_hosp_mortality,\n  AVG(readmit_30_days) AS readmit_30_rate\nFROM\n  final_data\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

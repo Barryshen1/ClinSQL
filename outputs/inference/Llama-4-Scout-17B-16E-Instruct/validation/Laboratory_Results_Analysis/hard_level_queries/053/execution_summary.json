@@ -1,0 +1,28 @@
+{
+  "query": "My 73\u2011year\u2011old man with lower GI bleeding: among male inpatients aged 68\u201378, what is the 90th\u2011percentile 72\u2011h lab\u2011instability score? For top\u2011tier patients, report mortality, average LOS, and compare critical rates for Cr, K, platelets, Hgb, whole\u2011blood K, and WBC versus all inpatients.",
+  "final_sql": "WITH \n-- Define target population\ntarget_population AS (\n  SELECT \n    p.subject_id, \n    p.anchor_age, \n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE \n    p.gender = 'M' AND \n    p.anchor_age BETWEEN 68 AND 78\n),\n\n-- Admissions for target population\ntarget_admissions AS (\n  SELECT \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.deathtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    target_population tp ON a.subject_id = tp.subject_id\n),\n\n-- Lab events for target population\nlab_events_target AS (\n  SELECT \n    le.hadm_id, \n    le.itemid, \n    le.charttime, \n    le.valuenum\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN \n    target_admissions ta ON le.hadm_id = ta.hadm_id\n  WHERE \n    le.itemid IN (\n      -- IDs for Cr, K, platelets, Hgb, WBC\n      220050,  -- Creatinine\n      220179,  -- Potassium\n      220051,  -- Platelets\n      220052,  -- Hemoglobin\n      220179  -- Serum Potassium; Note: Whole-blood K itemid might differ\n    )\n),\n\n-- Calculate lab-instability score (example: standard deviation of values over 72h)\nlab_instability AS (\n  SELECT \n    hadm_id, \n    STDDEV(valuenum) AS instability_score\n  FROM \n    lab_events_target\n  GROUP BY \n    hadm_id\n),\n\n-- Calculate 90th percentile of instability_score\npercentile_score AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 0.9)[OFFSET(1)] AS percentile_90\n  FROM \n    lab_instability\n),\n\n-- Identify top-tier patients (90th percentile of lab-instability score)\ntop_tier_patients AS (\n  SELECT \n    hadm_id\n  FROM \n    lab_instability\n  WHERE \n    instability_score >= (SELECT percentile_90 FROM percentile_score)\n),\n\n-- Critical lab rates for top-tier patients\ntop_tier_lab_rates AS (\n  SELECT \n    hadm_id,\n    AVG(CASE WHEN itemid = 220050 THEN valuenum END) AS avg_cr,\n    AVG(CASE WHEN itemid = 220179 THEN valuenum END) AS avg_k,\n    AVG(CASE WHEN itemid = 220051 THEN valuenum END) AS avg_platelets,\n    AVG(CASE WHEN itemid = 220052 THEN valuenum END) AS avg_hgb,\n    AVG(CASE WHEN itemid = 220050_1 THEN valuenum END) AS avg_wb_k  -- Assuming a different itemid for whole-blood K\n  FROM \n    lab_events_target\n  WHERE \n    hadm_id IN (SELECT hadm_id FROM top_tier_patients)\n  GROUP BY \n    hadm_id\n)\n\n-- Final query for top-tier patients' outcomes\nSELECT \n  -- Mortality\n  SUM(CASE WHEN ta.hospital_expire_flag = 1 OR ta.deathtime IS NOT NULL THEN 1 ELSE 0 END) AS mortality_count,\n  COUNT(DISTINCT ta.hadm_id) AS total_patients,\n  -- Average LOS\n  AVG(DATE_DIFF(ta.dischtime, ta.admittime)) AS avg_los,\n  -- Critical rates (example for Cr, adjust for others)\n  AVG(ttlr.avg_cr) AS avg_cr,\n  AVG(ttlr.avg_k) AS avg_k,\n  AVG(ttlr.avg_platelets) AS avg_platelets,\n  AVG(ttlr.avg_hgb) AS avg_hgb,\n  AVG(ttlr.avg_wb_k) AS avg_wb_k\nFROM \n  target_admissions ta\n  JOIN top_tier_patients ttp ON ta.hadm_id = ttp.hadm_id\n  LEFT JOIN top_tier_lab_rates ttlr ON ta.hadm_id = ttlr.hadm_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Missing whitespace between literal and alias at [88:34]; reason: invalidQuery, location: query, message: Syntax error: Missing whitespace between literal and alias at [88:34]\n\nLocation: US\nJob ID: 80100531-6b94-4b66-9a3a-899480fe1337\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [68:47]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [68:47]\n\nLocation: US\nJob ID: 22697542-f890-4168-abbb-e13ea0840f9d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: STDEV; Did you mean stddev? at [54:5]; reason: invalidQuery, location: query, message: Function not found: STDEV; Did you mean stddev? at [54:5]\n\nLocation: US\nJob ID: 577c7834-5076-4a14-bcbb-d89a84f4d0e9\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Missing whitespace between literal and alias at [88:34]; reason: invalidQuery, location: query, message: Syntax error: Missing whitespace between literal and alias at [88:34]\n\nLocation: US\nJob ID: 80100531-6b94-4b66-9a3a-899480fe1337\n"
+    }
+  ]
+}

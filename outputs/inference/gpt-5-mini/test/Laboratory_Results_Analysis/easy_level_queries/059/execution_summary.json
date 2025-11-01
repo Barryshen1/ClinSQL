@@ -1,0 +1,16 @@
+{
+  "query": "I have a 93-year-old male with sepsis\u2014what is the 75th percentile platelet count on discharge day among male sepsis admissions?",
+  "final_sql": "WITH sepsis_adm AS (\n  -- Admissions with a diagnosis whose description mentions sepsis/septicemia\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%sepsis%'\n     OR LOWER(dd.long_title) LIKE '%septicemia%'\n),\n\nplatelet_items AS (\n  -- Lab itemids that correspond to platelet tests\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%platelet%'\n),\n\nplatelet_on_discharge_per_adm AS (\n  -- For each sepsis admission of a male patient, pick the last platelet lab on the discharge date\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.dischtime,\n    l.valuenum AS platelet_val,\n    ROW_NUMBER() OVER (PARTITION BY a.hadm_id ORDER BY l.charttime DESC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN sepsis_adm s\n    ON a.hadm_id = s.hadm_id\n   AND a.subject_id = s.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n  JOIN platelet_items pi\n    ON l.itemid = pi.itemid\n  WHERE p.gender = 'M'\n    AND a.dischtime IS NOT NULL\n    -- On the same calendar day as discharge\n    AND DATE(l.charttime) = DATE(a.dischtime)\n    -- numeric platelet values only, exclude non-positive/uninterpretable entries\n    AND l.valuenum IS NOT NULL\n    AND l.valuenum > 0\n)\n\nSELECT\n  -- approximate 75th percentile of platelet values (same units as recorded in labevents)\n  (APPROX_QUANTILES(platelet_val, 100))[OFFSET(75)] AS platelet_75th_percentile,\n  COUNT(*) AS n_admissions_included\nFROM (\n  -- take only one platelet value per admission (the last on discharge day)\n  SELECT subject_id, hadm_id, platelet_val\n  FROM platelet_on_discharge_per_adm\n  WHERE rn = 1\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

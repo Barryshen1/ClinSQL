@@ -1,0 +1,1 @@
+SELECT CAST(COUNT(DISTINCT emar_id) AS FLOAT) / NULLIF(COUNT(DISTINCT hadm_id), 0) AS avg_devices FROM patients p JOIN admissions a ON p.subject_id = a.subject_id JOIN emar e ON a.subject_id = e.subject_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dob)) BETWEEN 73 AND 83;

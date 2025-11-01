@@ -1,0 +1,16 @@
+{
+  "query": "I have a 63\u2011year\u2011old man admitted for COPD exacerbation. Among male patients 58\u201368, stratified into tertiles by medication complexity during the first 72h, report for each tertile: n, min/max and mean complexity score, mean LOS, mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M'\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE \n        di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 9 AND di.icd_code IN ('491%', '492%', '493.2%', '496%'))\n          OR \n          (di.icd_version = 10 AND di.icd_code LIKE 'J44%')\n        )\n    )\n),\ncohort_filtered AS (\n  SELECT *\n  FROM cohort\n  WHERE age_admit BETWEEN 58 AND 68\n),\nmeds AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT e.medication) AS complexity_score\n  FROM cohort_filtered c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar` e\n    ON c.hadm_id = e.hadm_id\n    AND e.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.hadm_id\n),\nreadmission_flag AS (\n  SELECT \n    c.hadm_id,\n    CASE WHEN MIN(a.admittime) IS NOT NULL THEN 1 ELSE 0 END AS readmit_30d\n  FROM cohort_filtered c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON c.subject_id = a.subject_id\n    AND a.admittime > c.dischtime\n    AND a.admittime <= DATETIME_ADD(c.dischtime, INTERVAL 30 DAY)\n  GROUP BY c.hadm_id\n),\ncombined AS (\n  SELECT \n    c.hadm_id,\n    c.hospital_expire_flag,\n    COALESCE(m.complexity_score, 0) AS complexity_score,\n    r.readmit_30d,\n    DATETIME_DIFF(c.dischtime, c.admittime, DAY) AS los_days\n  FROM cohort_filtered c\n  LEFT JOIN meds m ON c.hadm_id = m.hadm_id\n  LEFT JOIN readmission_flag r ON c.hadm_id = r.hadm_id\n),\nwith_tertiles AS (\n  SELECT *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM combined\n)\nSELECT \n  tertile,\n  COUNT(hadm_id) AS n,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  AVG(complexity_score) AS mean_complexity,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) * 100 AS mortality_pct,\n  AVG(readmit_30d) * 100 AS readmit_30d_pct\nFROM with_tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

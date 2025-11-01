@@ -1,0 +1,28 @@
+{
+  "query": "44-year-old male. In male patients 39\u201349 with ACS and LOS 1\u20137 days, report p25, p50, p75 of ultrasounds (incl. echo) per admission, stratified 1\u20134 vs 5\u20137 stays and primary vs secondary ACS.",
+  "final_sql": "WITH patient_adms AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    p.gender, \n    p.anchor_age,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days,\n    CASE \n      WHEN DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) <= 4 THEN '1-4' \n      ELSE '5-7' \n    END AS los_group\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) BETWEEN 1 AND 7\n),\nprimary_acs AS (\n  SELECT DISTINCT d.hadm_id\n  FROM patient_adms pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON pa.hadm_id = d.hadm_id\n  WHERE d.seq_num = 1\n    AND (\n      (d.icd_version = 10 AND (d.icd_code LIKE 'I20%' OR d.icd_code LIKE 'I21%'))\n      OR \n      (d.icd_version = 9 AND (d.icd_code LIKE '410%' OR d.icd_code LIKE '411%'))\n    )\n),\nsecondary_acs AS (\n  SELECT DISTINCT d.hadm_id\n  FROM patient_adms pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON pa.hadm_id = d.hadm_id\n  WHERE d.seq_num > 1\n    AND (\n      (d.icd_version = 10 AND (d.icd_code LIKE 'I20%' OR d.icd_code LIKE 'I21%'))\n      OR \n      (d.icd_version = 9 AND (d.icd_code LIKE '410%' OR d.icd_code LIKE '411%'))\n    )\n    AND d.hadm_id NOT IN (SELECT hadm_id FROM primary_acs)\n),\nfiltered_adms AS (\n  SELECT pa.*, 'primary' AS acs_type\n  FROM patient_adms pa\n  INNER JOIN primary_acs pr ON pa.hadm_id = pr.hadm_id\n  \n  UNION ALL\n  \n  SELECT pa.*, 'secondary' AS acs_type\n  FROM patient_adms pa\n  INNER JOIN secondary_acs sec ON pa.hadm_id = sec.hadm_id\n),\nultrasound_counts AS (\n  SELECT \n    f.hadm_id, \n    f.los_group, \n    f.acs_type,\n    COALESCE(uc.num_procs, 0) AS num_ultrasounds\n  FROM filtered_adms f\n  LEFT JOIN (\n    SELECT \n      p.hadm_id,\n      COUNT(*) AS num_procs\n    FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dip \n      ON p.icd_code = dip.icd_code \n      AND p.icd_version = dip.icd_version\n    WHERE dip.long_title LIKE '%echocardiography%' \n       OR dip.long_title LIKE '%ultrasonography%'\n    GROUP BY p.hadm_id\n  ) uc ON f.hadm_id = uc.hadm_id\n)\nSELECT \n  los_group, \n  acs_type,\n  APPROX_QUANTILES(num_ultrasounds, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(num_ultrasounds, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(num_ultrasounds, 4)[OFFSET(3)] AS p75\nFROM ultrasound_counts\nGROUP BY los_group, acs_type\nORDER BY los_group, acs_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [28:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [28:8]\n\nLocation: US\nJob ID: e48dbd4d-d3d9-4ade-95f5-ff145f5b9993\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 8ac05fd3-6d9a-4f3b-aa17-e30e614a2177\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

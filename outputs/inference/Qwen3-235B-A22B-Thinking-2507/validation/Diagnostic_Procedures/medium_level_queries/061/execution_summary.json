@@ -1,0 +1,17 @@
+{
+  "query": "For my 69-year-old female with AKI: among female patients 64\u201374 with AKI, median (IQR) diagnostic imaging studies per admission for 1\u20133 vs 4\u20137 days, stratified by primary vs secondary diagnosis?",
+  "final_sql": "WITH base_admissions AS (\n  SELECT \n    a.hadm_id,\n    DATE(a.admittime) AS admission_date,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n        WHERE d.hadm_id = a.hadm_id \n          AND d.seq_num = 1\n          AND (\n            (d.icd_version = 9 AND d.icd_code LIKE '584%') \n            OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n          )\n      ) THEN 'primary'\n      ELSE 'secondary'\n    END AS aki_type\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 64 AND 74\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      WHERE d.hadm_id = a.hadm_id \n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '584%') \n          OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n        )\n    )\n),\nimaging_codes AS (\n  SELECT code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_hcpcs`\n  WHERE LOWER(long_description) LIKE '%x-ray%'\n     OR LOWER(long_description) LIKE '%ct%'\n     OR LOWER(long_description) LIKE '%mri%'\n     OR LOWER(long_description) LIKE '%ultrasound%'\n     OR LOWER(long_description) LIKE '%radiograph%'\n     OR LOWER(long_description) LIKE '%scan%'\n     OR LOWER(long_description) LIKE '%imaging%'\n),\ntime_windows AS (\n  SELECT '1-3' AS time_window, 0 AS start_offset, 2 AS end_offset\n  UNION ALL\n  SELECT '4-7', 3, 6\n),\nimaging_counts AS (\n  SELECT \n    ba.hadm_id,\n    ba.aki_type,\n    tw.time_window,\n    COUNT(ic.code) AS imaging_count\n  FROM base_admissions ba\n  CROSS JOIN time_windows tw\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n    ON ba.hadm_id = h.hadm_id\n    AND h.chartdate BETWEEN DATE_ADD(ba.admission_date, INTERVAL tw.start_offset DAY) \n                        AND DATE_ADD(ba.admission_date, INTERVAL tw.end_offset DAY)\n  LEFT JOIN imaging_codes ic \n    ON h.hcpcs_cd = ic.code\n  GROUP BY ba.hadm_id, ba.aki_type, tw.time_window\n)\nSELECT\n  aki_type,\n  time_window,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(500)] AS median,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(750)] - APPROX_QUANTILES(imaging_count, 1000)[OFFSET(250)] AS iqr\nFROM imaging_counts\nGROUP BY aki_type, time_window\nORDER BY aki_type, time_window;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

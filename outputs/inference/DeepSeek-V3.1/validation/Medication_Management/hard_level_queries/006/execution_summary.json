@@ -1,0 +1,16 @@
+{
+  "query": "For a 42\u2011year\u2011old man with a postoperative ICU admission, among male inpatients aged 37\u201347, compute medication complexity over the first 72 hours, stratify into quintiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per quintile and estimate his risk.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id, \n        p.anchor_age,\n        a.hadm_id,\n        a.admission_type,\n        a.dischtime,\n        a.hospital_expire_flag,\n        i.stay_id,\n        i.intime,\n        i.outtime,\n        i.los AS icu_los\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n        ON a.hadm_id = i.hadm_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 37 AND 47\n        AND a.admission_type IN ('ELECTIVE', 'URGENT', 'EMERGENCY')\n    -- Take the first ICU stay per admission\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY a.hadm_id ORDER BY i.intime) = 1\n),\n\nmedications AS (\n    SELECT \n        c.stay_id,\n        COUNT(DISTINCT e.medication) AS med_count\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar` e\n        ON c.subject_id = e.subject_id\n        AND c.hadm_id = e.hadm_id\n        AND e.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    GROUP BY c.stay_id\n),\n\nquintiles AS (\n    SELECT\n        stay_id,\n        med_count,\n        NTILE(5) OVER (ORDER BY med_count) AS quintile\n    FROM medications\n),\n\nreadmissions AS (\n    SELECT\n        a1.subject_id,\n        a1.hadm_id,\n        a1.dischtime,\n        COUNT(DISTINCT a2.hadm_id) > 0 AS readmit_30d\n    FROM cohort c\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a1\n        ON c.hadm_id = a1.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        ON a1.subject_id = a2.subject_id\n        AND a2.admittime > a1.dischtime\n        AND a2.admittime <= DATETIME_ADD(a1.dischtime, INTERVAL 30 DAY)\n    GROUP BY a1.subject_id, a1.hadm_id, a1.dischtime\n)\n\nSELECT\n    q.quintile,\n    COUNT(*) AS n_patients,\n    AVG(q.med_count) AS avg_med_count,\n    MIN(q.med_count) AS min_med_count,\n    MAX(q.med_count) AS max_med_count,\n    AVG(c.icu_los) AS avg_icu_los,\n    AVG(CAST(c.hospital_expire_flag AS INT)) AS mortality_rate,\n    AVG(CAST(r.readmit_30d AS INT)) AS readmit_rate\nFROM quintiles q\nINNER JOIN cohort c\n    ON q.stay_id = c.stay_id\nINNER JOIN readmissions r\n    ON c.hadm_id = r.hadm_id\nGROUP BY q.quintile\nORDER BY q.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

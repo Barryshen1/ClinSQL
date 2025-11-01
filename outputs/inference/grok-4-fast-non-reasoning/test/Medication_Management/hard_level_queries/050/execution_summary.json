@@ -1,0 +1,28 @@
+{
+  "query": "Patient is female, 86. Among female inpatients age 81\u201391 with AKI, compare medication complexity score distribution and outcomes for those with both CNS\u2011depressant and nephrotoxic drugs versus other AKI patients. Report quartiles, mean complexity, overall LOS and mortality, and top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH aki_cohort AS (\n  -- Base cohort: females 81-91 with AKI (top 5 diagnoses)\n  SELECT DISTINCT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id AND d.seq_num <= 5\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd \n    ON d.icd_code = icd.icd_code \n    AND (d.icd_version = icd.icd_version OR (d.icd_version IS NULL AND icd.icd_version IS NULL))\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 81 AND 91\n    AND (icd.icd_code LIKE 'N17.%' OR icd.icd_code LIKE '584.%')  -- AKI ICD-10/9\n    AND (a.admission_location IN ('FLOOR', 'ICU') OR (a.admission_location = 'EMERGENCY' AND a.edregtime IS NULL))  -- Inpatients\n    AND (a.deathtime IS NULL OR TIMESTAMP_DIFF(a.deathtime, a.admittime, HOUR) > 24)  -- Exclude immediate deaths\n    AND a.hadm_id IS NOT NULL\n),\nmed_exposures AS (\n  -- Drug exposure from prescriptions only (hospital-wide)\n  SELECT \n    ac.subject_id,\n    ac.hadm_id,\n    pres.drug AS drug_name,\n    pres.starttime\n  FROM aki_cohort ac\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres \n    ON ac.hadm_id = pres.hadm_id\n    AND pres.starttime >= ac.admittime \n    AND (pres.stoptime <= ac.dischtime OR pres.stoptime IS NULL)\n  WHERE pres.drug IS NOT NULL\n    AND pres.drug_type = 'MAIN'  -- Focus on main orders\n),\ndrug_flags AS (\n  -- Flag exposure to nephrotoxic and CNS-depressant drugs, plus unique drug count\n  SELECT \n    hadm_id,\n    MAX(CASE WHEN REGEXP_CONTAINS(UPPER(drug_name), r'(VANCOMYCIN|GENTAMICIN|IBUPROFEN|NAPROXEN|INDOMETHACIN|LISINOPRIL|ENALAPRIL|RAMIPRIL|FURSEMIDE|ACYCLOVIR|AMPHOTERICIN|COLISTIN|NSAID)') \n             THEN 1 ELSE 0 END) AS has_nephrotoxic,\n    MAX(CASE WHEN REGEXP_CONTAINS(UPPER(drug_name), r'(MORPHINE|FENTANYL|HYDROMORPHONE|LOPERAZEPAM|MIDAZOLAM|PROPOFOL|ZOLPIDEM|DEXMEDETOMIDINE|HALOPERIDOL)') \n             THEN 1 ELSE 0 END) AS has_cns_depressant,\n    COUNT(DISTINCT drug_name) AS unique_drugs\n  FROM med_exposures\n  GROUP BY hadm_id\n),\nmcs_calc AS (\n  -- Simplified MCS: unique drugs (no redundant flag addition)\n  SELECT \n    ac.*,\n    COALESCE(df.has_nephrotoxic, 0) AS nephro_flag,\n    COALESCE(df.has_cns_depressant, 0) AS cns_flag,\n    COALESCE(df.unique_drugs, 0) AS mcs_score\n  FROM aki_cohort ac\n  LEFT JOIN drug_flags df ON ac.hadm_id = df.hadm_id\n),\nlos_q3 AS (\n  -- Compute global LOS Q3 for top-quartile reference\n  SELECT APPROX_QUANTILES(los_days, 4)[OFFSET(3)] AS global_los_q3\n  FROM mcs_calc\n),\ngrouped_stats AS (\n  SELECT \n    CASE \n      WHEN nephro_flag = 1 AND cns_flag = 1 THEN 'Both CNS-depressant and Nephrotoxic'\n      ELSE 'Other AKI'\n    END AS exposure_group,\n    -- MCS distribution\n    APPROX_QUANTILES(mcs_score, 4)[OFFSET(1)] AS mcs_q1,\n    APPROX_QUANTILES(mcs_score, 4)[OFFSET(2)] AS mcs_median,\n    APPROX_QUANTILES(mcs_score, 4)[OFFSET(3)] AS mcs_q3,\n    AVG(mcs_score) AS mcs_mean,\n    COUNT(*) AS n_patients,\n    -- Overall outcomes\n    AVG(los_days) AS avg_los,\n    SAFE_DIVIDE(SUM(CAST(hospital_expire_flag AS INT64)), COUNT(*)) AS mortality_rate,\n    -- Top-quartile LOS (LOS > global Q3)\n    AVG(CASE WHEN los_days > lq.global_los_q3 THEN los_days END) AS top_q_los_avg,\n    COUNT(CASE WHEN los_days > lq.global_los_q3 THEN 1 END) AS top_q_n,\n    SAFE_DIVIDE(\n      SUM(CASE WHEN los_days > lq.global_los_q3 THEN CAST(hospital_expire_flag AS INT64) ELSE 0 END),\n      COUNT(CASE WHEN los_days > lq.global_los_q3 THEN 1 END)\n    ) AS top_q_mortality_rate\n  FROM mcs_calc\n  CROSS JOIN los_q3 lq\n  GROUP BY exposure_group, lq.global_los_q3\n)\nSELECT \n  exposure_group,\n  mcs_q1, mcs_median, mcs_q3, mcs_mean,\n  n_patients,\n  avg_los, mortality_rate,\n  top_q_los_avg, top_q_n, top_q_mortality_rate\nFROM grouped_stats\nORDER BY exposure_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column 3 in UNION ALL has incompatible types: STRING, INT64 at [41:3]; reason: invalidQuery, location: query, message: Column 3 in UNION ALL has incompatible types: STRING, INT64 at [41:3]\n\nLocation: US\nJob ID: 6cf12f13-89e6-4a1c-b3a6-384597ed910b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references df.has_nephrotoxic which is neither grouped nor aggregated at [58:15]; reason: invalidQuery, location: query, message: SELECT list expression references df.has_nephrotoxic which is neither grouped nor aggregated at [58:15]\n\nLocation: US\nJob ID: b13c4247-f785-4b5e-8115-463959ef2ab2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 72\u2011yo man. Among men 67\u201377 with heart failure, what are p25/p50/p75 numbers of imaging studies per admission, by LOS 1\u20134 vs 5\u20137 days and primary vs secondary HF?",
+  "final_sql": "WITH \n-- Step 1: Filter patients by age and gender\neligible_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M' AND anchor_age BETWEEN 67 AND 77\n),\n\n-- Step 2: Identify heart failure admissions and their type (primary/secondary)\nheart_failure_admissions AS (\n  SELECT \n    a.hadm_id,\n    d.icd_code,\n    d.icd_version,\n    CASE WHEN diag.seq_num = 1 THEN 'Primary' ELSE 'Secondary' END AS hf_type\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON a.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n  WHERE diag.icd_code IN (SELECT icd_code FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` WHERE long_title LIKE '%Heart failure%')\n  AND a.subject_id IN (SELECT subject_id FROM eligible_patients)\n),\n\n-- Step 3: Calculate LOS and stratify admissions\nadmission_details AS (\n  SELECT \n    hadm_id,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los,\n    CASE \n      WHEN DATETIME_DIFF(dischtime, admittime, DAY) BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN DATETIME_DIFF(dischtime, admittime, DAY) BETWEEN 5 AND 7 THEN '5-7 days'\n      ELSE 'Outside Range'\n    END AS los_category\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE hadm_id IN (SELECT hadm_id FROM heart_failure_admissions)\n),\n\n-- Step 4: Count imaging studies per admission (using hcpcsevents as a proxy)\nimaging_studies_count AS (\n  SELECT \n    hadm_id,\n    COUNT(*) AS num_imaging_studies\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n  WHERE hadm_id IN (SELECT hadm_id FROM admission_details)\n  GROUP BY hadm_id\n)\n\n-- Final query to calculate percentiles\nSELECT \n  ad.los_category,\n  hfa.hf_type,\n  APPROX_QUANTILES(isc.num_imaging_studies, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(isc.num_imaging_studies, 100)[OFFSET(50)] AS p50,\n  APPROX_QUANTILES(isc.num_imaging_studies, 100)[OFFSET(75)] AS p75\nFROM admission_details ad\nJOIN heart_failure_admissions hfa ON ad.hadm_id = hfa.hadm_id\nJOIN imaging_studies_count isc ON ad.hadm_id = isc.hadm_id\nWHERE ad.los_category != 'Outside Range'\nGROUP BY ad.los_category, hfa.hf_type\nORDER BY ad.los_category, hfa.hf_type;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

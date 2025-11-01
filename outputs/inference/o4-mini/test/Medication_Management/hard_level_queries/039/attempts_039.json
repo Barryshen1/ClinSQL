@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH ich_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      USING (subject_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      USING (subject_id, hadm_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n     AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 87 AND 97\n    AND LOWER(dd.long_title) LIKE '%intracranial hemorrhage%'\n),\nmed_complexity AS (\n  SELECT\n    ich.hadm_id,\n    COUNT(DISTINCT CONCAT(pres.drug, '||', pres.route)) AS med_complexity\n  FROM\n    ich_admissions ich\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n      ON ich.hadm_id = pres.hadm_id\n     AND pres.starttime BETWEEN ich.admittime\n                          AND TIMESTAMP_ADD(ich.admittime, INTERVAL 48 HOUR)\n  GROUP BY\n    ich.hadm_id\n),\nreadmissions AS (\n  SELECT\n    ich.*,\n    mc.med_complexity,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = ich.subject_id\n        AND a2.admittime > ich.admittime\n        AND a2.admittime <= TIMESTAMP_ADD(ich.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmit30_flag\n  FROM\n    ich_admissions ich\n    LEFT JOIN med_complexity mc\n      USING (hadm_id)\n),\nquartiled AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY med_complexity) AS quartile\n  FROM\n    readmissions\n)\nSELECT\n  quartile,\n  COUNT(hadm_id)                                  AS admissions,\n  MIN(med_complexity)                             AS med_score_min,\n  MAX(med_complexity)                             AS med_score_max,\n  ROUND(AVG(los), 2)                              AS avg_los_days,\n  ROUND(100 * AVG(hospital_expire_flag), 2)        AS mortality_pct,\n  ROUND(100 * AVG(readmit30_flag), 2)             AS readmit30_pct\nFROM\n  quartiled\nGROUP BY\n  quartile\nORDER BY\n  quartile;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

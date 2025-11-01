@@ -1,0 +1,22 @@
+{
+  "query": "I have a 76\u2011year\u2011old female inpatient with acute pancreatitis. Among female inpatients aged 71\u201381 with acute pancreatitis, compute medication complexity score over the first 72 hours, stratify into tertiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH pancreatitis_index AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON a.subject_id = pat.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    UPPER(pat.gender) = 'F'\n    AND pat.anchor_age BETWEEN 71 AND 81\n    AND LOWER(d.long_title) LIKE '%pancreatitis%'\n),\n-- Medication Complexity Score in first 72 hours: count distinct drugs started\n-- within the first 72 hours after admission\nmcs72 AS (\n  SELECT\n    p.hadm_id,\n    COUNT(DISTINCT p2.drug) AS mcs72\n  FROM\n    pancreatitis_index AS p\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p2\n      ON p.subject_id = p2.subject_id\n     AND p.hadm_id = p2.hadm_id\n     -- medications started within the first 72 hours after admission\n     AND p2.starttime >= p.admittime\n     AND p2.starttime < TIMESTAMP_ADD(p.admittime, INTERVAL 72 HOUR)\n  GROUP BY\n    p.hadm_id\n),\ncohort AS (\n  SELECT\n    b.hadm_id,\n    b.subject_id,\n    b.admittime,\n    b.dischtime,\n    b.hospital_expire_flag,\n    IFNULL(m.mcs72, 0) AS mcs72\n  FROM\n    pancreatitis_index AS b\n  LEFT JOIN\n    mcs72 AS m\n    ON b.hadm_id = m.hadm_id\n),\ncalc AS (\n  SELECT\n    c.hadm_id,\n    c.subject_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    c.mcs72,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, SECOND) / 3600.0 AS los_hours,\n    CASE WHEN c.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS in_hosp_mortality,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n        WHERE a2.subject_id = c.subject_id\n          AND a2.admittime >= c.dischtime\n          AND a2.admittime < TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 ELSE 0 END AS readmit_30\n  FROM\n    cohort AS c\n)\nSELECT\n  hadm_id,\n  subject_id,\n  admittime,\n  dischtime,\n  mcs72,\n  los_hours,\n  in_hosp_mortality,\n  readmit_30,\n  NTILE(3) OVER (ORDER BY mcs72) AS tertile\nFROM\n  calc\nORDER BY\n  tertile,\n  mcs72;",
+  "execution_success": true,
+  "row_count": 598,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 A valid date part name is required but found H at [36:64]; reason: invalidQuery, location: query, message: A valid date part name is required but found H at [36:64]\n\nLocation: US\nJob ID: 1badfdb8-e6a5-452e-8c2e-968b366ff4ec\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 598,
+      "error": null
+    }
+  ]
+}

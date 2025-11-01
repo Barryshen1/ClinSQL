@@ -1,0 +1,23 @@
+{
+  "query": "For my 56\u2011year\u2011old patient: among female patients 51\u201361 with heart failure, ICU vs no ICU, LOS <8 vs \u22658 and comorbidity burden (low/med/high), report in\u2011hospital mortality rates, absolute/relative differences, MV/vaso/RRT prevalence.",
+  "final_sql": "WITH heart_failure_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE (icd_version = 10 AND icd_code LIKE 'I50%')\n         OR (icd_version = 9 AND icd_code LIKE '428%')\n    )\n    AND p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 51 AND 61\n),\n\nicu_status AS (\n  SELECT\n    hfp.*,\n    CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END AS has_icu\n  FROM\n    heart_failure_patients hfp\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON hfp.hadm_id = i.hadm_id\n),\n\nlos_calc AS (\n  SELECT\n    *,\n    DATE_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM\n    icu_status\n),\n\ncomorbidity_count AS (\n  SELECT\n    hfp.hadm_id,\n    COUNT(d.icd_code) AS comorbidity_count\n  FROM\n    heart_failure_patients hfp\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON hfp.hadm_id = d.hadm_id\n  WHERE\n    NOT (\n      (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n      OR (d.icd_version = 9 AND d.icd_code LIKE '428%')\n    )\n  GROUP BY\n    hfp.hadm_id\n),\n\nmv_flag AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN itemid = 467 THEN 1 ELSE 0 END) AS has_mv\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents`\n  GROUP BY\n    hadm_id\n),\n\nvaso_flag AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN itemid IN (221906, 221902, 221907, 221662) THEN 1 ELSE 0 END) AS has_vaso\n  FROM\n    `physionet-data.mimiciv_3_1_icu.inputevents`\n  GROUP BY\n    hadm_id\n),\n\nrrt_flag AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN itemid = 227524 THEN 1 ELSE 0 END) AS has_rrt\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents`\n  GROUP BY\n    hadm_id\n)\n\nSELECT\n  has_icu,\n  CASE WHEN los_days < 8 THEN '<8' ELSE '>=8' END AS los_group,\n  CASE\n    WHEN comorbidity_count.comorbidity_count <= 1 THEN 'low'\n    WHEN comorbidity_count.comorbidity_count BETWEEN 2 AND 3 THEN 'medium'\n    ELSE 'high'\n  END AS comorbidity_burden,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  AVG(COALESCE(mv_flag.has_mv, 0)) AS mv_prevalence,\n  AVG(COALESCE(vaso_flag.has_vaso, 0)) AS vaso_prevalence,\n  AVG(COALESCE(rrt_flag.has_rrt, 0)) AS rrt_prevalence\nFROM\n  los_calc\nLEFT JOIN\n  comorbidity_count ON los_calc.hadm_id = comorbidity_count.hadm_id\nLEFT JOIN\n  mv_flag ON los_calc.hadm_id = mv_flag.hadm_id\nLEFT JOIN\n  vaso_flag ON los_calc.hadm_id = vaso_flag.hadm_id\nLEFT JOIN\n  rrt_flag ON los_calc.hadm_id = rrt_flag.hadm_id\nGROUP BY\n  has_icu, los_group, comorbidity_burden;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator <= for argument types: STRUCT<hadm_id INT64, comorbidity_count INT64>, INT64\n  Signature: T1 <= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRUCT<hadm_id INT64, comorbidity_count INT64>} at [97:10]; reason: invalidQuery, location: query, message: No matching signature for operator <= for argument types: STRUCT<hadm_id INT64, comorbidity_count INT64>, INT64\n  Signature: T1 <= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRUCT<hadm_id INT64, comorbidity_count INT64>} at [97:10]\n\nLocation: US\nJob ID: bb861634-8876-45a0-9302-f9b7c076ee3e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

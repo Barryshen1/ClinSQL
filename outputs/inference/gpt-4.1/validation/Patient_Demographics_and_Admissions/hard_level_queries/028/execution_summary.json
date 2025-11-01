@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 60\u2011year\u2011old woman. In female Medicare patients aged 55\u201365 admitted from the ED with principal cellulitis, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >7 days?",
+  "final_sql": "WITH cellulitis_icd AS (\n  -- ICD-9: 682.x, ICD-10: L03.x\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^682')) OR\n    (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^L03'))\n),\nindex_admissions AS (\n  -- Female Medicare patients aged 55-65, admitted from ED, principal cellulitis\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.deathtime,\n    adm.hospital_expire_flag,\n    pat.anchor_age,\n    pat.gender,\n    adm.insurance,\n    adm.admission_location,\n    adm.admission_type,\n    adm.race,\n    adm.marital_status,\n    adm.language,\n    -- LOS in days\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.hadm_id = dx.hadm_id\n  INNER JOIN cellulitis_icd icd\n    ON dx.icd_code = icd.icd_code AND dx.icd_version = icd.icd_version\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 55 AND 65\n    AND adm.insurance = 'Medicare'\n    AND (\n      LOWER(adm.admission_location) LIKE '%emergency%'\n      OR LOWER(adm.admission_location) LIKE '%ed%'\n    )\n    AND dx.seq_num = 1 -- principal diagnosis\n    AND adm.hospital_expire_flag = 0 -- exclude deaths during index stay\n    AND adm.deathtime IS NULL -- extra safety\n),\nreadmissions AS (\n  -- For each index admission, find first readmission within 30 days\n  SELECT\n    idx.subject_id,\n    idx.hadm_id AS index_hadm_id,\n    idx.dischtime AS index_dischtime,\n    MIN(next.admittime) AS readmit_admittime,\n    MIN(next.hadm_id) AS readmit_hadm_id\n  FROM index_admissions idx\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` next\n    ON idx.subject_id = next.subject_id\n    AND next.admittime > idx.dischtime\n    AND DATETIME_DIFF(next.admittime, idx.dischtime, DAY) <= 30\n  GROUP BY idx.subject_id, idx.hadm_id, idx.dischtime\n),\nindex_with_readmit_flag AS (\n  -- Mark index admissions as readmitted or not\n  SELECT\n    idx.*,\n    CASE WHEN r.readmit_hadm_id IS NOT NULL THEN 1 ELSE 0 END AS was_readmitted\n  FROM index_admissions idx\n  LEFT JOIN readmissions r\n    ON idx.subject_id = r.subject_id\n    AND idx.hadm_id = r.index_hadm_id\n)\nSELECT\n  -- 30-day readmission rate\n  ROUND(100 * SUM(was_readmitted) / COUNT(*), 2) AS readmission_rate_percent,\n  -- Median LOS for readmitted\n  APPROX_QUANTILES(IF(was_readmitted = 1, los, NULL), 2)[OFFSET(1)] AS median_los_readmitted,\n  -- Median LOS for non-readmitted\n  APPROX_QUANTILES(IF(was_readmitted = 0, los, NULL), 2)[OFFSET(1)] AS median_los_nonreadmitted,\n  -- Percent of index admissions with LOS > 7 days\n  ROUND(100 * COUNTIF(los > 7) / COUNT(*), 2) AS percent_los_gt_7_days,\n  -- Percent of index admissions with LOS > 7 days, by readmission status\n  ROUND(100 * COUNTIF(los > 7 AND was_readmitted = 1) / NULLIF(COUNTIF(was_readmitted = 1),0), 2) AS percent_los_gt_7_days_readmitted,\n  ROUND(100 * COUNTIF(los > 7 AND was_readmitted = 0) / NULLIF(COUNTIF(was_readmitted = 0),0), 2) AS percent_los_gt_7_days_nonreadmitted,\n  COUNT(*) AS n_index_admissions,\n  SUM(was_readmitted) AS n_readmitted\nFROM index_with_readmit_flag;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [76:46]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [76:46]\n\nLocation: US\nJob ID: 806406b4-d676-4319-8ac7-19ca186a9af6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 66\u2011year\u2011old woman. Among female Medicare patients 61\u201371 admitted from SNF with a principal diagnosis of acute kidney injury, what's the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >6 days?",
+  "final_sql": "WITH aki_index AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id\n   AND a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 61 AND 71\n    AND a.insurance = 'Medicare'\n    AND LOWER(a.admission_location) LIKE '%skilled nursing%'\n    AND d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '584%') OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n    )\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\nreadmit AS (\n  SELECT\n    idx.subject_id,\n    idx.hadm_id,\n    MIN(next.admittime) AS next_admittime\n  FROM aki_index idx\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` next\n    ON idx.subject_id = next.subject_id\n    AND idx.hadm_id != next.hadm_id\n    AND next.admittime > idx.dischtime\n    AND next.admittime <= DATETIME_ADD(idx.dischtime, INTERVAL 30 DAY)\n  GROUP BY idx.subject_id, idx.hadm_id\n),\nfinal AS (\n  SELECT\n    i.*,\n    CASE WHEN r.next_admittime IS NOT NULL THEN 1 ELSE 0 END AS readmit_30d\n  FROM aki_index i\n  LEFT JOIN readmit r\n    ON i.subject_id = r.subject_id\n   AND i.hadm_id = r.hadm_id\n)\nSELECT\n  COUNT(*) AS n_index_admissions,\n  ROUND(SUM(readmit_30d)/COUNT(*)*100,1) AS readmit_rate_percent,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days_overall,\n  APPROX_QUANTILES(IF(readmit_30d=1, los_days, NULL), 100)[OFFSET(50)] AS median_los_days_readmit,\n  APPROX_QUANTILES(IF(readmit_30d=0, los_days, NULL), 100)[OFFSET(50)] AS median_los_days_no_readmit,\n  ROUND(SUM(CASE WHEN los_days > 6 THEN 1 ELSE 0 END)/COUNT(*)*100,1) AS pct_los_gt6\nFROM final;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

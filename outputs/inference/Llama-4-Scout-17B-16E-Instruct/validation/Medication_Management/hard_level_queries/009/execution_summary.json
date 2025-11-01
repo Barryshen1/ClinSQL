@@ -1,0 +1,28 @@
+{
+  "query": "I have an 89\u2011year\u2011old female inpatient with AKI. Among female admissions aged 84\u201394 with AKI, stratified into quintiles by medication complexity score over the entire admission, report per quintile: LOS, inpatient mortality %, 30\u2011day readmission %, and anticoagulant\u2013opioid coadministration counts.",
+  "final_sql": "WITH \n-- Identify AKI patients\naki_patients AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.labevents\n  WHERE itemid = 220050 AND valuenum > 1.5  -- Creatinine > 1.5 mg/dL as a simple AKI criterion\n),\n\n-- Calculate medication complexity score (simple count of unique medications)\nmedication_complexity AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    COUNT(DISTINCT p.drug) AS medication_count\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.prescriptions p ON a.hadm_id = p.hadm_id AND p.starttime <= a.dischtime AND (p.stoptime IS NULL OR p.stoptime >= a.admittime)\n  GROUP BY a.subject_id, a.hadm_id\n),\n\n-- Stratify into quintiles based on medication complexity score\nquintiles AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    medication_count,\n    NTILE(5) OVER (ORDER BY medication_count) AS quintile\n  FROM medication_complexity\n),\n\n-- Calculate outcomes\noutcomes AS (\n  SELECT \n    q.quintile,\n    AVG(DATE_DIFF(a.dischtime, a.admittime, DAY)) AS los,\n    SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(a.hadm_id) AS inpatient_mortality_rate,\n    SUM(CASE WHEN EXISTS (\n      SELECT 1\n      FROM physionet-data.mimiciv_3_1_hosp.admissions readmission\n      WHERE readmission.subject_id = a.subject_id\n      AND readmission.admittime BETWEEN a.dischtime AND TIMESTAMP_ADD(a.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END) / COUNT(a.hadm_id) AS readmission_rate,\n    COUNT(DISTINCT CASE \n      WHEN p.drug LIKE '%anticoagulant%' AND EXISTS (\n        SELECT 1\n        FROM physionet-data.mimiciv_3_1_hosp.prescriptions p2\n        WHERE p2.hadm_id = p.hadm_id\n        AND p2.drug LIKE '%opioid%'\n      ) THEN p.hadm_id \n    END) AS anticoagulant_opioid_coadministration\n  FROM quintiles q\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a ON q.hadm_id = a.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.patients pt ON a.subject_id = pt.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.prescriptions p ON a.hadm_id = p.hadm_id\n  WHERE pt.anchor_age BETWEEN 84 AND 94 AND pt.gender = 'F' AND a.hadm_id IN (SELECT hadm_id FROM aki_patients)\n  GROUP BY q.quintile\n)\n\nSELECT * FROM outcomes;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [34:9]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [34:9]\n\nLocation: US\nJob ID: e0856cb1-57c9-495e-949c-53e84bbbba2d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function DATE_DIFF\n  Argument types: DATETIME, DATETIME\n  Signature: DATE_DIFF(DATE, DATE, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(DATETIME, DATETIME, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(TIMESTAMP, TIMESTAMP, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments at [34:9]; reason: invalidQuery, location: query, message: No matching signature for function DATE_DIFF\n  Argument types: DATETIME, DATETIME\n  Signature: DATE_DIFF(DATE, DATE, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(DATETIME, DATETIME, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(TIMESTAMP, TIMESTAMP, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments at [34:9]\n\nLocation: US\nJob ID: 0f011444-a7af-4b58-ada7-b1418e3f1f79\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

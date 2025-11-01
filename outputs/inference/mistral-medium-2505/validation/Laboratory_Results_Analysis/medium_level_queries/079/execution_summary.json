@@ -1,0 +1,22 @@
+{
+  "query": "For my 87\u2011year\u2011old female patient, among women 82\u201392 admitted with chest pain or AMI and initial troponin T >0.01 ng/mL, report p25, p50, p75 and min\u2013max.",
+  "final_sql": "WITH\n-- Identify female patients aged 82-92\neligible_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 82 AND 92\n),\n\n-- Identify admissions with chest pain or AMI\nchest_pain_ami_admissions AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    e.admittime\n  FROM\n    eligible_patients e\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON e.hadm_id = d.hadm_id\n  WHERE\n    -- Chest pain ICD-10 codes (R07.*)\n    d.icd_code LIKE 'R07.%'\n    -- AMI ICD-10 codes (I21.*, I22.*)\n    OR d.icd_code LIKE 'I21.%'\n    OR d.icd_code LIKE 'I22.%'\n),\n\n-- Get initial troponin T values > 0.01 ng/mL\ninitial_troponin AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    l.valuenum AS troponin_value,\n    ROW_NUMBER() OVER (PARTITION BY c.hadm_id ORDER BY l.charttime) AS troponin_rank\n  FROM\n    chest_pain_ami_admissions c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` di\n    ON l.itemid = di.itemid\n  WHERE\n    -- Troponin T itemid (verify with d_labitems)\n    di.label = 'Troponin T'\n    AND l.valuenum > 0.01\n    AND l.valueuom = 'ng/mL'\n),\n\n-- Calculate percentiles\npercentiles AS (\n  SELECT\n    PERCENTILE_CONT(troponin_value, 0.25) OVER() AS p25,\n    PERCENTILE_CONT(troponin_value, 0.5) OVER() AS p50,\n    PERCENTILE_CONT(troponin_value, 0.75) OVER() AS p75,\n    MIN(troponin_value) OVER() AS min_value,\n    MAX(troponin_value) OVER() AS max_value\n  FROM\n    initial_troponin\n  WHERE\n    troponin_rank = 1  -- Only the first troponin T per admission\n)\n\n-- Final result\nSELECT\n  p25,\n  p50,\n  p75,\n  min_value,\n  max_value\nFROM\n  percentiles\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column troponin_value which is neither grouped nor aggregated at [64:19]; reason: invalidQuery, location: query, message: SELECT list expression references column troponin_value which is neither grouped nor aggregated at [64:19]\n\nLocation: US\nJob ID: d8975559-152c-46b5-8e1f-172c4ffaff08\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

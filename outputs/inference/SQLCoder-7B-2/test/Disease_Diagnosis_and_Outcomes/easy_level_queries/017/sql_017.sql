@@ -1,0 +1,1 @@
+SELECT MAX(a.los) AS max_los FROM admissions a JOIN patients p ON a.subject_id = p.subject_id WHERE p.gender = 'M' AND p.anchor_age = 89 AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2014 AND 2015 AND a.admission_type = 'Ischemic stroke' AND p.anchor_year BETWEEN 84 AND 94;

@@ -1,0 +1,1 @@
+SELECT (SELECT avg_heart_rate FROM f) AS avg_heart_rate, (SELECT total_stays FROM c) AS total_stays, percent_rank() OVER (ORDER BY (SELECT avg_heart_rate FROM f)) AS percentile_rank FROM f;

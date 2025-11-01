@@ -1,0 +1,28 @@
+{
+  "query": "Patient is female, 86. Among female inpatients age 81\u201391 with AKI, compare medication complexity score distribution and outcomes for those with both CNS\u2011depressant and nephrotoxic drugs versus other AKI patients. Report quartiles, mean complexity, overall LOS and mortality, and top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH\n-- Define AKI patients (female, age 81-91)\naki_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.anchor_year,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 81 AND 91\n    AND d.icd_code LIKE 'N17%'  -- AKI ICD-10 codes\n    AND d.icd_version = 10\n),\n\n-- Define CNS-depressant drugs\ncns_depressants AS (\n  SELECT DISTINCT drug\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE LOWER(drug) IN (\n    'lorazepam', 'diazepam', 'midazolam', 'morphine', 'fentanyl',\n    'hydromorphone', 'oxycodone', 'alprazolam', 'clonazepam', 'zolpidem'\n  )\n),\n\n-- Define nephrotoxic drugs (specific examples)\nnephrotoxic_drugs AS (\n  SELECT DISTINCT drug\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE LOWER(drug) IN (\n    'vancomycin', 'gentamicin', 'tobramycin', 'amphotericin b', 'cisplatin',\n    'ibuprofen', 'naproxen', 'lisinopril', 'losartan', 'furosemide'\n  )\n),\n\n-- Identify patients with both drug types\npatients_with_both_drugs AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id\n  FROM\n    aki_patients p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON p.subject_id = pr.subject_id AND p.hadm_id = pr.hadm_id\n  JOIN\n    cns_depressants c ON LOWER(pr.drug) = LOWER(c.drug)\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr2 ON p.subject_id = pr2.subject_id AND p.hadm_id = pr2.hadm_id\n  JOIN\n    nephrotoxic_drugs n ON LOWER(pr2.drug) = LOWER(n.drug)\n  GROUP BY\n    p.subject_id, p.hadm_id\n),\n\n-- Calculate medication complexity score\nmedication_complexity AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    COUNT(DISTINCT pr.drug) AS unique_med_count,\n    COUNT(DISTINCT pr.route) AS unique_route_count,\n    SUM(CASE WHEN pr.doses_per_24_hrs IS NOT NULL THEN 1 ELSE 0 END) AS frequency_count,\n    -- Simple complexity score (adjust weights as needed)\n    COUNT(DISTINCT pr.drug) * 0.3 +\n    COUNT(DISTINCT pr.route) * 0.2 +\n    SUM(CASE WHEN pr.doses_per_24_hrs IS NOT NULL THEN 1 ELSE 0 END) * 0.5 AS complexity_score\n  FROM\n    aki_patients p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON p.subject_id = pr.subject_id AND p.hadm_id = pr.hadm_id\n  GROUP BY\n    p.subject_id, p.hadm_id\n),\n\n-- Pre-calculate LOS quartiles\nlos_quartiles AS (\n  SELECT\n    APPROX_QUANTILES(los_days, 4)[OFFSET(2)] AS top_quartile_threshold\n  FROM\n    aki_patients\n),\n\n-- Combine all data\nfinal_data AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.los_days,\n    a.hospital_expire_flag,\n    m.complexity_score,\n    CASE WHEN p.subject_id IS NOT NULL THEN 'Both Drugs' ELSE 'Other AKI' END AS patient_group,\n    q.top_quartile_threshold\n  FROM\n    aki_patients a\n  JOIN\n    medication_complexity m ON a.subject_id = m.subject_id AND a.hadm_id = m.hadm_id\n  LEFT JOIN\n    patients_with_both_drugs p ON a.subject_id = p.subject_id AND a.hadm_id = p.hadm_id\n  CROSS JOIN\n    los_quartiles q\n)\n\n-- Final analysis\nSELECT\n  patient_group,\n  COUNT(*) AS patient_count,\n  -- Complexity score statistics\n  APPROX_QUANTILES(complexity_score, 4) AS complexity_quartiles,\n  AVG(complexity_score) AS mean_complexity,\n  -- LOS statistics\n  APPROX_QUANTILES(los_days, 4) AS los_quartiles,\n  AVG(los_days) AS mean_los,\n  -- Mortality statistics\n  SUM(hospital_expire_flag) AS total_deaths,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  -- Top quartile LOS and mortality\n  SUM(CASE WHEN los_days > top_quartile_threshold THEN 1 ELSE 0 END) AS top_quartile_los_count,\n  SUM(CASE WHEN los_days > top_quartile_threshold AND hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS top_quartile_los_deaths\nFROM\n  final_data\nGROUP BY\n  patient_group, top_quartile_threshold\nORDER BY\n  patient_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name frequency not found inside pr at [71:22]; reason: invalidQuery, location: query, message: Name frequency not found inside pr at [71:22]\n\nLocation: US\nJob ID: dc1e80f3-3e03-4cb5-841c-a7d04ea59b11\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregations of aggregations are not allowed at [115:3]; reason: invalidQuery, location: query, message: Aggregations of aggregations are not allowed at [115:3]\n\nLocation: US\nJob ID: 22634687-93df-431e-847e-452438186d5e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

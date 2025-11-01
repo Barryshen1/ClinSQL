@@ -1,0 +1,22 @@
+{
+  "query": "For a 42-year-old woman, among female urgent/emergency admissions aged 37\u201347, report LOS mean, 25th/50th/75th percentiles and percentile rank of a 7\u2011day stay by discharge outcome (home/facility/in-hospital death).",
+  "final_sql": "WITH admissions_cohort AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag,\n        adm.discharge_location,\n        pat.gender,\n        (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) AS age_at_admission,\n        -- Calculate Length of Stay in fractional days\n        TIMESTAMP_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp`.admissions adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp`.patients pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'F' -- Female patients\n        AND adm.admission_type IN ('URGENT', 'EMERGENCY') -- Urgent or Emergency admissions\n        AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) BETWEEN 37 AND 47 -- Age at admission 37-47\n        AND adm.admittime IS NOT NULL\n        AND adm.dischtime IS NOT NULL\n        AND TIMESTAMP_DIFF(adm.dischtime, adm.admittime, HOUR) >= 0 -- Exclude invalid LOS\n),\n-- Assign discharge group based on specified criteria and filter out unclassified discharges early\ncleaned_cohort AS (\n    SELECT\n        ac.hadm_id,\n        ac.los_days,\n        CASE\n            WHEN ac.hospital_expire_flag = 1 THEN 'In-Hospital Death'\n            WHEN ac.discharge_location = 'Home' THEN 'Home'\n            WHEN ac.discharge_location IN ('SNF', 'Skilled Nursing Facility', 'Rehab', 'Rehab Care Alliance', 'Long Term Care Hospital') THEN 'Facility'\n            ELSE NULL -- Assign NULL to unclassified discharge locations\n        END AS discharge_group\n    FROM\n        admissions_cohort ac\n    WHERE\n        -- Only include rows that map to one of the target discharge groups before performing calculations\n        CASE\n            WHEN ac.hospital_expire_flag = 1 THEN 'In-Hospital Death'\n            WHEN ac.discharge_location = 'Home' THEN 'Home'\n            WHEN ac.discharge_location IN ('SNF', 'Skilled Nursing Facility', 'Rehab', 'Rehab Care Alliance', 'Long Term Care Hospital') THEN 'Facility'\n            ELSE NULL\n        END IS NOT NULL\n)\n-- Calculate aggregates using window functions and then select distinct results for each group\nSELECT DISTINCT\n    discharge_group,\n    COUNT(hadm_id) OVER (PARTITION BY discharge_group) AS num_admissions,\n    AVG(los_days) OVER (PARTITION BY discharge_group) AS mean_los_days,\n    -- Calculate percentiles using PERCENTILE_CONT window function\n    -- Removed ORDER BY from OVER clause in PERCENTILE_CONT, as it's not valid for BigQuery's syntax.\n    -- BigQuery implicitly sorts on the first argument (los_days) for PERCENTILE_CONT.\n    PERCENTILE_CONT(los_days, 0.25) OVER (PARTITION BY discharge_group) AS los_25th_percentile,\n    PERCENTILE_CONT(los_days, 0.50) OVER (PARTITION BY discharge_group) AS los_50th_percentile_median,\n    PERCENTILE_CONT(los_days, 0.75) OVER (PARTITION BY discharge_group) AS los_75th_percentile,\n    -- Calculate percentile rank of a 7-day stay: percentage of stays <= 7 days\n    (COUNT(CASE WHEN los_days <= 7 THEN 1 END) OVER (PARTITION BY discharge_group) * 100.0 / COUNT(hadm_id) OVER (PARTITION BY discharge_group)) AS percentile_rank_7_day_stay\nFROM\n    cleaned_cohort\nORDER BY\n    discharge_group;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [56:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [56:1]\n\nLocation: US\nJob ID: f6d2a4a9-d168-4807-a52e-45394c744afa\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

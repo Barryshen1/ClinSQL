@@ -1,0 +1,16 @@
+{
+  "query": "For a 44-year-old man: among male ICU admissions aged 39\u201349 with DKA, stratify first ICU stay diagnostic intensity (distinct procedures in first 24 h) into quintiles and report number of stays, mean/min/max procedure count, mean ICU LOS (days) and hospital mortality%",
+  "final_sql": "WITH first_icustays AS (\n  -- First ICU stay per hospital admission (hadm_id)\n  SELECT s.subject_id, s.hadm_id, s.stay_id, s.intime, s.outtime, s.los\n  FROM (\n    SELECT *,\n           ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) AS s\n  WHERE s.rn = 1\n),\ndka_match AS (\n  -- Admissions with a diagnosis of diabetic ketoacidosis\n  SELECT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddi\n    ON di.icd_code = ddi.icd_code AND di.icd_version = ddi.icd_version\n  WHERE LOWER(ddi.long_title) LIKE '%diabetic ketoacidosis%'\n),\ndka_admissions AS (\n  -- Admissions that are male, age 39-49 (based on anchor_age/year) and have DKA on the admission\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    fic.stay_id,\n    fic.intime,\n    fic.los AS icu_los_days,\n    (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) AS age_at_adm,\n    UPPER(p.gender) AS gender,\n    CASE WHEN adm.deathtime IS NOT NULL THEN 1 ELSE 0 END AS mortality_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  JOIN first_icustays fic ON adm.hadm_id = fic.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p ON adm.subject_id = p.subject_id\n  JOIN dka_match ON adm.subject_id = dka_match.subject_id AND adm.hadm_id = dka_match.hadm_id\n  WHERE UPPER(p.gender) = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 39 AND 49\n),\nper_admission AS (\n  -- Compute per-admission diagnostic intensity: distinct procedures in first 24h of first ICU stay\n  SELECT\n    da.subject_id,\n    da.hadm_id,\n    da.stay_id,\n    da.intime,\n    da.icu_los_days,\n    da.age_at_adm,\n    da.gender,\n    da.mortality_flag,\n    COALESCE((\n      SELECT COUNT(DISTINCT pe.itemid)\n      FROM `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n      WHERE pe.stay_id = da.stay_id\n        AND pe.starttime >= da.intime\n        AND pe.starttime < TIMESTAMP_ADD(da.intime, INTERVAL 24 HOUR)\n    ), 0) AS proc_count\n  FROM dka_admissions da\n)\nSELECT\n  quintile,\n  COUNT(*) AS stays,\n  AVG(proc_count) AS mean_proc_count,\n  MIN(proc_count) AS min_proc_count,\n  MAX(proc_count) AS max_proc_count,\n  AVG(icu_los_days) AS mean_icu_los_days,\n  100.0 * SUM(mortality_flag) / COUNT(*) AS hospital_mortality_percent\nFROM (\n  SELECT\n     pa.*,\n     NTILE(5) OVER (ORDER BY proc_count) AS quintile\n  FROM per_admission pa\n) AS t\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

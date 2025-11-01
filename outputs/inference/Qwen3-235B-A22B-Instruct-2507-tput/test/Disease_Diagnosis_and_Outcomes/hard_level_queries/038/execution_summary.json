@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old man. In male inpatients aged 74\u201384 with AKI, what are the cohort\u2019s median risk score (IQR) and 30\u2011day mortality? Compare ARDS rate and survivor LOS to general male inpatients 74\u201384 and give the risk percentile.",
+  "final_sql": "WITH first_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n),\ncohort AS (\n  SELECT\n    fa.subject_id,\n    fa.hadm_id,\n    fa.admittime,\n    fa.dischtime,\n    fa.deathtime,\n    fa.age_at_admit,\n    -- Flag if 30-day mortality\n    CASE WHEN p.dod IS NOT NULL \n              AND p.dod <= DATETIME_ADD(fa.admittime, INTERVAL 30 DAY)\n         THEN 1 ELSE 0 END AS thirty_day_mortality,\n    -- Hospital LOS in days (only valid if discharged)\n    DATETIME_DIFF(fa.dischtime, fa.admittime, HOUR) / 24.0 AS los_days,\n    -- Join DRG for risk score (drg_mortality)\n    COALESCE(drg.drg_mortality, 0) AS drg_mortality,\n    -- Flag AKI: ICD-10 code starting with 'N17'\n    MAX(CASE WHEN di.icd_version = 10 AND di.icd_code LIKE 'N17%' THEN 1 ELSE 0 END) AS has_aki,\n    -- Flag ARDS: ICD-10 code 'J80'\n    MAX(CASE WHEN di.icd_version = 10 AND di.icd_code = 'J80' THEN 1 ELSE 0 END) AS has_ards\n  FROM first_admissions fa\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON fa.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON fa.hadm_id = di.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.drgcodes` drg\n    ON fa.hadm_id = drg.hadm_id AND drg.drg_type = 'APR'\n  WHERE fa.age_at_admit BETWEEN 74 AND 84\n  GROUP BY fa.subject_id, fa.hadm_id, fa.admittime, fa.dischtime, fa.deathtime, fa.age_at_admit, p.dod, drg.drg_mortality\n),\naki_group AS (\n  SELECT\n    'AKI' AS group_name,\n    drg_mortality,\n    thirty_day_mortality,\n    has_ards,\n    los_days\n  FROM cohort\n  WHERE has_aki = 1\n),\nnon_aki_group AS (\n  SELECT\n    'Non-AKI' AS group_name,\n    drg_mortality,\n    thirty_day_mortality,\n    has_ards,\n    los_days\n  FROM cohort\n  WHERE has_aki = 0\n),\ncombined AS (\n  SELECT * FROM aki_group\n  UNION ALL\n  SELECT * FROM non_aki_group\n),\nsummary_stats AS (\n  SELECT\n    group_name,\n    -- Median and IQR of risk score (drg_mortality)\n    APPROX_QUANTILES(drg_mortality, 100)[OFFSET(50)] AS median_risk,\n    APPROX_QUANTILES(drg_mortality, 100)[OFFSET(25)] AS q1_risk,\n    APPROX_QUANTILES(drg_mortality, 100)[OFFSET(75)] AS q3_risk,\n    -- 30-day mortality rate\n    AVG(thirty_day_mortality) AS mortality_rate,\n    -- ARDS rate\n    AVG(has_ards) AS ards_rate,\n    -- Median survivor LOS\n    APPROX_QUANTILES(CASE WHEN thirty_day_mortality = 0 THEN los_days END, 100)[OFFSET(50)] AS median_survivor_los\n  FROM combined\n  GROUP BY group_name\n)\nSELECT * FROM summary_stats;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \";\" at [85:95]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \";\" at [85:95]\n\nLocation: US\nJob ID: 23b81cd7-453a-46c5-a0e8-8e907e348d96\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

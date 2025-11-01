@@ -1,0 +1,23 @@
+{
+  "query": "I have a 66-year-old man with chest pain. Among male patients aged 61\u201371 admitted for chest pain, what's the percent distribution of initial hs\u2011TnT: normal, borderline, myocardial injury?",
+  "final_sql": "WITH patients_with_age AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    TIMESTAMP_DIFF(a.admittime, DATE(p.anchor_year - p.anchor_age, 1, 1), YEAR) AS age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_year IS NOT NULL\n    AND p.anchor_age IS NOT NULL\n    AND p.anchor_year <= EXTRACT(YEAR FROM a.admittime)\n    AND TIMESTAMP_DIFF(a.admittime, DATE(p.anchor_year - p.anchor_age, 1, 1), YEAR) BETWEEN 61 AND 71\n),\nchest_pain_admissions AS (\n  SELECT \n    pwa.subject_id,\n    pwa.hadm_id,\n    pwa.admittime,\n    pwa.age\n  FROM patients_with_age pwa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON pwa.subject_id = d.subject_id AND pwa.hadm_id = d.hadm_id\n  WHERE \n    d.seq_num = 1\n    AND (\n      (d.icd_version = 10 AND UPPER(d.icd_code) IN ('R07.8', 'R07.9'))\n      OR (d.icd_version = 9 AND UPPER(d.icd_code) LIKE '786.5%')\n    )\n),\nhs_tnt_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE label LIKE '%hs-TnT%' OR label LIKE '%high-sensitivity Troponin T%'\n),\nfirst_hs_tnt_per_admission AS (\n  SELECT \n    cpa.subject_id,\n    cpa.hadm_id,\n    le.valuenum,\n    le.ref_range_lower,\n    le.ref_range_upper,\n    ROW_NUMBER() OVER (\n      PARTITION BY cpa.hadm_id \n      ORDER BY le.charttime, le.labevent_id\n    ) AS rn\n  FROM chest_pain_admissions cpa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le \n    ON cpa.subject_id = le.subject_id AND cpa.hadm_id = le.hadm_id\n  WHERE \n    le.itemid IN (SELECT itemid FROM hs_tnt_itemids)\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n    AND le.valuenum >= 0\n),\nclassified_results AS (\n  SELECT \n    CASE \n      WHEN valuenum >= ref_range_lower AND valuenum <= ref_range_upper THEN 'normal'\n      WHEN valuenum > ref_range_upper AND valuenum < 3 * ref_range_upper THEN 'borderline'\n      WHEN valuenum >= 3 * ref_range_upper THEN 'myocardial injury'\n      ELSE 'unknown'\n    END AS category\n  FROM first_hs_tnt_per_admission\n  WHERE rn = 1\n)\nSELECT \n  category,\n  COUNT(*) AS count,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percent\nFROM classified_results\nGROUP BY category\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]\n\nLocation: US\nJob ID: 9723e5e8-fbb2-4de1-83f9-cdcd64ad4095\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

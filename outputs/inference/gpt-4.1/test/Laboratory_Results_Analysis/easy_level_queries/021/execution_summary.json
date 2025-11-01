@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating a male patient. Among male pneumonia admissions, what is the 75th\u2011percentile serum glucose at discharge?",
+  "final_sql": "WITH male_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n),\npneumonia_admissions AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN male_patients p ON d.subject_id = p.subject_id\n  WHERE\n    (\n      (d.icd_version = 9 AND SAFE_CAST(d.icd_code AS INT64) BETWEEN 480 AND 486)\n      OR\n      (d.icd_version = 10 AND LEFT(d.icd_code, 3) BETWEEN 'J12' AND 'J18')\n    )\n),\ndischarge_times AS (\n  SELECT a.subject_id, a.hadm_id, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN pneumonia_admissions pa ON a.subject_id = pa.subject_id AND a.hadm_id = pa.hadm_id\n),\nserum_glucose_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%glucose%' AND LOWER(fluid) = 'serum'\n),\ndischarge_serum_glucose AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum,\n    dt.dischtime,\n    ROW_NUMBER() OVER (\n      PARTITION BY l.subject_id, l.hadm_id\n      ORDER BY ABS(TIMESTAMP_DIFF(dt.dischtime, l.charttime, SECOND))\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN discharge_times dt\n    ON l.subject_id = dt.subject_id AND l.hadm_id = dt.hadm_id\n  JOIN serum_glucose_items sgi\n    ON l.itemid = sgi.itemid\n  WHERE\n    l.valuenum IS NOT NULL\n    AND l.charttime <= dt.dischtime\n)\nSELECT\n  APPROX_QUANTILES(valuenum, 100)[SAFE_OFFSET(75)] AS serum_glucose_75th_percentile\nFROM discharge_serum_glucose\nWHERE rn = 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

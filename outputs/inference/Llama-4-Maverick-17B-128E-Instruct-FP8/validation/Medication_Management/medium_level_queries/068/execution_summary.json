@@ -1,0 +1,22 @@
+{
+  "query": "For my 88\u2011year\u2011old female inpatient, among females 83\u201393 with T2DM and HF, report % initiating basal, bolus, basal\u2013bolus, sliding\u2011scale insulin first 48h versus final 12h and net change.",
+  "final_sql": "WITH \n-- Step 1: Identify patients with T2DM and HF\ndiabetes_patients AS (\n  SELECT DISTINCT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_version = 10 AND icd_code LIKE 'E11%'\n),\nheart_failure_patients AS (\n  SELECT DISTINCT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_version = 10 AND icd_code LIKE 'I50%'\n),\ntarget_population AS (\n  SELECT p.subject_id, p.gender, EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 83 AND 93\n  AND p.subject_id IN (SELECT subject_id FROM diabetes_patients)\n  AND p.subject_id IN (SELECT subject_id FROM heart_failure_patients)\n),\n\n-- Step 2: Analyze ICU stays and insulin administration\nicu_stays AS (\n  SELECT i.subject_id, i.stay_id, i.intime, i.outtime,\n         TIMESTAMP_DIFF(i.outtime, i.intime, HOUR) AS los_hours\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN target_population t ON i.subject_id = t.subject_id\n),\ninsulin_administration AS (\n  SELECT i.subject_id, i.stay_id, i.intime, i.outtime, ie.starttime, ie.itemid\n  FROM icu_stays i\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.ingredientevents` ie ON i.stay_id = ie.stay_id\n  WHERE ie.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%Insulin%')\n),\n\n-- Step 3: Determine insulin regimen in first 48 hours and last 12 hours\ninsulin_first_48h AS (\n  SELECT subject_id, stay_id, COUNT(DISTINCT itemid) AS num_insulin_types\n  FROM insulin_administration\n  WHERE starttime BETWEEN intime AND TIMESTAMP_ADD(intime, INTERVAL 48 HOUR)\n  GROUP BY subject_id, stay_id\n),\ninsulin_last_12h AS (\n  SELECT subject_id, stay_id, COUNT(DISTINCT itemid) AS num_insulin_types\n  FROM insulin_administration\n  WHERE starttime BETWEEN TIMESTAMP_SUB(outtime, INTERVAL 12 HOUR) AND outtime\n  GROUP BY subject_id, stay_id\n)\n\n-- Final analysis\nSELECT \n  'First 48h' AS period,\n  COUNT(CASE WHEN num_insulin_types = 1 THEN 1 END) AS basal_or_bolus,\n  COUNT(CASE WHEN num_insulin_types > 1 THEN 1 END) AS basal_bolus,\n  COUNT(CASE WHEN num_insulin_types = 1 AND stay_id IN (SELECT stay_id FROM insulin_administration WHERE itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%Sliding%')) THEN 1 END) AS sliding_scale\nFROM insulin_first_48h\nUNION ALL\nSELECT \n  'Last 12h' AS period,\n  COUNT(CASE WHEN num_insulin_types = 1 THEN 1 END) AS basal_or_bolus,\n  COUNT(CASE WHEN num_insulin_types > 1 THEN 1 END) AS basal_bolus,\n  COUNT(CASE WHEN num_insulin_types = 1 AND stay_id IN (SELECT stay_id FROM insulin_administration WHERE itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%Sliding%')) THEN 1 END) AS sliding_scale\nFROM insulin_last_12h;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: intime at [40:27]; reason: invalidQuery, location: query, message: Unrecognized name: intime at [40:27]\n\nLocation: US\nJob ID: d13f4e34-8ebe-4c0b-805a-94dae0bf7a98\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 92\u2011year\u2011old man. Among male patients aged 87\u201397 admitted for suspected ACS, what are counts, percentages, and in\u2011hospital mortality rates by index Troponin T category (Normal/Minimal, Borderline, Elevated)?",
+  "final_sql": "WITH\n  -- Step 1: Identify hospital admissions for Acute Coronary Syndrome (ACS)\n  acs_admissions AS (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx\n      ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n    WHERE\n      LOWER(d_dx.long_title) LIKE '%acute myocardial infarction%'\n      OR LOWER(d_dx.long_title) LIKE '%unstable angina%'\n      OR LOWER(d_dx.long_title) LIKE '%acute coronary syndrome%'\n  ),\n\n  -- Step 2: Identify the specific patient cohort (males, 87-97, with ACS)\n  patient_cohort AS (\n    SELECT\n      adm.subject_id,\n      adm.hadm_id,\n      adm.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n    INNER JOIN acs_admissions ON adm.hadm_id = acs_admissions.hadm_id\n    WHERE\n      pat.gender = 'M'\n      AND (\n        pat.anchor_age + DATETIME_DIFF(\n          adm.admittime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR\n        )\n      ) BETWEEN 87 AND 97\n  ),\n\n  -- Step 3: Find the first (index) Troponin T for each patient in the cohort\n  index_troponin AS (\n    SELECT\n      le.hadm_id,\n      le.valuenum,\n      ROW_NUMBER() OVER (\n        PARTITION BY le.hadm_id ORDER BY le.charttime ASC\n      ) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    INNER JOIN patient_cohort AS cohort ON le.hadm_id = cohort.hadm_id\n    WHERE\n      le.itemid = 51003  -- Troponin T\n      AND le.valuenum IS NOT NULL\n  ),\n\n  -- Step 4: Categorize the index Troponin T values and join with mortality data\n  troponin_categorized AS (\n    SELECT\n      it.hadm_id,\n      cohort.hospital_expire_flag,\n      CASE\n        WHEN it.valuenum <= 0.01\n        THEN 'Normal/Minimal'\n        WHEN it.valuenum > 0.01 AND it.valuenum <= 0.04\n        THEN 'Borderline'\n        WHEN it.valuenum > 0.04\n        THEN 'Elevated'\n        ELSE NULL\n      END AS troponin_category\n    FROM index_troponin AS it\n    INNER JOIN\n      patient_cohort AS cohort ON it.hadm_id = cohort.hadm_id\n    WHERE\n      it.rn = 1  -- Only the first measurement\n  )\n\n-- Step 5: Aggregate results to get counts, percentages, and mortality rates\nSELECT\n  troponin_category,\n  COUNT(hadm_id) AS patient_count,\n  ROUND(\n    COUNT(hadm_id) * 100.0 / SUM(COUNT(hadm_id)) OVER (), 2\n  ) AS percentage_of_patients,\n  ROUND(\n    SUM(hospital_expire_flag) * 100.0 / COUNT(hadm_id), 2\n  ) AS in_hospital_mortality_rate\nFROM troponin_categorized\nWHERE troponin_category IS NOT NULL\nGROUP BY\n  troponin_category\nORDER BY\n  CASE\n    WHEN troponin_category = 'Normal/Minimal' THEN 1\n    WHEN troponin_category = 'Borderline' THEN 2\n    WHEN troponin_category = 'Elevated' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [10:23]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [10:23]\n\nLocation: US\nJob ID: 02fea41c-8de6-4b71-a546-6c284aa89f2a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

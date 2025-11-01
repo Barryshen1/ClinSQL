@@ -1,0 +1,16 @@
+{
+  "query": "For an 85\u2011year\u2011old male with sepsis: among male inpatients 80\u201390 with sepsis, during first 24 h what are medication complexity score distribution and percentile ranks for those on both QT\u2011prolonging and bleeding\u2011risk drugs versus other patients, and LOS/mortality for top quartile?",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, p.gender, p.anchor_age, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.subject_id = diag.subject_id AND a.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 80 AND 90\n    AND LOWER(d.long_title) LIKE '%sepsis%'\n),\nmeds_24h AS (\n  SELECT sc.subject_id, sc.hadm_id, LOWER(pr.drug) AS drug\n  FROM sepsis_cohort sc\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON sc.subject_id = pr.subject_id AND sc.hadm_id = pr.hadm_id\n  WHERE pr.starttime BETWEEN sc.admittime AND DATETIME_ADD(sc.admittime, INTERVAL 24 HOUR)\n),\ncomplexity AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    COUNT(DISTINCT drug) AS complexity_score,\n    MAX(CASE WHEN drug LIKE '%amiodarone%' OR drug LIKE '%haloperidol%' OR drug LIKE '%levofloxacin%' THEN 1 ELSE 0 END) AS qt_flag,\n    MAX(CASE WHEN drug LIKE '%warfarin%' OR drug LIKE '%heparin%' OR drug LIKE '%aspirin%' OR drug LIKE '%clopidogrel%' THEN 1 ELSE 0 END) AS bleed_flag\n  FROM meds_24h\n  GROUP BY subject_id, hadm_id\n),\nflags AS (\n  SELECT *,\n    CASE WHEN qt_flag = 1 AND bleed_flag = 1 THEN 1 ELSE 0 END AS both_flag\n  FROM complexity\n),\nranks AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.complexity_score,\n    f.both_flag,\n    PERCENT_RANK() OVER (ORDER BY f.complexity_score) AS complexity_percentile\n  FROM flags f\n)\nSELECT\n  r.subject_id,\n  r.hadm_id,\n  r.complexity_score,\n  r.complexity_percentile,\n  r.both_flag,\n  sc.anchor_age,\n  sc.gender,\n  DATETIME_DIFF(sc.dischtime, sc.admittime, DAY) AS los_days,\n  sc.hospital_expire_flag\nFROM ranks r\nJOIN sepsis_cohort sc\n  ON r.subject_id = sc.subject_id AND r.hadm_id = sc.hadm_id\nWHERE r.complexity_percentile >= 0.75\nORDER BY r.complexity_percentile DESC;",
+  "execution_success": true,
+  "row_count": 397,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 397,
+      "error": null
+    }
+  ]
+}

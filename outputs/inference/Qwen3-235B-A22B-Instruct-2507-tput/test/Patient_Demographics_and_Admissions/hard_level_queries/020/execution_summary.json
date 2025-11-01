@@ -1,0 +1,16 @@
+{
+  "query": "For an 81\u2011year\u2011old female: among female Medicare patients aged 76\u201386 transferred from another hospital with principal AMI (ICD\u20119 410*/ICD\u201110 I21*), report 30\u2011day readmission rate; median index LOS for readmitted vs not; percent index stays >4 days.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.hadm_id = diag.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND a.insurance = 'Medicare'\n    AND LOWER(a.admission_location) IN (\n      'transfer from hospital', \n      'transfer from other healthca', \n      'transfer from another hospital'\n    )\n    AND diag.seq_num = 1\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code LIKE '410%')\n      OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I21%')\n    )\n    AND a.dischtime IS NOT NULL\n),\nindex_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n  FROM cohort\n),\nindex_only AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days\n  FROM index_admissions\n  WHERE rn = 1\n),\nreadmission_flag AS (\n  SELECT\n    i.*,\n    LEAD(i.admittime) OVER (PARTITION BY i.subject_id ORDER BY i.admittime) AS next_admittime,\n    CASE\n      WHEN LEAD(i.admittime) OVER (PARTITION BY i.subject_id ORDER BY i.admittime) <= DATETIME_ADD(i.dischtime, INTERVAL 30 DAY)\n        THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM index_only i\n),\nsummary_stats AS (\n  SELECT\n    readmitted_30d,\n    los_days,\n    CASE WHEN los_days > 4 THEN 1 ELSE 0 END AS los_gt_4_days\n  FROM readmission_flag\n)\nSELECT\n  -- 30-day readmission rate\n  AVG(CAST(readmitted_30d AS FLOAT64)) AS readmission_rate_30d,\n  -- Median index LOS for readmitted vs not\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los_days END, 100)[OFFSET(50)] AS median_los_not_readmitted,\n  -- Percent of index stays > 4 days\n  AVG(CAST(los_gt_4_days AS FLOAT64)) AS pct_los_gt_4_days\nFROM summary_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

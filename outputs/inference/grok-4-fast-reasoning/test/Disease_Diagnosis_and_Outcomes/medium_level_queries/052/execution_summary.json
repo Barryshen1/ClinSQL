@@ -1,0 +1,22 @@
+{
+  "query": "For my 57\u2011year\u2011old male stroke patient: among males 52\u201362, by ICU vs non\u2011ICU, LOS \u22645 vs >5 days and comorbidity tertile, report in\u2011hospital mortality (%) and CKD and diabetes prevalence (%).",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    p.gender, \n    p.anchor_age,\n    CASE \n      WHEN EXISTS(\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_icu.icustays` i \n        WHERE i.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n      ) THEN 'ICU' \n      ELSE 'non-ICU' \n    END AS icu_stay\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND a.dischtime IS NOT NULL\n    AND EXISTS(\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      WHERE d.subject_id = a.subject_id \n        AND d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 \n           AND (d.icd_code LIKE '430%' OR d.icd_code LIKE '431%' OR d.icd_code LIKE '432%' \n                OR d.icd_code LIKE '433%' OR d.icd_code LIKE '434%' OR d.icd_code LIKE '436%' \n                OR d.icd_code LIKE '437%' OR d.icd_code LIKE '438%')) \n          OR \n          (d.icd_version = 10 \n           AND REGEXP_CONTAINS(d.icd_code, r'^I6[0-9]'))\n        )\n    )\n),\ncomorb AS (\n  SELECT \n    c.*,\n    (SELECT COUNT(DISTINCT d.icd_code) \n     FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n     WHERE d.hadm_id = c.hadm_id\n    ) AS num_comorb\n  FROM cohort c\n),\ntertile_cte AS (\n  SELECT \n    *,\n    NTILE(3) OVER (ORDER BY num_comorb ASC) AS comorbidity_tertile\n  FROM comorb\n),\nwith_flags AS (\n  SELECT \n    t.*,\n    CASE WHEN t.los_days <= 5 THEN '<=5' ELSE '>5' END AS los_group,\n    EXISTS(\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      WHERE d.hadm_id = t.hadm_id\n        AND (\n          (d.icd_version = 9 AND (d.icd_code LIKE '585%' OR d.icd_code = '586')) \n          OR \n          (d.icd_version = 10 AND d.icd_code LIKE 'N18%')\n        )\n    ) AS has_ckd,\n    EXISTS(\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      WHERE d.hadm_id = t.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '250%') \n          OR \n          (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^(E10|E11|E12|E13|E14)'))\n        )\n    ) AS has_diabetes\n  FROM tertile_cte t\n)\nSELECT \n  icu_stay,\n  los_group,\n  comorbidity_tertile,\n  COUNT(*) AS total_admissions,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct,\n  ROUND(AVG(CAST(has_ckd AS INT64)) * 100, 2) AS ckd_prevalence_pct,\n  ROUND(AVG(CAST(has_diabetes AS INT64)) * 100, 2) AS diabetes_prevalence_pct\nFROM with_flags\nGROUP BY icu_stay, los_group, comorbidity_tertile\nORDER BY icu_stay, los_group, comorbidity_tertile;",
+  "execution_success": true,
+  "row_count": 12,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [31:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [31:12]\n\nLocation: US\nJob ID: b99c11a0-5401-4341-b3d7-27d503995201\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 12,
+      "error": null
+    }
+  ]
+}

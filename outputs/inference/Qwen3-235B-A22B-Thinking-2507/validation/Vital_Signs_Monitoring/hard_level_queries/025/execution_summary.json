@@ -1,0 +1,29 @@
+{
+  "query": "I have a 60-year-old man post\u2013cardiac arrest in the ICU. Among male ICU patients 55\u201365 with post-arrest, what percentile is a first\u201124h vital\u2011sign instability score of 70? Also report mean ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH cardiac_arrest_cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.intime,  -- Added to expose ICU admission time\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  WHERE p.gender = 'M'\n    AND (\n      (d.icd_version = 9 AND d.icd_code = '4275') OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I46.%')\n    )\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 55 AND 65\n),\ninstability_scores AS (\n  SELECT \n    c.stay_id,\n    STDDEV(ce.valuenum) AS instability_score\n  FROM cardiac_arrest_cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n  WHERE ce.itemid = 220045  -- Heart rate itemid\n    AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 24 HOUR)  -- Fixed reference to c.intime\n    AND ce.valuenum IS NOT NULL\n  GROUP BY c.stay_id\n  HAVING COUNT(ce.valuenum) >= 5  -- Require minimum measurements\n),\ncohort_analysis AS (\n  SELECT \n    cs.*,\n    i.los,\n    a.hospital_expire_flag,\n    NTILE(10) OVER (ORDER BY cs.instability_score DESC) AS instability_decile\n  FROM instability_scores cs\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON cs.stay_id = i.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n)\nSELECT \n  (SELECT COUNT(*) FROM cohort_analysis WHERE instability_score <= 70) * 100.0 / COUNT(*) AS percentile_70,\n  AVG(IF(instability_decile = 1, los, NULL)) AS mean_los_top_decile,\n  AVG(IF(instability_decile = 1, hospital_expire_flag, NULL)) AS mortality_top_decile\nFROM cohort_analysis;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"-\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"-\" at [1:10]\n\nLocation: US\nJob ID: 7bfec8b9-a929-4e49-b704-e8177ff92ab0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: i at [29:30]; reason: invalidQuery, location: query, message: Unrecognized name: i at [29:30]\n\nLocation: US\nJob ID: db935d2e-5deb-4688-b33a-f5a31714b80b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

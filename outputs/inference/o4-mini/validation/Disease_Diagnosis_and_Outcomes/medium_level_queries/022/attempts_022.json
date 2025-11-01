@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH sepsis_adms AS (\n  -- Identify male patients age 50-60 with sepsis (no septic shock)\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.subject_id = d.subject_id\n      AND a.hadm_id = d.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND LOWER(dd.long_title) LIKE '%sepsis%'\n    AND LOWER(dd.long_title) NOT LIKE '%septic shock%'\n  GROUP BY\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n),\n\nadms_with_icu AS (\n  -- Annotate whether the patient went to ICU on day 1\n  SELECT\n    s.*,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n        WHERE icu.subject_id = s.subject_id\n          AND icu.hadm_id    = s.hadm_id\n          -- ICU intime within 1 day of admission\n          AND icu.intime BETWEEN s.admittime\n                             AND TIMESTAMP_ADD(s.admittime, INTERVAL 1 DAY)\n      )\n      THEN 'ICU Day1'\n      ELSE 'No ICU Day1'\n    END AS icu_day1_status,\n    CASE\n      WHEN los_days <= 7 THEN '<=7 days'\n      ELSE '>7 days'\n    END AS los_group\n  FROM sepsis_adms s\n)\n\nSELECT\n  los_group,\n  icu_day1_status,\n  COUNT(1)                                           AS admissions,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(1), 2) AS mortality_pct,\n  -- Approximate median LOS\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)]            AS median_los_days\nFROM\n  adms_with_icu\nGROUP BY\n  los_group,\n  icu_day1_status\nORDER BY\n  los_group,\n  icu_day1_status;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

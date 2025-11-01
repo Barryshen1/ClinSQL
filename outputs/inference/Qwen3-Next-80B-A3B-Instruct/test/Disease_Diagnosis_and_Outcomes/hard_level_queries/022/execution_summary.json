@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating a 45\u2011year\u2011old woman with AKI. Among female inpatients 40\u201350 with AKI, stratify by composite risk (5\u00d7comorbidities +50 if ARDS) into quintiles and report per quintile: N; 30\u2011day post\u2011discharge mortality %; ARDS co\u2011occurrence %; median survivor LOS (days).",
+  "final_sql": "WITH patients_40_50_female AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.dod\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n),\n\naki_creatinine AS (\n  SELECT DISTINCT\n    le.subject_id,\n    le.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON le.itemid = dl.itemid\n  WHERE dl.label = 'Creatinine'\n    AND le.valuenum >= 1.3\n),\n\nelixhauser_comorbidities AS (\n  SELECT DISTINCT\n    di.subject_id,\n    di.hadm_id,\n    di.icd_code,\n    di.icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON di.icd_code = did.icd_code\n    AND di.icd_version = did.icd_version\n  WHERE did.long_title IN (\n    'Congestive heart failure',\n    'Cardiac arrhythmias',\n    'Valvular disease',\n    'Pulmonary circulation disorders',\n    'Peripheral vascular disorders',\n    'Hypertension, uncomplicated',\n    'Hypertension, complicated',\n    'Paralysis',\n    'Other neurological disorders',\n    'Chronic pulmonary disease',\n    'Diabetes, uncomplicated',\n    'Diabetes, complicated',\n    'Hypothyroidism',\n    'Renal failure',\n    'Liver disease',\n    'Peptic ulcer disease excluding bleeding',\n    'AIDS/HIV',\n    'Lymphoma',\n    'Metastatic cancer',\n    'Solid tumor without metastasis',\n    'Rheumatoid arthritis/collagen vascular diseases',\n    'Coagulopathy',\n    'Obesity',\n    'Weight loss',\n    'Fluid and electrolyte disorders',\n    'Blood loss anemia',\n    'Deficiency anemias',\n    'Alcohol abuse',\n    'Drug abuse',\n    'Psychoses',\n    'Depression'\n  )\n),\n\nards_diagnosis AS (\n  SELECT DISTINCT\n    di.subject_id,\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON di.icd_code = did.icd_code\n    AND di.icd_version = did.icd_version\n  WHERE did.icd_code IN ('J80', '518.82')\n),\n\ncomposite_risk AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    COUNT(e.icd_code) AS elixhauser_count,\n    CASE WHEN a.hadm_id IS NOT NULL THEN 50 ELSE 0 END AS ards_flag,\n    5 * COUNT(e.icd_code) + CASE WHEN a.hadm_id IS NOT NULL THEN 50 ELSE 0 END AS composite_risk\n  FROM patients_40_50_female p\n  JOIN aki_creatinine aki ON p.subject_id = aki.subject_id AND p.hadm_id = aki.hadm_id\n  LEFT JOIN elixhauser_comorbidities e ON p.subject_id = e.subject_id AND p.hadm_id = e.hadm_id\n  LEFT JOIN ards_diagnosis a ON p.subject_id = a.subject_id AND p.hadm_id = a.hadm_id\n  GROUP BY p.subject_id, p.hadm_id, a.hadm_id\n),\n\nquintiles AS (\n  SELECT\n    cr.*,\n    NTILE(5) OVER (ORDER BY cr.composite_risk) AS risk_quintile\n  FROM composite_risk cr\n),\n\nsurvivor_los AS (\n  SELECT\n    q.risk_quintile,\n    i.los\n  FROM quintiles q\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON q.subject_id = i.subject_id AND q.hadm_id = i.hadm_id\n  WHERE q.dod IS NULL OR DATE_DIFF(q.dod, q.dischtime, DAY) > 30\n)\n\nSELECT\n  q.risk_quintile,\n  COUNT(*) AS N,\n  ROUND(100.0 * SUM(CASE WHEN q.dod IS NOT NULL AND DATE_DIFF(q.dod, q.dischtime, DAY) <= 30 THEN 1 ELSE 0 END) / COUNT(*), 2) AS thirty_day_mortality_pct,\n  ROUND(100.0 * SUM(CASE WHEN q.ards_flag = 50 THEN 1 ELSE 0 END) / COUNT(*), 2) AS ards_cooccurrence_pct,\n  ROUND(PERCENTILE_CONT(s.los, 0.5) OVER (), 2) AS median_survivor_los_days\nFROM quintiles q\nLEFT JOIN survivor_los s ON q.risk_quintile = s.risk_quintile\nGROUP BY q.risk_quintile\nORDER BY q.risk_quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name dod not found inside q at [111:11]; reason: invalidQuery, location: query, message: Name dod not found inside q at [111:11]\n\nLocation: US\nJob ID: 6ad52edf-5d4d-49aa-b8ec-ba5b1b4f084b\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"composite_risk\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"composite_risk\" at [1:1]\n\nLocation: US\nJob ID: a54885ab-a503-46ad-905a-a763654862e6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:9]\n\nLocation: US\nJob ID: 71818aeb-61fe-4cd7-ad36-e8b8fbc08966\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name dod not found inside q at [111:11]; reason: invalidQuery, location: query, message: Name dod not found inside q at [111:11]\n\nLocation: US\nJob ID: 6ad52edf-5d4d-49aa-b8ec-ba5b1b4f084b\n"
+    }
+  ]
+}

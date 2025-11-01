@@ -1,0 +1,16 @@
+{
+  "query": "For a 45\u2011year\u2011old man with AMI (no shock or respiratory failure), among males 40\u201350 report in\u2011hospital mortality (%) and median LOS by LOS \u22645 vs >5 and day\u20111 ICU status.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  -- age/gender filter\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n    -- include AMI diagnosis\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '410%')\n          OR (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'))\n        )\n    )\n    -- exclude shock or respiratory failure\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n      WHERE dx.hadm_id = a.hadm_id\n        AND (\n          (dx.icd_version = 9 AND (\n              dx.icd_code = '78551' -- cardiogenic shock\n              OR dx.icd_code IN ('51881','51882','51884') -- resp failure codes\n          ))\n          OR (dx.icd_version = 10 AND (\n              dx.icd_code = 'R570' -- cardiogenic shock\n              OR dx.icd_code LIKE 'J96%' -- resp failure\n          ))\n        )\n    )\n),\nicu_flag AS (\n  SELECT\n    c.hadm_id,\n    CASE WHEN COUNTIF(\n      -- ICU stay starts before 24h mark and ends after admission start\n      i.intime < TIMESTAMP_ADD(c.admittime, INTERVAL 1 DAY)\n      AND i.outtime > c.admittime\n    ) > 0 THEN 1 ELSE 0 END AS icu_day1_flag\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON c.hadm_id = i.hadm_id\n  GROUP BY c.hadm_id\n),\nfinal AS (\n  SELECT\n    c.*,\n    f.icu_day1_flag,\n    CASE WHEN c.los_days <= 5 THEN '<=5' ELSE '>5' END AS los_group\n  FROM cohort c\n  JOIN icu_flag f\n    ON c.hadm_id = f.hadm_id\n)\nSELECT\n  los_group,\n  icu_day1_flag,\n  COUNT(*) AS n_admissions,\n  ROUND(100 * AVG(hospital_expire_flag), 1) AS mortality_pct,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los\nFROM final\nGROUP BY los_group, icu_day1_flag\nORDER BY los_group, icu_day1_flag;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

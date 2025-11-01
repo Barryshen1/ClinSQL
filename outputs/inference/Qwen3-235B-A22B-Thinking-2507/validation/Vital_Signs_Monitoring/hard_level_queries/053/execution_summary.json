@@ -1,0 +1,29 @@
+{
+  "query": "Evaluating a 64\u2011year\u2011old woman: among female ICU patients aged 59\u201369 with a shock diagnosis versus without shock, in the first 24 hours what are mean and percentiles of composite instability score, hypotension (MAP<65) and tachycardia burden, ICU LOS, and mortality?",
+  "final_sql": "WITH icu_stays AS (\n  SELECT \n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,  -- Added to include ICU length of stay\n    EXTRACT(YEAR FROM icu.intime) - (pat.anchor_year - pat.anchor_age) AS age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND EXTRACT(YEAR FROM icu.intime) - (pat.anchor_year - pat.anchor_age) BETWEEN 59 AND 69\n),\nshock_diagnosis AS (\n  SELECT \n    icu.hadm_id,\n    MAX(CASE WHEN d.icd_code IN ('R570','R571','R572','R578','R579') THEN 1 ELSE 0 END) AS has_shock\n  FROM icu_stays icu\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON icu.hadm_id = d.hadm_id\n  GROUP BY icu.hadm_id\n),\nvital_signs AS (\n  SELECT \n    ce.stay_id,\n    ce.charttime,\n    MAX(CASE WHEN ce.itemid = 220052 THEN ce.valuenum ELSE NULL END) AS map_value,\n    MAX(CASE WHEN ce.itemid = 220045 THEN ce.valuenum ELSE NULL END) AS hr_value\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN icu_stays icu ON ce.stay_id = icu.stay_id\n  WHERE ce.charttime >= icu.intime\n    AND ce.charttime < TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n    AND ce.itemid IN (220052, 220045)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY ce.stay_id, ce.charttime\n),\nvital_intervals AS (\n  SELECT \n    vs.stay_id,\n    vs.charttime,\n    icu.intime,\n    LEAD(vs.charttime) OVER (PARTITION BY vs.stay_id ORDER BY vs.charttime) AS next_charttime,\n    vs.map_value,\n    vs.hr_value\n  FROM vital_signs vs\n  INNER JOIN icu_stays icu ON vs.stay_id = icu.stay_id\n),\nburden_intervals AS (\n  SELECT \n    stay_id,\n    charttime,\n    intime,\n    LEAST(\n      COALESCE(next_charttime, TIMESTAMP_ADD(intime, INTERVAL 24 HOUR)),\n      TIMESTAMP_ADD(intime, INTERVAL 24 HOUR)\n    ) AS end_interval,\n    map_value,\n    hr_value,\n    TIMESTAMP_DIFF(\n      LEAST(\n        COALESCE(next_charttime, TIMESTAMP_ADD(intime, INTERVAL 24 HOUR)),\n        TIMESTAMP_ADD(intime, INTERVAL 24 HOUR)\n      ),\n      charttime,\n      MINUTE\n    ) AS duration_minutes\n  FROM vital_intervals\n),\nburden_metrics AS (\n  SELECT \n    stay_id,\n    SUM(CASE WHEN map_value < 65 THEN duration_minutes ELSE 0 END) AS hypotension_minutes,\n    SUM(CASE WHEN hr_value > 100 THEN duration_minutes ELSE 0 END) AS tachycardia_minutes,\n    SUM(CASE WHEN map_value < 65 OR hr_value > 100 THEN duration_minutes ELSE 0 END) AS composite_minutes\n  FROM burden_intervals\n  GROUP BY stay_id\n),\noutcomes AS (\n  SELECT \n    icu.stay_id,\n    icu.los AS icu_los_days,\n    adm.hospital_expire_flag AS mortality\n  FROM icu_stays icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n)\nSELECT \n  sd.has_shock,\n  AVG(bm.composite_minutes) AS mean_composite_minutes,\n  APPROX_QUANTILES(bm.composite_minutes, 100)[OFFSET(50)] AS median_composite_minutes,\n  APPROX_QUANTILES(bm.composite_minutes, 100)[OFFSET(25)] AS p25_composite_minutes,\n  APPROX_QUANTILES(bm.composite_minutes, 100)[OFFSET(75)] AS p75_composite_minutes,\n  \n  AVG(bm.hypotension_minutes) AS mean_hypotension_minutes,\n  APPROX_QUANTILES(bm.hypotension_minutes, 100)[OFFSET(50)] AS median_hypotension_minutes,\n  APPROX_QUANTILES(bm.hypotension_minutes, 100)[OFFSET(25)] AS p25_hypotension_minutes,\n  APPROX_QUANTILES(bm.hypotension_minutes, 100)[OFFSET(75)] AS p75_hypotension_minutes,\n  \n  AVG(bm.tachycardia_minutes) AS mean_tachycardia_minutes,\n  APPROX_QUANTILES(bm.tachycardia_minutes, 100)[OFFSET(50)] AS median_tachycardia_minutes,\n  APPROX_QUANTILES(bm.tachycardia_minutes, 100)[OFFSET(25)] AS p25_tachycardia_minutes,\n  APPROX_QUANTILES(bm.tachycardia_minutes, 100)[OFFSET(75)] AS p75_tachycardia_minutes,\n  \n  AVG(o.icu_los_days) AS mean_icu_los_days,\n  APPROX_QUANTILES(o.icu_los_days, 100)[OFFSET(50)] AS median_icu_los_days,\n  APPROX_QUANTILES(o.icu_los_days, 100)[OFFSET(25)] AS p25_icu_los_days,\n  APPROX_QUANTILES(o.icu_los_days, 100)[OFFSET(75)] AS p75_icu_los_days,\n  \n  AVG(o.mortality) AS mortality_rate\nFROM icu_stays icu\nINNER JOIN shock_diagnosis sd ON icu.hadm_id = sd.hadm_id\nLEFT JOIN burden_metrics bm ON icu.stay_id = bm.stay_id\nINNER JOIN outcomes o ON icu.stay_id = o.stay_id\nGROUP BY sd.has_shock;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"shock\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"shock\" at [1:8]\n\nLocation: US\nJob ID: 1b888340-16ad-405c-aaa5-6daa2fd0df05\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside icu at [82:9]; reason: invalidQuery, location: query, message: Name los not found inside icu at [82:9]\n\nLocation: US\nJob ID: e28d3521-80c4-488a-8e38-edb23c6fa4a7\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

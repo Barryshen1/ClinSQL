@@ -1,0 +1,16 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT \n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    p.anchor_age,\n    p.gender,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    -- Calculate hospital LOS in days\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS hosp_los_days,\n    -- Identify sepsis: has sepsis ICD code (ICD-9: 995.91, 995.92; ICD-10: R65.20, R65.21)\n    MAX(CASE \n        WHEN di.icd_code IN ('99591','99592') AND di.icd_version = 9 THEN 1\n        WHEN di.icd_code IN ('R6520','R6521') AND di.icd_version = 10 THEN 1\n        ELSE 0 \n    END) AS has_sepsis\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON ie.hadm_id = di.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 66 AND 76\n  GROUP BY ie.subject_id, ie.hadm_id, ie.stay_id, ie.intime, ie.outtime, p.anchor_age, p.gender, adm.admittime, adm.dischtime, adm.hospital_expire_flag\n  -- Keep only the first ICU stay per subject\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY ie.subject_id ORDER BY ie.intime) = 1\n),\n\n-- Count distinct procedures in first 48h for each stay (using procedureevents)\nprocedure_counts AS (\n  SELECT \n    fis.subject_id,\n    fis.stay_id,\n    COUNT(DISTINCT pe.itemid) AS num_procedures\n  FROM first_icu_stays fis\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON fis.stay_id = pe.stay_id\n  WHERE pe.starttime BETWEEN fis.intime AND DATETIME_ADD(fis.intime, INTERVAL 48 HOUR)\n  GROUP BY fis.subject_id, fis.stay_id\n)\n\n-- Main query: for sepsis cases, get the 90th percentile of procedure count, and compare LOS and mortality with controls\nSELECT \n  'Sepsis' AS cohort,\n  COUNT(*) AS n_patients,\n  -- 90th percentile of distinct procedures for sepsis cases\n  APPROX_QUANTILES(pc.num_procedures, 100)[OFFSET(90)] AS proc_90th_percentile,\n  AVG(fis.hosp_los_days) AS avg_hosp_los,\n  AVG(fis.hospital_expire_flag) AS mortality_rate\nFROM first_icu_stays fis\nLEFT JOIN procedure_counts pc\n  ON fis.subject_id = pc.subject_id AND fis.stay_id = pc.stay_id\nWHERE fis.has_sepsis = 1\nGROUP BY cohort\n\nUNION ALL\n\nSELECT \n  'Control' AS cohort,\n  COUNT(*) AS n_patients,\n  NULL AS proc_90th_percentile,  -- Not applicable for controls\n  AVG(fis.hosp_los_days) AS avg_hosp_los,\n  AVG(fis.hospital_expire_flag) AS mortality_rate\nFROM first_icu_stays fis\nWHERE fis.has_sepsis = 0\nGROUP BY cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

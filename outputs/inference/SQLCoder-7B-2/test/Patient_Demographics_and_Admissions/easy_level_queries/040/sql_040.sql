@@ -1,0 +1,1 @@
+SELECT AVG(icu.los) AS average_length_of_stay FROM patients p JOIN admissions a ON p.subject_id = a.subject_id JOIN icustays icu ON a.stay_id = icu.stay_id WHERE p.gender = 'F' AND p.age >= 40 AND p.had_stroke = 'Y' AND p.age BETWEEN 35 AND 45;

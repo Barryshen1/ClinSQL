@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH first_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY a.admittime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n      USING (subject_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n)\n, dap_prescriptions AS (\n  SELECT\n    fa.subject_id,\n    fa.hadm_id,\n    -- flag for aspirin\n    MAX(CASE WHEN LOWER(pr.drug) LIKE '%aspirin%' THEN 1 ELSE 0 END) AS has_aspirin,\n    -- flag for P2Y12 inhibitors\n    MAX(CASE\n          WHEN LOWER(pr.drug) LIKE '%clopidogrel%'\n            OR LOWER(pr.drug) LIKE '%prasugrel%'\n            OR LOWER(pr.drug) LIKE '%ticagrelor%'\n          THEN 1\n          ELSE 0\n        END) AS has_p2y12\n  FROM\n    first_admissions AS fa\n    JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n      ON fa.subject_id = pr.subject_id\n      AND fa.hadm_id    = pr.hadm_id\n      AND pr.starttime BETWEEN fa.admittime AND fa.dischtime\n  WHERE\n    fa.rn = 1\n  GROUP BY\n    fa.subject_id,\n    fa.hadm_id\n)\n, dap_cohort AS (\n  -- keep only admissions with both aspirin and a P2Y12 inhibitor\n  SELECT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    dap_prescriptions AS d\n  WHERE\n    d.has_aspirin = 1\n    AND d.has_p2y12 = 1\n)\nSELECT\n  -- standard deviation of the binary mortality indicator\n  STDDEV_SAMP(CAST(fa.hospital_expire_flag AS INT64)) AS sd_in_hospital_mortality\nFROM\n  first_admissions AS fa\n  JOIN dap_cohort AS dc\n    USING (subject_id, hadm_id)\nWHERE\n  fa.rn = 1;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

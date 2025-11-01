@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating an 85\u2011year\u2011old female inpatient with hepatic failure. Among female inpatients aged 80\u201390 with hepatic failure, calculate a 7\u2011day medication complexity score, stratify cohort into tertiles, and report LOS, in\u2011hospital mortality and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` pat\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON pat.subject_id = adm.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON diag.icd_code = dd.icd_code AND diag.icd_version = dd.icd_version\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 80 AND 90\n    AND LOWER(dd.long_title) LIKE '%hepatic failure%'\n),\nmed_complexity AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT COALESCE(p.formulary_drug_cd, p.drug)) AS complexity_score\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n  WHERE p.starttime >= c.admittime\n    AND p.starttime < DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.subject_id, c.hadm_id\n),\nlos_mortality_readmit AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    DATE_DIFF(c.dischtime, c.admittime, DAY) AS los_days,\n    c.hospital_expire_flag,\n    -- 30-day readmission: check if any future admission within 30 days\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm2\n      WHERE adm2.subject_id = c.subject_id\n        AND adm2.admittime > c.dischtime\n        AND adm2.admittime <= DATETIME_ADD(c.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmit_30d\n  FROM cohort c\n),\ncombined AS (\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.complexity_score,\n    l.los_days,\n    l.hospital_expire_flag,\n    l.readmit_30d\n  FROM med_complexity m\n  JOIN los_mortality_readmit l\n    ON m.subject_id = l.subject_id AND m.hadm_id = l.hadm_id\n),\ntertiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    complexity_score,\n    los_days,\n    hospital_expire_flag,\n    readmit_30d,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM combined\n)\nSELECT\n  tertile,\n  COUNT(DISTINCT hadm_id) AS admissions,\n  AVG(complexity_score) AS avg_complexity_score,\n  AVG(los_days) AS avg_los_days,\n  AVG(hospital_expire_flag) AS in_hosp_mortality_rate,\n  AVG(readmit_30d) AS readmit_30d_rate\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

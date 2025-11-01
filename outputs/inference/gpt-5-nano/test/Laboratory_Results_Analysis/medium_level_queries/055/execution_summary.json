@@ -1,0 +1,28 @@
+{
+  "query": "I have an 86\u2011year\u2011old female. Among female patients aged 81\u201391 admitted for chest pain or AMI, what's the distribution of index hs\u2011TnT (normal/borderline/myocardial injury), with counts, percentages, and mean LOS?",
+  "final_sql": "WITH eligible AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND (p.anchor_age IS NOT NULL)\n    AND (p.anchor_year IS NOT NULL)\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 81 AND 91\n    AND (dd.long_title LIKE '%Chest pain%' OR dd.long_title LIKE '%Myocardial infarction%')\n),\ntroponin_first AS (\n  SELECT t.hadm_id, t.valuenum\n  FROM (\n    SELECT le.hadm_id, le.valuenum,\n           ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n      ON le.itemid = dli.itemid\n    WHERE le.hadm_id IN (SELECT hadm_id FROM eligible)\n      AND REGEXP_CONTAINS(dli.label, r'(?i)troponin.*t')\n  ) AS t\n  WHERE t.rn = 1\n),\nsummary AS (\n  SELECT\n    CASE\n      WHEN tf.valuenum <= 14 THEN 'Normal'\n      WHEN tf.valuenum < 53 THEN 'Borderline'\n      ELSE 'Myocardial Injury'\n    END AS hsTnT_index_category,\n    COUNT(*) AS n,\n    AVG(TIMESTAMP_DIFF(e.dischtime, e.admittime, SECOND) / 86400.0) AS mean_los_days\n  FROM eligible e\n  JOIN troponin_first tf ON e.hadm_id = tf.hadm_id\n  GROUP BY\n    CASE\n      WHEN tf.valuenum <= 14 THEN 'Normal'\n      WHEN tf.valuenum < 53 THEN 'Borderline'\n      ELSE 'Myocardial Injury'\n    END\n),\ntot AS (\n  SELECT COUNT(*) AS total_n FROM eligible\n)\nSELECT\n  hsTnT_index_category,\n  n,\n  ROUND(100.0 * n / tot.total_n, 2) AS pct,\n  mean_los_days\nFROM summary\nCROSS JOIN tot\nORDER BY hsTnT_index_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/742d71a6-4201-4ef6-a69a-f708a2cf2eae?maxResults=0&location=US&prettyPrint=false: Query error: Unrecognized name: le at [21:10]\n\nLocation: US\nJob ID: 742d71a6-4201-4ef6-a69a-f708a2cf2eae\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Cannot access field total_n on a value with type INT64 at [57:29]; reason: invalidQuery, location: query, message: Cannot access field total_n on a value with type INT64 at [57:29]\n\nLocation: US\nJob ID: 490c512d-28d5-4685-9715-4db870e6428d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

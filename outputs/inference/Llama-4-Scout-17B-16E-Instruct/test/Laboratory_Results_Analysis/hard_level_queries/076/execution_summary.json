@@ -1,0 +1,28 @@
+{
+  "query": "For a 92\u2011year\u2011old man with ACS: among male inpatients aged 87\u201397, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u2265P95 report mean LOS, in\u2011hospital mortality, and compare avg critical lab events per patient to general inpatients.",
+  "final_sql": "WITH \n-- Target population: Male patients aged 87-97 with ACS\ntarget_population AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    p.anchor_age, \n    a.admittime, \n    a.dischtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      ON a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 87 AND 97\n    AND d.icd_code LIKE '%ACS%'  -- Simplified ACS identification\n),\n\n-- Lab events for target population within 72 hours of admission\nlab_events_target AS (\n  SELECT \n    le.subject_id, \n    le.hadm_id, \n    le.charttime, \n    le.itemid, \n    le.valuenum\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN \n    target_population tp \n      ON le.subject_id = tp.subject_id AND le.hadm_id = tp.hadm_id\n  WHERE \n    le.charttime BETWEEN tp.admittime AND TIMESTAMP_ADD(tp.admittime, INTERVAL 72 HOUR)\n),\n\n-- Calculate lab instability score (example: standard deviation of lab values)\nlab_instability AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    STDEV(valuenum) AS lab_instability_score\n  FROM \n    lab_events_target\n  GROUP BY \n    subject_id, \n    hadm_id\n),\n\n-- Calculate 95th percentile of lab instability score\np95_score AS (\n  SELECT \n    APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(95)] AS p95\n  FROM \n    lab_instability\n),\n\n-- Identify patients with lab instability score >= 95th percentile\nhigh_risk_patients AS (\n  SELECT \n    li.subject_id, \n    li.hadm_id, \n    li.lab_instability_score\n  FROM \n    lab_instability li\n  CROSS JOIN \n    p95_score p95\n  WHERE \n    li.lab_instability_score >= p95.p95\n),\n\n-- Calculate mean LOS, in-hospital mortality for high-risk patients\nhigh_risk_stats AS (\n  SELECT \n    AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR)) / 24 AS mean_LOS,\n    SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS in_hospital_mortality\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    high_risk_patients hrp \n      ON a.hadm_id = hrp.hadm_id\n),\n\n-- General inpatient stats for comparison\ngeneral_inpatient_stats AS (\n  SELECT \n    AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR)) / 24 AS mean_LOS_general,\n    SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS in_hospital_mortality_general\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 87 AND 97\n),\n\n-- Critical lab events per patient\ncritical_lab_events AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    COUNT(*) AS critical_lab_events\n  FROM \n    lab_events_target\n  WHERE \n    valuenum > (SELECT highnormalvalue FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` WHERE itemid = lab_events_target.itemid)\n  GROUP BY \n    subject_id, \n    hadm_id\n)\n\n-- Final output\nSELECT \n  hrp.lab_instability_score,\n  hrs.mean_LOS,\n  hrs.in_hospital_mortality,\n  COALESCE(AVG(cle.critical_lab_events), 0) AS avg_critical_lab_events,\n  gi.mean_LOS_general,\n  gi.in_hospital_mortality_general\nFROM \n  high_risk_patients hrp\n  JOIN high_risk_stats hrs ON hrp.hadm_id = hrs.hadm_id\n  LEFT JOIN critical_lab_events cle ON hrp.hadm_id = cle.hadm_id\n  CROSS JOIN general_inpatient_stats gi\nGROUP BY \n  hrp.lab_instability_score,\n  hrs.mean_LOS,\n  hrs.in_hospital_mortality,\n  gi.mean_LOS_general,\n  gi.in_hospital_mortality_general;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: STDEV; Did you mean stddev? at [47:5]; reason: invalidQuery, location: query, message: Function not found: STDEV; Did you mean stddev? at [47:5]\n\nLocation: US\nJob ID: 24cd6890-78e4-4b2e-b7ae-69ba69ebe1ba\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [53:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [53:25]\n\nLocation: US\nJob ID: 176ccada-c06e-4b80-916f-9f91776f068e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [58:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [58:27]\n\nLocation: US\nJob ID: dec527aa-9ace-4a9b-a785-4f1e1b3bc486\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: STDEV; Did you mean stddev? at [47:5]; reason: invalidQuery, location: query, message: Function not found: STDEV; Did you mean stddev? at [47:5]\n\nLocation: US\nJob ID: 24cd6890-78e4-4b2e-b7ae-69ba69ebe1ba\n"
+    }
+  ]
+}

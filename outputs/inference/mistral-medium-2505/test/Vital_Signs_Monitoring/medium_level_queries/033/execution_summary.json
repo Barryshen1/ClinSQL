@@ -1,0 +1,16 @@
+{
+  "query": "Patient is a 67-year-old man. Among male ICU patients aged 62\u201372, report counts per ICU-stay mean heart\u2011rate category (<60; 60\u201399; 100\u2013119; \u2265120 bpm) and percent with acute MI.",
+  "final_sql": "WITH\n-- Get male patients aged 62-72\nmale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 62 AND 72\n),\n\n-- Get ICU stays for these patients\nicu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    male_patients p ON s.subject_id = p.subject_id\n),\n\n-- Get heart rate measurements (itemid 220045 is for Heart Rate)\nheart_rates AS (\n  SELECT\n    ce.stay_id,\n    ce.valuenum AS heart_rate\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    icu_stays s ON ce.stay_id = s.stay_id\n  WHERE\n    ce.itemid = 220045  -- Heart Rate\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0  -- Exclude invalid values\n),\n\n-- Calculate mean heart rate per ICU stay\nmean_heart_rates AS (\n  SELECT\n    stay_id,\n    AVG(heart_rate) AS mean_heart_rate\n  FROM\n    heart_rates\n  GROUP BY\n    stay_id\n),\n\n-- Categorize mean heart rates\nheart_rate_categories AS (\n  SELECT\n    stay_id,\n    CASE\n      WHEN mean_heart_rate < 60 THEN '<60'\n      WHEN mean_heart_rate BETWEEN 60 AND 99 THEN '60-99'\n      WHEN mean_heart_rate BETWEEN 100 AND 119 THEN '100-119'\n      WHEN mean_heart_rate >= 120 THEN '>=120'\n      ELSE 'Unknown'\n    END AS heart_rate_category\n  FROM\n    mean_heart_rates\n),\n\n-- Identify acute MI diagnoses (ICD-9: 410.xx, ICD-10: I21.xx)\nacute_mi AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    (d.icd_version = 9 AND d.icd_code LIKE '410.%')\n    OR (d.icd_version = 10 AND d.icd_code LIKE 'I21.%')\n),\n\n-- Join heart rate categories with acute MI status\nfinal_data AS (\n  SELECT\n    h.heart_rate_category,\n    COUNT(DISTINCT h.stay_id) AS count_icu_stays,\n    SUM(CASE WHEN a.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS count_with_acute_mi\n  FROM\n    heart_rate_categories h\n  JOIN\n    icu_stays s ON h.stay_id = s.stay_id\n  LEFT JOIN\n    acute_mi a ON s.subject_id = a.subject_id AND s.hadm_id = a.hadm_id\n  GROUP BY\n    h.heart_rate_category\n)\n\n-- Final output\nSELECT\n  heart_rate_category,\n  count_icu_stays,\n  ROUND(100 * count_with_acute_mi / count_icu_stays, 2) AS percent_with_acute_mi\nFROM\n  final_data\nORDER BY\n  CASE heart_rate_category\n    WHEN '<60' THEN 1\n    WHEN '60-99' THEN 2\n    WHEN '100-119' THEN 3\n    WHEN '>=120' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

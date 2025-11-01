@@ -1,0 +1,22 @@
+{
+  "query": "I have a 90\u2011year\u2011old male. Among male ICU patients aged 85\u201395 with acute respiratory failure, what is the percentile rank of a first\u201124\u2011hour vital\u2011sign instability score of 85? Also report average ICU length\u2011of\u2011stay and in\u2011hospital mortality for the most unstable quartile.",
+  "final_sql": "WITH \n-- Filter patients of interest\npatients_of_interest AS (\n  SELECT \n    p.subject_id, \n    p.anchor_age, \n    p.gender, \n    a.hadm_id, \n    a.admittime, \n    a.deathtime,\n    a.hospital_expire_flag,\n    a.discharge_location\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 85 AND 95\n    AND a.discharge_location LIKE '%ICU%'\n    AND a.admission_type = 'Acute Respiratory Failure'\n),\n\n-- Get ICU stay information\nicu_stays AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    stay_id, \n    intime, \n    outtime, \n    los\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays`\n),\n\n-- Assume a simple instability score calculation for demonstration\ninstability_scores AS (\n  SELECT \n    ce.subject_id, \n    ce.hadm_id, \n    ce.stay_id,\n    -- Example calculation: sum of absolute deviations from normal ranges\n    SUM(\n      ABS(ce.valuenum - \n          CASE \n            WHEN d.label = 'Heart Rate' THEN 72 \n            WHEN d.label = 'Systolic Blood Pressure' THEN 120 \n            WHEN d.label = 'Respiratory Rate' THEN 18 \n          END\n        )\n    ) AS instability_score\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` d \n      ON ce.itemid = d.itemid\n  WHERE \n    ce.charttime BETWEEN (SELECT intime FROM icu_stays WHERE subject_id = ce.subject_id AND hadm_id = ce.hadm_id)\n    AND (SELECT outtime FROM icu_stays WHERE subject_id = ce.subject_id AND hadm_id = ce.hadm_id)\n    AND d.category IN ('Vital Signs')\n  GROUP BY \n    ce.subject_id, \n    ce.hadm_id, \n    ce.stay_id\n)\n\n-- Calculate percentile rank and statistics for the most unstable quartile\nSELECT \n  APPROX_QUANTILES(instability_score, 100)[OFFSET(50)] AS percentile_50,\n  APPROX_QUANTILES(instability_score, 4)[OFFSET(3)] AS quartile_3_score,\n  AVG(icu_stays.los) AS avg_icu_los,\n  SUM(CASE WHEN poi.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS in_hospital_mortality\nFROM \n  instability_scores\n  JOIN patients_of_interest poi ON instability_scores.hadm_id = poi.hadm_id\n  JOIN icu_stays ON instability_scores.stay_id = icu_stays.stay_id\nWHERE \n  instability_score IS NOT NULL;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [68:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [68:24]\n\nLocation: US\nJob ID: d1850b33-db47-4faa-bac9-771dc0aff9b0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

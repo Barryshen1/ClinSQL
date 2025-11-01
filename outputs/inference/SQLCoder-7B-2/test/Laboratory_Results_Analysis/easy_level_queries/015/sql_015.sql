@@ -1,0 +1,1 @@
+SELECT MIN(value) AS min_creatinine_level FROM labevents JOIN patients ON labevents.subject_id = patients.subject_id JOIN admissions ON labevents.subject_id = admissions.subject_id WHERE patients.gender = 'F' AND admissions.admission_type = 'Pneumonia';

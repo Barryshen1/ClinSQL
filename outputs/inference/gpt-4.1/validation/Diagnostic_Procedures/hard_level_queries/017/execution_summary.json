@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH cohort AS (\n  -- Select male patients aged 83-93 with first ICU stay and sepsis diagnosis\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n    INNER JOIN physionet-data.mimiciv_3_1_icu.icustays i\n      ON p.subject_id = i.subject_id\n    INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n      ON i.hadm_id = a.hadm_id\n    INNER JOIN (\n      -- Sepsis ICD codes (ICD-9 and ICD-10)\n      SELECT DISTINCT hadm_id\n      FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd\n      WHERE\n        (\n          (icd_version = 9 AND (\n            icd_code LIKE '99591' OR\n            icd_code LIKE '99592' OR\n            icd_code LIKE '78552'\n          )) OR\n          (icd_version = 10 AND (\n            icd_code LIKE 'A40%' OR\n            icd_code LIKE 'A41%'\n          ))\n        )\n    ) sepsis\n      ON i.hadm_id = sepsis.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 83 AND 93\n),\nfirst_icu AS (\n  -- Only first ICU stay per patient\n  SELECT *\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM cohort\n  )\n  WHERE rn = 1\n),\nproc_72h AS (\n  -- Procedures within first 72h of ICU stay\n  SELECT\n    f.subject_id,\n    f.stay_id,\n    COUNT(DISTINCT p.icd_code) AS procedure_count\n  FROM first_icu f\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.procedures_icd p\n    ON f.subject_id = p.subject_id\n    AND f.hadm_id = p.hadm_id\n    AND p.chartdate >= DATE(f.intime)\n    AND p.chartdate < DATE_ADD(DATE(f.intime), INTERVAL 3 DAY)\n  GROUP BY f.subject_id, f.stay_id\n),\nfinal AS (\n  -- Merge procedure counts with cohort\n  SELECT\n    f.subject_id,\n    f.stay_id,\n    COALESCE(p.procedure_count, 0) AS procedure_count,\n    f.los,\n    f.hospital_expire_flag\n  FROM first_icu f\n  LEFT JOIN proc_72h p\n    ON f.subject_id = p.subject_id\n    AND f.stay_id = p.stay_id\n),\nquartiles AS (\n  -- Assign quartile based on procedure_count\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS proc_quartile\n  FROM final\n)\nSELECT\n  proc_quartile,\n  COUNT(*) AS n_patients,\n  ROUND(AVG(procedure_count),2) AS mean_procedure_count,\n  ROUND(AVG(los),2) AS mean_icu_los_days,\n  ROUND(100.0 * AVG(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END),2) AS mortality_percent\nFROM quartiles\nGROUP BY proc_quartile\nORDER BY proc_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

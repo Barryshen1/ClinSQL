@@ -1,0 +1,16 @@
+{
+  "query": "For a 49-year-old woman with TIA: among female patients 44\u201354, what are p25, p50, p75 of diagnostic imaging per admission by LOS (1\u20134 vs 5\u20137 days) and ICU use?",
+  "final_sql": "WITH cohort AS (\n  -- Female patients age 44\u201354\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 44 AND 54\n),\ntia_admissions AS (\n  -- Admissions with TIA diagnosis\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN cohort c ON adm.subject_id = c.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx ON adm.hadm_id = dx.hadm_id\n  WHERE (\n    (dx.icd_version = 10 AND REGEXP_CONTAINS(dx.icd_code, r'^G45')) OR\n    (dx.icd_version = 9 AND REGEXP_CONTAINS(dx.icd_code, r'^435'))\n  )\n),\nimaging_procs AS (\n  -- Imaging procedures per admission\n  SELECT proc.hadm_id, COUNT(*) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dproc\n    ON proc.icd_code = dproc.icd_code AND proc.icd_version = dproc.icd_version\n  WHERE LOWER(dproc.long_title) LIKE '%ct%'\n     OR LOWER(dproc.long_title) LIKE '%mri%'\n     OR LOWER(dproc.long_title) LIKE '%ultrasound%'\n     OR LOWER(dproc.long_title) LIKE '%radiography%'\n     OR LOWER(dproc.long_title) LIKE '%angiography%'\n     OR LOWER(dproc.long_title) LIKE '%x-ray%'\n     OR LOWER(dproc.long_title) LIKE '%pet%'\n     OR LOWER(dproc.long_title) LIKE '%scan%'\n  GROUP BY proc.hadm_id\n),\nicu_use AS (\n  -- Admissions with ICU stay\n  SELECT DISTINCT hadm_id, TRUE AS icu_used\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nadmission_imaging AS (\n  -- Combine all info per admission\n  SELECT\n    t.subject_id,\n    t.hadm_id,\n    TIMESTAMP_DIFF(t.dischtime, t.admittime, DAY) AS los_days,\n    CASE\n      WHEN TIMESTAMP_DIFF(t.dischtime, t.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4'\n      WHEN TIMESTAMP_DIFF(t.dischtime, t.admittime, DAY) BETWEEN 5 AND 7 THEN '5-7'\n      ELSE NULL\n    END AS los_group,\n    IFNULL(ip.imaging_count, 0) AS imaging_count,\n    IFNULL(iu.icu_used, FALSE) AS icu_used\n  FROM tia_admissions t\n  LEFT JOIN imaging_procs ip ON t.hadm_id = ip.hadm_id\n  LEFT JOIN icu_use iu ON t.hadm_id = iu.hadm_id\n  WHERE TIMESTAMP_DIFF(t.dischtime, t.admittime, DAY) BETWEEN 1 AND 7\n)\nSELECT\n  los_group,\n  icu_used,\n  APPROX_QUANTILES(imaging_count, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(imaging_count, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(imaging_count, 4)[OFFSET(3)] AS p75,\n  COUNT(*) AS n_admissions\nFROM admission_imaging\nWHERE los_group IS NOT NULL\nGROUP BY los_group, icu_used\nORDER BY los_group, icu_used DESC;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

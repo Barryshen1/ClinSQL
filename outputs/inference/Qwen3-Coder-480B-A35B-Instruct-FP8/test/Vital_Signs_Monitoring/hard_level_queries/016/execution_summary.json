@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 62-year-old male post\u2013solid-organ transplant in the ICU. Among male ICU patients aged 57\u201367, compare Transplant vs Non\u2011Transplant during the first 72 hours: median and percentiles of composite instability score (count of fever>38.5\u00b0C, SpO2<90%, RR>20 events), ICU LOS, and mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los AS icu_los,\n    CASE WHEN adm.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS mortality,\n    CASE WHEN tx.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS is_transplant\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n      ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n    WHERE d.icd_code LIKE 'Z94%'\n  ) tx\n    ON icu.hadm_id = tx.hadm_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 57 AND 67\n),\n\n-- Identify relevant itemids for vital signs\nvitals AS (\n  SELECT\n    itemid,\n    label\n  FROM\n    `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    label IN ('SpO2', 'Respiratory Rate', 'Temperature Celsius', 'Temperature Fahrenheit')\n),\n\n-- Chartevents within first 72 hours\ninstability_events AS (\n  SELECT\n    c.stay_id,\n    COUNT(*) AS instability_score\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN\n    vitals v ON c.itemid = v.itemid\n  JOIN\n    cohort coh ON c.stay_id = coh.stay_id\n  WHERE\n    c.charttime >= coh.intime\n    AND c.charttime <= DATETIME_ADD(coh.intime, INTERVAL 72 HOUR)\n    AND (\n      (v.label = 'Temperature Celsius' AND c.valuenum > 38.5)\n      OR (v.label = 'Temperature Fahrenheit' AND c.valuenum > 101.3)\n      OR (v.label = 'SpO2' AND c.valuenum < 90)\n      OR (v.label = 'Respiratory Rate' AND c.valuenum > 20)\n    )\n  GROUP BY\n    c.stay_id\n),\n\n-- Final cohort with instability score\nfinal_cohort AS (\n  SELECT\n    coh.*,\n    COALESCE(ie.instability_score, 0) AS instability_score\n  FROM\n    cohort coh\n  LEFT JOIN\n    instability_events ie\n    ON coh.stay_id = ie.stay_id\n)\n\nSELECT\n  is_transplant,\n  APPROX_QUANTILES(instability_score, 100)[OFFSET(50)] AS median_instability_score,\n  APPROX_QUANTILES(instability_score, 100)[OFFSET(25)] AS p25_instability_score,\n  APPROX_QUANTILES(instability_score, 100)[OFFSET(75)] AS p75_instability_score,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(50)] AS median_icu_los,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(25)] AS p25_icu_los,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(75)] AS p75_icu_los,\n  AVG(mortality) AS mortality_rate\nFROM\n  final_cohort\nGROUP BY\n  is_transplant\nORDER BY\n  is_transplant;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

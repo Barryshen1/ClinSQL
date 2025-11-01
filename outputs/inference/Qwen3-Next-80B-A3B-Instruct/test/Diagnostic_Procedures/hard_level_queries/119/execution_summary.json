@@ -1,0 +1,28 @@
+{
+  "query": "For a 47\u2011year\u2011old man: among male ICU patients aged 42\u201352 with AMI, what is the 90th percentile of diagnostic intensity (distinct procedures in first 72 ICU hours), and how do mean hospital LOS and in\u2011hospital mortality compare to age\u2011matched males?",
+  "final_sql": "WITH amI_diagnoses AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE LOWER(d_icd.long_title) LIKE '%acute myocardial infarction%'\n     OR d.icd_code IN (\n       'I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4', 'I21.9', \n       'I22.0', 'I22.1', 'I22.2', 'I22.8', 'I22.9',\n       'I23.0', 'I23.1', 'I23.2', 'I23.3', 'I23.4', 'I23.5', 'I23.6', 'I23.7', 'I23.8', 'I23.9'\n     )\n),\n\nfirst_icu_stay AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    stay_id, \n    intime, \n    outtime,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays\n),\n\npatients_filtered AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 42 AND 52\n),\n\nami_cohort AS (\n  SELECT DISTINCT pf.*\n  FROM patients_filtered pf\n  JOIN amI_diagnoses am ON pf.hadm_id = am.hadm_id\n),\n\nnon_ami_cohort AS (\n  SELECT DISTINCT pf.*\n  FROM patients_filtered pf\n  LEFT JOIN amI_diagnoses am ON pf.hadm_id = am.hadm_id\n  WHERE am.hadm_id IS NULL\n),\n\nami_with_first_icu AS (\n  SELECT am.*, fis.stay_id, fis.intime, fis.outtime\n  FROM ami_cohort am\n  JOIN first_icu_stay fis ON am.hadm_id = fis.hadm_id AND fis.rn = 1\n),\n\nnon_ami_with_first_icu AS (\n  SELECT nma.*, fis.stay_id, fis.intime, fis.outtime\n  FROM non_ami_cohort nma\n  JOIN first_icu_stay fis ON nma.hadm_id = fis.hadm_id AND fis.rn = 1\n),\n\nami_procedures AS (\n  SELECT \n    awfi.subject_id,\n    awfi.stay_id,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedures\n  FROM ami_with_first_icu awfi\n  JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pe\n    ON awfi.stay_id = pe.stay_id\n    AND pe.starttime >= awfi.intime\n    AND pe.starttime <= awfi.intime + INTERVAL 72 HOUR\n  GROUP BY awfi.subject_id, awfi.stay_id\n),\n\nami_stats AS (\n  SELECT \n    PERCENTILE_CONT(distinct_procedures, 0.9) OVER () AS p90_distinct_procedures,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM ami_with_first_icu awfi\n  LEFT JOIN ami_procedures ap ON awfi.stay_id = ap.stay_id\n),\n\nnon_ami_stats AS (\n  SELECT \n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM non_ami_with_first_icu\n)\n\nSELECT \n  a.p90_distinct_procedures,\n  a.mean_los_days AS ami_mean_los_days,\n  a.mortality_rate AS ami_mortality_rate,\n  n.mean_los_days AS non_ami_mean_los_days,\n  n.mortality_rate AS non_ami_mortality_rate\nFROM ami_stats a\nCROSS JOIN non_ami_stats n\nLIMIT 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column distinct_procedures which is neither grouped nor aggregated at [81:21]; reason: invalidQuery, location: query, message: SELECT list expression references column distinct_procedures which is neither grouped nor aggregated at [81:21]\n\nLocation: US\nJob ID: 22679c02-8393-480e-881a-d7a01ec28496\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 9a3abaf9-e6b6-48df-b1a7-2b15bb7bd16b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [6:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [6:26]\n\nLocation: US\nJob ID: a6e35cf7-4e1b-4720-83e0-5d55ddb69b28\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column distinct_procedures which is neither grouped nor aggregated at [81:21]; reason: invalidQuery, location: query, message: SELECT list expression references column distinct_procedures which is neither grouped nor aggregated at [81:21]\n\nLocation: US\nJob ID: 22679c02-8393-480e-881a-d7a01ec28496\n"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "query": "For my 88\u2011year\u2011old female inpatient, among females 83\u201393 with T2DM and HF, report % initiating basal, bolus, basal\u2013bolus, sliding\u2011scale insulin first 48h versus final 12h and net change.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.hadm_id,\n    adm.subject_id,\n    adm.admittime,\n    adm.dischtime,\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) BETWEEN 83 AND 93\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code LIKE '250%' AND LENGTH(diag.icd_code) >= 5 AND SUBSTR(diag.icd_code, 5, 1) IN ('0','1'))\n          OR (diag.icd_version = 10 AND diag.icd_code LIKE 'E11%')\n        )\n    )\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code LIKE '428%')\n          OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I50%')\n        )\n    )\n),\ninsulin_orders AS (\n  SELECT \n    c.hadm_id,\n    c.subject_id,\n    c.admittime,\n    c.dischtime,\n    p.starttime,\n    CASE\n      WHEN LOWER(p.drug) LIKE '%glargine%' OR LOWER(p.drug) LIKE '%detemir%' OR LOWER(p.drug) LIKE '%degludec%' OR LOWER(p.drug) LIKE '%nph%' THEN 'basal'\n      WHEN LOWER(p.drug) LIKE '%aspart%' OR LOWER(p.drug) LIKE '%lispro%' OR LOWER(p.drug) LIKE '%regular%' OR LOWER(p.drug) LIKE '%glulisine%' THEN 'bolus'\n      WHEN LOWER(p.drug) LIKE '%sliding scale%' THEN 'sliding_scale'\n      ELSE NULL\n    END AS insulin_type\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n  WHERE LOWER(p.drug) LIKE '%insulin%'\n    AND p.starttime IS NOT NULL\n),\nfirst_occurrences AS (\n  SELECT \n    hadm_id,\n    insulin_type,\n    MIN(starttime) AS first_time\n  FROM insulin_orders\n  WHERE insulin_type IS NOT NULL\n  GROUP BY hadm_id, insulin_type\n),\ntime_windows AS (\n  SELECT \n    fo.hadm_id,\n    fo.insulin_type,\n    fo.first_time,\n    CASE \n      WHEN fo.first_time BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR) \n      THEN 1 ELSE 0 \n    END AS first_48h,\n    CASE \n      WHEN fo.first_time BETWEEN TIMESTAMP_ADD(c.dischtime, INTERVAL -12 HOUR) AND c.dischtime \n      THEN 1 ELSE 0 \n    END AS final_12h\n  FROM first_occurrences fo\n  INNER JOIN cohort c ON fo.hadm_id = c.hadm_id\n),\naggregated AS (\n  SELECT\n    insulin_type,\n    AVG(first_48h) AS pct_first_48h,\n    AVG(final_12h) AS pct_final_12h,\n    AVG(final_12h) - AVG(first_48h) AS net_change\n  FROM time_windows\n  GROUP BY insulin_type\n)\nSELECT\n  'basal' AS insulin_regimen,\n  COALESCE((SELECT pct_first_48h FROM aggregated WHERE insulin_type = 'basal'), 0) AS first_48h_pct,\n  COALESCE((SELECT pct_final_12h FROM aggregated WHERE insulin_type = 'basal'), 0) AS final_12h_pct,\n  COALESCE((SELECT net_change FROM aggregated WHERE insulin_type = 'basal'), 0) AS net_change\nUNION ALL\nSELECT\n  'bolus',\n  COALESCE((SELECT pct_first_48h FROM aggregated WHERE insulin_type = 'bolus'), 0),\n  COALESCE((SELECT pct_final_12h FROM aggregated WHERE insulin_type = 'bolus'), 0),\n  COALESCE((SELECT net_change FROM aggregated WHERE insulin_type = 'bolus'), 0)\nUNION ALL\nSELECT\n  'basal-bolus',\n  COALESCE((SELECT pct_first_48h FROM aggregated WHERE insulin_type = 'basal'), 0) * \n  COALESCE((SELECT pct_first_48h FROM aggregated WHERE insulin_type = 'bolus'), 0),\n  COALESCE((SELECT pct_final_12h FROM aggregated WHERE insulin_type = 'basal'), 0) * \n  COALESCE((SELECT pct_final_12h FROM aggregated WHERE insulin_type = 'bolus'), 0),\n  (COALESCE((SELECT pct_final_12h FROM aggregated WHERE insulin_type = 'basal'), 0) * \n   COALESCE((SELECT pct_final_12h FROM aggregated WHERE insulin_type = 'bolus'), 0)) -\n  (COALESCE((SELECT pct_first_48h FROM aggregated WHERE insulin_type = 'basal'), 0) * \n   COALESCE((SELECT pct_first_48h FROM aggregated WHERE insulin_type = 'bolus'), 0))\nUNION ALL\nSELECT\n  'sliding-scale',\n  COALESCE((SELECT pct_first_48h FROM aggregated WHERE insulin_type = 'sliding_scale'), 0),\n  COALESCE((SELECT pct_final_12h FROM aggregated WHERE insulin_type = 'sliding_scale'), 0),\n  COALESCE((SELECT net_change FROM aggregated WHERE insulin_type = 'sliding_scale'), 0);",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:11]\n\nLocation: US\nJob ID: 3725682b-b0fc-43e1-a591-ed21c2ea2c03\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword THEN but got identifier \"ILIKE\" at [40:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword THEN but got identifier \"ILIKE\" at [40:19]\n\nLocation: US\nJob ID: 0881c4ab-03f7-40b7-a776-debf852fcc8d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

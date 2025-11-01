@@ -1,0 +1,28 @@
+{
+  "query": "For a 45-year-old woman: among female inpatients aged 40\u201350 with ARDS, what is the 75th-percentile laboratory-instability score (first 72 h)? For patients at/above this threshold, report mortality, mean LOS, and compare average critical lab events per patient to age-matched non-ARDS inpatients.",
+  "final_sql": "WITH subjects AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age BETWEEN 40 AND 50\n),\nadmissions AS (\n  SELECT a.*\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN subjects s ON a.subject_id = s.subject_id\n),\nards_hadms AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  INNER JOIN admissions USING (hadm_id)\n  WHERE ((icd_version = 10 AND icd_code = 'J80') OR (icd_version = 9 AND icd_code = '51882'))\n),\nnon_ards_hadms AS (\n  SELECT a.hadm_id\n  FROM admissions a\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE ((icd_version = 10 AND icd_code = 'J80') OR (icd_version = 9 AND icd_code = '51882'))\n  ) ards ON a.hadm_id = ards.hadm_id\n  WHERE ards.hadm_id IS NULL\n),\nscores_ards AS (\n  SELECT \n    ah.hadm_id,\n    SUM(CASE \n      WHEN l.charttime >= a.admittime \n        AND l.charttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR) \n        AND l.flag IS NOT NULL \n      THEN 1 \n      ELSE 0 \n    END) AS instability_score\n  FROM ards_hadms ah\n  INNER JOIN admissions a ON ah.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l ON l.hadm_id = ah.hadm_id\n  GROUP BY ah.hadm_id\n),\nscores_non AS (\n  SELECT \n    nh.hadm_id,\n    SUM(CASE \n      WHEN l.charttime >= a.admittime \n        AND l.charttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR) \n        AND l.flag IS NOT NULL \n      THEN 1 \n      ELSE 0 \n    END) AS instability_score\n  FROM non_ards_hadms nh\n  INNER JOIN admissions a ON nh.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l ON l.hadm_id = nh.hadm_id\n  GROUP BY nh.hadm_id\n),\np75_cte AS (\n  SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(75)] AS threshold\n  FROM scores_ards\n),\nhigh_group AS (\n  SELECT \n    sa.hadm_id,\n    sa.instability_score,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM scores_ards sa\n  INNER JOIN admissions a ON sa.hadm_id = a.hadm_id\n  CROSS JOIN p75_cte p\n  WHERE sa.instability_score >= p.threshold\n)\nSELECT \n  (SELECT threshold FROM p75_cte) AS p75_instability_score,\n  (SELECT AVG(hospital_expire_flag) FROM high_group) AS mortality_rate,\n  (SELECT AVG(los_days) FROM high_group) AS mean_los_days,\n  (SELECT AVG(instability_score) FROM high_group) AS avg_critical_events_high_group,\n  (SELECT AVG(instability_score) FROM scores_non) AS avg_critical_events_non_ards;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 29613e26-816c-40f0-8c25-1be6923a2f44\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [15:11]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [15:11]\n\nLocation: US\nJob ID: 1d59b83b-4278-477e-a279-63c9b1c8ddaf\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

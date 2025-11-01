@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 82\u2011year\u2011old man. Among male ICU patients aged 77\u201387 admitted with asthma exacerbation, stratify first 72\u2011hour ICU procedure burden into quartiles and report each quartile\u2019s mean procedure count, mean hospital LOS (days), and hospital mortality.",
+  "final_sql": "WITH\n-- Get male patients aged 77-87\neligible_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 77 AND 87\n),\n\n-- Get asthma exacerbation admissions\nasthma_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    eligible_patients p ON a.subject_id = p.subject_id\n  WHERE\n    (d.icd_code LIKE 'J45.%' OR d.icd_code LIKE 'J44.%')\n    AND d.icd_version = 10\n),\n\n-- Get first ICU stay for each admission\nfirst_icu_stays AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id, i.hadm_id ORDER BY i.intime) AS stay_rank\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN\n    asthma_admissions a ON i.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n  WHERE\n    i.intime IS NOT NULL\n    AND i.outtime IS NOT NULL\n),\n\n-- Filter to first ICU stay per admission\nfiltered_icu_stays AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    outtime\n  FROM\n    first_icu_stays\n  WHERE\n    stay_rank = 1\n),\n\n-- Count procedures in first 72 hours of ICU stay\nprocedure_counts AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    COUNT(DISTINCT p.itemid) AS procedure_count\n  FROM\n    filtered_icu_stays f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON f.subject_id = p.subject_id\n    AND f.hadm_id = p.hadm_id\n    AND f.stay_id = p.stay_id\n    AND p.starttime BETWEEN f.intime AND DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY\n    f.subject_id, f.hadm_id\n),\n\n-- Calculate quartiles\nquartiles AS (\n  SELECT\n    procedure_count,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM\n    procedure_counts\n),\n\n-- Get hospital outcomes\nhospital_outcomes AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.procedure_count,\n    q.quartile,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    a.hospital_expire_flag\n  FROM\n    procedure_counts p\n  JOIN\n    quartiles q ON p.procedure_count = q.procedure_count\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id AND p.hadm_id = a.hadm_id\n  WHERE\n    a.dischtime IS NOT NULL\n    AND a.admittime IS NOT NULL\n)\n\n-- Final aggregation by quartile\nSELECT\n  quartile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(los_days) AS mean_hospital_los_days,\n  AVG(CAST(hospital_expire_flag AS INT64)) AS hospital_mortality_rate\nFROM\n  hospital_outcomes\nGROUP BY\n  quartile\nORDER BY\n  quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside p at [75:11]; reason: invalidQuery, location: query, message: Name charttime not found inside p at [75:11]\n\nLocation: US\nJob ID: 5e2006ff-0a49-43e4-9d85-117546003462\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

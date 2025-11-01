@@ -1,0 +1,16 @@
+{
+  "query": "My 78-year-old female with multi\u2011trauma: among females 73\u201383, what are mean, min, and max ultrasounds per admission (including echocardiography) for 1\u20133 vs 4\u20137 day stays, stratified by ED vs elective?",
+  "final_sql": "WITH AdmissionsFiltered AS (\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        DATE_DIFF(ad.dischtime, ad.admittime, DAY) AS los_days,\n        CASE\n            WHEN ad.admission_type IN ('EMERGENCY', 'URGENT', 'TRAUMA', 'OBSERVATION THROUGH ED') THEN 'ED'\n            WHEN ad.admission_type = 'ELECTIVE' THEN 'Elective'\n            ELSE 'Other_Admission_Type' -- Categorize other types or filter them out if not relevant\n        END AS admission_type_group,\n        CASE\n            WHEN DATE_DIFF(ad.dischtime, ad.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3 Days'\n            WHEN DATE_DIFF(ad.dischtime, ad.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7 Days'\n            ELSE NULL -- Filter these out later if not within 1-7 days\n        END AS stay_duration_group\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON ad.subject_id = p.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 73 AND 83\n        -- Only consider admissions relevant to the requested LOS and Admission Types\n        AND DATE_DIFF(ad.dischtime, ad.admittime, DAY) BETWEEN 1 AND 7\n        AND (ad.admission_type IN ('EMERGENCY', 'URGENT', 'TRAUMA', 'OBSERVATION THROUGH ED') OR ad.admission_type = 'ELECTIVE')\n),\nUltrasoundProceduresCount AS (\n    SELECT\n        proc.subject_id,\n        proc.hadm_id,\n        COUNT(proc.icd_code) AS num_ultrasounds\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n    WHERE\n        -- ICD-9 codes for Diagnostic Ultrasound (including echocardiography)\n        (proc.icd_version = 9 AND proc.icd_code LIKE '88.7%')\n        OR\n        -- ICD-10 codes for Diagnostic Ultrasound (including echocardiography)\n        (proc.icd_version = 10 AND proc.icd_code LIKE 'B_4%')\n    GROUP BY\n        proc.subject_id,\n        proc.hadm_id\n)\nSELECT\n    af.admission_type_group,\n    af.stay_duration_group,\n    COUNT(DISTINCT af.hadm_id) AS num_admissions, -- For context, count the unique admissions in each group\n    IFNULL(ROUND(AVG(upc.num_ultrasounds), 2), 0.00) AS mean_ultrasounds_per_admission,\n    IFNULL(MIN(upc.num_ultrasounds), 0) AS min_ultrasounds_per_admission,\n    IFNULL(MAX(upc.num_ultrasounds), 0) AS max_ultrasounds_per_admission\nFROM\n    AdmissionsFiltered AS af\nLEFT JOIN -- Use LEFT JOIN to include admissions with 0 ultrasounds\n    UltrasoundProceduresCount AS upc\n    ON af.subject_id = upc.subject_id AND af.hadm_id = upc.hadm_id\nWHERE\n    af.stay_duration_group IS NOT NULL -- Ensure only '1-3 Days' or '4-7 Days' are considered\nGROUP BY\n    af.admission_type_group,\n    af.stay_duration_group\nORDER BY\n    af.admission_type_group,\n    af.stay_duration_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

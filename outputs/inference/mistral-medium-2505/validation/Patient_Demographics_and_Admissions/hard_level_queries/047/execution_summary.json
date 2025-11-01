@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old female Medicare patient. Among female Medicare patients aged 68\u201378 admitted from the ED with a principal hemorrhagic stroke, what are the 30-day readmission rate, median index LOS for readmitted vs non-readmitted, and % with LOS >4 days?",
+  "final_sql": "WITH\n-- Get female Medicare patients aged 68-78\neligible_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age,\n    anchor_year\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 68 AND 78\n),\n\n-- Get their ED admissions with Medicare insurance\ned_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_location,\n    a.insurance,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    eligible_patients p ON a.subject_id = p.subject_id\n  WHERE\n    a.admission_location = 'EMERGENCY ROOM ADMIT'\n    AND a.insurance = 'Medicare'\n    AND a.hospital_expire_flag = 0\n),\n\n-- Get principal diagnosis of hemorrhagic stroke\nstroke_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.los_days\n  FROM\n    ed_admissions a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  WHERE\n    d.seq_num = 1\n    AND (\n      (d.icd_version = 10 AND d.icd_code LIKE 'I61.%')\n      OR (d.icd_version = 9 AND d.icd_code LIKE '431.%')\n    )\n),\n\n-- For each patient, get their first qualifying admission as index admission\nindex_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS admission_rank\n  FROM\n    stroke_admissions\n),\n\n-- Get only the first admission per patient\nfirst_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days\n  FROM\n    index_admissions\n  WHERE\n    admission_rank = 1\n),\n\n-- Find 30-day readmissions (from any admission location)\nreadmissions AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id AS index_hadm_id,\n    f.admittime AS index_admittime,\n    f.dischtime AS index_dischtime,\n    f.los_days AS index_los,\n    a.hadm_id AS readmit_hadm_id,\n    a.admittime AS readmit_admittime,\n    TIMESTAMP_DIFF(a.admittime, f.dischtime, DAY) AS days_to_readmit\n  FROM\n    first_admissions f\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON f.subject_id = a.subject_id\n  WHERE\n    a.hadm_id != f.hadm_id\n    AND a.admittime > f.dischtime\n    AND TIMESTAMP_DIFF(a.admittime, f.dischtime, DAY) <= 30\n),\n\n-- Flag patients with readmissions\nreadmission_flags AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.los_days,\n    CASE WHEN r.subject_id IS NOT NULL THEN 1 ELSE 0 END AS has_readmission\n  FROM\n    first_admissions f\n  LEFT JOIN\n    readmissions r ON f.subject_id = r.subject_id\n),\n\n-- Count total patients to check if we have any\npatient_counts AS (\n  SELECT\n    COUNT(*) AS total_patients,\n    COUNT(CASE WHEN has_readmission = 1 THEN 1 END) AS readmitted_patients,\n    COUNT(CASE WHEN los_days > 4 THEN 1 END) AS los_gt_4_patients\n  FROM\n    readmission_flags\n)\n\n-- Calculate final metrics with NULL handling\nSELECT\n  -- 30-day readmission rate\n  CASE\n    WHEN total_patients = 0 THEN NULL\n    ELSE readmitted_patients / total_patients\n  END AS readmission_rate,\n\n  -- Median LOS for readmitted vs non-readmitted\n  APPROX_QUANTILES(CASE WHEN has_readmission = 1 THEN los_days END, 2)[OFFSET(1)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN has_readmission = 0 THEN los_days END, 2)[OFFSET(1)] AS median_los_non_readmitted,\n\n  -- % with LOS >4 days\n  CASE\n    WHEN total_patients = 0 THEN NULL\n    ELSE los_gt_4_patients / total_patients\n  END AS percent_los_gt_4_days,\n\n  -- Include counts for transparency\n  total_patients,\n  readmitted_patients,\n  los_gt_4_patients\n\nFROM\n  readmission_flags\nCROSS JOIN\n  patient_counts\nLIMIT 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column total_patients which is neither grouped nor aggregated at [132:10]; reason: invalidQuery, location: query, message: SELECT list expression references column total_patients which is neither grouped nor aggregated at [132:10]\n\nLocation: US\nJob ID: e44de5b4-6f21-487e-a9c2-69f88637b194\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 1b04888a-3c48-4b2d-a3ac-491d7948b6ba\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column total_patients which is neither grouped nor aggregated at [132:10]; reason: invalidQuery, location: query, message: SELECT list expression references column total_patients which is neither grouped nor aggregated at [132:10]\n\nLocation: US\nJob ID: a9ca5e58-d867-4e7c-8abb-e431d7f5d481\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column total_patients which is neither grouped nor aggregated at [132:10]; reason: invalidQuery, location: query, message: SELECT list expression references column total_patients which is neither grouped nor aggregated at [132:10]\n\nLocation: US\nJob ID: e44de5b4-6f21-487e-a9c2-69f88637b194\n"
+    }
+  ]
+}

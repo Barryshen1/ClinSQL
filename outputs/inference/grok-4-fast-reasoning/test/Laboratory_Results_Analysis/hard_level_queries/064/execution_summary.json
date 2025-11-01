@@ -1,0 +1,22 @@
+{
+  "query": "I have a 70\u2011year\u2011old female with acute pancreatitis. Among female inpatients 65\u201375 with acute pancreatitis, stratify first\u201148\u2011hour lab instability scores into quintiles and report count, mean instability, mean LOS, mortality per quintile, and % with critical labs versus age\u2011matched inpatients.",
+  "final_sql": "WITH patients_female_age AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE \n    p.gender = 'F' \n    AND p.anchor_age BETWEEN 65 AND 75\n),\nadmissions_female AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    patients_female_age pfa ON a.subject_id = pfa.subject_id\n),\npancreatitis_hadms AS (\n  SELECT DISTINCT \n    di.hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did ON di.icd_code = did.icd_code \n    AND di.icd_version = did.icd_version\n  WHERE \n    LOWER(did.long_title) LIKE '%acute%' \n    AND LOWER(did.long_title) LIKE '%pancreatitis%'\n),\npancreatitis_cohort AS (\n  SELECT \n    af.*,\n    TIMESTAMP_DIFF(af.dischtime, af.admittime, HOUR) / 24.0 AS los_days\n  FROM \n    admissions_female af\n  INNER JOIN \n    pancreatitis_hadms ph ON af.hadm_id = ph.hadm_id\n),\npancreatitis_scores AS (\n  SELECT \n    le.hadm_id,\n    COUNT(*) AS instability_score\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN \n    pancreatitis_cohort pc ON le.subject_id = pc.subject_id AND le.hadm_id = pc.hadm_id\n  WHERE \n    le.charttime >= pc.admittime\n    AND le.charttime < TIMESTAMP_ADD(pc.admittime, INTERVAL 48 HOUR)\n    AND le.flag = 'abnormal'\n  GROUP BY \n    le.hadm_id\n),\npancreatitis_with_scores AS (\n  SELECT \n    pc.*,\n    COALESCE(ps.instability_score, 0) AS instability_score,\n    NTILE(5) OVER (ORDER BY COALESCE(ps.instability_score, 0) ASC) AS quintile\n  FROM \n    pancreatitis_cohort pc\n  LEFT JOIN \n    pancreatitis_scores ps ON pc.hadm_id = ps.hadm_id\n),\ngeneral_cohort AS (\n  SELECT \n    af.*,\n    TIMESTAMP_DIFF(af.dischtime, af.admittime, HOUR) / 24.0 AS los_days\n  FROM \n    admissions_female af\n),\ngeneral_scores AS (\n  SELECT \n    le.hadm_id,\n    COUNT(*) AS instability_score\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN \n    general_cohort gc ON le.subject_id = gc.subject_id AND le.hadm_id = gc.hadm_id\n  WHERE \n    le.charttime >= gc.admittime\n    AND le.charttime < TIMESTAMP_ADD(gc.admittime, INTERVAL 48 HOUR)\n    AND le.flag = 'abnormal'\n  GROUP BY \n    le.hadm_id\n),\ngeneral_with_scores AS (\n  SELECT \n    COALESCE(gs.instability_score, 0) AS instability_score\n  FROM \n    general_cohort gc\n  LEFT JOIN \n    general_scores gs ON gc.hadm_id = gs.hadm_id\n),\ngeneral_critical_pct AS (\n  SELECT \n    (SUM(CASE WHEN instability_score > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)) AS general_pct_critical\n  FROM \n    general_with_scores\n)\nSELECT \n  quintile,\n  COUNT(*) AS count,\n  ROUND(AVG(instability_score), 2) AS mean_instability,\n  ROUND(AVG(los_days), 2) AS mean_los,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100, 2) AS mortality_pct,\n  ROUND((SUM(CASE WHEN instability_score > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)), 2) AS pct_critical_pancreatitis,\n  ROUND((SELECT general_pct_critical FROM general_critical_pct), 2) AS pct_critical_general\nFROM \n  pancreatitis_with_scores\nGROUP BY \n  quintile\nORDER BY \n  quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [111:42]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [111:42]\n\nLocation: US\nJob ID: d928a745-6c81-4fb0-b044-9a9224dedeab\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT AVG(icustays.los) AS average_los FROM admissions JOIN patients ON admissions.subject_id = patients.subject_id JOIN icustays ON admissions.stay_id = icustays.stay_id WHERE patients.gender = 'M' AND patients.anchor_age = 79 AND EXTRACT(YEAR FROM admissions.admittime) BETWEEN 2014 AND 2015 AND icustays.first_careunit = 'CABG';

@@ -1,0 +1,28 @@
+{
+  "query": "For a 45-year-old woman: among female inpatients aged 40\u201350 with ARDS, what is the 75th-percentile laboratory-instability score (first 72 h)? For patients at/above this threshold, report mortality, mean LOS, and compare average critical lab events per patient to age-matched non-ARDS inpatients.",
+  "final_sql": "WITH ards_cohort AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data`.mimiciv_3_1_hosp.patients p\n  JOIN `physionet-data`.mimiciv_3_1_hosp.admissions a ON p.subject_id = a.subject_id\n  JOIN `physionet-data`.mimiciv_3_1_hosp.diagnoses_icd d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data`.mimiciv_3_1_hosp.d_icd_diagnoses did ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND (LOWER(did.long_title) LIKE '%ards%' OR LOWER(did.long_title) LIKE '%acute respiratory distress syndrome%')\n),\n\nnon_ards_cohort AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data`.mimiciv_3_1_hosp.patients p\n  JOIN `physionet-data`.mimiciv_3_1_hosp.admissions a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data`.mimiciv_3_1_hosp.diagnoses_icd d\n      JOIN `physionet-data`.mimiciv_3_1_hosp.d_icd_diagnoses did ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND (LOWER(did.long_title) LIKE '%ards%' OR LOWER(did.long_title) LIKE '%acute respiratory distress syndrome%')\n    )\n),\n\nlab_events_critical AS (\n  SELECT \n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.flag\n  FROM `physionet-data`.mimiciv_3_1_hosp.labevents le\n  JOIN `physionet-data`.mimiciv_3_1_hosp.admissions a ON le.hadm_id = a.hadm_id\n  WHERE le.valuenum IS NOT NULL\n    AND le.charttime >= a.admittime\n    AND le.charttime <= DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND le.flag IN ('H', 'L', 'abnormal')\n),\n\nlab_counts_ards AS (\n  SELECT \n    ac.subject_id,\n    COUNT(*) AS lab_event_count\n  FROM ards_cohort ac\n  JOIN lab_events_critical le ON ac.hadm_id = le.hadm_id\n  GROUP BY ac.subject_id\n),\n\nlab_counts_non_ards AS (\n  SELECT \n    nac.subject_id,\n    COUNT(*) AS lab_event_count\n  FROM non_ards_cohort nac\n  JOIN lab_events_critical le ON nac.hadm_id = le.hadm_id\n  GROUP BY nac.subject_id\n),\n\nthreshold AS (\n  SELECT PERCENTILE_CONT(lab_event_count, 0.75) WITHIN GROUP (ORDER BY lab_event_count) AS p75_threshold\n  FROM lab_counts_ards\n),\n\nhigh_risk_ards AS (\n  SELECT ac.subject_id, ac.hospital_expire_flag, \n         DATETIME_DIFF(ac.dischtime, ac.admittime, DAY) AS los\n  FROM ards_cohort ac\n  JOIN lab_counts_ards lca ON ac.subject_id = lca.subject_id\n  JOIN threshold t ON lca.lab_event_count >= t.p75_threshold\n)\n\nSELECT \n  t.p75_threshold,\n  AVG(CAST(hra.hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n  AVG(hra.los) AS mean_los_days,\n  AVG(lca.lab_event_count) AS avg_lab_events_high_risk_ards,\n  AVG(lcna.lab_event_count) AS avg_lab_events_non_ards\nFROM threshold t\nLEFT JOIN high_risk_ards hra ON TRUE\nLEFT JOIN lab_counts_ards lca ON hra.subject_id = lca.subject_id\nLEFT JOIN lab_counts_non_ards lcna ON TRUE\nGROUP BY t.p75_threshold;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [61:49]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [61:49]\n\nLocation: US\nJob ID: 7892d07a-b7a2-4f11-b0cf-df52e6cb8ef1\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"the\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"the\" at [1:16]\n\nLocation: US\nJob ID: 54420e40-9067-4e09-b08f-457f14e5b1df\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside di at [44:14]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside di at [44:14]\n\nLocation: US\nJob ID: 2a05901b-c32e-465d-b22d-9d27cbc0019e\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [61:49]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [61:49]\n\nLocation: US\nJob ID: 7892d07a-b7a2-4f11-b0cf-df52e6cb8ef1\n"
+    }
+  ]
+}

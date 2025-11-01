@@ -1,0 +1,28 @@
+{
+  "query": "I have an 81-year-old man. Among male Medicare patients 76\u201386 admitted from the ED with a principal ischemic stroke, what are the 30-day all-cause readmission rate, median index LOS for readmitted vs non-readmitted, and percent index stays >5 days?",
+  "final_sql": "WITH \ncohort AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 76 AND 86\n  AND a.insurance = 'Medicare'\n),\n\nischemic_stroke_admissions AS (\n  SELECT a.hadm_id, a.subject_id, a.admittime, a.dischtime,\n         ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS admission_seq,\n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN cohort ON a.subject_id = cohort.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON di.icd_code = dicd.icd_code AND di.icd_version = dicd.icd_version\n  WHERE a.admission_location = 'EMERGENCY DEPARTMENT'\n  AND di.seq_num = 1  \n  AND dicd.icd_version = 10  \n  AND dicd.icd_code LIKE 'I63%'  \n),\n\nreadmission_status AS (\n  SELECT hadm_id, subject_id, admittime, dischtime, los, admission_seq,\n         LEAD(admittime, 1) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admit,\n         CASE \n           WHEN LEAD(admittime, 1) OVER (PARTITION BY subject_id ORDER BY admittime) <= (dischtime + INTERVAL 30 DAY) THEN 1\n           ELSE 0\n         END AS readmitted_within_30_days\n  FROM ischemic_stroke_admissions\n  WHERE admission_seq = 1  \n),\n\nfinal_metrics AS (\n  SELECT \n    SUM(readmitted_within_30_days) / COUNT(*) AS thirty_day_readmission_rate,\n    (SELECT APPROX_QUANTILES(los, 100)[OFFSET(50)] FROM UNNEST([los]) AS los WHERE readmitted_within_30_days = 1) AS median_los_readmitted,\n    (SELECT APPROX_QUANTILES(los, 100)[OFFSET(50)] FROM UNNEST([los]) AS los WHERE readmitted_within_30_days = 0) AS median_los_not_readmitted,\n    AVG(CASE WHEN los > 5 THEN 1 ELSE 0 END) * 100 AS percent_stays_gt_5_days\n  FROM readmission_status\n)\n\nSELECT \n  thirty_day_readmission_rate,\n  median_los_readmitted,\n  median_los_not_readmitted,\n  percent_stays_gt_5_days\nFROM final_metrics;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 UNNEST expression references column los which is neither grouped nor aggregated at [38:65]; reason: invalidQuery, location: query, message: UNNEST expression references column los which is neither grouped nor aggregated at [38:65]\n\nLocation: US\nJob ID: 96f2f844-772d-4978-8ac2-9da6b28afb2d\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column dischtime which is neither grouped nor aggregated at [44:35]; reason: invalidQuery, location: query, message: SELECT list expression references column dischtime which is neither grouped nor aggregated at [44:35]\n\nLocation: US\nJob ID: 1bcd9490-3db5-4fdc-9ef5-216c6d004ad2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 3f93fac1-7766-491d-9f50-08b194231b7a\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 UNNEST expression references column los which is neither grouped nor aggregated at [38:65]; reason: invalidQuery, location: query, message: UNNEST expression references column los which is neither grouped nor aggregated at [38:65]\n\nLocation: US\nJob ID: 96f2f844-772d-4978-8ac2-9da6b28afb2d\n"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 74-year-old female patient: among women aged 69\u201379 with UGIB and COPD exacerbation, what's the median hospital LOS?",
+  "final_sql": "WITH diag_text AS (\n  -- bring in diagnosis descriptions (lowercased for simpler matching)\n  SELECT\n    d.hadm_id,\n    LOWER(dd.long_title) AS long_title\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE dd.long_title IS NOT NULL\n),\ndiag_flags AS (\n  -- mark diagnoses that look like UGIB or COPD exacerbation\n  SELECT\n    hadm_id,\n    MAX(\n      IF(\n        (\n          long_title LIKE '%hematemesis%' OR\n          long_title LIKE '%melena%' OR\n          long_title LIKE '%gastrointestinal hemorrh%' OR\n          long_title LIKE '%gastrointestinal haemorrh%' OR\n          long_title LIKE '%upper gastrointestinal%' OR\n          (\n            long_title LIKE '%hemorrh%' AND\n            (\n              long_title LIKE '%gastro%' OR\n              long_title LIKE '%gastric%' OR\n              long_title LIKE '%duodenal%' OR\n              long_title LIKE '%esophag%' OR\n              long_title LIKE '%esophageal%' OR\n              long_title LIKE '%variceal%'\n            )\n          ) OR\n          long_title LIKE '%mallory-weiss%'\n        ),\n        1,\n        0\n      )\n    ) AS has_ugib,\n    MAX(\n      IF(\n        (\n          (long_title LIKE '%chronic obstructive%' AND long_title LIKE '%exacerb%') OR\n          (long_title LIKE '%copd%' AND long_title LIKE '%exacerb%') OR\n          long_title LIKE '%acute exacerbation of copd%' OR\n          long_title LIKE '%acute exacerbation%' AND long_title LIKE '%copd%'\n        ),\n        1,\n        0\n      )\n    ) AS has_copd\n  FROM diag_text\n  GROUP BY hadm_id\n),\ncohort AS (\n  -- admissions joining patients and requiring both diagnosis flags\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN diag_flags f\n    ON a.hadm_id = f.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 69 AND 79\n    AND f.has_ugib = 1\n    AND f.has_copd = 1\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n)\nSELECT\n  COUNT(*) AS n_admissions,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

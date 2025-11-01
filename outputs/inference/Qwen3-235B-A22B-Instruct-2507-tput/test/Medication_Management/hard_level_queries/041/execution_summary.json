@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 45\u2011year\u2011old man with heart failure. In male inpatients aged 40\u201350 with HF, stratified by quintiles of a 7\u2011day medication complexity score, report patient counts, score ranges, mean LOS (days), in\u2011hospital mortality, and 30\u2011day readmission.",
+  "final_sql": "WITH patient_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_ADD(a.dischtime, INTERVAL 30 DAY) AS followup_30d\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.patients p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp`.admissions a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 40 AND 50\n),\n\nhf_admissions AS (\n  SELECT DISTINCT\n    pa.*\n  FROM\n    patient_age pa\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  ON\n    pa.hadm_id = di.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n  ON\n    di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    LOWER(d.long_title) LIKE '%heart failure%'\n),\n\nmed_complexity AS (\n  SELECT\n    h.hadm_id,\n    COUNT(DISTINCT pr.drug) AS med_count_7d\n  FROM\n    hf_admissions h\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp`.prescriptions pr\n  ON\n    h.hadm_id = pr.hadm_id\n    AND pr.starttime >= h.admittime\n    AND pr.starttime < DATETIME_ADD(h.admittime, INTERVAL 7 DAY)\n  GROUP BY\n    h.hadm_id\n),\n\nquintiles AS (\n  SELECT\n    h.*,\n    COALESCE(m.med_count_7d, 0) AS med_count_7d,\n    NTILE(5) OVER (ORDER BY COALESCE(m.med_count_7d, 0)) AS quintile\n  FROM\n    hf_admissions h\n  LEFT JOIN\n    med_complexity m\n  ON\n    h.hadm_id = m.hadm_id\n),\n\nreadmissions AS (\n  SELECT\n    q.*,\n    CASE\n      WHEN LEAD(q.admittime) OVER (PARTITION BY q.subject_id ORDER BY q.admittime) <= q.followup_30d THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM\n    quintiles q\n),\n\nsummary_stats AS (\n  SELECT\n    quintile,\n    COUNT(*) AS patient_count,\n    MIN(med_count_7d) AS score_min,\n    MAX(med_count_7d) AS score_max,\n    AVG(DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(hospital_expire_flag) AS in_hospital_mortality_rate,\n    AVG(readmitted_30d) AS readmission_30d_rate\n  FROM\n    readmissions\n  GROUP BY\n    quintile\n  ORDER BY\n    quintile\n)\n\nSELECT\n  quintile,\n  patient_count,\n  CONCAT(CAST(score_min AS STRING), ' - ', CAST(score_max AS STRING)) AS score_range,\n  ROUND(mean_los_days, 2) AS mean_los_days,\n  ROUND(in_hospital_mortality_rate, 3) AS in_hospital_mortality,\n  ROUND(readmission_30d_rate, 3) AS readmission_30d\nFROM\n  summary_stats;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: NEXT at [72:12]; reason: invalidQuery, location: query, message: Function not found: NEXT at [72:12]\n\nLocation: US\nJob ID: 05b72ea3-9419-4ed7-bd85-e2bf145da319\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

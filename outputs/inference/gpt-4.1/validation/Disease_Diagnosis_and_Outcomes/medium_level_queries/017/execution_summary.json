@@ -1,0 +1,22 @@
+{
+  "query": "For a 55-year-old man: among males 50\u201360 with sepsis (excluding septic shock), report in-hospital mortality (%) with 95% CIs and median time-to-death among non-survivors (days) by LOS (<8 vs \u22658 days).",
+  "final_sql": "WITH sepsis_icd AS (\n  -- ICD-9 sepsis: 99591, 99592; ICD-10 sepsis: A40.*, A41.*\n  SELECT DISTINCT hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  WHERE (\n    (d.icd_version = 9 AND (d.icd_code IN ('99591', '99592') OR LEFT(d.icd_code,5) IN ('99591','99592')))\n    OR\n    (d.icd_version = 10 AND (LEFT(d.icd_code,3) IN ('A40','A41')))\n  )\n),\nseptic_shock_icd AS (\n  -- ICD-9 septic shock: 78552; ICD-10 septic shock: R6521\n  SELECT DISTINCT hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  WHERE (\n    (d.icd_version = 9 AND d.icd_code = '78552')\n    OR\n    (d.icd_version = 10 AND LEFT(d.icd_code,5) = 'R6521')\n  )\n),\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) < 8 THEN '<8' ELSE '\u22658' END AS los_group,\n    CASE WHEN a.hospital_expire_flag = 1 THEN TIMESTAMP_DIFF(a.deathtime, a.admittime, DAY) ELSE NULL END AS time_to_death_days\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  INNER JOIN sepsis_icd s\n    ON a.hadm_id = s.hadm_id\n  LEFT JOIN septic_shock_icd ss\n    ON a.hadm_id = ss.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND ss.hadm_id IS NULL -- exclude septic shock\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND p.anchor_age IS NOT NULL\n),\nagg AS (\n  SELECT\n    los_group,\n    COUNT(*) AS n_admissions,\n    SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS n_deaths,\n    SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)) AS mortality_rate,\n    -- Wilson score interval for 95% CI\n    -- p\u0302 = deaths/n, n = n_admissions, z = 1.96\n    SAFE_DIVIDE(\n      (\n        SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*))\n        + (1.96*1.96)/(2*COUNT(*))\n        - 1.96*SQRT(\n          SAFE_DIVIDE(\n            SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*))\n            * (1 - SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)))\n            + (1.96*1.96)/(4*COUNT(*)),\n            COUNT(*)\n          )\n        )\n      ),\n      (1 + (1.96*1.96)/COUNT(*))\n    ) AS ci_lower,\n    SAFE_DIVIDE(\n      (\n        SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*))\n        + (1.96*1.96)/(2*COUNT(*))\n        + 1.96*SQRT(\n          SAFE_DIVIDE(\n            SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*))\n            * (1 - SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)))\n            + (1.96*1.96)/(4*COUNT(*)),\n            COUNT(*)\n          )\n        )\n      ),\n      (1 + (1.96*1.96)/COUNT(*))\n    ) AS ci_upper,\n    -- Median time-to-death among non-survivors\n    APPROX_QUANTILES(time_to_death_days, 2)[OFFSET(1)] AS median_time_to_death_days\n  FROM cohort\n  GROUP BY los_group\n)\nSELECT\n  los_group,\n  n_admissions,\n  n_deaths,\n  ROUND(mortality_rate*100,1) AS mortality_percent,\n  ROUND(ci_lower*100,1) AS mortality_95ci_lower_percent,\n  ROUND(ci_upper*100,1) AS mortality_95ci_upper_percent,\n  median_time_to_death_days\nFROM agg\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: mortality_rate at [59:8]; reason: invalidQuery, location: query, message: Unrecognized name: mortality_rate at [59:8]\n\nLocation: US\nJob ID: 3a20bcbb-eff8-4c39-8732-d86d2cc3a1a0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

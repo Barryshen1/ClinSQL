@@ -1,0 +1,28 @@
+{
+  "query": "For a 93-year-old male admitted with pneumonia, among males aged 88\u201398 with pneumonia and ICU stay, report cohort size; composite risk score distribution (min, 25th, median, 75th, max); in-hospital mortality, AKI, ARDS rates; and median survival days for decedents.",
+  "final_sql": "WITH pneumonia_admissions AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.deathtime,\n    adm.hospital_expire_flag,\n    pat.anchor_age,\n    pat.gender\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON adm.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 88 AND 98\n),\npneumonia_dx AS (\n  SELECT\n    dx.subject_id,\n    dx.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n      ON dx.icd_code = did.icd_code\n      AND dx.icd_version = did.icd_version\n  WHERE\n    -- ICD-10: J12-J18, ICD-9: 480-486\n    (\n      (dx.icd_version = 10 AND REGEXP_CONTAINS(dx.icd_code, r'^J1[2-8]'))\n      OR\n      (dx.icd_version = 9 AND REGEXP_CONTAINS(dx.icd_code, r'^(480|481|482|483|484|485|486)(\\.|$)'))\n    )\n),\naki_dx AS (\n  SELECT DISTINCT\n    dx.subject_id,\n    dx.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n  WHERE\n    -- ICD-10: N17, ICD-9: 584\n    (\n      (dx.icd_version = 10 AND dx.icd_code = 'N17')\n      OR\n      (dx.icd_version = 9 AND dx.icd_code = '584')\n    )\n),\nards_dx AS (\n  SELECT DISTINCT\n    dx.subject_id,\n    dx.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n  WHERE\n    -- ICD-10: J80, ICD-9: 518.82\n    (\n      (dx.icd_version = 10 AND dx.icd_code = 'J80')\n      OR\n      (dx.icd_version = 9 AND dx.icd_code = '51882')\n    )\n),\nicu_admissions AS (\n  SELECT DISTINCT\n    stay.subject_id,\n    stay.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` stay\n),\ncohort AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.admittime,\n    pa.dischtime,\n    pa.deathtime,\n    pa.hospital_expire_flag,\n    pa.anchor_age,\n    -- Outcomes\n    IF(aki.subject_id IS NOT NULL, 1, 0) AS has_aki,\n    IF(ards.subject_id IS NOT NULL, 1, 0) AS has_ards\n  FROM\n    pneumonia_admissions pa\n    INNER JOIN pneumonia_dx pdx\n      ON pa.subject_id = pdx.subject_id AND pa.hadm_id = pdx.hadm_id\n    INNER JOIN icu_admissions icu\n      ON pa.subject_id = icu.subject_id AND pa.hadm_id = icu.hadm_id\n    LEFT JOIN aki_dx aki\n      ON pa.subject_id = aki.subject_id AND pa.hadm_id = aki.hadm_id\n    LEFT JOIN ards_dx ards\n      ON pa.subject_id = ards.subject_id AND pa.hadm_id = ards.hadm_id\n)\n, risk_scores AS (\n  SELECT\n    *,\n    -- Composite risk score: age + 10*death + 5*AKI + 5*ARDS\n    anchor_age + 10 * hospital_expire_flag + 5 * has_aki + 5 * has_ards AS composite_risk_score,\n    -- Survival days for decedents\n    CASE\n      WHEN hospital_expire_flag = 1 AND deathtime IS NOT NULL AND admittime IS NOT NULL\n        THEN DATE_DIFF(DATE(deathtime), DATE(admittime), DAY)\n      ELSE NULL\n    END AS survival_days\n  FROM cohort\n)\nSELECT\n  COUNT(*) AS cohort_size,\n  -- Composite risk score distribution\n  MIN(composite_risk_score) AS risk_score_min,\n  APPROX_QUANTILES(composite_risk_score, 4)[OFFSET(1)] AS risk_score_25th,\n  APPROX_QUANTILES(composite_risk_score, 4)[OFFSET(2)] AS risk_score_median,\n  APPROX_QUANTILES(composite_risk_score, 4)[OFFSET(3)] AS risk_score_75th,\n  MAX(composite_risk_score) AS risk_score_max,\n  -- Outcome rates\n  ROUND(SUM(hospital_expire_flag) / COUNT(*), 3) AS in_hospital_mortality_rate,\n  ROUND(SUM(has_aki) / COUNT(*), 3) AS aki_rate,\n  ROUND(SUM(has_ards) / COUNT(*), 3) AS ards_rate,\n  -- Median survival days for decedents\n  APPROX_QUANTILES(survival_days, 2)[OFFSET(1)] AS median_survival_days_decedents\nFROM risk_scores;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ic_code not found inside dx at [61:34]; reason: invalidQuery, location: query, message: Name ic_code not found inside dx at [61:34]\n\nLocation: US\nJob ID: ce053863-74fc-4fe9-86a6-3d88a96f073f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Bad int64 value: V8522; Column 'subject_id'; reason: invalidQuery, location: query, message: Bad int64 value: V8522; Column 'subject_id'\n\nLocation: US\nJob ID: 6552de37-cbba-43a6-874f-668d449d130b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

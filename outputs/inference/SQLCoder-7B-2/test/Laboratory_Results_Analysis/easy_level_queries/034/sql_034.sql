@@ -1,0 +1,1 @@
+SELECT MIN(labevents.value) AS min_serum_sodium FROM labevents JOIN admissions ON labevents.subject_id = admissions.subject_id JOIN patients ON admissions.subject_id = patients.subject_id WHERE patients.gender = 'M' AND patients.anchor_age = 65 AND labevents.itemid = 14684570 AND admissions.admission_type = 'heart failure';

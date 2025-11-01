@@ -1,0 +1,16 @@
+{
+  "query": "For benchmarking my 70-year-old female ICU patient: among female ICU stays age 65\u201375, summarize per-measurement systolic BP in first 24h by categories (<140; 140\u2013159; \u2265160) giving mean, median, IQR.",
+  "final_sql": "WITH\n  -- Step 1: Identify the cohort of female ICU patients aged 65-75\n  cohort AS (\n    SELECT\n      icu.stay_id,\n      icu.intime\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON icu.subject_id = pat.subject_id\n    WHERE\n      pat.gender = 'F'\n      AND pat.anchor_age BETWEEN 65 AND 75\n  ),\n  -- Step 2: Get all systolic BP measurements in the first 24h for the cohort and categorize them\n  sbp_events AS (\n    SELECT\n      ch.valuenum,\n      CASE\n        WHEN ch.valuenum < 140\n        THEN '<140'\n        WHEN ch.valuenum >= 140 AND ch.valuenum <= 159\n        THEN '140-159'\n        WHEN ch.valuenum >= 160\n        THEN '>=160'\n        ELSE NULL\n      END AS bp_category\n    FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ch\n    INNER JOIN cohort\n      ON ch.stay_id = cohort.stay_id\n    WHERE\n      -- Filter for systolic blood pressure itemids (non-invasive and invasive)\n      ch.itemid IN (220179, 220050)\n      -- Filter for the first 24 hours of the ICU stay\n      AND ch.charttime BETWEEN cohort.intime AND DATETIME_ADD(\n        cohort.intime,\n        INTERVAL 24 HOUR\n      )\n      -- Basic data cleaning for plausible values\n      AND ch.valuenum IS NOT NULL\n      AND ch.valuenum > 0 AND ch.valuenum < 400\n  )\n-- Step 3: Group by category and calculate summary statistics\nSELECT\n  bp_category,\n  COUNT(*) AS number_of_measurements,\n  ROUND(AVG(valuenum), 2) AS mean_sbp,\n  ROUND(APPROX_QUANTILES(valuenum, 100)[OFFSET(50)], 2) AS median_sbp,\n  ROUND(\n    (\n      APPROX_QUANTILES(valuenum, 100)[OFFSET(75)]\n      - APPROX_QUANTILES(valuenum, 100)[OFFSET(25)]\n    ),\n    2\n  ) AS iqr_sbp\nFROM sbp_events\nWHERE\n  bp_category IS NOT NULL\nGROUP BY\n  bp_category\nORDER BY\n  -- Order by the minimum value of each range for logical sorting\n  CASE\n    WHEN bp_category = '<140'\n    THEN 1\n    WHEN bp_category = '140-159'\n    THEN 2\n    WHEN bp_category = '>=160'\n    THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

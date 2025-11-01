@@ -1,0 +1,22 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH stays AS (\n  -- Per-ICU-stay info, plus age at ICU admission and a sepsis indicator for the admission\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los AS icu_los_days,\n    adm.hospital_expire_flag,\n    LOWER(pat.gender) AS gender,\n    (pat.anchor_age + (EXTRACT(YEAR FROM icu.intime) - pat.anchor_year)) AS age_at_intime,\n    MAX(\n      CASE\n        WHEN did.long_title LIKE '%sepsis%' OR\n             did.long_title LIKE '%septicaemia%' OR\n             did.long_title LIKE '%septicemia%'\n        THEN 1 ELSE 0\n      END\n    ) AS has_sepsis\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON icu.hadm_id = di.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS did\n    ON di.icd_code = did.icd_code\n   AND di.icd_version = did.icd_version\n  GROUP BY\n    icu.subject_id, icu.hadm_id, icu.stay_id,\n    icu.intime, icu.outtime, adm.hospital_expire_flag,\n    pat.gender, pat.anchor_age, pat.anchor_year, icu.los\n),\nprocs AS (\n  -- Count procedures within the first 24 hours after ICU intime for each stay\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.icu_los_days,\n    s.hospital_expire_flag,\n    s.gender,\n    s.age_at_intime,\n    s.has_sepsis,\n    COUNT(pe.stay_id) AS proc_first24h\n  FROM stays AS s\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON pe.stay_id = s.stay_id\n   AND pe.starttime >= s.intime\n   AND pe.starttime < TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR)\n  GROUP BY\n    s.subject_id, s.hadm_id, s.stay_id, s.intime, s.outtime,\n    s.icu_los_days, s.hospital_expire_flag, s.gender,\n    s.age_at_intime, s.has_sepsis\n)\nSELECT\n  cohort_label,\n  p75_proc_first24h,\n  p90_proc_first24h,\n  avg_icu_los_days,\n  in_hospital_mortality_rate\nFROM (\n  SELECT\n     CASE WHEN has_sepsis = 1 THEN 'Sepsis_53-63' ELSE 'NonSepsis_53-63' END AS cohort_label,\n     APPROX_QUANTILES(proc_first24h, 4)[OFFSET(3)] AS p75_proc_first24h,\n     APPROX_QUANTILES(proc_first24h, 10)[OFFSET(9)] AS p90_proc_first24h,\n     AVG(icu_los_days) AS avg_icu_los_days,\n     AVG(hospital_expire_flag) AS in_hospital_mortality_rate\n  FROM procs\n  WHERE age_at_intime BETWEEN 53 AND 63\n  GROUP BY CASE WHEN has_sepsis = 1 THEN 'Sepsis_53-63' ELSE 'NonSepsis_53-63' END\n) AS x\nORDER BY cohort_label;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [62:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [62:3]\n\nLocation: US\nJob ID: 18f56ab7-d793-4037-9539-4ba3c7a3aaf2\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

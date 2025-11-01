@@ -1,0 +1,28 @@
+{
+  "query": "45-year-old man: among male inpatients 40\u201350 with diabetes and heart failure, for antidiabetic, beta\u2011blocker, ACEi/ARB/ARNI, loop diuretic, give % on first vs last 24h and counts continued, initiated late, discontinued.",
+  "final_sql": "WITH cohort AS (\n  SELECT a.subject_id, a.hadm_id, p.gender, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n),\ndx AS (\n  SELECT hadm_id,\n    MAX(CASE \n      WHEN (icd_version = 9 AND icd_code LIKE '250%')\n        OR (icd_version = 10 AND (icd_code LIKE 'E10%' OR icd_code LIKE 'E11%' OR icd_code LIKE 'E13%'))\n      THEN 1 ELSE 0 END) AS has_dm,\n    MAX(CASE \n      WHEN (icd_version = 9 AND icd_code LIKE '428%')\n        OR (icd_version = 10 AND icd_code LIKE 'I50%')\n      THEN 1 ELSE 0 END) AS has_hf\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\ncohort_filtered AS (\n  SELECT c.subject_id, c.hadm_id\n  FROM cohort c\n  JOIN dx\n    ON c.hadm_id = dx.hadm_id\n  WHERE dx.has_dm = 1 AND dx.has_hf = 1\n),\nadm_times AS (\n  SELECT hadm_id, admittime, dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\npresc_class AS (\n  SELECT hadm_id,\n         CASE \n           WHEN LOWER(drug) LIKE '%metformin%' \n             OR LOWER(drug) LIKE '%insulin%' \n             OR LOWER(drug) LIKE '%glipizide%' \n             OR LOWER(drug) LIKE '%glyburide%' \n             OR LOWER(drug) LIKE '%pioglitazone%' \n             OR LOWER(drug) LIKE '%sitagliptin%' \n             OR LOWER(drug) LIKE '%linagliptin%' \n           THEN 'antidiabetic'\n           WHEN LOWER(drug) LIKE '%metoprolol%' \n             OR LOWER(drug) LIKE '%atenolol%' \n             OR LOWER(drug) LIKE '%carvedilol%' \n             OR LOWER(drug) LIKE '%propranolol%' \n             OR LOWER(drug) LIKE '%nadolol%' \n           THEN 'beta_blocker'\n           WHEN LOWER(drug) LIKE '%lisinopril%' \n             OR LOWER(drug) LIKE '%enalapril%' \n             OR LOWER(drug) LIKE '%ramipril%' \n             OR LOWER(drug) LIKE '%captopril%' \n             OR LOWER(drug) LIKE '%losartan%' \n             OR LOWER(drug) LIKE '%valsartan%' \n             OR LOWER(drug) LIKE '%candesartan%' \n             OR LOWER(drug) LIKE '%irbesartan%' \n             OR LOWER(drug) LIKE '%sacubitril%' \n           THEN 'ace_arb_arni'\n           WHEN LOWER(drug) LIKE '%furosemide%' \n             OR LOWER(drug) LIKE '%bumetanide%' \n             OR LOWER(drug) LIKE '%torsemide%' \n           THEN 'loop_diuretic'\n           ELSE NULL\n         END AS med_class,\n         TIMESTAMP(starttime) AS starttime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n),\npresc_flagged AS (\n  SELECT cf.hadm_id, pc.med_class,\n    MAX(\n      CASE \n        WHEN pc.starttime BETWEEN TIMESTAMP(adm.admittime) \n                               AND TIMESTAMP_ADD(TIMESTAMP(adm.admittime), INTERVAL 24 HOUR)\n        THEN 1 ELSE 0 \n      END\n    ) AS first24h_flag,\n    MAX(\n      CASE \n        WHEN pc.starttime BETWEEN TIMESTAMP_SUB(TIMESTAMP(adm.dischtime), INTERVAL 24 HOUR) \n                               AND TIMESTAMP(adm.dischtime)\n        THEN 1 ELSE 0 \n      END\n    ) AS last24h_flag\n  FROM cohort_filtered cf\n  JOIN adm_times adm\n    ON cf.hadm_id = adm.hadm_id\n  JOIN presc_class pc\n    ON cf.hadm_id = pc.hadm_id\n  WHERE pc.med_class IS NOT NULL\n  GROUP BY cf.hadm_id, pc.med_class\n),\ncounts AS (\n  SELECT med_class,\n    COUNT(DISTINCT CASE WHEN first24h_flag = 1 THEN hadm_id END) * 100.0 / COUNT(DISTINCT hadm_id) AS pct_first24h,\n    COUNT(DISTINCT CASE WHEN last24h_flag = 1 THEN hadm_id END) * 100.0 / COUNT(DISTINCT hadm_id) AS pct_last24h,\n    COUNT(DISTINCT CASE WHEN first24h_flag = 1 AND last24h_flag = 1 THEN hadm_id END) AS n_continued,\n    COUNT(DISTINCT CASE WHEN first24h_flag = 0 AND last24h_flag = 1 THEN hadm_id END) AS n_initiated_late,\n    COUNT(DISTINCT CASE WHEN first24h_flag = 1 AND last24h_flag = 0 THEN hadm_id END) AS n_discontinued,\n    COUNT(DISTINCT hadm_id) AS total_cases\n  FROM presc_flagged\n  GROUP BY med_class\n)\nSELECT med_class, pct_first24h, pct_last24h, n_continued, n_initiated_late, n_discontinued, total_cases\nFROM counts\nORDER BY med_class;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword AT at [71:40]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AT at [71:40]\n\nLocation: US\nJob ID: 9f5d8e5a-d89b-4708-9c1e-545110d6a8c3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator BETWEEN\n  Argument types: TIMESTAMP, DATETIME, DATETIME\n  Signature: (T1) BETWEEN (T1) AND (T1)\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [71:32]; reason: invalidQuery, location: query, message: No matching signature for operator BETWEEN\n  Argument types: TIMESTAMP, DATETIME, DATETIME\n  Signature: (T1) BETWEEN (T1) AND (T1)\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [71:32]\n\nLocation: US\nJob ID: d3a9ab0e-daac-4dfa-b844-877f18c102bc\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

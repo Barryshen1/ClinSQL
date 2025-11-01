@@ -1,0 +1,22 @@
+{
+  "query": "For my 57-year-old female patient: among women 52\u201362 admitted with AMI whose first Troponin T >0.01 ng/mL, report patient/admission counts, mean age, LOS, first troponin stats, and in-hospital mortality.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 52 AND 62\n),\n\nami_admissions AS (\n  SELECT DISTINCT pa.subject_id, pa.hadm_id, pa.admittime, pa.dischtime, pa.hospital_expire_flag, pa.age_at_admission\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%myocardial infarction%'\n    AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%' OR d.icd_code LIKE '410%')\n    AND di.seq_num = 1  -- Primary diagnosis\n),\n\ntroponin_t_values AS (\n  SELECT\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_labitems dl\n    ON le.itemid = dl.itemid\n  WHERE LOWER(dl.label) = 'troponin t'\n    AND le.valuenum IS NOT NULL\n),\n\nfirst_troponin_filtered AS (\n  SELECT\n    am.subject_id,\n    am.hadm_id,\n    am.admittime,\n    am.dischtime,\n    am.hospital_expire_flag,\n    am.age_at_admission,\n    tt.valuenum AS first_troponin_t\n  FROM ami_admissions am\n  INNER JOIN troponin_t_values tt\n    ON am.hadm_id = tt.hadm_id\n  WHERE tt.rn = 1\n    AND tt.valuenum > 0.01\n)\n\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(hadm_id) AS admission_count,\n  ROUND(AVG(age_at_admission), 2) AS mean_age,\n  ROUND(AVG(DATETIME_DIFF(dischtime, admittime, SECOND) / 86400), 2) AS mean_los_days,\n  ROUND(AVG(first_troponin_t), 4) AS mean_first_troponin_t,\n  ROUND(MIN(first_troponin_t), 4) AS min_first_troponin_t,\n  ROUND(MAX(first_troponin_t), 4) AS max_first_troponin_t,\n  SUM(hospital_expire_flag) AS in_hospital_deaths,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)), 3) AS mortality_rate\nFROM first_troponin_filtered;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: 622bc77c-7bfb-4e7e-91e6-d62d3ec44694\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

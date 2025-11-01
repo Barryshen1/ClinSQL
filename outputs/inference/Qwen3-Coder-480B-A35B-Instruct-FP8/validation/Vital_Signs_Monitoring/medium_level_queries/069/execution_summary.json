@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46-year-old female ICU patient. Among female ICU patients 41\u201351, how many had per\u2011stay average RR <12, 12\u201320, 21\u201329, \u226530 in first 48h, and what were stroke rates?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.stay_id,\n    icu.subject_id,\n    icu.hadm_id,\n    icu.intime,\n    icu.outtime,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 41 AND 51\n),\n\nrr_first48 AS (\n  SELECT\n    ce.stay_id,\n    AVG(ce.valuenum) AS avg_rr\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  JOIN\n    cohort c\n    ON ce.stay_id = c.stay_id\n  WHERE\n    LOWER(di.label) LIKE '%respiratory rate%'\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    ce.stay_id\n),\n\nrr_categories AS (\n  SELECT\n    stay_id,\n    avg_rr,\n    CASE\n      WHEN avg_rr < 12 THEN '<12'\n      WHEN avg_rr >= 12 AND avg_rr <= 20 THEN '12\u201320'\n      WHEN avg_rr > 20 AND avg_rr < 30 THEN '21\u201329'\n      WHEN avg_rr >= 30 THEN '\u226530'\n    END AS rr_group\n  FROM\n    rr_first48\n),\n\nstroke_flag AS (\n  SELECT DISTINCT\n    icu.stay_id,\n    TRUE AS has_stroke\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON dx.icd_code = d.icd_code AND dx.icd_version = d.icd_version\n  WHERE\n    (dx.icd_version = 9 AND dx.icd_code BETWEEN '430' AND '438')\n    OR (dx.icd_version = 10 AND REGEXP_CONTAINS(dx.icd_code, r'^I6[0-9]'))\n),\n\nfinal_data AS (\n  SELECT\n    r.stay_id,\n    r.rr_group,\n    COALESCE(s.has_stroke, FALSE) AS has_stroke\n  FROM\n    rr_categories r\n  LEFT JOIN\n    stroke_flag s\n    ON r.stay_id = s.stay_id\n)\n\nSELECT\n  rr_group,\n  COUNT(*) AS patient_count,\n  SUM(CASE WHEN has_stroke THEN 1 ELSE 0 END) AS stroke_count,\n  ROUND(SUM(CASE WHEN has_stroke THEN 1 ELSE 0 END) / COUNT(*) * 100, 2) AS stroke_rate_percent\nFROM\n  final_data\nGROUP BY\n  rr_group\nORDER BY\n  CASE rr_group\n    WHEN '<12' THEN 1\n    WHEN '12\u201320' THEN 2\n    WHEN '21\u201329' THEN 3\n    WHEN '\u226530' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

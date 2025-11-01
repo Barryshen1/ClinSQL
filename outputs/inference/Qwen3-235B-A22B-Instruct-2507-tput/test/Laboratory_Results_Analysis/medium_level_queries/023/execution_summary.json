@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72-year-old woman. Among female patients 67\u201377 admitted with ACS, report counts, percent of admissions, and in-hospital mortality rates for initial Troponin T: \u22640.04 normal; >0.04\u20130.1 borderline; >0.1 elevated.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 67 AND 77\n),\nacs_admissions AS (\n  SELECT DISTINCT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  JOIN patients_filtered p ON a.subject_id = p.subject_id\n  WHERE LOWER(d.long_title) LIKE '%myocardial infarction%'\n     OR LOWER(d.long_title) LIKE '%acute coronary syndrome%'\n     OR LOWER(d.long_title) LIKE '%unstable angina%'\n),\ntrop_t_lab AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_labitems\n  WHERE LOWER(label) = 'troponin t'\n),\nfirst_troponin_t AS (\n  SELECT\n    le.hadm_id,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  JOIN trop_t_lab t ON le.itemid = t.itemid\n  JOIN acs_admissions aa ON le.hadm_id = aa.hadm_id\n  WHERE le.valuenum IS NOT NULL\n),\ntroponin_category AS (\n  SELECT\n    hadm_id,\n    valuenum,\n    CASE\n      WHEN valuenum <= 0.04 THEN 'normal'\n      WHEN valuenum > 0.04 AND valuenum <= 0.1 THEN 'borderline'\n      WHEN valuenum > 0.1 THEN 'elevated'\n      ELSE NULL\n    END AS category\n  FROM first_troponin_t\n  WHERE rn = 1\n),\nadmission_stats AS (\n  SELECT\n    tc.category,\n    COUNT(*) AS admission_count,\n    AVG(IF(a.hospital_expire_flag = 1, 1, 0)) AS mortality_rate\n  FROM troponin_category tc\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON tc.hadm_id = a.hadm_id\n  WHERE tc.category IS NOT NULL\n  GROUP BY tc.category\n),\ntotal_count AS (\n  SELECT SUM(admission_count) AS total_admissions\n  FROM admission_stats\n)\nSELECT\n  category AS troponin_t_category,\n  admission_count,\n  ROUND(admission_count * 100.0 / total_admissions, 2) AS percent_of_admissions,\n  ROUND(mortality_rate * 100, 2) AS in_hospital_mortality_rate_percent\nFROM admission_stats\nCROSS JOIN total_count\nORDER BY\n  CASE category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'elevated' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [49:14]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [49:14]\n\nLocation: US\nJob ID: 6d14abf7-4e21-48e7-8990-e95d3eedb183\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

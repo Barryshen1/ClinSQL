@@ -1,0 +1,22 @@
+{
+  "query": "For a 62-year-old male inpatient: among male inpatients 57\u201367 with diabetes and acute HF, report prevalence and initiation rates (%) of GLP\u20111s in first 72h vs final 24h, with absolute and relative change.",
+  "final_sql": "WITH cohort AS (\n  -- Select male inpatients age 57-67 with diabetes AND acute HF in same admission\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  -- Diabetes diagnosis\n  JOIN (\n    SELECT DISTINCT hadm_id\n    FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd\n    WHERE\n      (icd_version = 9 AND icd_code LIKE '250%')\n      OR (icd_version = 10 AND icd_code LIKE 'E1%')\n  ) d1 ON a.hadm_id = d1.hadm_id\n  -- Acute HF diagnosis\n  JOIN (\n    SELECT DISTINCT hadm_id\n    FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd\n    WHERE\n      (icd_version = 9 AND (icd_code LIKE '4280%' OR icd_code LIKE '4281%' OR icd_code LIKE '4282%' OR icd_code LIKE '4283%' OR icd_code LIKE '4284%' OR icd_code LIKE '4289%'))\n      OR (icd_version = 10 AND icd_code LIKE 'I50%')\n  ) d2 ON a.hadm_id = d2.hadm_id\n  WHERE\n    p.anchor_age BETWEEN 57 AND 67\n    AND p.gender = 'M'\n),\n\nglp1_rx AS (\n  -- Find first GLP-1 prescription or pharmacy event per admission\n  SELECT\n    hadm_id,\n    MIN(starttime) AS first_glp1_time\n  FROM (\n    SELECT\n      hadm_id,\n      starttime\n    FROM physionet-data.mimiciv_3_1_hosp.prescriptions\n    WHERE LOWER(drug) LIKE '%exenatide%'\n      OR LOWER(drug) LIKE '%liraglutide%'\n      OR LOWER(drug) LIKE '%dulaglutide%'\n      OR LOWER(drug) LIKE '%semaglutide%'\n      OR LOWER(drug) LIKE '%lixisenatide%'\n      OR LOWER(drug) LIKE '%albiglutide%'\n    UNION ALL\n    SELECT\n      hadm_id,\n      starttime\n    FROM physionet-data.mimiciv_3_1_hosp.pharmacy\n    WHERE LOWER(medication) LIKE '%exenatide%'\n      OR LOWER(medication) LIKE '%liraglutide%'\n      OR LOWER(medication) LIKE '%dulaglutide%'\n      OR LOWER(medication) LIKE '%semaglutide%'\n      OR LOWER(medication) LIKE '%lixisenatide%'\n      OR LOWER(medication) LIKE '%albiglutide%'\n  )\n  GROUP BY hadm_id\n),\n\nfinal AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.anchor_age,\n    c.gender,\n    c.admittime,\n    c.dischtime,\n    rx.first_glp1_time,\n    -- Prevalence: any GLP-1 use\n    CASE WHEN rx.first_glp1_time IS NOT NULL THEN 1 ELSE 0 END AS glp1_prevalent,\n    -- Initiation in first 72h\n    CASE WHEN rx.first_glp1_time IS NOT NULL AND TIMESTAMP_DIFF(rx.first_glp1_time, c.admittime, HOUR) BETWEEN 0 AND 72 THEN 1 ELSE 0 END AS glp1_init_72h,\n    -- Initiation in final 24h\n    CASE WHEN rx.first_glp1_time IS NOT NULL AND TIMESTAMP_DIFF(c.dischtime, rx.first_glp1_time, HOUR) BETWEEN 0 AND 24 THEN 1 ELSE 0 END AS glp1_init_final24h\n  FROM cohort c\n  LEFT JOIN glp1_rx rx\n    ON c.hadm_id = rx.hadm_id\n)\n\n-- Aggregate and calculate percentages in a subquery, then reference them in outer SELECT\nSELECT\n  n_admissions,\n  n_glp1_prevalent,\n  prevalence_pct,\n  n_init_72h,\n  init_72h_pct,\n  n_init_final24h,\n  init_final24h_pct,\n  -- Absolute and relative change\n  ROUND(init_final24h_pct - init_72h_pct, 2) AS absolute_change_pct,\n  CASE WHEN init_72h_pct > 0 THEN ROUND(init_final24h_pct / init_72h_pct, 2) ELSE NULL END AS relative_change\nFROM (\n  SELECT\n    COUNT(*) AS n_admissions,\n    SUM(glp1_prevalent) AS n_glp1_prevalent,\n    ROUND(100 * SUM(glp1_prevalent) / COUNT(*), 2) AS prevalence_pct,\n    SUM(glp1_init_72h) AS n_init_72h,\n    ROUND(100 * SUM(glp1_init_72h) / COUNT(*), 2) AS init_72h_pct,\n    SUM(glp1_init_final24h) AS n_init_final24h,\n    ROUND(100 * SUM(glp1_init_final24h) / COUNT(*), 2) AS init_final24h_pct\n  FROM final\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: init_final24h_pct at [94:9]; reason: invalidQuery, location: query, message: Unrecognized name: init_final24h_pct at [94:9]\n\nLocation: US\nJob ID: d9246167-58e7-4f77-ae6a-bf7a7292b66d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "58\u2011year\u2011old man: among men 53\u201363 with sepsis (excluding septic shock), what are in\u2011hospital mortality (%) and prevalence (%) of mechanical ventilation, vasopressors, and RRT by LOS (<8 vs \u22658) and day\u20111 ICU?",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.hospital_expire_flag,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 53 AND 63\n    -- Filter for sepsis without septic shock\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      GROUP BY hadm_id\n      HAVING \n        SUM(CASE WHEN icd_code IN (\n          'A40.0','A40.1','A40.2','A40.3','A40.8','A40.9',\n          'A41.0','A41.1','A41.2','A41.3','A41.4','A41.50','A41.51','A41.52','A41.53','A41.54','A41.59','A41.8','A41.9',\n          'R65.20'\n        ) THEN 1 ELSE 0 END) > 0\n        AND SUM(CASE WHEN icd_code = 'R65.21' THEN 1 ELSE 0 END) = 0\n    )\n),\nicu_stays AS (\n  SELECT \n    i.stay_id,\n    i.subject_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    -- Get first ICU stay per admission\n    ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS stay_order\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN patient_cohort pc\n    ON i.hadm_id = pc.hadm_id\n),\nday1_interventions AS (\n  SELECT \n    i.stay_id,\n    i.hadm_id,\n    i.los,\n    pc.hospital_expire_flag,\n    -- Mechanical ventilation on day 1 (first 24 hours of ICU)\n    MAX(CASE \n          WHEN ce.itemid IN (223849, 224688, 224689, 224690) \n            AND (\n              (ce.itemid = 223849 AND ce.valuenum = 1) OR\n              (ce.itemid IN (224688, 224689) AND ce.value IS NOT NULL AND ce.value != 'None') OR\n              (ce.itemid = 224690 AND ce.valuenum > 0)\n            ) \n          THEN 1 ELSE 0 \n        END) AS mech_vent_day1,\n    -- Vasopressors on day 1 (norepinephrine, epinephrine, dopamine, vasopressin, phenylephrine)\n    MAX(CASE \n          WHEN ie.itemid IN (221906, 221289, 221662, 222315, 221749) \n            AND ie.amount > 0 \n          THEN 1 ELSE 0 \n        END) AS vaso_day1,\n    -- RRT on day 1\n    MAX(CASE \n          WHEN pe.itemid IN (227639, 227640, 227641, 227642, 227643) \n          THEN 1 ELSE 0 \n        END) AS rrt_day1\n  FROM icu_stays i\n  INNER JOIN patient_cohort pc ON i.hadm_id = pc.hadm_id\n  -- Mechanical ventilation (chartevents)\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON i.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN i.intime AND DATETIME_ADD(i.intime, INTERVAL 1 DAY)\n    AND ce.itemid IN (223849, 224688, 224689, 224690)\n  -- Vasopressors (inputevents)\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.inputevents` ie\n    ON i.stay_id = ie.stay_id\n    AND ie.starttime <= DATETIME_ADD(i.intime, INTERVAL 1 DAY)\n    AND ie.endtime >= i.intime\n    AND ie.itemid IN (221906, 221289, 221662, 222315, 221749)\n  -- RRT (procedureevents)\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON i.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN i.intime AND DATETIME_ADD(i.intime, INTERVAL 1 DAY)\n    AND pe.itemid IN (227639, 227640, 227641, 227642, 227643)\n  WHERE i.stay_order = 1\n  GROUP BY i.stay_id, i.hadm_id, i.los, pc.hospital_expire_flag\n),\nlos_groups AS (\n  SELECT \n    *,\n    CASE WHEN los < 8 THEN '<8' ELSE '>=8' END AS los_group\n  FROM day1_interventions\n)\nSELECT \n  los_group,\n  COUNT(*) AS total_patients,\n  ROUND(100 * AVG(hospital_expire_flag), 2) AS mortality_pct,\n  ROUND(100 * AVG(mech_vent_day1), 2) AS mech_vent_pct,\n  ROUND(100 * AVG(vaso_day1), 2) AS vaso_pct,\n  ROUND(100 * AVG(rrt_day1), 2) AS rrt_pct\nFROM los_groups\nGROUP BY los_group\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:13]\n\nLocation: US\nJob ID: 6c1b938b-a765-422f-ae8d-cf04b128e3bf\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT COUNT(DISTINCT a.hadm_id) AS num_admissions FROM admissions a JOIN patients p ON a.subject_id = p.subject_id JOIN diagnoses_icd d ON a.subject_id = d.subject_id WHERE p.gender = 'F' AND p.anchor_age = 85 AND p.anchor_year_group BETWEEN 80 AND 90 AND a.admission_type = 'Emergency' AND d.icd_code = 'Osteomyelitis';

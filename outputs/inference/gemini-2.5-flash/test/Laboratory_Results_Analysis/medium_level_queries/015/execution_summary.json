@@ -1,0 +1,28 @@
+{
+  "query": "For my 93-year-old female admitted with ACS, among female ACS admissions aged 88\u201398 with initial Troponin T >0.01 ng/mL, report the median and IQR (ng/mL) of the first value.",
+  "final_sql": "WITH acs_admissions AS (\n    -- Step 1: Identify admissions with an ACS diagnosis\n    SELECT DISTINCT\n        da.subject_id,\n        da.hadm_id,\n        adm.admittime,\n        pat.gender,\n        pat.anchor_age\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS da\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS did\n        ON da.icd_code = did.icd_code AND da.icd_version = did.icd_version\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n        ON da.subject_id = adm.subject_id AND da.hadm_id = adm.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON da.subject_id = pat.subject_id\n    WHERE\n        -- ICD-9 codes for Acute Coronary Syndrome (ACS)\n        (da.icd_version = 9 AND (\n            SUBSTR(da.icd_code, 1, 3) IN ('410', '411', '412', '413') OR da.icd_code IN ('41400', '41401', '41406')\n        ))\n        OR\n        -- ICD-10 codes for Acute Coronary Syndrome (ACS)\n        (da.icd_version = 10 AND (\n            SUBSTR(da.icd_code, 1, 3) IN ('I20', 'I21', 'I22', 'I24') OR SUBSTR(da.icd_code, 1, 4) = 'I251'\n        ))\n),\nfiltered_cohort AS (\n    -- Step 2: Filter by demographics\n    SELECT\n        acs.subject_id,\n        acs.hadm_id,\n        acs.admittime\n    FROM\n        acs_admissions AS acs\n    WHERE\n        acs.gender = 'F'\n        -- MIMIC-IV caps anchor_age at 91 for all patients >= 90 years old.\n        -- So, to include patients aged 88-98, we select anchor_age between 88 and 91.\n        AND acs.anchor_age BETWEEN 88 AND 91\n),\ntroponin_t_labs AS (\n    -- Step 3: Get all relevant Troponin T lab events for the filtered cohort\n    SELECT\n        fc.subject_id,\n        fc.hadm_id,\n        le.charttime,\n        CAST(le.valuenum AS BIGNUMERIC) AS valuenum, -- Cast to BIGNUMERIC for precision\n        le.valueuom\n    FROM\n        filtered_cohort AS fc\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n        ON fc.subject_id = le.subject_id AND fc.hadm_id = le.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n        ON le.itemid = dli.itemid\n    WHERE\n        dli.label = 'Troponin T' -- Specific item for Troponin T\n        AND le.valuenum IS NOT NULL\n        AND le.valuenum > 0.01 -- Initial Troponin T must be > 0.01 ng/mL\n        AND le.valueuom = 'ng/mL' -- Ensure correct units\n        -- Lab events can have charttime before admittime if from ED, which is fine for \"initial\".\n),\nfirst_troponin_t_per_admission AS (\n    -- Step 4: Find the first qualifying Troponin T value for each eligible admission\n    SELECT\n        subject_id,\n        hadm_id,\n        valuenum AS first_troponin_t_value,\n        ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n    FROM\n        troponin_t_labs\n)\n-- Step 5: Calculate Median and IQR using PERCENTILE_CONT as an analytic function\nSELECT\n    ROUND(CAST(PERCENTILE_CONT(first_troponin_t_value, 0.5) OVER (ORDER BY first_troponin_t_value) AS NUMERIC), 4) AS median_troponin_t_ng_per_ml,\n    ROUND(CAST(PERCENTILE_CONT(first_troponin_t_value, 0.75) OVER (ORDER BY first_troponin_t_value) AS NUMERIC), 4) -\n    ROUND(CAST(PERCENTILE_CONT(first_troponin_t_value, 0.25) OVER (ORDER BY first_troponin_t_value) AS NUMERIC), 4) AS iqr_troponin_t_ng_per_ml\nFROM\n    first_troponin_t_per_admission\nWHERE\n    rn = 1\nLIMIT 1; -- LIMIT to 1 because analytic functions return a value for every row.;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Window ORDER BY is not allowed for analytic function percentile_cont at [80:67]; reason: invalidQuery, location: query, message: Window ORDER BY is not allowed for analytic function percentile_cont at [80:67]\n\nLocation: US\nJob ID: aa1c9067-8430-4baf-bc7f-14bd3dd42f60\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword WITHIN at [80:37]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword WITHIN at [80:37]\n\nLocation: US\nJob ID: 74e5f2c5-b099-40e2-9a1d-8ad5e7b5c619\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 642c7ab6-1613-4b95-bea9-8572bd4110d9\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Window ORDER BY is not allowed for analytic function percentile_cont at [80:67]; reason: invalidQuery, location: query, message: Window ORDER BY is not allowed for analytic function percentile_cont at [80:67]\n\nLocation: US\nJob ID: aa1c9067-8430-4baf-bc7f-14bd3dd42f60\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For my 43-year-old female, among women 38\u201348 with heart failure, what's the average 30\u2011day readmission rate after first HF admission?",
+  "final_sql": "WITH hf_icd_codes AS (\n  -- List of ICD codes for heart failure (ICD-9: 428.x, ICD-10: I50.x)\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^428')) OR\n    (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^I50'))\n),\nhf_admissions AS (\n  -- Admissions with HF diagnosis\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN hf_icd_codes c\n    ON d.icd_code = c.icd_code AND d.icd_version = c.icd_version\n),\neligible_patients AS (\n  -- Women aged 38-48 with HF admission\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n),\nfirst_hf_admission AS (\n  -- First HF admission per eligible patient\n  SELECT\n    t.subject_id,\n    t.hadm_id,\n    t.admittime,\n    t.dischtime,\n    t.deathtime,\n    t.hospital_expire_flag\n  FROM (\n    SELECT\n      e.subject_id,\n      h.hadm_id,\n      adm.admittime,\n      adm.dischtime,\n      adm.deathtime,\n      adm.hospital_expire_flag,\n      ROW_NUMBER() OVER (PARTITION BY e.subject_id ORDER BY adm.admittime ASC) AS rn\n    FROM eligible_patients e\n    INNER JOIN hf_admissions h\n      ON e.subject_id = h.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n      ON h.hadm_id = adm.hadm_id\n  ) t\n  WHERE t.rn = 1\n    AND (t.hospital_expire_flag = 0 OR t.deathtime IS NULL) -- exclude deaths during index admission\n),\nreadmissions AS (\n  -- Find 30-day readmissions after first HF admission\n  SELECT\n    f.subject_id,\n    f.hadm_id AS index_hadm_id,\n    f.dischtime,\n    MIN(a.admittime) AS readmit_admittime\n  FROM first_hf_admission f\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.subject_id = a.subject_id\n    AND a.admittime > f.dischtime\n    AND a.admittime <= TIMESTAMP_ADD(f.dischtime, INTERVAL 30 DAY)\n    AND a.hadm_id != f.hadm_id\n  GROUP BY f.subject_id, f.hadm_id, f.dischtime\n)\nSELECT\n  COUNT(DISTINCT f.subject_id) AS num_patients,\n  COUNT(DISTINCT r.subject_id) AS num_readmitted,\n  SAFE_DIVIDE(COUNT(DISTINCT r.subject_id), COUNT(DISTINCT f.subject_id)) AS avg_30day_readmission_rate\nFROM first_hf_admission f\nLEFT JOIN readmissions r\n  ON f.subject_id = r.subject_id\n  AND f.hadm_id = r.index_hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: a at [31:5]; reason: invalidQuery, location: query, message: Unrecognized name: a at [31:5]\n\nLocation: US\nJob ID: 366748e2-6dfe-4d64-8853-ba2dcf689e25\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: a at [31:5]; reason: invalidQuery, location: query, message: Unrecognized name: a at [31:5]\n\nLocation: US\nJob ID: 9acb505a-b3ad-44b9-9c86-7529be925fdb\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

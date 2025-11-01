@@ -1,0 +1,22 @@
+{
+  "query": "My 71\u2011year\u2011old female with AMI, no initial shock or respiratory failure: among females 66\u201376 with AMI, report in\u2011hospital mortality (%) and median time\u2011to\u2011death (days) by LOS 1\u20133/4\u20137/\u22658 and emergent vs non\u2011emergent admission.",
+  "final_sql": "WITH ami_hadms AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code LIKE '410.%')\n     OR (icd_version = 10 AND icd_code LIKE 'I21%')\n),\ncohort AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.deathtime, \n    a.hospital_expire_flag,\n    a.admission_type,\n    p.gender, \n    p.anchor_age,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE \n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7'\n      ELSE '>=8' \n    END AS los_group,\n    CASE WHEN a.admission_type = 'EMERGENCY' THEN 'Emergent' ELSE 'Non-emergent' END AS adm_group\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  INNER JOIN ami_hadms ah \n    ON a.hadm_id = ah.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 66 AND 76\n),\ndecedents AS (\n  SELECT \n    los_group, \n    adm_group,\n    TIMESTAMP_DIFF(deathtime, admittime, DAY) AS ttd_days\n  FROM cohort\n  WHERE hospital_expire_flag = 1\n),\ncounts AS (\n  SELECT \n    los_group, \n    adm_group,\n    COUNT(*) AS n,\n    SUM(hospital_expire_flag) AS deaths,\n    ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(*), 2) AS mortality_pct\n  FROM cohort\n  GROUP BY los_group, adm_group\n),\nmedians AS (\n  SELECT DISTINCT\n    los_group, \n    adm_group,\n    PERCENTILE_CONT(ttd_days, 0.5) OVER (PARTITION BY los_group, adm_group) AS median_ttd\n  FROM decedents\n)\nSELECT \n  c.los_group, \n  c.adm_group,\n  c.n,\n  c.deaths,\n  c.mortality_pct,\n  COALESCE(m.median_ttd, 0) AS median_ttd_days\nFROM counts c\nLEFT JOIN medians m \n  ON c.los_group = m.los_group AND c.adm_group = m.adm_group\nORDER BY \n  CASE c.los_group \n    WHEN '1-3' THEN 1 \n    WHEN '4-7' THEN 2 \n    ELSE 3 \n  END,\n  CASE c.adm_group WHEN 'Emergent' THEN 1 ELSE 2 END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic functions cannot be arguments to aggregate functions at [55:5]; reason: invalidQuery, location: query, message: Analytic functions cannot be arguments to aggregate functions at [55:5]\n\nLocation: US\nJob ID: a7cfd12f-4b1b-49d9-8907-001e4fa5d49b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

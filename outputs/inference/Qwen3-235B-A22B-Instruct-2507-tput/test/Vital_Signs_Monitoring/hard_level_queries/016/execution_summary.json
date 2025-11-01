@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 62-year-old male post\u2013solid-organ transplant in the ICU. Among male ICU patients aged 57\u201367, compare Transplant vs Non\u2011Transplant during the first 72 hours: median and percentiles of composite instability score (count of fever>38.5\u00b0C, SpO2<90%, RR>20 events), ICU LOS, and mortality.",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT\n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.los AS icu_los,\n    adm.hospital_expire_flag,\n    -- Calculate age at ICU admission\n    p.anchor_age + (EXTRACT(YEAR FROM ie.intime) - p.anchor_year) AS age_at_admission,\n    -- Determine transplant status for this admission\n    MAX(CASE \n          WHEN dip.long_title LIKE '%transplant%' THEN 1 \n          ELSE 0 \n        END) AS is_transplant\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n    ON ie.hadm_id = proc.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dip\n    ON proc.icd_code = dip.icd_code AND proc.icd_version = dip.icd_version\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM ie.intime) - p.anchor_year)) BETWEEN 57 AND 67\n  GROUP BY ie.subject_id, ie.hadm_id, ie.stay_id, ie.intime, ie.los, adm.hospital_expire_flag, p.anchor_age, p.anchor_year\n),\nvitals AS (\n  SELECT\n    ce.stay_id,\n    -- Flags for each instability criterion (any occurrence in first 72h)\n    MAX(CASE WHEN di.label = 'Temperature' AND ce.valuenum > 38.5 THEN 1 ELSE 0 END) AS has_fever,\n    MAX(CASE WHEN di.label = 'O2 saturation pulse oximetry' AND ce.valuenum < 90 THEN 1 ELSE 0 END) AS has_hypoxemia,\n    MAX(CASE WHEN di.label = 'Respiratory Rate' AND ce.valuenum > 20 THEN 1 ELSE 0 END) AS has_tachypnea\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  INNER JOIN patient_cohort pc\n    ON ce.stay_id = pc.stay_id\n  WHERE ce.charttime >= pc.intime\n    AND ce.charttime <= pc.intime + INTERVAL '72' HOUR\n    AND di.label IN ('Temperature', 'O2 saturation pulse oximetry', 'Respiratory Rate')\n    AND ce.valuenum IS NOT NULL\n  GROUP BY ce.stay_id\n),\ninstability_score AS (\n  SELECT\n    pc.stay_id,\n    pc.is_transplant,\n    COALESCE(v.has_fever, 0) AS has_fever,\n    COALESCE(v.has_hypoxemia, 0) AS has_hypoxemia,\n    COALESCE(v.has_tachypnea, 0) AS has_tachypnea,\n    COALESCE(v.has_fever, 0) + COALESCE(v.has_hypoxemia, 0) + COALESCE(v.has_tachypnea, 0) AS composite_instability_score,\n    pc.icu_los,\n    pc.hospital_expire_flag\n  FROM patient_cohort pc\n  LEFT JOIN vitals v ON pc.stay_id = v.stay_id\n)\n-- Final aggregation: median, percentiles, and mortality by transplant status\nSELECT\n  is_transplant,\n  -- Median and percentiles of composite instability score\n  APPROX_QUANTILES(composite_instability_score, 100)[OFFSET(50)] AS instability_median,\n  APPROX_QUANTILES(composite_instability_score, 100)[OFFSET(25)] AS instability_p25,\n  APPROX_QUANTILES(composite_instability_score, 100)[OFFSET(75)] AS instability_p75,\n  -- Median and percentiles of ICU LOS\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(50)] AS icu_los_median,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(25)] AS icu_los_p25,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(75)] AS icu_los_p75,\n  -- Mortality rate\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM instability_score\nGROUP BY is_transplant\nORDER BY is_transplant;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword THEN but got identifier \"ILIKE\" at [13:31]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword THEN but got identifier \"ILIKE\" at [13:31]\n\nLocation: US\nJob ID: f0f5d92d-df18-4f0d-8f12-871f9570830d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

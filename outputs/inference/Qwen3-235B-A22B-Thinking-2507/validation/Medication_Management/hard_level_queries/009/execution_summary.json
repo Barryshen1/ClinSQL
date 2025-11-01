@@ -1,0 +1,23 @@
+{
+  "query": "I have an 89\u2011year\u2011old female inpatient with AKI. Among female admissions aged 84\u201394 with AKI, stratified into quintiles by medication complexity score over the entire admission, report per quintile: LOS, inpatient mortality %, 30\u2011day readmission %, and anticoagulant\u2013opioid coadministration counts.",
+  "final_sql": "WITH \ncohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 84 AND 94\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND d.icd_code LIKE 'N17%'\n    )\n),\n\nmed_complex AS (\n  SELECT \n    hadm_id,\n    COUNT(DISTINCT drug) AS med_count\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE hadm_id IN (SELECT hadm_id FROM cohort)\n  GROUP BY hadm_id\n),\n\nquintiles AS (\n  SELECT \n    c.hadm_id,\n    c.subject_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    m.med_count,\n    NTILE(5) OVER (ORDER BY m.med_count) AS quintile\n  FROM cohort c\n  INNER JOIN med_complex m\n    ON c.hadm_id = m.hadm_id\n),\n\nreadmission_flag AS (\n  SELECT \n    q.hadm_id,\n    CASE \n      WHEN LEAD(q.admittime) OVER (\n        PARTITION BY q.subject_id \n        ORDER BY q.admittime\n      ) <= TIMESTAMP_ADD(q.dischtime, INTERVAL 30 DAY) \n      THEN 1 ELSE 0 \n    END AS readmission_30d\n  FROM quintiles q\n),\n\ncoadmin AS (\n  SELECT \n    p.hadm_id,\n    MAX(CASE WHEN LOWER(p.drug) IN (\n      'warfarin', 'heparin', 'enoxaparin', 'rivaroxaban', 'apixaban'\n    ) THEN 1 ELSE 0 END) AS has_anticoagulant,\n    MAX(CASE WHEN LOWER(p.drug) IN (\n      'morphine', 'fentanyl', 'hydromorphone', 'oxycodone'\n    ) THEN 1 ELSE 0 END) AS has_opioid\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  WHERE p.hadm_id IN (SELECT hadm_id FROM quintiles)\n  GROUP BY p.hadm_id\n),\n\ncoadmin_final AS (\n  SELECT \n    hadm_id,\n    CASE WHEN has_anticoagulant = 1 AND has_opioid = 1 THEN 1 ELSE 0 END AS coadmin_flag\n  FROM coadmin\n)\n\nSELECT\n  q.quintile,\n  AVG(DATETIME_DIFF(q.dischtime, q.admittime, HOUR) / 24.0) AS avg_los,\n  AVG(q.hospital_expire_flag) * 100 AS mortality_pct,\n  AVG(r.readmission_30d) * 100 AS readmission_30d_pct,\n  SUM(c.coadmin_flag) AS anticoagulant_opioid_coadmin_count\nFROM quintiles q\nLEFT JOIN readmission_flag r ON q.hadm_id = r.hadm_id\nLEFT JOIN coadmin_final c ON q.hadm_id = c.hadm_id\nGROUP BY q.quintile\nORDER BY q.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:9]\n\nLocation: US\nJob ID: b1112d73-bbec-4040-88b2-4913d7a78f29\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

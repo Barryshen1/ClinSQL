@@ -1,0 +1,28 @@
+{
+  "query": "For a 45\u2011year\u2011old man with AMI (no shock or respiratory failure), among males 40\u201350 report in\u2011hospital mortality (%) and median LOS by LOS \u22645 vs >5 and day\u20111 ICU status.",
+  "final_sql": "WITH patient_filter AS (\n  -- Filter patients: males aged 40-50\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 40 AND 50\n),\nami_admissions AS (\n  -- Get admissions with primary AMI diagnosis, excluding shock/respiratory failure\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN patient_filter p ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd \n    ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  -- Primary AMI (ICD-10)\n  WHERE d.seq_num = 1 \n    AND d.icd_version = 10\n    AND d.icd_code LIKE 'I21%'\n    AND DATE(a.dischtime) > DATE(a.admittime)  -- Valid discharge\n  -- Exclude shock or respiratory failure in any diagnosis\n  AND NOT EXISTS (\n    SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n    WHERE d2.subject_id = a.subject_id \n      AND d2.hadm_id = a.hadm_id \n      AND d2.icd_version = 10\n      AND (\n        d2.icd_code = 'R57.0'  -- Cardiogenic shock\n        OR d2.icd_code LIKE 'R57%'  -- Other shock\n        OR d2.icd_code LIKE 'J96.0%'  -- Acute resp failure\n        OR d2.icd_code LIKE 'J96.2%'  -- Acute resp failure\n      )\n  )\n  -- One admission per patient (earliest)\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) = 1\n),\nicu_cohort AS (\n  -- Add day-1 ICU status for patients with ICU stay on admission day\n  SELECT \n    aa.*,\n    CASE WHEN i.stay_id IS NOT NULL THEN 'Y' ELSE 'N' END AS day1_icu_status\n  FROM ami_admissions aa\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON aa.subject_id = i.subject_id \n    AND aa.hadm_id = i.hadm_id\n    AND DATE(i.intime) = DATE(aa.admittime)  -- Day-1 stay\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY aa.subject_id, aa.hadm_id ORDER BY i.intime NULLS LAST) = 1  -- First ICU stay if applicable, preserve non-ICU\n),\ngrouped_data AS (\n  SELECT \n    CASE \n      WHEN los_days <= 5 THEN '<=5'\n      ELSE '>5'\n    END AS los_group,\n    day1_icu_status,\n    hospital_expire_flag,\n    los_days,\n    COUNT(*) OVER (PARTITION BY \n      CASE WHEN los_days <= 5 THEN '<=5' ELSE '>5' END, \n      day1_icu_status\n    ) AS group_size\n  FROM icu_cohort\n)\nSELECT \n  los_group,\n  day1_icu_status,\n  ROUND(SAFE_DIVIDE(SUM(hospital_expire_flag) * 100.0, COUNT(*)), 2) AS mortality_pct,\n  -- Median LOS using PERCENTILE_CONT for accuracy\n  PERCENTILE_CONT(los_days, 0.5) AS median_los_days\nFROM grouped_data\nGROUP BY los_group, day1_icu_status\nORDER BY los_group, day1_icu_status;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 1541941e-c1dc-476d-8cd3-c9f67ef2e52e\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:9]\n\nLocation: US\nJob ID: f0740ddf-e75e-45e9-89d0-3a7ea2d28de1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_group at [71:8]; reason: invalidQuery, location: query, message: Unrecognized name: los_group at [71:8]\n\nLocation: US\nJob ID: 3ecb8d09-996e-4b45-afdd-951fd0e66e3e\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 1541941e-c1dc-476d-8cd3-c9f67ef2e52e\n"
+    }
+  ]
+}

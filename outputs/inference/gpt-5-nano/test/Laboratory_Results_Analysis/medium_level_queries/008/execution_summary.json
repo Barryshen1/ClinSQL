@@ -1,0 +1,22 @@
+{
+  "query": "I have a 92\u2011year\u2011old man. Among male patients aged 87\u201397 admitted for suspected ACS, what are counts, percentages, and in\u2011hospital mortality rates by index Troponin T category (Normal/Minimal, Borderline, Elevated)?",
+  "final_sql": "WITH acs_patients AS (\n  -- Patients 87-97 year-old males admitted with ACS-related diagnoses\n  SELECT DISTINCT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 87 AND 97\n    AND (\n      di.icd_code LIKE '410%'\n      OR di.icd_code LIKE '411%'\n      OR di.icd_code LIKE '413%'\n      OR di.icd_code LIKE '414%'\n    )\n),\ntroponin_first AS (\n  -- First Troponin T measurement during the admission\n  SELECT le.hadm_id, le.charttime, le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n    ON le.itemid = dli.itemid\n  WHERE LOWER(dli.label) LIKE '%troponin t%'\n    AND le.valuenum IS NOT NULL\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) = 1\n),\ncohort AS (\n  -- Combine ACS cohort with the index Troponin T value\n  SELECT a.hadm_id,\n         a.subject_id,\n         t.valuenum,\n         CASE\n           WHEN t.valuenum <= 0.01 THEN 'Normal/Minimal'\n           WHEN t.valuenum > 0.01 AND t.valuenum <= 0.04 THEN 'Borderline'\n           WHEN t.valuenum > 0.04 THEN 'Elevated'\n           ELSE 'Unknown'\n         END AS troponin_category,\n         a.deathtime,\n         a.dischtime\n  FROM acs_patients ap\n  JOIN troponin_first t ON t.hadm_id = ap.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON a.hadm_id = ap.hadm_id\n),\ntotal AS (\n  SELECT COUNT(*) AS total_cohort FROM cohort\n)\nSELECT\n  c.troponin_category,\n  COUNT(*) AS n,\n  SAFE_DIVIDE(COUNT(*), t.total_cohort) * 100 AS percent_of_cohort,\n  SAFE_DIVIDE(SUM(\n      CASE\n        WHEN c.deathtime IS NOT NULL\n             AND c.dischtime IS NOT NULL\n             AND c.deathtime <= c.dischtime\n        THEN 1 ELSE 0\n      END\n  ), COUNT(*)) AS in_hospital_mortality_rate\nFROM cohort AS c\nCROSS JOIN total AS t\nGROUP BY c.troponin_category, t.total_cohort\nORDER BY c.troponin_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column total_cohort which is neither grouped nor aggregated at [51:25]; reason: invalidQuery, location: query, message: SELECT list expression references column total_cohort which is neither grouped nor aggregated at [51:25]\n\nLocation: US\nJob ID: 3ec53852-83ff-4239-8804-b7fc57216d89\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

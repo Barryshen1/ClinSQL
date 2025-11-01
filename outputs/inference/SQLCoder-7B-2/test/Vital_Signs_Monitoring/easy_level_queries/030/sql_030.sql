@@ -1,0 +1,1 @@
+SELECT MIN(omr.value) AS min_heart_rate FROM patients p JOIN icustays i ON p.subject_id = i.subject_id JOIN omr ON i.stay_id = omr.subject_id WHERE p.gender = 'F' AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dob)) = 43 AND EXTRACT(YEAR FROM i.intime) BETWEEN 2018 AND 2020 AND omr.itemid = 1549857 AND omr.value IS NOT NULL;

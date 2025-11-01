@@ -1,0 +1,28 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH first_icu_stays AS (\n  -- First ICU stay per subject\n  SELECT \n    subject_id,\n    stay_id,\n    hadm_id,\n    first_careunit,\n    intime,\n    outtime,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY stay_id) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  WHERE stay_id IS NOT NULL\n),\n\npatients_first_stay AS (\n  -- Female patients aged 66-76 in first ICU stay\n  SELECT \n    fis.*,\n    p.gender,\n    p.anchor_age\n  FROM first_icu_stays fis\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON fis.subject_id = p.subject_id\n  WHERE fis.rn = 1\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 66 AND 76\n),\n\nsepsis_cohort AS (\n  -- Sepsis cases: first stay with sepsis diagnosis\n  SELECT DISTINCT\n    pfs.stay_id,\n    pfs.hadm_id,\n    pfs.intime\n  FROM patients_first_stay pfs\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON pfs.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  WHERE (\n    -- ICD-9 sepsis codes\n    (di.icd_version = 9 AND (\n      di.icd_code LIKE '038.%' OR\n      di.icd_code LIKE '785.5%' OR\n      di.icd_code = '020.0' OR di.icd_code = '022.3' OR di.icd_code = '036.2' OR\n      di.icd_code = '790.7'\n    ))\n    OR\n    -- ICD-10 sepsis codes\n    (di.icd_version = 10 AND (\n      di.icd_code LIKE 'A40.%' OR\n      di.icd_code LIKE 'A41.%' OR\n      di.icd_code LIKE 'A42.%' OR\n      di.icd_code LIKE 'R65.%'\n    ))\n  )\n),\n\ncontrol_cohort AS (\n  -- Controls: first stay without sepsis, same demographics\n  SELECT \n    pfs.stay_id,\n    pfs.hadm_id,\n    pfs.intime\n  FROM patients_first_stay pfs\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON pfs.hadm_id = a.hadm_id\n  WHERE pfs.hadm_id NOT IN (SELECT hadm_id FROM sepsis_cohort)\n),\n\nall_cohorts AS (\n  SELECT stay_id, hadm_id, intime, 'sepsis' AS cohort\n  FROM sepsis_cohort\n  UNION ALL\n  SELECT stay_id, hadm_id, intime, 'control' AS cohort\n  FROM control_cohort\n),\n\nprocedures_sepsis AS (\n  -- Distinct procedures in first 48h for sepsis cohort\n  SELECT \n    sc.stay_id,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedures\n  FROM sepsis_cohort sc\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON sc.stay_id = pe.stay_id\n  WHERE pe.starttime BETWEEN sc.intime AND TIMESTAMP_ADD(sc.intime, INTERVAL 48 HOUR)\n    AND pe.itemid IS NOT NULL\n    AND pe.value IS NOT NULL  -- Indicates procedure occurred\n  GROUP BY sc.stay_id\n),\n\np90_procedures AS (\n  -- 90th percentile for sepsis\n  SELECT \n    PERCENTILE_CONT(distinct_procedures, 0.9) OVER() AS p90_distinct_procedures\n  FROM procedures_sepsis\n),\n\noutcomes AS (\n  -- Hospital LOS and mortality by cohort\n  SELECT \n    ac.cohort,\n    a.hadm_id,\n    DATE_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS hospital_los_days,\n    a.hospital_expire_flag AS mortality\n  FROM all_cohorts ac\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ac.hadm_id = a.hadm_id\n  WHERE a.dischtime IS NOT NULL  -- Exclude ongoing admissions\n)\n\n-- Final results: Procedures percentile + outcomes comparison\nSELECT \n  'sepsis' AS cohort,\n  (SELECT p90_distinct_procedures FROM p90_procedures) AS p90_distinct_procedures_48h,\n  AVG(o.hospital_los_days) AS avg_hospital_los_days,\n  AVG(o.mortality) AS mortality_rate\nFROM outcomes o\nWHERE o.cohort = 'sepsis'\n\nUNION ALL\n\nSELECT \n  'control' AS cohort,\n  NULL AS p90_distinct_procedures_48h,  -- Not computed for controls\n  AVG(o.hospital_los_days) AS avg_hospital_los_days,\n  AVG(o.mortality) AS mortality_rate\nFROM outcomes o\nWHERE o.cohort = 'control';",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword IGNORE at [96:26]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword IGNORE at [96:26]\n\nLocation: US\nJob ID: e6272db9-061a-4be3-9e64-6f777603e363\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [96:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [96:5]\n\nLocation: US\nJob ID: 889ca5fb-99c6-4321-a7c6-0af2a343a038\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

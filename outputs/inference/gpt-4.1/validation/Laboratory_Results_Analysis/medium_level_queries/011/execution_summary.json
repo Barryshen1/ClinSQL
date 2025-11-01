@@ -1,0 +1,16 @@
+{
+  "query": "I have a 66-year-old man with chest pain. Among male patients aged 61\u201371 admitted for chest pain, what's the percent distribution of initial hs\u2011TnT: normal, borderline, myocardial injury?",
+  "final_sql": "WITH male_61_71 AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 61 AND 71\n),\nchest_pain_admissions AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN male_61_71 pat ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE\n    -- ICD-10 chest pain codes\n    (diag.icd_version = 10 AND diag.icd_code IN ('R071', 'R072', 'R0789', 'R079'))\n    -- ICD-9 chest pain codes\n    OR (diag.icd_version = 9 AND diag.icd_code IN ('78650', '78651', '78652', '78659'))\n),\nhs_tnt_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n    AND (LOWER(label) LIKE '%high%' OR LOWER(label) LIKE '%hs%')\n),\ninitial_hs_tnt AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    labe.itemid,\n    labe.charttime,\n    labe.valuenum,\n    labe.valueuom\n  FROM chest_pain_admissions adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` labe\n    ON adm.subject_id = labe.subject_id AND adm.hadm_id = labe.hadm_id\n  JOIN hs_tnt_items hs ON labe.itemid = hs.itemid\n  WHERE labe.valuenum IS NOT NULL\n),\nfirst_hs_tnt_per_admission AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    valueuom,\n    MIN(charttime) AS first_charttime\n  FROM initial_hs_tnt\n  GROUP BY subject_id, hadm_id, valueuom\n),\nfirst_hs_tnt_value AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.valuenum,\n    i.valueuom\n  FROM initial_hs_tnt i\n  JOIN first_hs_tnt_per_admission f\n    ON i.subject_id = f.subject_id\n    AND i.hadm_id = f.hadm_id\n    AND i.charttime = f.first_charttime\n    AND i.valueuom = f.valueuom\n),\ncategorized_hs_tnt AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    -- Convert to ng/L if needed\n    CASE\n      WHEN LOWER(valueuom) = 'ng/ml' THEN valuenum * 1000\n      ELSE valuenum\n    END AS hs_tnt_ngl,\n    CASE\n      WHEN\n        (LOWER(valueuom) = 'ng/ml' AND valuenum * 1000 < 14)\n        OR (LOWER(valueuom) = 'ng/l' AND valuenum < 14)\n      THEN 'Normal'\n      WHEN\n        ((LOWER(valueuom) = 'ng/ml' AND valuenum * 1000 >= 14 AND valuenum * 1000 <= 52)\n        OR (LOWER(valueuom) = 'ng/l' AND valuenum >= 14 AND valuenum <= 52))\n      THEN 'Borderline'\n      WHEN\n        (LOWER(valueuom) = 'ng/ml' AND valuenum * 1000 > 52)\n        OR (LOWER(valueuom) = 'ng/l' AND valuenum > 52)\n      THEN 'Myocardial injury'\n      ELSE 'Unknown'\n    END AS hs_tnt_category\n  FROM first_hs_tnt_value\n)\nSELECT\n  hs_tnt_category AS category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS percent\nFROM categorized_hs_tnt\nWHERE hs_tnt_category IN ('Normal', 'Borderline', 'Myocardial injury')\nGROUP BY hs_tnt_category\nORDER BY percent DESC;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

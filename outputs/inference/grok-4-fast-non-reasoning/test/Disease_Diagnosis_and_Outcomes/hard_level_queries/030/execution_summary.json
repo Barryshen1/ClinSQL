@@ -1,0 +1,28 @@
+{
+  "query": "For a 69-year-old male inpatient, among male inpatients aged 64\u201374 with upper GI bleeding stratified into quintiles by composite risk score (diagnosis count +20\u00d7major complication), give n, mean score, 30\u2011day mortality %, major complication %, and median LOS among survivors.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: males 64-74, inpatient admissions\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    p.dod,\n    a.admission_type\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND a.admission_type IN ('ELECTIVE', 'EMERGENCY', 'URGENT')\n),\n\nupper_gi_bleed AS (\n  -- Filter to admissions with upper GI bleeding (K25/K26)\n  SELECT \n    c.*,\n    d.icd_code\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON c.hadm_id = d.hadm_id\n  WHERE d.icd_version = 10\n    AND (d.icd_code LIKE 'K25%' OR d.icd_code LIKE 'K26%')\n),\n\nrisk_scores AS (\n  -- Compute diagnosis count and major complications per admission\n  SELECT \n    u.*,\n    COUNT(DISTINCT d_all.icd_code) AS dx_count,\n    COUNT(DISTINCT CASE \n      WHEN d_all.icd_code IN (\n        -- Curated major complications (ICD-10): sepsis, shock, ARDS, AKI, etc.\n        'A41', 'R57', 'J96.0', 'N17', 'K92.2', 'I95.1', 'D65', 'T81.4', 'Y83.9'\n        -- Add more as needed: e.g., 'J15.2' (pneumonia), 'I21' (MI), etc.\n      ) THEN d_all.icd_code \n    END) AS major_comp_count\n  FROM upper_gi_bleed u\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d_all\n    ON u.hadm_id = d_all.hadm_id\n    AND d_all.icd_version = 10\n  GROUP BY \n    u.subject_id, u.hadm_id, u.anchor_age, u.admittime, u.dischtime, u.dod, u.admission_type\n),\n\nfinal_cohort AS (\n  -- Composite score and quintiles\n  SELECT \n    *,\n    dx_count + 20 * major_comp_count AS composite_score,\n    NTILE(5) OVER (ORDER BY (dx_count + 20 * major_comp_count) ASC) AS quintile,\n    -- 30-day mortality flag\n    CASE \n      WHEN dod IS NOT NULL \n        AND TIMESTAMP(dod) >= admittime \n        AND TIMESTAMP(dod) <= TIMESTAMP_ADD(admittime, INTERVAL 30 DAY)\n      THEN TRUE \n      ELSE FALSE \n    END AS day30_death,\n    -- LOS in days (timestamp diff)\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los_days,\n    -- Major comp flag (any)\n    CASE WHEN major_comp_count > 0 THEN TRUE ELSE FALSE END AS has_major_comp\n  FROM risk_scores\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY icd_code) = 1  -- Dedup if multiple GI dx per adm\n)\n\n-- Aggregates by quintile\nSELECT \n  quintile AS risk_quintile,\n  COUNT(*) AS n,\n  ROUND(AVG(composite_score), 2) AS mean_score,\n  ROUND(AVG(CASE WHEN day30_death THEN 1.0 ELSE 0.0 END) * 100, 2) AS mortality_30d_pct,\n  ROUND(AVG(CASE WHEN has_major_comp THEN 1.0 ELSE 0.0 END) * 100, 2) AS major_comp_pct,\n  PERCENTILE_CONT(0.5) OVER (ORDER BY los_days) \n    FILTER (WHERE NOT day30_death) AS median_los_survivors\nFROM final_cohort\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got \"(\" at [81:12]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [81:12]\n\nLocation: US\nJob ID: 0026ef78-5d28-46fb-9c88-e08f223ed3cf\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword IGNORE at [84:24]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword IGNORE at [84:24]\n\nLocation: US\nJob ID: 948e478e-4668-4d66-a919-badb12e1ea97\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [84:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [84:24]\n\nLocation: US\nJob ID: 2357281a-f1b1-4e41-93ab-0414609d54f2\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [81:12]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [81:12]\n\nLocation: US\nJob ID: 0026ef78-5d28-46fb-9c88-e08f223ed3cf\n"
+    }
+  ]
+}

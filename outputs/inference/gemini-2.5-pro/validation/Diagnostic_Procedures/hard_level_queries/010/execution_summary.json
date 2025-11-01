@@ -1,0 +1,16 @@
+{
+  "query": "I have a 45-year-old man. Among male ICU patients aged 40\u201350, comparing those with hemorrhagic stroke versus other males 40\u201350, what is the 90th percentile of diagnostic procedures in the first 72 hours, and associated ICU LOS and in-hospital mortality?",
+  "final_sql": "WITH\n  base_cohort AS (\n    -- Step 1: Identify male ICU patients aged 40-50\n    SELECT\n      i.subject_id,\n      i.hadm_id,\n      i.stay_id,\n      i.intime,\n      i.los\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON i.subject_id = p.subject_id\n    WHERE\n      p.gender = 'M' AND p.anchor_age BETWEEN 40 AND 50\n  ),\n\n  hemorrhagic_stroke_admissions AS (\n    -- Step 2: Identify hospital admissions with a hemorrhagic stroke diagnosis\n    SELECT DISTINCT\n      hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n      -- ICD-9 codes for subarachnoid, intracerebral, and other intracranial hemorrhage\n      SUBSTR(icd_code, 1, 3) IN ('430', '431', '432')\n      -- ICD-10 codes for subarachnoid, intracerebral, and other nontraumatic intracranial hemorrhage\n      OR SUBSTR(icd_code, 1, 3) IN ('I60', 'I61', 'I62')\n  ),\n\n  procedures_in_72h AS (\n    -- Step 3: Count procedures within the first 72 hours of the ICU stay for each patient\n    SELECT\n      cohort.stay_id,\n      COUNT(proc.icd_code) AS num_procedures\n    FROM base_cohort AS cohort\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n      ON cohort.hadm_id = proc.hadm_id\n    WHERE\n      -- Filter for procedures that occurred within the first 72 hours of ICU admission\n      proc.chartdate <= DATETIME_ADD(cohort.intime, INTERVAL 72 HOUR)\n    GROUP BY\n      cohort.stay_id\n  ),\n\n  final_cohort_data AS (\n    -- Step 4: Combine all data points for each patient stay\n    SELECT\n      cohort.stay_id,\n      cohort.los,\n      adm.hospital_expire_flag,\n      CASE\n        WHEN hs.hadm_id IS NOT NULL THEN 'Hemorrhagic Stroke'\n        ELSE 'Other'\n      END AS patient_group,\n      COALESCE(proc.num_procedures, 0) AS num_procedures\n    FROM base_cohort AS cohort\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      ON cohort.hadm_id = adm.hadm_id\n    LEFT JOIN\n      hemorrhagic_stroke_admissions AS hs\n      ON cohort.hadm_id = hs.hadm_id\n    LEFT JOIN\n      procedures_in_72h AS proc\n      ON cohort.stay_id = proc.stay_id\n  )\n\n-- Step 5: Aggregate the metrics for the two groups\nSELECT\n  patient_group,\n  APPROX_QUANTILES(num_procedures, 100)[OFFSET(90)] AS p90_diagnostic_procedures_first_72h,\n  AVG(los) AS avg_icu_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_percent\nFROM final_cohort_data\nGROUP BY\n  patient_group\nORDER BY\n  patient_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

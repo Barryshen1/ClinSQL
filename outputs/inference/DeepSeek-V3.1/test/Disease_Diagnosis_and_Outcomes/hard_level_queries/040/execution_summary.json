@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating a 74\u2011year\u2011old female with intracranial hemorrhage. For female inpatients aged 69\u201379 with ICH, stratify admissions into quintiles by the composite risk score and report, per quintile: n, 30\u2011day mortality %, major complication %, and median survivor LOS.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.deathtime,\n    a.hospital_expire_flag,\n    -- Count distinct diagnoses as risk score proxy\n    COUNT(DISTINCT d.icd_code) AS num_diagnoses,\n    -- Check for major complications: pneumonia (J18%), sepsis (A41%), severe sepsis (R65.2), DVT (I82%), PE (I26%)\n    MAX(CASE WHEN (d.icd_code LIKE 'J18%' OR d.icd_code LIKE 'A41%' OR d.icd_code LIKE 'R65.2%' OR d.icd_code LIKE 'I82%' OR d.icd_code LIKE 'I26%') AND d.icd_version = 10 THEN 1 ELSE 0 END) AS has_complication\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 69 AND 79\n    AND d.icd_code LIKE 'I61%'  -- ICH ICD-10 codes\n    AND d.icd_version = 10       -- Ensure ICD-10\n  GROUP BY p.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime, a.hospital_expire_flag\n),\n\ncohort_with_quintile AS (\n  SELECT *,\n    NTILE(5) OVER (ORDER BY num_diagnoses) AS quintile\n  FROM cohort\n),\n\n-- Calculate LOS for survivors only\nsurvivor_los AS (\n  SELECT \n    quintile,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM cohort_with_quintile\n  WHERE hospital_expire_flag = 0\n)\n\nSELECT \n  q.quintile,\n  COUNT(*) AS n,\n  -- 30-day mortality: died within 30 days of admission\n  ROUND(100 * AVG(CASE WHEN deathtime IS NOT NULL AND DATETIME_DIFF(deathtime, admittime, DAY) <= 30 THEN 1 ELSE 0 END), 2) AS mortality_30d_percent,\n  -- Major complication percentage\n  ROUND(100 * AVG(has_complication), 2) AS complication_percent,\n  -- Median LOS for survivors\n  ROUND(PERCENTILE_CONT(los_days, 0.5) OVER (PARTITION BY quintile), 2) AS median_survivor_los\nFROM cohort_with_quintile q\nLEFT JOIN survivor_los s ON q.quintile = s.quintile\nGROUP BY q.quintile\nORDER BY q.quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Column name quintile is ambiguous at [48:59]; reason: invalidQuery, location: query, message: Column name quintile is ambiguous at [48:59]\n\nLocation: US\nJob ID: 9f5f0594-b0e3-49ed-9022-963c8a7f1892\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: deathtime at [37:29]; reason: invalidQuery, location: query, message: Unrecognized name: deathtime at [37:29]\n\nLocation: US\nJob ID: 6316cbf5-ad4b-4d15-8ee9-eb3146974df8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword FILTER at [39:72]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword FILTER at [39:72]\n\nLocation: US\nJob ID: a47fe89c-611f-419a-969c-9011e5084147\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name quintile is ambiguous at [48:59]; reason: invalidQuery, location: query, message: Column name quintile is ambiguous at [48:59]\n\nLocation: US\nJob ID: 9f5f0594-b0e3-49ed-9022-963c8a7f1892\n"
+    }
+  ]
+}

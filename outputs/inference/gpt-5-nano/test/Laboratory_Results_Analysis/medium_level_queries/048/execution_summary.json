@@ -1,0 +1,22 @@
+{
+  "query": "For a 60-year-old woman: among female patients aged 55\u201365 admitted with AMI whose first hs\u2011TnT >0.01 ng/mL, report patient and admission counts and hs\u2011TnT mean, median, and IQR.",
+  "final_sql": "WITH\n-- 1) Female patients in target age range\neligible_patients AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 55 AND 65\n),\n\n-- 2) Admissions with AMI diagnosis (ICD-9 410% OR ICD-10 I21*/I22*)\nami_admissions AS (\n  SELECT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  WHERE (\n          (di.icd_version = 9  AND di.icd_code LIKE '410%')\n       OR (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%'))\n        )\n),\n\n-- 3) Filter to target females and ages (AMI admissions intersecting eligible patients)\ntarget_admissions AS (\n  SELECT DISTINCT aa.subject_id, aa.hadm_id\n  FROM ami_admissions AS aa\n  JOIN eligible_patients AS ep\n    ON aa.subject_id = ep.subject_id\n  -- ensure patient exists in patients table (redundant guard)\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON aa.subject_id = p.subject_id\n),\n\n-- 4) Troponin T measurements (hs-TnT) in hospital lab events\ntroponin_events AS (\n  SELECT l.subject_id,\n         l.hadm_id,\n         l.charttime,\n         l.valuenum,\n         l.valueuom\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS d\n    ON l.itemid = d.itemid\n  WHERE l.valuenum IS NOT NULL\n    AND LOWER(d.label) LIKE '%troponin t%'\n    AND LOWER(l.valueuom) LIKE '%ng/mL%'\n),\n\n-- 5) For each admission, identify the first hs-TnT value > 0.01 ng/mL\nfirst_hstn AS (\n  SELECT te.subject_id,\n         te.hadm_id,\n         MIN(te.charttime) AS first_time\n  FROM troponin_events AS te\n  JOIN target_admissions AS ta\n    ON te.subject_id = ta.subject_id AND te.hadm_id = ta.hadm_id\n  WHERE te.valuenum > 0.01\n  GROUP BY te.subject_id, te.hadm_id\n),\n\n-- 6) First hs-TnT value per admission\nfirst_vals AS (\n  SELECT fh.subject_id,\n         fh.hadm_id,\n         te.valuenum\n  FROM first_hstn AS fh\n  JOIN troponin_events AS te\n    ON te.subject_id = fh.subject_id\n   AND te.hadm_id = fh.hadm_id\n   AND te.charttime = fh.first_time\n)\n\nSELECT\n  -- patient and admission counts\n  (SELECT COUNT(DISTINCT subject_id) FROM target_admissions) AS patient_count,\n  (SELECT COUNT(DISTINCT hadm_id) FROM first_vals) AS admission_count,\n  -- HS-TnT mean\n  (SELECT AVG(valuenum) FROM first_vals) AS mean_hstn,\n  -- HS-TnT median\n  (\n    SELECT quant[OFFSET(2)]\n    FROM (\n      SELECT APPROX_QUANTILES(valuenum, 4) AS quant\n      FROM first_vals\n    )\n  ) AS median_hstn,\n  -- HS-TnT IQR (75th - 25th)\n  (\n    SELECT (quant[OFFSET(3)] - quant[OFFSET(1)])\n    FROM (\n      SELECT APPROX_QUANTILES(valuenum, 4) AS quant\n      FROM first_vals\n    )\n  ) AS iqr_hstn\nFROM (SELECT 1) AS dummy;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Cannot use array subquery with column of type ARRAY<FLOAT64> because nested arrays are not supported at [80:17]; reason: invalidQuery, location: query, message: Cannot use array subquery with column of type ARRAY<FLOAT64> because nested arrays are not supported at [80:17]\n\nLocation: US\nJob ID: da24124e-4160-4fc5-a48d-92c9831bfaf4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

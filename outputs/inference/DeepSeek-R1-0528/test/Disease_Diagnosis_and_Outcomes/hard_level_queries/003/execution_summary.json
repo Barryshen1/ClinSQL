@@ -1,0 +1,16 @@
+{
+  "query": "I have a 75-year-old female inpatient with pulmonary embolism. For female inpatients aged 70\u201380 with PE, stratify into risk-score quintiles and report per quintile: 90\u2011day mortality, general 70\u201380 female 90\u2011day mortality (comparison), AKI and ARDS rates, and median survivor LOS",
+  "final_sql": "WITH all_females_70_80 AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.dod,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 70 AND 80\n),\n\npe_cohort AS (\n  SELECT \n    af.*\n  FROM all_females_70_80 af\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    WHERE \n      diag.subject_id = af.subject_id\n      AND diag.hadm_id = af.hadm_id\n      AND (\n        (diag.icd_version = 9 AND diag.icd_code LIKE '415.1%')\n        OR \n        (diag.icd_version = 10 AND diag.icd_code LIKE 'I26%')\n      )\n  )\n),\n\npe_with_quintile AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY age) AS quintile\n  FROM pe_cohort\n),\n\ngeneral_mortality AS (\n  SELECT \n    COUNT(*) AS total,\n    COUNTIF(dod <= DATETIME_ADD(admittime, INTERVAL 90 DAY)) AS deaths,\n    COUNTIF(dod <= DATETIME_ADD(admittime, INTERVAL 90 DAY)) / COUNT(*) AS mortality_rate\n  FROM all_females_70_80\n),\n\naki_patients AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '584%')\n    OR (icd_version = 10 AND icd_code LIKE 'N17%')\n),\n\nards_patients AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code = '518.82')\n    OR (icd_version = 10 AND icd_code = 'J80')\n)\n\nSELECT \n  q.quintile,\n  COUNT(q.subject_id) AS num_patients,\n  COUNTIF(q.dod <= DATETIME_ADD(q.admittime, INTERVAL 90 DAY)) / COUNT(*) AS mortality_90d,\n  (SELECT mortality_rate FROM general_mortality) AS general_mortality_90d,\n  COUNTIF(aki.subject_id IS NOT NULL) / COUNT(*) AS aki_rate,\n  COUNTIF(ards.subject_id IS NOT NULL) / COUNT(*) AS ards_rate,\n  APPROX_QUANTILES(\n    IF(q.hospital_expire_flag = 0, DATETIME_DIFF(q.dischtime, q.admittime, DAY), NULL), \n    100\n  )[OFFSET(50)] AS median_survivor_los_days\nFROM pe_with_quintile q\nLEFT JOIN aki_patients aki\n  ON q.subject_id = aki.subject_id AND q.hadm_id = aki.hadm_id\nLEFT JOIN ards_patients ards\n  ON q.subject_id = ards.subject_id AND q.hadm_id = ards.hadm_id\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

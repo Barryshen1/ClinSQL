@@ -1,0 +1,22 @@
+{
+  "query": "Female patient, 57: among female patients aged 52\u201362 with ischemic versus hemorrhagic stroke, report in\u2011hospital mortality (%), median LOS (<8 vs \u22658 days) and CKD/diabetes prevalence by comorbidity tertile",
+  "final_sql": "WITH female_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 52 AND 62\n),\n\nstroke_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE\n      WHEN d.icd_code IN ('I63', 'I64') THEN 'Ischemic'\n      WHEN d.icd_code IN ('I61', 'I62') THEN 'Hemorrhagic'\n    END AS stroke_type\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN female_patients fp\n    ON a.subject_id = fp.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE d.icd_code IN ('I63', 'I61', 'I62', 'I64')\n    AND d.seq_num = 1\n),\n\ncomorbidity_count AS (\n  SELECT\n    sa.hadm_id,\n    sa.stroke_type,\n    sa.hospital_expire_flag,\n    sa.los_days,\n    COUNT(d2.icd_code) AS comorbidity_score\n  FROM stroke_admissions sa\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n    ON sa.hadm_id = d2.hadm_id\n  WHERE d2.seq_num > 1\n  GROUP BY sa.hadm_id, sa.stroke_type, sa.hospital_expire_flag, sa.los_days\n),\n\ncomorbidity_tertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY comorbidity_score) AS comorbidity_tertile\n  FROM comorbidity_count\n),\n\nckd_diabetes AS (\n  SELECT\n    ct.hadm_id,\n    MAX(CASE WHEN did.icd_code IN ('N18', 'N181', 'N182', 'N183', 'N184', 'N185', 'N186') THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN did.icd_code IN ('E10', 'E11', 'E12', 'E13', 'E14') THEN 1 ELSE 0 END) AS has_diabetes\n  FROM comorbidity_tertiles ct\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON ct.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE d.seq_num > 1\n  GROUP BY ct.hadm_id\n),\n\nfinal_data AS (\n  SELECT\n    ct.stroke_type,\n    ct.comorbidity_tertile,\n    ct.hospital_expire_flag,\n    ct.los_days,\n    COALESCE(cd.has_ckd, 0) AS has_ckd,\n    COALESCE(cd.has_diabetes, 0) AS has_diabetes\n  FROM comorbidity_tertiles ct\n  LEFT JOIN ckd_diabetes cd\n    ON ct.hadm_id = cd.hadm_id\n)\n\nSELECT\n  stroke_type,\n  comorbidity_tertile,\n  COUNT(*) AS n_patients,\n  AVG(hospital_expire_flag) * 100 AS in_hosp_mortality_pct,\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los_days,\n  SUM(CASE WHEN los_days < 8 THEN 1 ELSE 0 END) AS los_lt_8,\n  SUM(CASE WHEN los_days >= 8 THEN 1 ELSE 0 END) AS los_ge_8,\n  AVG(has_ckd) * 100 AS ckd_prevalence_pct,\n  AVG(has_diabetes) * 100 AS diabetes_prevalence_pct\nFROM final_data\nGROUP BY stroke_type, comorbidity_tertile\nORDER BY stroke_type, comorbidity_tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator < for argument types: INTERVAL, INT64\n  Signature: T1 < T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, INTERVAL} at [86:17]; reason: invalidQuery, location: query, message: No matching signature for operator < for argument types: INTERVAL, INT64\n  Signature: T1 < T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, INTERVAL} at [86:17]\n\nLocation: US\nJob ID: 67dbcf8b-a835-47df-827c-e6fd3683f253\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

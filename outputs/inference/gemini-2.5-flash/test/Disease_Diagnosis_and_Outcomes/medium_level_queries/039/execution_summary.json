@@ -1,0 +1,28 @@
+{
+  "query": "My 71\u2011year\u2011old female with AMI, no initial shock or respiratory failure: among females 66\u201376 with AMI, report in\u2011hospital mortality (%) and median time\u2011to\u2011death (days) by LOS 1\u20133/4\u20137/\u22658 and emergent vs non\u2011emergent admission.",
+  "final_sql": "WITH ami_admissions AS (\n    -- Step 1: Identify admissions with Acute Myocardial Infarction (AMI)\n    -- ICD-10 codes for AMI range from I21.x to I22.x\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n    WHERE icd_version = 10\n      AND (icd_code LIKE 'I21%' OR icd_code LIKE 'I22%')\n),\nexclusion_admissions AS (\n    -- Step 2: Identify admissions with shock or respiratory failure for exclusion\n    -- ICD-10 codes for shock: R57.x (Cardiogenic/Hypovolemic/Other Shock), R65.x (SIRS/Septic Shock), T78.x (Anaphylactic/Allergic Shock)\n    -- ICD-10 codes for respiratory failure: J96.x (Acute/Chronic/Unspecified Respiratory Failure)\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n    WHERE icd_version = 10\n      AND (icd_code LIKE 'R57%' -- Shock (e.g., R57.0 Cardiogenic shock)\n           OR icd_code LIKE 'R65%' -- Systemic Inflammatory Response Syndrome (SIRS), R65.21 (Septic shock)\n           OR icd_code LIKE 'T78%' -- Adverse effects, not elsewhere classified (e.g., T78.2 Anaphylactic shock)\n           OR icd_code LIKE 'J96%' -- Respiratory failure (e.g., J96.0x Acute respiratory failure)\n          )\n),\ncohort_base AS (\n    -- Step 3: Establish the base cohort applying age/gender filters and exclusions\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime,\n        ad.deathtime,\n        ad.hospital_expire_flag,\n        p.gender,\n        p.anchor_age,\n        ad.admission_type,\n        DATE_DIFF(ad.dischtime, ad.admittime, DAY) AS los_days,\n        CASE\n            WHEN ad.admission_type IN ('EW EMER.', 'DIRECT EMER.') THEN 'Emergent'\n            ELSE 'Non-Emergent'\n        END AS admission_type_grouped,\n        CASE\n            WHEN ad.hospital_expire_flag = 1 AND ad.deathtime IS NOT NULL THEN DATE_DIFF(ad.deathtime, ad.admittime, DAY)\n            ELSE NULL\n        END AS time_to_death_days_if_died\n    FROM\n        `physionet-data.mimiciv_3_1_hosp`.admissions ad\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp`.patients p\n        ON ad.subject_id = p.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 66 AND 76\n        AND ad.hadm_id IN (SELECT hadm_id FROM ami_admissions)\n        AND ad.hadm_id NOT IN (SELECT hadm_id FROM exclusion_admissions)\n),\ncohort_categorized AS (\n    -- Step 4: Categorize the cohort by Length of Stay (LOS)\n    SELECT\n        *,\n        CASE\n            WHEN los_days BETWEEN 1 AND 3 THEN '1-3 days'\n            WHEN los_days BETWEEN 4 AND 7 THEN '4-7 days'\n            WHEN los_days >= 8 THEN '>=8 days'\n            ELSE 'Unknown/Invalid LOS' -- Should not occur with valid data but added for robustness\n        END AS los_category\n    FROM\n        cohort_base\n    WHERE los_days IS NOT NULL AND los_days >= 0 -- Exclude admissions with invalid or negative LOS\n)\n-- Step 5: Aggregate and calculate final metrics\nSELECT\n    los_category,\n    admission_type_grouped,\n    COUNT(hadm_id) AS num_admissions,\n    SUM(hospital_expire_flag) AS in_hospital_deaths,\n    ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(hadm_id), 2) AS mortality_rate_percent,\n    -- CORRECTED: Replaced PERCENTILE_CONT with APPROX_QUANTILES for median calculation\n    APPROX_QUANTILES(time_to_death_days_if_died, 2)[OFFSET(1)] AS median_time_to_death_days\nFROM\n    cohort_categorized\nWHERE los_category <> 'Unknown/Invalid LOS'\nGROUP BY\n    los_category,\n    admission_type_grouped\nORDER BY\n    -- Custom order for LOS categories\n    CASE los_category\n        WHEN '1-3 days' THEN 1\n        WHEN '4-7 days' THEN 2\n        WHEN '>=8 days' THEN 3\n        ELSE 4\n    END,\n    admission_type_grouped;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword IGNORE at [75:54]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword IGNORE at [75:54]\n\nLocation: US\nJob ID: 15d45bb8-eb1a-4764-a150-5ab16289c0a9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 7d7f5942-0789-4b47-873a-cee7d81c08f4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

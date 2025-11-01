@@ -1,0 +1,28 @@
+{
+  "query": "I have a 56\u2011year\u2011old female postoperative patient. Among female surgical admissions aged 51\u201361, stratified by 24\u2011h medication complexity quartiles (unique drugs plus weighted high\u2011risk classes), report LOS, in\u2011hospital mortality (%) and 30\u2011day readmission (%) and counts by quartile for comparison.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag,\n        pt.anchor_age,\n        pt.gender,\n        COUNT(DISTINCT pr.drug) AS num_unique_drugs,\n        -- Add high-risk medication classes weighting\n        COUNT(DISTINCT CASE \n            WHEN LOWER(pr.drug) LIKE '%warfarin%' OR LOWER(pr.drug) LIKE '%insulin%' \n                 OR LOWER(pr.drug) LIKE '%heparin%' OR LOWER(pr.drug) LIKE '%opioid%'\n                 OR LOWER(pr.drug) LIKE '%narcotic%' OR LOWER(pr.drug) LIKE '%chemotherapy%'\n            THEN pr.drug \n        END) * 2 AS high_risk_score\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n        ON adm.subject_id = pt.subject_id\n    -- Filter for surgical patients using EXISTS to avoid duplicates\n    WHERE EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n        WHERE adm.hadm_id = proc.hadm_id\n    )\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        ON adm.hadm_id = pr.hadm_id\n        AND pr.starttime BETWEEN adm.admittime AND DATETIME_ADD(adm.admittime, INTERVAL 24 HOUR)\n    WHERE pt.gender = 'F'\n        AND pt.anchor_age BETWEEN 51 AND 61\n        AND adm.admission_type = 'ELECTIVE'\n    GROUP BY adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.hospital_expire_flag, pt.anchor_age, pt.gender\n),\nmed_complexity AS (\n    SELECT \n        *,\n        num_unique_drugs + high_risk_score AS complexity_score\n    FROM cohort\n),\nquartiles AS (\n    SELECT \n        *,\n        NTILE(4) OVER (ORDER BY complexity_score) AS complexity_quartile\n    FROM med_complexity\n),\nreadmissions AS (\n    SELECT \n        adm1.hadm_id,\n        adm1.dischtime,\n        CASE \n            WHEN MIN(adm2.admittime) <= DATETIME_ADD(adm1.dischtime, INTERVAL 30 DAY) THEN 1\n            ELSE 0 \n        END AS readmit_30d\n    FROM quartiles adm1\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm2\n        ON adm1.subject_id = adm2.subject_id\n        AND adm2.admittime > adm1.dischtime\n        AND adm2.admittime <> adm1.admittime  -- Exclude same admission\n    GROUP BY adm1.hadm_id, adm1.dischtime\n)\nSELECT \n    complexity_quartile,\n    COUNT(*) AS n_admissions,\n    AVG(DATETIME_DIFF(q.dischtime, q.admittime, DAY)) AS avg_los,\n    SUM(hospital_expire_flag) AS in_hospital_deaths,\n    AVG(hospital_expire_flag) * 100 AS mortality_percent,\n    SUM(readmit_30d) AS readmissions_30d,\n    AVG(readmit_30d) * 100 AS readmit_30d_percent\nFROM quartiles q\nLEFT JOIN readmissions r\n    ON q.hadm_id = r.hadm_id\nGROUP BY complexity_quartile\nORDER BY complexity_quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword LEFT at [27:5]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword LEFT at [27:5]\n\nLocation: US\nJob ID: d7bef0a2-c1a3-4fd1-a501-0d4a6327c7a3\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references adm1.dischtime which is neither grouped nor aggregated at [32:54]; reason: invalidQuery, location: query, message: SELECT list expression references adm1.dischtime which is neither grouped nor aggregated at [32:54]\n\nLocation: US\nJob ID: ba5c8ab0-312a-4fc5-b230-7a8de0569cfd\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name dischtime is ambiguous at [62:23]; reason: invalidQuery, location: query, message: Column name dischtime is ambiguous at [62:23]\n\nLocation: US\nJob ID: aedfc067-cc13-4124-a259-505e41088bdf\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword LEFT at [27:5]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword LEFT at [27:5]\n\nLocation: US\nJob ID: d7bef0a2-c1a3-4fd1-a501-0d4a6327c7a3\n"
+    }
+  ]
+}

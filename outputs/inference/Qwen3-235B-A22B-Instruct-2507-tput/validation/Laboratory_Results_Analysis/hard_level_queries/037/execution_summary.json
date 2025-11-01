@@ -1,0 +1,22 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH\n  -- Define hemorrhagic stroke codes\n  stroke_codes AS (\n    SELECT '431' AS icd_code, 9 AS icd_version\n    UNION ALL\n    SELECT 'I61', 10\n    UNION ALL\n    SELECT 'I61.0', 10\n    UNION ALL\n    SELECT 'I61.1', 10\n    UNION ALL\n    SELECT 'I61.2', 10\n    UNION ALL\n    SELECT 'I61.3', 10\n    UNION ALL\n    SELECT 'I61.4', 10\n    UNION ALL\n    SELECT 'I61.5', 10\n    UNION ALL\n    SELECT 'I61.6', 10\n    UNION ALL\n    SELECT 'I61.8', 10\n    UNION ALL\n    SELECT 'I61.9', 10\n  ),\n  \n  -- Cohort: male, age 70-80, hemorrhagic stroke\n  cohort AS (\n    SELECT DISTINCT a.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n    JOIN stroke_codes sc ON di.icd_code = sc.icd_code AND di.icd_version = sc.icd_version\n    WHERE p.gender = 'M'\n      AND p.anchor_age >= 70 AND p.anchor_age <= 80\n  ),\n  \n  -- First 48h lab events for all admissions with abnormal flags\n  labs_48h AS (\n    SELECT\n      le.hadm_id,\n      le.charttime,\n      le.flag\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON le.hadm_id = a.hadm_id\n    WHERE le.charttime >= a.admittime\n      AND le.charttime <= DATETIME_ADD(a.admittime, INTERVAL 48 HOUR)\n      AND le.flag IS NOT NULL\n      AND le.flag IN ('abnormal', 'high', 'low')\n  ),\n  \n  -- Critical lab counts per admission for cohort\n  cohort_lab_counts AS (\n    SELECT\n      c.hadm_id,\n      COUNT(*) AS critical_lab_count\n    FROM cohort c\n    LEFT JOIN labs_48h l ON c.hadm_id = l.hadm_id\n    GROUP BY c.hadm_id\n  ),\n  \n  -- Critical lab counts for general population (all admissions with lab data in first 48h)\n  general_lab_counts AS (\n    SELECT\n      a.hadm_id,\n      COUNT(*) AS critical_lab_count\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN labs_48h l ON a.hadm_id = l.hadm_id\n    GROUP BY a.hadm_id\n  ),\n  \n  -- Hospital LOS and mortality for cohort\n  cohort_outcomes AS (\n    SELECT\n      a.hadm_id,\n      DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days,\n      a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    WHERE a.hadm_id IN (SELECT hadm_id FROM cohort)\n  )\n\n-- Final output\nSELECT\n  -- 25th percentile of lab instability score (critical lab count) in cohort\n  APPROX_QUANTILES(clc.critical_lab_count, 100)[OFFSET(25)] AS cohort_lab_instability_25th_percentile,\n  \n  -- Mean critical lab event rate (per admission) in cohort\n  AVG(clc.critical_lab_count) AS cohort_critical_lab_rate,\n  \n  -- Mean critical lab event rate in general inpatient population\n  (SELECT AVG(critical_lab_count) FROM general_lab_counts) AS general_critical_lab_rate,\n  \n  -- Mean hospital LOS for cohort\n  AVG(co.los_days) AS cohort_mean_los_days,\n  \n  -- In-hospital mortality rate for cohort\n  AVG(co.hospital_expire_flag) AS cohort_mortality_rate\n\nFROM cohort_lab_counts clc\nJOIN cohort_outcomes co ON clc.hadm_id = co.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:18]\n\nLocation: US\nJob ID: 72edb305-87c1-401d-9b84-cffd927e4997\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

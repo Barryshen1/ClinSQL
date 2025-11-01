@@ -1,0 +1,22 @@
+{
+  "query": "I have a 45-year-old man. Among male inpatients 40\u201350 with hemorrhagic stroke, compute a 72\u2011hour lab instability score (count of unique abnormal labs), stratify into quartiles, and report LOS, mortality, and per\u2011lab abnormal rates versus general inpatients.",
+  "final_sql": "WITH \n-- Identify target population (male, 40-50, hemorrhagic stroke)\ntarget_population AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    p.anchor_age,\n    p.gender,\n    p.dod\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 40 AND 50\n    AND a.hadm_id IN (\n      SELECT \n        hadm_id\n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE \n        icd_code IN (\n          SELECT \n            icd_code \n          FROM \n            `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` \n          WHERE \n            long_title LIKE '%Hemorrhagic stroke%'\n        )\n    )\n),\n\n-- Identify abnormal labs within 72 hours of admission\nabnormal_labs AS (\n  SELECT \n    le.hadm_id,\n    le.subject_id,\n    le.itemid,\n    le.charttime,\n    le.value,\n    le.valuenum,\n    le.ref_range_lower,\n    le.ref_range_upper,\n    CASE \n      WHEN le.valuenum IS NOT NULL AND \n           (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper) \n      THEN 1 \n      ELSE 0 \n    END AS is_abnormal\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON le.hadm_id = a.hadm_id\n  WHERE \n    le.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n),\n\n-- Calculate lab instability score (count of unique abnormal labs)\nlab_instability_score AS (\n  SELECT \n    hadm_id,\n    COUNT(DISTINCT itemid) AS score\n  FROM \n    abnormal_labs\n  WHERE \n    is_abnormal = 1\n  GROUP BY \n    hadm_id\n),\n\n-- Stratify into quartiles based on lab instability score\nquartiles AS (\n  SELECT \n    hadm_id,\n    score,\n    NTILE(4) OVER (ORDER BY score) AS quartile\n  FROM \n    lab_instability_score\n),\n\n-- Prepare for final aggregation\nfinal_data AS (\n  SELECT \n    tp.hadm_id,\n    tp.subject_id,\n    tp.dod,\n    a.dischtime,\n    a.admittime,\n    COALESCE(q.quartile, 0) AS quartile,\n    COALESCE(lis.score, 0) AS lab_instability_score\n  FROM \n    target_population tp\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON tp.hadm_id = a.hadm_id\n  LEFT JOIN \n    quartiles q ON tp.hadm_id = q.hadm_id\n  LEFT JOIN \n    lab_instability_score lis ON tp.hadm_id = lis.hadm_id\n)\n\n-- Final aggregation\nSELECT \n  quartile,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS avg_los,\n  SUM(CASE WHEN dod IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate,\n  SUM(lab_instability_score) / COUNT(*) AS avg_abnormal_labs_per_patient\nFROM \n  final_data\nGROUP BY \n  quartile\nORDER BY \n  quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"admissions\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: admissions, message: Table \"admissions\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: a964e29c-951a-4be9-90e6-1a978e64a7b8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

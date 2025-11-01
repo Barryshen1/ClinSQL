@@ -1,0 +1,23 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_year,\n    p.anchor_age,\n    TIMESTAMP_DIFF(a.admittime, DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), INTERVAL p.anchor_age YEAR), YEAR) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n),\nmulti_trauma AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT icd_code) AS trauma_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code BETWEEN '800' AND '994') OR \n    (icd_version = 10 AND icd_code BETWEEN 'S00' AND 'T98')\n  GROUP BY hadm_id\n  HAVING trauma_count >= 2\n),\nmed_complexity AS (\n  SELECT\n    p.hadm_id,\n    COUNT(DISTINCT p.formulary_drug_cd) AS med_complexity\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.hadm_id = a.hadm_id\n  WHERE p.starttime BETWEEN a.admittime AND a.admittime + INTERVAL 7 DAY\n  GROUP BY p.hadm_id\n),\nadmissions_with_metrics AS (\n  SELECT\n    pa.hadm_id,\n    pa.subject_id,\n    pa.admittime,\n    pa.dischtime,\n    pa.hospital_expire_flag,\n    pa.age_at_admission,\n    m.trauma_count,\n    COALESCE(mc.med_complexity, 0) AS med_complexity\n  FROM patient_admissions pa\n  INNER JOIN multi_trauma m\n    ON pa.hadm_id = m.hadm_id\n  LEFT JOIN med_complexity mc\n    ON pa.hadm_id = mc.hadm_id\n  WHERE pa.age_at_admission BETWEEN 45 AND 55\n),\nreadmission_flags AS (\n  SELECT\n    a1.hadm_id,\n    a1.subject_id,\n    a1.dischtime,\n    (SELECT MIN(admittime) \n     FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n     WHERE a2.subject_id = a1.subject_id\n       AND a2.admittime > a1.dischtime) AS next_admit\n  FROM admissions_with_metrics a1\n),\nadmissions_with_readmission AS (\n  SELECT\n    a.*,\n    CASE \n      WHEN r.next_admit IS NOT NULL AND r.next_admit <= a.dischtime + INTERVAL 30 DAY THEN 1\n      ELSE 0 \n    END AS readmission_30d\n  FROM admissions_with_metrics a\n  LEFT JOIN readmission_flags r\n    ON a.hadm_id = r.hadm_id\n),\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY med_complexity) AS tertile\n  FROM admissions_with_readmission\n)\nSELECT\n  tertile,\n  COUNT(*) AS admissions,\n  AVG(med_complexity) AS mean_score,\n  MIN(med_complexity) AS min_score,\n  MAX(med_complexity) AS max_score,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS mean_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent,\n  AVG(CAST(readmission_30d AS FLOAT64)) * 100 AS readmission_percent\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"-\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"-\" at [1:11]\n\nLocation: US\nJob ID: 6549812f-8bb1-47f8-a145-b361860d6147\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

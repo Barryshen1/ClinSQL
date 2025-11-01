@@ -1,0 +1,16 @@
+{
+  "query": "I have a 55-year-old female. For women aged 50\u201360 with sepsis excluding septic shock, give in-hospital mortality (%) for LOS \u22647 vs >7 days, absolute/relative difference, and median time-to-death.",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND d.icd_version = 10\n    AND (\n      dd.icd_code LIKE 'A41%'\n      OR dd.icd_code LIKE 'R65.2%'\n      AND dd.icd_code != 'R65.23'\n    )\n),\n\nmortality_stats AS (\n  SELECT\n    hadm_id,\n    hospital_expire_flag,\n    los_days,\n    CASE WHEN los_days <= 7 THEN 'LOS <= 7' ELSE 'LOS > 7' END AS los_group,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0\n      ELSE NULL\n    END AS days_to_death\n  FROM\n    sepsis_cohort\n),\n\ngrouped_stats AS (\n  SELECT\n    los_group,\n    COUNT(*) AS total_patients,\n    SUM(hospital_expire_flag) AS deaths,\n    AVG(hospital_expire_flag) * 100 AS mortality_percent,\n    APPROX_QUANTILES(days_to_death, 2 IGNORE NULLS)[OFFSET(1)] AS median_time_to_death\n  FROM\n    mortality_stats\n  GROUP BY\n    los_group\n),\n\npivot_stats AS (\n  SELECT\n    MAX(CASE WHEN los_group = 'LOS <= 7' THEN mortality_percent END) AS mortality_leq_7,\n    MAX(CASE WHEN los_group = 'LOS > 7' THEN mortality_percent END) AS mortality_gt_7,\n    MAX(CASE WHEN los_group = 'LOS <= 7' THEN median_time_to_death END) AS median_ttd_leq_7,\n    MAX(CASE WHEN los_group = 'LOS > 7' THEN median_time_to_death END) AS median_ttd_gt_7\n  FROM\n    grouped_stats\n)\n\nSELECT\n  mortality_leq_7,\n  mortality_gt_7,\n  mortality_leq_7 - mortality_gt_7 AS abs_diff_mortality,\n  SAFE_DIVIDE(mortality_leq_7 - mortality_gt_7, mortality_gt_7) * 100 AS rel_diff_mortality_percent,\n  median_ttd_leq_7,\n  median_ttd_gt_7\nFROM\n  pivot_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

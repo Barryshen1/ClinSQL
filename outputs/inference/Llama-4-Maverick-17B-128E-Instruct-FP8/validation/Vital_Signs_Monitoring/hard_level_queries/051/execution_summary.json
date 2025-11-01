@@ -1,0 +1,22 @@
+{
+  "query": "Male patient, 94. Among male ICU patients aged 89\u201399, what is the 95th\u2011percentile 48\u2011hour instability score for ischemic stroke? For the top instability quartile, compare ischemic stroke versus general ICU: N, mean instability, mean abnormal episodes, mean ICU LOS (hrs), and mortality.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT p.subject_id, p.anchor_age, icu.hadm_id, icu.stay_id, icu.intime, icu.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON p.subject_id = icu.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 89 AND 99\n),\n\n-- Step 2: Identify ischemic stroke patients\nischemic_stroke AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE d_diag.long_title LIKE '%Ischemic stroke%'\n),\n\n-- Step 3: Calculate 48-hour instability score\ninstability_score AS (\n  SELECT cohort.stay_id, \n         -- Example: Standard deviation of heart rate as a measure of instability\n         STDDEV(ce.valuenum) AS instability,\n         -- Example: Abnormal episodes (e.g., heart rate > 100 or < 60)\n         SUM(CASE WHEN ce.valuenum > 100 OR ce.valuenum < 60 THEN 1 ELSE 0 END) AS abnormal_episodes\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN cohort ON ce.stay_id = cohort.stay_id\n  WHERE ce.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label = 'Heart Rate')\n  AND ce.charttime BETWEEN cohort.intime AND TIMESTAMP_ADD(cohort.intime, INTERVAL 48 HOUR)\n  GROUP BY cohort.stay_id\n),\n\n-- Step 4: Calculate 95th percentile of instability score for ischemic stroke\npercentile_95_instability AS (\n  SELECT APPROX_QUANTILES(instability, 100)[OFFSET(95)] AS percentile_95\n  FROM instability_score\n  WHERE stay_id IN (SELECT stay_id FROM cohort JOIN ischemic_stroke ON cohort.hadm_id = ischemic_stroke.hadm_id)\n),\n\n-- Step 5: Compare metrics for top instability quartile\ntop_quartile AS (\n  SELECT instability_score.stay_id, instability_score.instability, abnormal_episodes\n  FROM instability_score\n  JOIN cohort ON instability_score.stay_id = cohort.stay_id\n  WHERE instability_score.instability > (SELECT percentile_95 FROM percentile_95_instability)\n),\n\nfinal_comparison AS (\n  SELECT \n    COUNT(*) AS N,\n    AVG(top_quartile.instability) AS mean_instability,\n    AVG(top_quartile.abnormal_episodes) AS mean_abnormal_episodes,\n    AVG(TIMESTAMP_DIFF(cohort.outtime, cohort.intime, HOUR)) AS mean_icu_los_hrs,\n    -- Mortality calculation\n    AVG(CASE WHEN adm.deathtime IS NOT NULL THEN 1 ELSE 0 END) AS mortality\n  FROM top_quartile\n  JOIN cohort ON top_quartile.stay_id = cohort.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm ON cohort.hadm_id = adm.hadm_id\n  GROUP BY cohort.hadm_id IN (SELECT hadm_id FROM ischemic_stroke)\n)\n\nSELECT * FROM final_comparison;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [20:10]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [20:10]\n\nLocation: US\nJob ID: 08e5e824-6003-41a4-b224-20614dea6d79\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

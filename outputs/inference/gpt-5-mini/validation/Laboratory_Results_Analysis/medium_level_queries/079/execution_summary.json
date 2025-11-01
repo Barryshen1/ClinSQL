@@ -1,0 +1,22 @@
+{
+  "query": "For my 87\u2011year\u2011old female patient, among women 82\u201392 admitted with chest pain or AMI and initial troponin T >0.01 ng/mL, report p25, p50, p75 and min\u2013max.",
+  "final_sql": "WITH troponin_items AS (\n  -- Identify lab itemids that correspond to Troponin T\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n     OR LOWER(label) LIKE '%troponin-t%'\n     OR LOWER(label) LIKE '%trop t%'\n),\neligible_admissions AS (\n  -- Admissions for female patients age 82-92 with a diagnosis of chest pain or myocardial infarction\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.admittime, a.edregtime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id AND a.subject_id = d.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 82 AND 92\n    AND (\n      LOWER(dd.long_title) LIKE '%chest pain%'\n      OR LOWER(dd.long_title) LIKE '%myocardial infarction%'\n      OR LOWER(dd.long_title) LIKE '%acute myocardial infarction%'\n    )\n),\nfirst_troponin_per_adm AS (\n  -- Get the earliest Troponin T per admission within the ED/admission window\n  SELECT\n    hadm_id,\n    subject_id,\n    valuenum AS troponin_val,\n    charttime\n  FROM (\n    SELECT\n      l.subject_id,\n      l.hadm_id,\n      l.charttime,\n      l.valuenum,\n      ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime, l.storetime) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n    JOIN troponin_items ti\n      ON l.itemid = ti.itemid\n    JOIN eligible_admissions ea\n      ON l.hadm_id = ea.hadm_id AND l.subject_id = ea.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON l.hadm_id = a.hadm_id\n    WHERE l.valuenum IS NOT NULL\n      -- Ensure lab is within the ED/admission window (include ED measurements if edregtime exists)\n      AND l.charttime >= COALESCE(a.edregtime, a.admittime)\n      AND l.charttime <= a.dischtime\n  ) lab_first\n  WHERE rn = 1\n),\ncohort_troponin_filtered AS (\n  -- Keep only initial troponin > 0.01 ng/mL\n  SELECT f.*\n  FROM first_troponin_per_adm f\n  WHERE f.troponin_val > 0.01\n)\n\nSELECT\n  q.n_admissions,\n  q.quantiles[OFFSET(0)] AS min_troponin,\n  q.quantiles[OFFSET(1)] AS p25_troponin,\n  q.quantiles[OFFSET(2)] AS median_troponin,\n  q.quantiles[OFFSET(3)] AS p75_troponin,\n  q.quantiles[OFFSET(4)] AS max_troponin\nFROM (\n  SELECT\n    COUNT(*) AS n_admissions,\n    APPROX_QUANTILES(troponin_val, 4) AS quantiles\n  FROM cohort_troponin_filtered\n) q;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column quantiles which is neither grouped nor aggregated at [64:3]; reason: invalidQuery, location: query, message: SELECT list expression references column quantiles which is neither grouped nor aggregated at [64:3]\n\nLocation: US\nJob ID: e0b633ec-8a12-43ac-af40-34201d47af67\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 57-year-old male, among men aged 52\u201362 undergoing their first PCI, what is the average 30-day readmission rate?",
+  "final_sql": "WITH first_pci_admissions AS (\n  -- Step 1: Identify the very first hospital admission for a PCI procedure\n  -- for each patient within the specified demographic.\n  SELECT\n    pat.subject_id,\n    adm.hadm_id,\n    adm.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON pat.subject_id = adm.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n    ON adm.hadm_id = proc.hadm_id\n  WHERE\n    -- Filter for male patients\n    pat.gender = 'M'\n    -- Filter for age between 52 and 62 at the time of admission\n    AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) BETWEEN 52 AND 62\n    -- Filter for PCI procedure codes (ICD-9 and ICD-10)\n    AND (\n      (proc.icd_version = 9 AND proc.icd_code IN ('00.66', '36.06', '36.07'))\n      OR (proc.icd_version = 10 AND proc.icd_code LIKE '027%')\n    )\n  -- The QUALIFY clause filters the results of a window function.\n  -- Here, it keeps only the first admission (ranked by time) for each patient.\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY pat.subject_id ORDER BY adm.admittime) = 1\n),\n\nnext_admission_times AS (\n  -- Step 2: For every hospital admission, find the start time of the next one.\n  -- The LEAD function looks ahead in the partition.\n  SELECT\n    hadm_id,\n    LEAD(admittime, 1) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions`\n)\n\n-- Step 3: Calculate the 30-day readmission rate for the cohort.\nSELECT\n  -- Count the total number of patients in the cohort\n  COUNT(pci.hadm_id) AS number_of_patients,\n  -- Calculate the average of the readmission flag to get the rate\n  AVG(\n    CASE\n      -- Check if there is a next admission and if it's within 30 days of discharge\n      WHEN next_adm.next_admittime IS NOT NULL\n        AND DATETIME_DIFF(next_adm.next_admittime, pci.dischtime, DAY) <= 30\n        AND DATETIME_DIFF(next_adm.next_admittime, pci.dischtime, DAY) >= 0 -- ensures next admission is after discharge\n        THEN 1\n      ELSE 0\n    END\n  ) AS avg_30_day_readmission_rate\nFROM\n  first_pci_admissions AS pci\nLEFT JOIN\n  next_admission_times AS next_adm\n  ON pci.hadm_id = next_adm.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

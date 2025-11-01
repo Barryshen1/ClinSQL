@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 52-year-old man. Among male inpatients aged 47\u201357 with AKI, what is the mean 72-hour laboratory instability score? Compare critical-event frequency, average length of stay, and in-hospital mortality versus age-matched male controls.",
+  "final_sql": "WITH aki_codes AS (\n  SELECT '9' AS icd_version, code AS icd_code\n  FROM UNNEST(['584']) AS code\n  UNION ALL\n  SELECT '10', code\n  FROM UNNEST(['N17']) AS code\n),\n-- Identify hadm_id with AKI diagnosis\naki_hadm AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9   AND icd_code LIKE '584%')\n     OR (icd_version = 10  AND icd_code LIKE 'N17%')\n),\n-- Base cohort: male 47\u201357 inpatients\nbase_cohort AS (\n  SELECT\n    pat.subject_id,\n    adm.hadm_id,\n    pat.anchor_age,\n    pat.gender,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    CASE WHEN aki.hadm_id IS NOT NULL THEN 'AKI' ELSE 'Control' END AS cohort\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  LEFT JOIN aki_hadm aki\n    ON adm.hadm_id = aki.hadm_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 47 AND 57\n),\n-- Lab instability score in first 72h\nlab_scores AS (\n  SELECT\n    bc.hadm_id,\n    COUNTIF(flag = 'abnormal') AS lab_instability_score\n  FROM base_cohort bc\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON bc.hadm_id = le.hadm_id\n   AND le.charttime BETWEEN bc.admittime\n                        AND DATETIME_ADD(bc.admittime, INTERVAL 72 HOUR)\n  GROUP BY bc.hadm_id\n),\n-- ICU admissions within hospitalization as critical events\nicu_flags AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT stay_id) AS icu_count,\n    CASE WHEN COUNT(DISTINCT stay_id) > 0 THEN 1 ELSE 0 END AS critical_event_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\n-- Combine all per-admission outcomes\ncohort_measures AS (\n  SELECT\n    bc.cohort,\n    bc.hadm_id,\n    COALESCE(ls.lab_instability_score, 0) AS lab_instability_score,\n    COALESCE(ifg.critical_event_flag, 0) AS critical_event_flag,\n    TIMESTAMP_DIFF(bc.dischtime, bc.admittime, HOUR)/24.0 AS los_days,\n    bc.hospital_expire_flag\n  FROM base_cohort bc\n  LEFT JOIN lab_scores ls\n    ON bc.hadm_id = ls.hadm_id\n  LEFT JOIN icu_flags ifg\n    ON bc.hadm_id = ifg.hadm_id\n)\nSELECT\n  cohort,\n  AVG(lab_instability_score) AS mean_72h_lab_instability_score,\n  AVG(critical_event_flag)   AS critical_event_rate,\n  AVG(los_days)              AS avg_los_days,\n  AVG(hospital_expire_flag)  AS inhospital_mortality_rate\nFROM cohort_measures\nGROUP BY cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

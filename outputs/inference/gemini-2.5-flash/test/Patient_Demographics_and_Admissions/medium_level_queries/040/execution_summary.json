@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 75-year-old woman. For female surgical inpatients aged 70\u201380, what proportions had LOS \u22657 and \u226514 days, stratified by discharge: home, facility (SNF/rehab/LTACH), or in\u2011hospital death?",
+  "final_sql": "WITH AdmittedPatients AS (\n    -- Select relevant admission and patient details, filter by gender and age, and calculate LOS\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.discharge_location,\n        adm.hospital_expire_flag,\n        pat.gender,\n        pat.anchor_age,\n        TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp`.admissions AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp`.patients AS pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'F' -- Filter for female patients\n        AND pat.anchor_age BETWEEN 70 AND 80 -- Filter for age 70-80\n),\nSurgicalAdmissions AS (\n    -- Filter admissions to include only 'surgical inpatients' (those with at least one procedure)\n    SELECT\n        ap.hadm_id,\n        ap.discharge_location,\n        ap.hospital_expire_flag,\n        ap.los_days\n    FROM\n        AdmittedPatients AS ap\n    WHERE\n        EXISTS (\n            -- Check if there's any procedure recorded for this admission\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp`.procedures_icd AS picd\n            WHERE picd.hadm_id = ap.hadm_id\n            LIMIT 1\n        )\n),\nCategorizedAdmissions AS (\n    -- Assign a discharge category to each surgical admission\n    SELECT\n        hadm_id,\n        los_days,\n        CASE\n            WHEN hospital_expire_flag = 1 THEN 'In-hospital Death'\n            WHEN discharge_location IN ('HOME', 'HOME HEALTH CARE') THEN 'Home'\n            WHEN discharge_location IN (\n                'SKILLED NURSING FACILITY',\n                'REHABILITATION FACILITY',\n                'LONG TERM CARE HOSPITAL',\n                'ACUTE HOSPITAL',\n                'PSYCH HOSPITAL',\n                'OTHER FACILITY',\n                'ICF',\n                'DISCH-TRAN TO PSYCH HOSP'\n            ) THEN 'Facility'\n            ELSE 'Other/Unknown' -- For any other discharge locations not explicitly requested\n        END AS discharge_category\n    FROM\n        SurgicalAdmissions\n)\n-- Final aggregation to calculate total admissions and proportions for each category\nSELECT\n    discharge_category,\n    COUNT(hadm_id) AS total_admissions,\n    COUNTIF(los_days >= 7) AS admissions_los_ge_7_days,\n    ROUND(COUNTIF(los_days >= 7) * 100.0 / COUNT(hadm_id), 2) AS proportion_los_ge_7_percent,\n    COUNTIF(los_days >= 14) AS admissions_los_ge_14_days,\n    ROUND(COUNTIF(los_days >= 14) * 100.0 / COUNT(hadm_id), 2) AS proportion_los_ge_14_percent\nFROM\n    CategorizedAdmissions\nWHERE\n    discharge_category IN ('Home', 'Facility', 'In-hospital Death') -- Only include requested categories\nGROUP BY\n    discharge_category\nORDER BY\n    discharge_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

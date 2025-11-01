@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72-year-old woman. Among female patients 67\u201377 admitted with ACS, report counts, percent of admissions, and in-hospital mortality rates for initial Troponin T: \u22640.04 normal; >0.04\u20130.1 borderline; >0.1 elevated.",
+  "final_sql": "WITH cohort_admissions AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        -- Calculate age at admission\n        p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n        a.admittime,\n        a.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    WHERE\n        p.gender = 'F'\n        AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 67 AND 77\n    AND EXISTS ( -- Check for ACS diagnosis (Acute Myocardial Infarction as primary indicator)\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        WHERE di.hadm_id = a.hadm_id\n        AND (\n               (di.icd_version = 9 AND di.icd_code LIKE '410%') -- ICD-9 for Acute myocardial infarction\n            OR (di.icd_version = 10 AND di.icd_code LIKE 'I21%') -- ICD-10 for Acute myocardial infarction\n        )\n    )\n),\n-- Step 2: Get the first Troponin T measurement for each admission in the cohort\nfirst_troponin_t_measurements AS (\n    SELECT\n        le.hadm_id,\n        le.valuenum AS initial_troponin_t_value,\n        ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime, le.labevent_id) AS rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n    INNER JOIN\n        cohort_admissions ca\n        ON le.hadm_id = ca.hadm_id\n    WHERE\n        le.itemid = 51003 -- Itemid for Troponin T (found in d_labitems)\n        AND le.valuenum IS NOT NULL -- Ensure a numeric value exists\n),\nfinal_troponin_t_values AS (\n  SELECT\n      ftt.hadm_id,\n      ftt.initial_troponin_t_value\n  FROM\n      first_troponin_t_measurements ftt\n  WHERE\n      ftt.rn = 1\n),\n-- Step 3: Categorize Troponin T levels for the cohort\ncategorized_admissions_with_troponin AS (\n    SELECT\n        ca.subject_id,\n        ca.hadm_id,\n        ca.hospital_expire_flag,\n        fttv.initial_troponin_t_value,\n        CASE\n            WHEN fttv.initial_troponin_t_value <= 0.04 THEN 'Normal'\n            WHEN fttv.initial_troponin_t_value > 0.04 AND fttv.initial_troponin_t_value <= 0.1 THEN 'Borderline'\n            WHEN fttv.initial_troponin_t_value > 0.1 THEN 'Elevated'\n            ELSE 'Unknown_Category' -- This case should ideally not be hit with NOT NULL valuenum\n        END AS troponin_category\n    FROM\n        cohort_admissions ca\n    INNER JOIN -- Use INNER JOIN to only include admissions that have an initial Troponin T measurement\n        final_troponin_t_values fttv\n        ON ca.hadm_id = fttv.hadm_id\n)\n-- Step 4: Aggregate results by Troponin T category\nSELECT\n    troponin_category,\n    COUNT(DISTINCT hadm_id) AS num_admissions,\n    SUM(hospital_expire_flag) AS num_deaths,\n    SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(DISTINCT hadm_id)) * 100 AS mortality_rate_percent,\n    (COUNT(DISTINCT hadm_id) / (SELECT COUNT(DISTINCT hadm_id) FROM categorized_admissions_with_troponin)) * 100 AS percent_of_total_admissions_in_cohort\nFROM\n    categorized_admissions_with_troponin\nGROUP BY\n    troponin_category\nORDER BY\n    -- Order by category based on clinical relevance: Normal, Borderline, Elevated\n    CASE troponin_category\n        WHEN 'Normal' THEN 1\n        WHEN 'Borderline' THEN 2\n        WHEN 'Elevated' THEN 3\n        ELSE 4\n    END\n;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword WITH at [2:1]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword WITH at [2:1]\n\nLocation: US\nJob ID: c2510fb2-355a-4c68-b1fa-1dc5045b912c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

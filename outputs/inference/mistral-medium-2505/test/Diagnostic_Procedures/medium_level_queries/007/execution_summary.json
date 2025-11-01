@@ -1,0 +1,16 @@
+{
+  "query": "For a 55\u2011year\u2011old woman, among female patients 50\u201360 with ACS, report p25, p50, p75 diagnostic procedures per admission, stratified by LOS (1\u20134 vs 5\u20138 days) and primary vs secondary diagnosis.",
+  "final_sql": "WITH\n-- Get female patients aged 50-60\nfemale_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age,\n    anchor_year\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 50 AND 60\n),\n\n-- Get admissions for these patients with ACS diagnosis\nacs_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    d.seq_num,\n    d.icd_code,\n    d.icd_version,\n    -- Calculate LOS in days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    female_patients p ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  WHERE\n    -- ACS ICD-10 codes (I20-I25)\n    (d.icd_code LIKE 'I20%' OR d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'\n     OR d.icd_code LIKE 'I23%' OR d.icd_code LIKE 'I24%' OR d.icd_code LIKE 'I25%')\n    AND d.icd_version = 10\n),\n\n-- Count procedures per admission\nprocedure_counts AS (\n  SELECT\n    aa.hadm_id,\n    aa.los_days,\n    aa.seq_num AS diagnosis_seq_num,\n    COUNT(DISTINCT p.icd_code) AS procedure_count\n  FROM\n    acs_admissions aa\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p ON aa.hadm_id = p.hadm_id\n  GROUP BY\n    aa.hadm_id, aa.los_days, aa.seq_num\n),\n\n-- Categorize by LOS and diagnosis type\ncategorized_procedures AS (\n  SELECT\n    hadm_id,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 8 THEN '5-8 days'\n      ELSE 'Other'\n    END AS los_category,\n    CASE\n      WHEN diagnosis_seq_num = 1 THEN 'Primary'\n      ELSE 'Secondary'\n    END AS diagnosis_type,\n    procedure_count\n  FROM\n    procedure_counts\n  WHERE\n    los_days BETWEEN 1 AND 8\n)\n\n-- Calculate percentiles\nSELECT\n  los_category,\n  diagnosis_type,\n  APPROX_QUANTILES(procedure_count, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(procedure_count, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(procedure_count, 4)[OFFSET(3)] AS p75\nFROM\n  categorized_procedures\nGROUP BY\n  los_category, diagnosis_type\nORDER BY\n  los_category, diagnosis_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

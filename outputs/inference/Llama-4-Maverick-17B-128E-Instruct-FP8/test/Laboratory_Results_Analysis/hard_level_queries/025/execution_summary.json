@@ -1,0 +1,22 @@
+{
+  "query": "53\u2011year\u2011old female inpatient. Among female inpatients 48\u201358 with hemorrhagic stroke, what is the 90th\u2011percentile lab\u2011instability score (lab systems with critical values in first 72 h)? For patients \u2265P90 report mortality%, mean LOS, and avg critical labs/patient vs age\u2011matched cohort.",
+  "final_sql": "WITH \n-- Step 1: Identify patients with hemorrhagic stroke\nhemorrhagic_stroke_patients AS (\n  SELECT DISTINCT h.subject_id, h.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` h\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON h.icd_code = d.icd_code AND h.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%Hemorrhagic stroke%' AND h.icd_version = 10\n),\n\n-- Step 2: Filter by age and gender\ncohort AS (\n  SELECT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN hemorrhagic_stroke_patients hsp ON p.subject_id = hsp.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON hsp.hadm_id = a.hadm_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 48 AND 58\n),\n\n-- Step 3: Calculate lab-instability score\nlab_instability AS (\n  SELECT c.hadm_id, COUNT(DISTINCT le.itemid) AS critical_labs\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le ON c.hadm_id = le.hadm_id\n  WHERE le.charttime BETWEEN c.admittime AND (c.admittime + INTERVAL 3 DAY)\n  AND ((le.valuenum < le.ref_range_lower) OR (le.valuenum > le.ref_range_upper))\n  GROUP BY c.hadm_id\n),\n\n-- Step 4: Calculate 90th percentile of lab-instability score\npercentile_90 AS (\n  SELECT APPROX_QUANTILES(critical_labs, 100)[OFFSET(90)] AS p90\n  FROM lab_instability\n),\n\n-- Step 5: Determine outcomes for patients >= P90\noutcomes AS (\n  SELECT \n    c.hadm_id,\n    CASE WHEN c.deathtime IS NOT NULL THEN 1 ELSE 0 END AS mortality,\n    DATETIME_DIFF(c.dischtime, c.admittime, HOUR) / 24 AS los,\n    li.critical_labs\n  FROM cohort c\n  JOIN lab_instability li ON c.hadm_id = li.hadm_id\n  WHERE li.critical_labs >= (SELECT p90 FROM percentile_90)\n)\n\n-- Final query\nSELECT \n  COUNT(*) AS num_patients,\n  AVG(mortality) * 100 AS mortality_percent,\n  AVG(los) AS mean_los,\n  AVG(critical_labs) AS avg_critical_labs\nFROM outcomes;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name lownormalvalue not found inside li at [26:25]; reason: invalidQuery, location: query, message: Name lownormalvalue not found inside li at [26:25]\n\nLocation: US\nJob ID: 32180ddf-25f9-4087-abc8-65a625757b23\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH map_items AS (\n  -- 1. Find itemids corresponding to Mean Arterial Pressure\n  SELECT\n    itemid\n  FROM\n    `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    LOWER(label) LIKE '%mean arterial pressure%'\n),\n\npatient_icustays AS (\n  -- 2. Restrict to male patients aged 52\u201362 with ICU stays\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON icu.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n),\n\nfirst_map_per_stay AS (\n  -- 3. Join to chartevents, filter to MAP itemids, and pick the first measurement per stay\n  SELECT\n    pis.subject_id,\n    pis.hadm_id,\n    pis.stay_id,\n    ce.charttime,\n    ce.valuenum AS first_map\n  FROM\n    patient_icustays pis\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      ON pis.subject_id = ce.subject_id\n      AND pis.hadm_id    = ce.hadm_id\n      AND pis.stay_id    = ce.stay_id\n    INNER JOIN map_items mi\n      ON ce.itemid = mi.itemid\n  WHERE\n    ce.charttime >= pis.intime\n    AND ce.valuenum IS NOT NULL\n),\nranked_first_map AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    first_map,\n    ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY charttime ASC) AS rn\n  FROM\n    first_map_per_stay\n)\n-- 4. Compute the IQR over all first-recorded MAP values (one per stay)\nSELECT\n  quantiles[OFFSET(25)] AS p25_map,\n  quantiles[OFFSET(75)] AS p75_map,\n  quantiles[OFFSET(75)] - quantiles[OFFSET(25)] AS iqr_map\nFROM (\n  SELECT\n    APPROX_QUANTILES(first_map, 100) AS quantiles\n  FROM (\n    SELECT\n      first_map\n    FROM\n      ranked_first_map\n    WHERE\n      rn = 1\n  )\n);",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

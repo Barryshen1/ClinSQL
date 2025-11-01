@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 48\u2011year\u2011old man. Among male inpatients aged 43\u201353 with hepatic failure, compute medication complexity score over the first 72 hours, stratify into quintiles, and report per quintile: n, min/max/mean score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH hepatic_failure_adm AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND (\n      (d.icd_version = 10 AND d.icd_code LIKE 'K72%')\n      OR (d.icd_version = 9 AND d.icd_code IN ('570','5722','5723','5724','5728'))\n    )\n),\nmeds_first72 AS (\n  SELECT ha.subject_id, ha.hadm_id,\n         COUNT(DISTINCT pr.drug) AS med_complexity_score\n  FROM hepatic_failure_adm ha\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON ha.subject_id = pr.subject_id\n   AND ha.hadm_id = pr.hadm_id\n   AND pr.starttime IS NOT NULL\n   AND pr.starttime <= DATETIME_ADD(ha.admittime, INTERVAL 72 HOUR)\n  GROUP BY ha.subject_id, ha.hadm_id\n),\nscored AS (\n  SELECT ha.*, \n         COALESCE(m.med_complexity_score,0) AS score\n  FROM hepatic_failure_adm ha\n  LEFT JOIN meds_first72 m\n    ON ha.subject_id = m.subject_id AND ha.hadm_id = m.hadm_id\n),\nwith_quintile AS (\n  SELECT *,\n         NTILE(5) OVER (ORDER BY score) AS quintile,\n         TIMESTAMP_DIFF(dischtime, admittime, HOUR)/24.0 AS los_days\n  FROM scored\n),\n-- flag readmission within 30 days\nreadmit AS (\n  SELECT curr.subject_id, curr.hadm_id,\n         CASE WHEN MIN(TIMESTAMP_DIFF(next.admittime, curr.dischtime, DAY)) <= 30\n                  AND MIN(TIMESTAMP_DIFF(next.admittime, curr.dischtime, DAY)) IS NOT NULL\n              THEN 1 ELSE 0 END AS readmit_30d\n  FROM with_quintile curr\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` next\n    ON curr.subject_id = next.subject_id\n   AND curr.hadm_id != next.hadm_id\n   AND next.admittime > curr.dischtime\n   AND TIMESTAMP_DIFF(next.admittime, curr.dischtime, DAY) <= 30\n  GROUP BY curr.subject_id, curr.hadm_id\n)\nSELECT w.quintile,\n       COUNT(*) AS n_admissions,\n       MIN(w.score) AS min_score,\n       MAX(w.score) AS max_score,\n       ROUND(AVG(w.score),2) AS mean_score,\n       ROUND(AVG(w.los_days),2) AS mean_los_days,\n       ROUND(100*AVG(w.hospital_expire_flag),1) AS in_hosp_mortality_pct,\n       ROUND(100*AVG(r.readmit_30d),1) AS readmit_30d_pct\nFROM with_quintile w\nJOIN readmit r\n  ON w.subject_id = r.subject_id AND w.hadm_id = r.hadm_id\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

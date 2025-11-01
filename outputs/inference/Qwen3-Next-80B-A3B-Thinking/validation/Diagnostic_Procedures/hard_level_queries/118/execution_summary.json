@@ -1,0 +1,17 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH first_icu_stay AS (\n    SELECT \n        hadm_id,\n        stay_id,\n        intime\n    FROM (\n        SELECT \n            hadm_id,\n            stay_id,\n            intime,\n            ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n        FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    ) \n    WHERE rn = 1\n),\namii_patients AS (\n    SELECT \n        p.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag,\n        i.intime AS first_icu_intime,\n        i.stay_id,\n        p.anchor_age,\n        p.anchor_year\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n    JOIN first_icu_stay i ON a.hadm_id = i.hadm_id\n    WHERE \n        p.gender = 'F'\n        AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%')\n        AND d.icd_version = 10\n        AND (p.anchor_age + EXTRACT(YEAR FROM i.intime) - p.anchor_year) BETWEEN 44 AND 54\n),\nprocedure_count AS (\n    SELECT \n        a.subject_id,\n        a.hadm_id,\n        COUNT(pe.itemid) AS procedure_count\n    FROM amii_patients a\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe \n        ON a.stay_id = pe.stay_id\n        AND pe.starttime BETWEEN a.first_icu_intime AND a.first_icu_intime + INTERVAL 72 HOUR\n    GROUP BY a.subject_id, a.hadm_id\n),\ncohort AS (\n    SELECT \n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag,\n        a.first_icu_intime,\n        COALESCE(pc.procedure_count, 0) AS procedure_count,\n        DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n    FROM amii_patients a\n    LEFT JOIN procedure_count pc \n        ON a.subject_id = pc.subject_id AND a.hadm_id = pc.hadm_id\n),\nquartiles AS (\n    SELECT \n        *,\n        NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n    FROM cohort\n)\nSELECT \n    quartile,\n    COUNT(*) AS n,\n    AVG(procedure_count) AS mean_procedure_count,\n    AVG(los_days) AS avg_los_days,\n    AVG(hospital_expire_flag) * 100 AS mortality_percent\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

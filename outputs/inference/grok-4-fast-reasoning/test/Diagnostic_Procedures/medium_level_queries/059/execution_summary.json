@@ -1,0 +1,28 @@
+{
+  "query": "I have a 72\u2011yo man. Among men 67\u201377 with heart failure, what are p25/p50/p75 numbers of imaging studies per admission, by LOS 1\u20134 vs 5\u20137 days and primary vs secondary HF?",
+  "final_sql": "WITH hf_adm AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    MIN(CASE WHEN is_hf = 1 THEN seq_num END) AS min_seq_hf\n  FROM (\n    SELECT \n      subject_id, \n      hadm_id, \n      seq_num, \n      CASE \n        WHEN (icd_version = 9 AND icd_code LIKE '428%') \n          OR (icd_version = 10 AND icd_code LIKE 'I50%') \n        THEN 1 \n        ELSE 0 \n      END AS is_hf\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  )\n  GROUP BY subject_id, hadm_id\n  HAVING min_seq_hf IS NOT NULL  -- At least one HF diagnosis\n),\ncohort_adm AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    p.gender, \n    p.anchor_age,\n    h.min_seq_hf,\n    DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  INNER JOIN hf_adm h \n    ON a.subject_id = h.subject_id AND a.hadm_id = h.hadm_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age BETWEEN 67 AND 77\n),\nimaging_counts AS (\n  SELECT \n    ca.subject_id, \n    ca.hadm_id,\n    COUNT(CASE \n      WHEN (pi.icd_version = 9 AND (pi.icd_code LIKE '87%' OR pi.icd_code LIKE '88%' OR pi.icd_code LIKE '89%'))\n        OR (pi.icd_version = 10 AND pi.icd_code LIKE 'B%')\n      THEN 1 \n    END) AS num_imaging\n  FROM cohort_adm ca\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n    ON ca.subject_id = pi.subject_id AND ca.hadm_id = pi.hadm_id\n  GROUP BY ca.subject_id, ca.hadm_id\n),\nstratified_data AS (\n  SELECT \n    CASE WHEN ca.min_seq_hf = 1 THEN 'Primary' ELSE 'Secondary' END AS hf_type,\n    CASE \n      WHEN ca.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN ca.los_days BETWEEN 5 AND 7 THEN '5-7 days'\n    END AS los_group,\n    COALESCE(ic.num_imaging, 0) AS num_imaging\n  FROM cohort_adm ca\n  INNER JOIN imaging_counts ic \n    ON ca.subject_id = ic.subject_id AND ca.hadm_id = ic.hadm_id\n  WHERE ca.los_days BETWEEN 1 AND 7\n)\nSELECT \n  hf_type,\n  los_group,\n  APPROX_QUANTILES(num_imaging, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(num_imaging, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(num_imaging, 4)[OFFSET(3)] AS p75\nFROM stratified_data\nGROUP BY hf_type, los_group\nORDER BY hf_type, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [12:15]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [12:15]\n\nLocation: US\nJob ID: b2a6e805-a1ab-4de4-a501-f41cee8090d8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 19180d79-2f6d-4aef-8cfe-3bb0f85c98c2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

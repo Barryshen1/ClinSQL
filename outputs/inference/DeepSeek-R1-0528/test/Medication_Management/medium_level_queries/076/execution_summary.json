@@ -1,0 +1,16 @@
+{
+  "query": "For my 80-year-old female inpatient: among women aged 75\u201385 with diabetes and acute heart failure (admissions \u226536h), what percent had injectable GLP\u20111s started in first 24h versus final 12h? Report percentages only.",
+  "final_sql": "WITH diabetes_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '250%') OR\n    (icd_version = 10 AND icd_code LIKE 'E1[0-4]%')\n),\nhf_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    REGEXP_CONTAINS(LOWER(long_title), r'acute.*heart failure|heart failure.*acute')\n),\ncohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE \n    pat.gender = 'F'\n    AND DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) >= 36\n    AND (pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year)) BETWEEN 75 AND 85\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      INNER JOIN diabetes_codes dc \n        ON d.icd_code = dc.icd_code AND d.icd_version = dc.icd_version\n      WHERE d.hadm_id = adm.hadm_id\n    )\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      INNER JOIN hf_codes hc \n        ON d.icd_code = hc.icd_code AND d.icd_version = hc.icd_version\n      WHERE d.hadm_id = adm.hadm_id\n    )\n),\nglp1_orders AS (\n  SELECT \n    hadm_id,\n    starttime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE \n    (LOWER(drug) LIKE '%exenatide%' OR\n     LOWER(drug) LIKE '%liraglutide%' OR\n     LOWER(drug) LIKE '%dulaglutide%' OR\n     LOWER(drug) LIKE '%semaglutide%' OR\n     LOWER(drug) LIKE '%lixisenatide%') \n    AND (LOWER(route) LIKE '%subcut%' OR \n         LOWER(route) LIKE '%iv%' OR \n         LOWER(route) LIKE '%intraven%')\n),\ncohort_flags AS (\n  SELECT \n    c.hadm_id,\n    MAX(CASE \n        WHEN g.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 24 HOUR) \n        THEN 1 ELSE 0 \n    END) AS in_first_24h,\n    MAX(CASE \n        WHEN g.starttime BETWEEN DATETIME_SUB(c.dischtime, INTERVAL 12 HOUR) AND c.dischtime \n        THEN 1 ELSE 0 \n    END) AS in_final_12h\n  FROM cohort c\n  LEFT JOIN glp1_orders g \n    ON c.hadm_id = g.hadm_id\n  GROUP BY c.hadm_id\n)\nSELECT \n  ROUND(100.0 * SUM(in_first_24h) / COUNT(*), 2) AS pct_first_24h,\n  ROUND(100.0 * SUM(in_final_12h) / COUNT(*), 2) AS pct_final_12h\nFROM cohort_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

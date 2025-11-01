@@ -1,0 +1,16 @@
+{
+  "query": "For my 56\u2011year\u2011old patient: among female patients 51\u201361 with heart failure, ICU vs no ICU, LOS <8 vs \u22658 and comorbidity burden (low/med/high), report in\u2011hospital mortality rates, absolute/relative differences, MV/vaso/RRT prevalence.",
+  "final_sql": "WITH \n-- Step 1: Identify heart failure patients and filter by age and gender\nheart_failure_patients AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, p.gender, di.long_title\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diags ON p.subject_id = diags.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON diags.icd_code = di.icd_code AND diags.icd_version = di.icd_version\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 51 AND 61\n  AND di.long_title LIKE '%Heart failure%'\n),\n\n-- Step 2: Determine ICU stay and LOS for each admission\nicu_stays AS (\n  SELECT hadm_id, COUNT(stay_id) AS icu_stay_count\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\nadmissions_info AS (\n  SELECT a.hadm_id, \n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n         a.hospital_expire_flag,\n         COALESCE(icu.icu_stay_count, 0) > 0 AS had_icu_stay\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN icu_stays icu ON a.hadm_id = icu.hadm_id\n),\n\n-- Step 3: Calculate comorbidity burden\ncomorbidity_burden AS (\n  SELECT hadm_id, COUNT(DISTINCT icd_code) AS num_diagnoses\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\n\n-- Step 4: Identify MV, Vaso, RRT usage\nprocedure_events AS (\n  SELECT DISTINCT pe.hadm_id,\n         MAX(CASE WHEN di.label LIKE '%Mechanical Ventilation%' THEN 1 ELSE 0 END) AS had_mv,\n         MAX(CASE WHEN di.label LIKE '%Vasopressor%' THEN 1 ELSE 0 END) AS had_vaso,\n         MAX(CASE WHEN di.label LIKE '%Renal Replacement Therapy%' THEN 1 ELSE 0 END) AS had_rrt\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON pe.itemid = di.itemid\n  GROUP BY pe.hadm_id\n)\n\n-- Final query to report in-hospital mortality rates and prevalence\nSELECT \n  ai.had_icu_stay,\n  ai.los < 8 AS los_less_than_8,\n  CASE \n    WHEN cb.num_diagnoses <= 3 THEN 'low'\n    WHEN cb.num_diagnoses <= 6 THEN 'med'\n    ELSE 'high'\n  END AS comorbidity_burden,\n  COUNT(*) AS total_patients,\n  SUM(ai.hospital_expire_flag) AS in_hospital_deaths,\n  SUM(ai.hospital_expire_flag) / COUNT(*) AS in_hospital_mortality_rate,\n  AVG(pe.had_mv) AS mv_prevalence,\n  AVG(pe.had_vaso) AS vaso_prevalence,\n  AVG(pe.had_rrt) AS rrt_prevalence\nFROM heart_failure_patients hfp\nJOIN admissions_info ai ON hfp.subject_id = ai.hadm_id\nJOIN comorbidity_burden cb ON ai.hadm_id = cb.hadm_id\nLEFT JOIN procedure_events pe ON ai.hadm_id = pe.hadm_id\nGROUP BY ai.had_icu_stay, ai.los < 8, comorbidity_burden\nORDER BY ai.had_icu_stay, ai.los < 8, comorbidity_burden;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

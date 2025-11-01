@@ -1,0 +1,16 @@
+{
+  "query": "I have a 44-year-old female inpatient. Among female inpatients 39\u201349 with asthma exacerbation, what is the 75th\u2011percentile lab instability score in the first 48 hours? Compare critical\u2011lab events per admission to all inpatients and report cohort LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH all_admissions AS (\n    SELECT a.hadm_id, a.admittime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\ncritical_lab_counts AS (\n    SELECT\n        a.hadm_id,\n        COUNT(l.labevent_id) AS critical_count\n    FROM all_admissions a\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n        ON a.hadm_id = l.hadm_id\n        AND l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 48 HOUR)\n        AND l.flag IS NOT NULL\n        AND l.flag != 'normal'  -- Exclude normal flags\n    GROUP BY a.hadm_id\n),\ncohort AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag,\n        (EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age)) AS age_admit\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    WHERE\n        p.gender = 'F'\n        AND (EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age)) BETWEEN 39 AND 49\n        AND a.hadm_id IN (\n            SELECT hadm_id\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n            WHERE\n                (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^493\\.[0129][12]'))\n                OR\n                (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^J45\\.[0-9]+[12]'))\n        )\n),\ncohort_lab AS (\n    SELECT\n        c.*,\n        COALESCE(clc.critical_count, 0) AS critical_count\n    FROM cohort c\n    LEFT JOIN critical_lab_counts clc\n        ON c.hadm_id = clc.hadm_id\n)\nSELECT\n    (SELECT APPROX_QUANTILES(critical_count, 100)[OFFSET(75)]\n     FROM cohort_lab) AS cohort_75th_percentile_lab_instability,\n    AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS cohort_avg_los_days,\n    AVG(hospital_expire_flag) AS cohort_mortality_rate,\n    (SELECT APPROX_QUANTILES(critical_count, 100)[OFFSET(75)]\n     FROM critical_lab_counts) AS all_inpatients_75th_percentile_lab_instability\nFROM cohort_lab;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

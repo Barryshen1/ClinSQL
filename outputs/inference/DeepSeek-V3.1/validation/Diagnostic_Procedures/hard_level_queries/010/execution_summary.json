@@ -1,0 +1,16 @@
+{
+  "query": "I have a 45-year-old man. Among male ICU patients aged 40\u201350, comparing those with hemorrhagic stroke versus other males 40\u201350, what is the 90th percentile of diagnostic procedures in the first 72 hours, and associated ICU LOS and in-hospital mortality?",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        ie.subject_id,\n        ie.hadm_id,\n        ie.stay_id,\n        ie.intime,\n        ie.outtime,\n        ie.los,\n        p.gender,\n        p.anchor_age,\n        adm.hospital_expire_flag,\n        -- Flag for hemorrhagic stroke: ICD-10: I60, I61, I62; ICD-9: 430, 431, 432\n        MAX(CASE \n            WHEN di.icd_code LIKE 'I6[0-2]%' OR di.icd_code IN ('430', '431', '432') \n            THEN 1 \n            ELSE 0 \n        END) AS hemorrhagic_stroke\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ie.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON ie.hadm_id = adm.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON ie.hadm_id = di.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 40 AND 50\n    GROUP BY ie.subject_id, ie.hadm_id, ie.stay_id, ie.intime, ie.outtime, ie.los, p.gender, p.anchor_age, adm.hospital_expire_flag\n),\n\nprocedures_in_72h AS (\n    SELECT \n        c.stay_id,\n        COUNT(DISTINCT pe.itemid) AS num_procedures\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n        ON c.stay_id = pe.stay_id\n        AND pe.starttime >= c.intime\n        AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    GROUP BY c.stay_id\n)\n\nSELECT \n    c.hemorrhagic_stroke,\n    COUNT(*) AS num_patients,\n    -- 90th percentile of diagnostic procedures\n    APPROX_QUANTILES(p.num_procedures, 100)[OFFSET(90)] AS proc_90th_percentile,\n    -- 90th percentile of ICU LOS\n    APPROX_QUANTILES(c.los, 100)[OFFSET(90)] AS los_90th_percentile,\n    -- In-hospital mortality rate\n    ROUND(100.0 * SUM(c.hospital_expire_flag) / COUNT(*), 2) AS mortality_percent\nFROM cohort c\nLEFT JOIN procedures_in_72h p\n    ON c.stay_id = p.stay_id\nGROUP BY c.hemorrhagic_stroke\nORDER BY c.hemorrhagic_stroke;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

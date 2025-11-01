@@ -1,0 +1,28 @@
+{
+  "query": "I have a 70-year-old male patient. Among male Medicare patients aged 65\u201375 admitted from the ED with a principal diagnosis of acute respiratory failure, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent LOS >9 days?",
+  "final_sql": "WITH cohort_raw AS (\n  -- Compute row number first\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    EXTRACT(DAY FROM a.dischtime - a.admittime) AS los_index,\n    ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY a.admittime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n    ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'EMERGENCY ROOM'\n    AND a.hospital_expire_flag = 0\n    AND a.dischtime IS NOT NULL\n    AND a.admittime < a.dischtime\n    AND d.seq_num = 1\n    AND d.icd_version = '10'\n    AND d.icd_code LIKE 'J96%'\n),\ncohort AS (\n  SELECT \n    subject_id,\n    hadm_id AS index_hadm_id,\n    admittime AS index_admittime,\n    dischtime AS index_dischtime,\n    los_index\n  FROM cohort_raw\n  WHERE rn = 1\n),\nreadmits AS (\n  -- Flag if patient had readmission within 30 days of index discharge\n  SELECT \n    c.*,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n          ON a2.hadm_id = d2.hadm_id AND d2.seq_num = 1\n        WHERE a2.subject_id = c.subject_id\n          AND a2.hadm_id != c.index_hadm_id\n          AND a2.admittime > c.index_dischtime\n          AND a2.admittime <= DATE_ADD(c.index_dischtime, INTERVAL 30 DAY)\n          AND a2.hospital_expire_flag = 0\n          AND a2.dischtime IS NOT NULL\n          AND d2.icd_version = '10'\n          AND d2.icd_code NOT LIKE 'Z%'  -- Exclude observation/rehab as readmits\n      ) THEN 1 ELSE 0 \n    END AS readmitted\n  FROM cohort c\n),\nsummary AS (\n  SELECT\n    -- 30-day readmission rate (%)\n    SAFE_DIVIDE(SUM(readmitted), COUNT(*)) * 100 AS readmission_rate_pct,\n    \n    -- Median LOS by readmission status\n    PERCENTILE_CONT(los_index, 0.5) OVER (PARTITION BY readmitted) AS median_los,\n    \n    -- % LOS >9 days (full cohort)\n    SAFE_DIVIDE(COUNTIF(los_index > 9), COUNT(*)) * 100 AS pct_los_gt_9_days\n  FROM readmits\n),\nfinal_summary AS (\n  SELECT\n    readmission_rate_pct,\n    MAX(CASE WHEN median_los = (SELECT median_los FROM summary WHERE readmitted = 1) THEN median_los END) AS median_los_readmitted,\n    MAX(CASE WHEN median_los = (SELECT median_los FROM summary WHERE readmitted = 0) THEN median_los END) AS median_los_non_readmitted,\n    pct_los_gt_9_days\n  FROM summary\n  GROUP BY readmission_rate_pct, pct_los_gt_9_days\n)\nSELECT\n  readmission_rate_pct,\n  median_los_readmitted,\n  median_los_non_readmitted,\n  pct_los_gt_9_days\nFROM final_summary;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:9]\n\nLocation: US\nJob ID: 69234e22-9c89-4972-9282-a8537fcbc925\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [24:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [24:9]\n\nLocation: US\nJob ID: 370d432d-00f2-4764-aacd-2b43e97dc8f6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \":\" at [37:15]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \":\" at [37:15]\n\nLocation: US\nJob ID: 15f7a655-16a0-4b63-b471-34ed90e8bd61\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:9]\n\nLocation: US\nJob ID: 69234e22-9c89-4972-9282-a8537fcbc925\n"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH cohort_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND TIMESTAMP_DIFF(\n          a.admittime,\n          DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE),\n          INTERVAL p.anchor_age YEAR),\n          YEAR\n        ) BETWEEN 70 AND 80\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE\n        d.subject_id = a.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%hemorrhagic stroke%'\n    )\n),\ncohort_lab_48h AS (\n  SELECT\n    c.hadm_id,\n    COUNT(l.labevent_id) AS critical_lab_count_48h\n  FROM cohort_admissions c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.subject_id = l.subject_id\n    AND c.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.flag IN ('critical', 'critical/high', 'critical/low')\n  GROUP BY c.hadm_id\n),\ncohort_stats AS (\n  SELECT\n    (SELECT APPROX_QUANTILES(critical_lab_count_48h, 100)[OFFSET(25)] \n     FROM cohort_lab_48h) AS p25_critical_lab_count_48h,\n    AVG(COALESCE(l_entire.critical_lab_count_entire, 0)) AS cohort_critical_lab_rate,\n    AVG(TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY)) AS mean_los,\n    AVG(CAST(c.hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM cohort_admissions c\n  LEFT JOIN (\n    SELECT\n      subject_id,\n      hadm_id,\n      COUNT(*) AS critical_lab_count_entire\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n    WHERE flag IN ('critical', 'critical/high', 'critical/low')\n    GROUP BY subject_id, hadm_id\n  ) l_entire\n    ON c.subject_id = l_entire.subject_id\n    AND c.hadm_id = l_entire.hadm_id\n),\ngeneral_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  WHERE NOT EXISTS (\n    SELECT 1\n    FROM cohort_admissions c\n    WHERE c.subject_id = a.subject_id\n      AND c.hadm_id = a.hadm_id\n  )\n),\ngeneral_lab_events AS (\n  SELECT\n    g.hadm_id,\n    COUNT(*) AS critical_lab_count_entire\n  FROM general_admissions g\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON g.subject_id = l.subject_id\n    AND g.hadm_id = l.hadm_id\n    AND l.flag IN ('critical', 'critical/high', 'critical/low')\n  GROUP BY g.hadm_id\n),\ngeneral_stats AS (\n  SELECT\n    AVG(COALESCE(l.critical_lab_count_entire, 0)) AS general_critical_lab_rate\n  FROM general_lab_events l\n)\nSELECT\n  cs.*,\n  gs.general_critical_lab_rate\nFROM cohort_stats cs,\ngeneral_stats gs;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: critical_lab_count_48h; Did you mean critical_lab_count_entire? at [53:22]; reason: invalidQuery, location: query, message: Unrecognized name: critical_lab_count_48h; Did you mean critical_lab_count_entire? at [53:22]\n\nLocation: US\nJob ID: ad245841-e020-44fa-b6e0-f047345e224d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \".\" at [9:18]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \".\" at [9:18]\n\nLocation: US\nJob ID: 45ecf615-adb0-4ece-b695-ac57da6b4db5\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

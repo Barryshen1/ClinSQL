@@ -1,0 +1,28 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH\n-- 1. Identify hemorrhagic stroke ICD codes\nhemorrhagic_stroke_icd AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE\n    (icd_version = 9 AND (icd_code LIKE '430%' OR icd_code LIKE '431%' OR icd_code LIKE '432%'))\n    OR\n    (icd_version = 10 AND (icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%'))\n),\n\n-- 2. Cohort: male, age 70-80, hemorrhagic stroke\ncohort_admissions AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN hemorrhagic_stroke_icd h ON d.icd_code = h.icd_code AND d.icd_version = h.icd_version\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 70 AND 80\n),\n\n-- 3. General inpatient admissions (for comparison)\ngeneral_admissions AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\n\n-- 4. Lab instability score for each admission (first 48h)\nlab_instability AS (\n  SELECT\n    l.hadm_id,\n    SUM(CAST(is_critical_lab_event AS INT64)) AS critical_lab_events\n  FROM (\n    SELECT\n      l.hadm_id,\n      (\n        l.flag = 'abnormal'\n        OR (\n          SAFE_CAST(l.valuenum AS FLOAT64) IS NOT NULL\n          AND (\n            (l.ref_range_lower IS NOT NULL AND SAFE_CAST(l.valuenum AS FLOAT64) < SAFE_CAST(l.ref_range_lower AS FLOAT64))\n            OR\n            (l.ref_range_upper IS NOT NULL AND SAFE_CAST(l.valuenum AS FLOAT64) > SAFE_CAST(l.ref_range_upper AS FLOAT64))\n          )\n        )\n      ) AS is_critical_lab_event\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON l.hadm_id = a.hadm_id\n    WHERE\n      l.charttime >= a.admittime\n      AND l.charttime < TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n  ) l\n  GROUP BY l.hadm_id\n),\n\n-- 5. Merge lab instability with cohort and general admissions\ncohort_lab AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    IFNULL(l.critical_lab_events, 0) AS critical_lab_events,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR)/24.0 AS los_days\n  FROM cohort_admissions c\n  LEFT JOIN lab_instability l ON c.hadm_id = l.hadm_id\n),\n\ngeneral_lab AS (\n  SELECT\n    g.subject_id,\n    g.hadm_id,\n    g.admittime,\n    g.dischtime,\n    g.hospital_expire_flag,\n    IFNULL(l.critical_lab_events, 0) AS critical_lab_events,\n    TIMESTAMP_DIFF(g.dischtime, g.admittime, HOUR)/24.0 AS los_days\n  FROM general_admissions g\n  LEFT JOIN lab_instability l ON g.hadm_id = l.hadm_id\n),\n\n-- 6. Cohort statistics\ncohort_stats AS (\n  SELECT\n    APPROX_QUANTILES(critical_lab_events, 100)[25] AS lab_instability_25th_percentile,\n    AVG(critical_lab_events) AS mean_critical_lab_events,\n    AVG(los_days) AS mean_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS in_hospital_mortality_rate,\n    COUNT(*) AS n_admissions\n  FROM cohort_lab\n  WHERE los_days IS NOT NULL\n),\n\n-- 7. General inpatient statistics\ngeneral_stats AS (\n  SELECT\n    AVG(critical_lab_events) AS mean_critical_lab_events,\n    AVG(los_days) AS mean_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS in_hospital_mortality_rate,\n    COUNT(*) AS n_admissions\n  FROM general_lab\n  WHERE los_days IS NOT NULL\n)\n\n-- 8. Final output\nSELECT\n  'Cohort: Male, Age 70-80, Hemorrhagic Stroke' AS group,\n  lab_instability_25th_percentile,\n  mean_critical_lab_events,\n  mean_los_days,\n  in_hospital_mortality_rate,\n  n_admissions\nFROM cohort_stats\n\nUNION ALL\n\nSELECT\n  'General Inpatient Population' AS group,\n  NULL AS lab_instability_25th_percentile,\n  mean_critical_lab_events,\n  mean_los_days,\n  in_hospital_mortality_rate,\n  n_admissions\nFROM general_stats;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword GROUP at [108:52]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [108:52]\n\nLocation: US\nJob ID: 01d8a6a4-cdba-486c-88b4-0d9ac4b4fc4d\n",
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [107:52]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [107:52]\n\nLocation: US\nJob ID: b864caa2-a5dd-4313-8dc8-4133a98b22d8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [103:52]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [103:52]\n\nLocation: US\nJob ID: 3cb71f90-7e6e-4ed7-a829-05f813a5e6d2\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [108:52]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [108:52]\n\nLocation: US\nJob ID: 01d8a6a4-cdba-486c-88b4-0d9ac4b4fc4d\n"
+    }
+  ]
+}

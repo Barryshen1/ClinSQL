@@ -1,0 +1,28 @@
+{
+  "query": "In women 83\u201393 with heart failure, stratified by ICU vs non\u2011ICU, LOS <8 vs \u22658, and comorbidity burden (0\u20131/2/\u22653), report mortality (%), median LOS, CKD and diabetes prevalence.",
+  "final_sql": "WITH hf_hadm AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 83 AND 93\n    AND (\n      (di.icd_version = 9  AND di.icd_code LIKE '428%')\n      OR (di.icd_version = 10 AND di.icd_code LIKE 'I50%')\n    )\n),\n\nhf_pop AS (\n  SELECT\n    h.hadm_id,\n    h.subject_id,\n    h.deathtime,\n    h.hospital_expire_flag,\n    CASE WHEN i.stay_id IS NOT NULL THEN 'ICU' ELSE 'Non-ICU' END AS icu_group,\n    TIMESTAMP_DIFF(h.dischtime, h.admittime, SECOND) / 86400.0 AS los_days\n  FROM hf_hadm AS h\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS i\n    ON i.subject_id = h.subject_id AND i.hadm_id = h.hadm_id\n),\n\nhadm_metrics AS (\n  SELECT\n    f.hadm_id,\n    f.subject_id,\n    f.icu_group,\n    f.los_days,\n    MAX(CASE\n          WHEN (d.icd_version = 9 AND d.icd_code LIKE '585%')\n               OR (d.icd_version = 10 AND d.icd_code LIKE 'N18%')\n          THEN 1 ELSE 0\n        END) AS ckd_present,\n    MAX(CASE\n          WHEN (d.icd_version = 9 AND d.icd_code LIKE '250%')\n               OR (d.icd_version = 10 AND (d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E12%' OR d.icd_code LIKE 'E13%' OR d.icd_code LIKE 'E14%'))\n          THEN 1 ELSE 0\n        END) AS dia_present,\n    (COUNT(DISTINCT d.icd_code) - 1) AS comorb_count,\n    CASE WHEN (f.deathtime IS NOT NULL OR f.hospital_expire_flag = 1) THEN 1 ELSE 0 END AS mortality_flag\n  FROM hf_pop AS f\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON d.subject_id = f.subject_id AND d.hadm_id = f.hadm_id\n  GROUP BY\n    f.hadm_id, f.subject_id, f.icu_group, f.los_days, f.deathtime, f.hospital_expire_flag\n)\n\nSELECT\n  icu_group,\n  CASE WHEN los_days < 8.0 THEN '<8' ELSE '>=8' END AS los_cat,\n  CASE\n    WHEN comorb_count <= 1 THEN '0-1'\n    WHEN comorb_count = 2 THEN '2'\n    ELSE '>=3'\n  END AS comorb_cat,\n  100.0 * SUM(mortality_flag) / COUNT(*) AS mortality_percent,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days,\n  100.0 * SUM(ckd_present) / COUNT(*) AS ckd_prevalence_percent,\n  100.0 * SUM(dia_present) / COUNT(*) AS diabetes_prevalence_percent\nFROM hadm_metrics\nGROUP BY icu_group, los_cat, comorb_cat\nORDER BY icu_group, comorb_cat, los_cat;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name deathtime not found inside f at [56:18]; reason: invalidQuery, location: query, message: Name deathtime not found inside f at [56:18]\n\nLocation: US\nJob ID: e8acadb0-9f7f-4e37-b444-398b569d1dcd\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [69:3]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [69:3]\n\nLocation: US\nJob ID: 8e5f354e-ea15-4e02-8799-7454f2e22d32\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

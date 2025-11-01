@@ -1,0 +1,16 @@
+{
+  "query": "For my 80-year-old female inpatient, what is the IQR of single high\u2011intensity atorvastatin (40\u201380 mg) prescription duration in women 75\u201385?",
+  "final_sql": "WITH atorva_pres AS (\n  SELECT\n    pr.subject_id,\n    pr.hadm_id,\n    pr.starttime,\n    pr.stoptime,\n    pr.drug,\n    pr.dose_val_rx,\n    pr.dose_unit_rx,\n    pr.prod_strength,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    -- duration in days as fractional days\n    SAFE_DIVIDE(TIMESTAMP_DIFF(pr.stoptime, pr.starttime, SECOND), 86400.0) AS duration_days\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON pr.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON pr.hadm_id = a.hadm_id\n  WHERE\n    -- female, age 75-85\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 75 AND 85\n\n    -- inpatient prescription: starttime inside admission window\n    AND pr.starttime IS NOT NULL\n    AND pr.stoptime IS NOT NULL\n    AND pr.hadm_id IS NOT NULL\n    AND pr.starttime >= a.admittime\n    AND pr.starttime <= a.dischtime\n\n    -- identify atorvastatin / Lipitor\n    AND (\n      LOWER(COALESCE(pr.drug, '')) LIKE '%atorvastatin%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%lipitor%'\n    )\n\n    -- identify 40 mg or 80 mg strength via multiple possible fields\n    AND (\n      SAFE_CAST(pr.dose_val_rx AS INT64) IN (40, 80)\n      OR SAFE_CAST(REGEXP_EXTRACT(LOWER(COALESCE(pr.prod_strength, '')), r'(\\d+)') AS INT64) IN (40, 80)\n      OR REGEXP_CONTAINS(LOWER(COALESCE(pr.drug, '')), r'(^|\\D)(40|80)\\s*mg(\\D|$)')\n    )\n\n    -- positive duration only\n    AND TIMESTAMP_DIFF(pr.stoptime, pr.starttime, SECOND) > 0\n),\n\nquantiles AS (\n  SELECT\n    APPROX_QUANTILES(duration_days, 100) AS q_arr,\n    COUNT(*) AS n_prescriptions\n  FROM atorva_pres\n)\n\nSELECT\n  q_arr[OFFSET(25)] AS q1_days,\n  q_arr[OFFSET(50)] AS median_days,\n  q_arr[OFFSET(75)] AS q3_days,\n  q_arr[OFFSET(75)] - q_arr[OFFSET(25)] AS iqr_days,\n  n_prescriptions\nFROM quantiles;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

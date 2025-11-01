@@ -1,0 +1,28 @@
+{
+  "query": "47\u2011year\u2011old male: among inpatients 42\u201352 with diabetes + acute HF, report % prevalence antidiabetic classes Insulin, Metformin, Sulfonylurea, DPP\u20114, SGLT2, GLP\u20111, TZD in first 24h vs final 12h, net change (pp).",
+  "final_sql": "WITH\n-- Define diabetes and acute HF ICD codes\ndiabetes_codes AS (\n  SELECT icd_code, icd_version FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND icd_code LIKE '250%')\n     OR (icd_version = 10 AND icd_code LIKE 'E1%')\n),\nacute_hf_codes AS (\n  SELECT icd_code, icd_version FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND icd_code LIKE '428%')\n     OR (icd_version = 10 AND icd_code LIKE 'I50%')\n),\n\n-- Get patients with diabetes and acute HF\ntarget_patients AS (\n  SELECT DISTINCT p.subject_id, p.gender, p.anchor_age, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d1 ON a.hadm_id = d1.hadm_id\n  JOIN diabetes_codes dc ON d1.icd_code = dc.icd_code AND d1.icd_version = dc.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2 ON a.hadm_id = d2.hadm_id\n  JOIN acute_hf_codes ahf ON d2.icd_code = ahf.icd_code AND d2.icd_version = ahf.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 42 AND 52\n),\n\n-- Define medication classes\nmedication_classes AS (\n  SELECT\n    CASE\n      WHEN LOWER(drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN LOWER(drug) LIKE '%metformin%' THEN 'Metformin'\n      WHEN LOWER(drug) LIKE '%sulfonylurea%' OR\n           LOWER(drug) LIKE '%glimepiride%' OR\n           LOWER(drug) LIKE '%glyburide%' OR\n           LOWER(drug) LIKE '%glipizide%' THEN 'Sulfonylurea'\n      WHEN LOWER(drug) LIKE '%dpp-4%' OR\n           LOWER(drug) LIKE '%sitagliptin%' OR\n           LOWER(drug) LIKE '%saxagliptin%' OR\n           LOWER(drug) LIKE '%linagliptin%' THEN 'DPP-4'\n      WHEN LOWER(drug) LIKE '%sglt2%' OR\n           LOWER(drug) LIKE '%empagliflozin%' OR\n           LOWER(drug) LIKE '%canagliflozin%' OR\n           LOWER(drug) LIKE '%dapagliflozin%' THEN 'SGLT2'\n      WHEN LOWER(drug) LIKE '%glp-1%' OR\n           LOWER(drug) LIKE '%exenatide%' OR\n           LOWER(drug) LIKE '%liraglutide%' OR\n           LOWER(drug) LIKE '%dulaglutide%' THEN 'GLP-1'\n      WHEN LOWER(drug) LIKE '%thiazolidinedione%' OR\n           LOWER(drug) LIKE '%pioglitazone%' OR\n           LOWER(drug) LIKE '%rosiglitazone%' THEN 'TZD'\n      ELSE 'Other'\n    END AS medication_class,\n    drug\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  GROUP BY drug\n),\n\n-- Get medications for target patients\npatient_medications AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.admittime,\n    p.dischtime,\n    m.medication_class,\n    pr.starttime AS medication_starttime\n  FROM target_patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON p.hadm_id = pr.hadm_id\n  JOIN medication_classes m ON LOWER(pr.drug) = LOWER(m.drug)\n  WHERE m.medication_class != 'Other'\n),\n\n-- Calculate first 24h prevalence\nfirst_24h_prevalence AS (\n  SELECT\n    medication_class,\n    COUNT(DISTINCT subject_id) AS patients_with_medication,\n    COUNT(DISTINCT CASE WHEN medication_starttime <= TIMESTAMP_ADD(admittime, INTERVAL 24 HOUR) THEN subject_id END) AS patients_in_window\n  FROM patient_medications\n  GROUP BY medication_class\n),\n\n-- Calculate final 12h prevalence\nfinal_12h_prevalence AS (\n  SELECT\n    medication_class,\n    COUNT(DISTINCT subject_id) AS patients_with_medication,\n    COUNT(DISTINCT CASE WHEN medication_starttime >= TIMESTAMP_SUB(dischtime, INTERVAL 12 HOUR) THEN subject_id END) AS patients_in_window\n  FROM patient_medications\n  GROUP BY medication_class\n),\n\n-- Combine results\ncombined_results AS (\n  SELECT\n    f.medication_class,\n    f.patients_with_medication AS total_patients,\n    f.patients_in_window AS first_24h_patients,\n    l.patients_in_window AS final_12h_patients,\n    p.subject_count\n  FROM first_24h_prevalence f\n  JOIN final_12h_prevalence l ON f.medication_class = l.medication_class\n  CROSS JOIN (SELECT COUNT(DISTINCT subject_id) AS subject_count FROM target_patients) p\n)\n\n-- Final calculation with percentages\nSELECT\n  medication_class,\n  ROUND((first_24h_patients / subject_count) * 100, 2) AS first_24h_prevalence_percent,\n  ROUND((final_12h_patients / subject_count) * 100, 2) AS final_12h_prevalence_percent,\n  ROUND(((final_12h_patients / subject_count) * 100) - ((first_24h_patients / subject_count) * 100), 2) AS net_change_pp\nFROM combined_results\nORDER BY medication_class;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name icd_version not found inside dc at [20:79]; reason: invalidQuery, location: query, message: Name icd_version not found inside dc at [20:79]\n\nLocation: US\nJob ID: aa49b921-72db-4626-87cd-6282d76987c8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name subject_id not found inside p at [87:23]; reason: invalidQuery, location: query, message: Name subject_id not found inside p at [87:23]\n\nLocation: US\nJob ID: c90afc65-a6f9-40a1-a786-bdd9b563b74f\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

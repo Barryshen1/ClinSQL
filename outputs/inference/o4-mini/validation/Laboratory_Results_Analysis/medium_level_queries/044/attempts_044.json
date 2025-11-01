@@ -1,0 +1,27 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH troponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\n\n-- 2) Get the initial Troponin-T measurement per admission\ninitial_trop AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  JOIN troponin_items AS ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n  QUALIFY ROW_NUMBER() \n    OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC) = 1\n),\n\n-- 3) Apply cohort filters: male, age 54-64, initial Troponin-T > 0.01\ncohort AS (\n  SELECT\n    it.valuenum\n  FROM initial_trop AS it\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON it.hadm_id = adm.hadm_id\n   AND it.subject_id = adm.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON it.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n    AND it.valuenum > 0.01\n)\n\n-- 4) Compute descriptive statistics\nSELECT\n  COUNT(*)                        AS n,\n  AVG(valuenum)                   AS mean,\n  STDDEV_POP(valuenum)            AS stddev,\n  MIN(valuenum)                   AS min,\n  MAX(valuenum)                   AS max,\n  (SELECT PERCENTILE_CONT(valuenum, 0.50) FROM cohort) AS median,\n  (SELECT PERCENTILE_CONT(valuenum, 0.25) FROM cohort) AS p25,\n  (SELECT PERCENTILE_CONT(valuenum, 0.75) FROM cohort) AS p75\nFROM cohort;",
+      "success": false,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: ff3d876a-4a84-4f9d-bc09-6ac7453a8821\n",
+      "row_count": 0
+    },
+    {
+      "attempt": 2,
+      "sql": "WITH troponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\n\ninitial_trop AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  JOIN troponin_items AS ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n  QUALIFY ROW_NUMBER() \n    OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC) = 1\n),\n\ncohort AS (\n  SELECT\n    it.valuenum\n  FROM initial_trop AS it\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON it.subject_id = adm.subject_id\n   AND it.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON it.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n    AND it.valuenum > 0.01\n)\n\nSELECT\n  COUNT(*)                                 AS n,\n  AVG(valuenum)                            AS mean,\n  STDDEV_POP(valuenum)                     AS stddev,\n  MIN(valuenum)                            AS min,\n  MAX(valuenum)                            AS max,\n  quantiles[OFFSET(2)]                     AS median,\n  quantiles[OFFSET(1)]                     AS p25,\n  quantiles[OFFSET(3)]                     AS p75\nFROM (\n  SELECT valuenum, APPROX_QUANTILES(valuenum, 4) AS quantiles\n  FROM cohort\n)\n;",
+      "success": false,
+      "error": "400 SELECT list expression references column valuenum which is neither grouped nor aggregated at [44:10]; reason: invalidQuery, location: query, message: SELECT list expression references column valuenum which is neither grouped nor aggregated at [44:10]\n\nLocation: US\nJob ID: 2fdde438-1dff-4c31-98c7-d919830ca4c3\n",
+      "row_count": 0
+    },
+    {
+      "attempt": 3,
+      "sql": "WITH troponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\n\ninitial_trop AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  JOIN troponin_items AS ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n  QUALIFY\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC) = 1\n),\n\ncohort AS (\n  SELECT\n    it.valuenum\n  FROM initial_trop AS it\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON it.subject_id = adm.subject_id\n   AND it.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON it.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n    AND it.valuenum > 0.01\n),\n\nmetrics AS (\n  SELECT\n    COUNT(*)          AS n,\n    AVG(valuenum)     AS mean,\n    STDDEV_POP(valuenum) AS stddev,\n    MIN(valuenum)     AS min,\n    MAX(valuenum)     AS max\n  FROM cohort\n),\n\nquant AS (\n  SELECT\n    APPROX_QUANTILES(valuenum, 4) AS quantiles\n  FROM cohort\n)\n\nSELECT\n  m.n,\n  m.mean,\n  m.stddev,\n  m.min,\n  m.max,\n  q.quantiles[OFFSET(1)] AS p25,\n  q.quantiles[OFFSET(2)] AS median,\n  q.quantiles[OFFSET(3)] AS p75\nFROM metrics AS m\nCROSS JOIN quant AS q;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

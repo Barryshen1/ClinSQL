@@ -1,0 +1,22 @@
+{
+  "query": "For my 53-year-old female: among female stroke admissions aged 48\u201358, report in\u2011hospital mortality (%) with 95% CIs by ICU vs non\u2011ICU, LOS \u22645 vs >5, and comorbidity burden.",
+  "final_sql": "WITH \n-- Step 1: Identify stroke admissions\nstroke_admissions AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON a.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 48 AND 58\n  AND d_diag.long_title LIKE '%stroke%'  -- Simplified stroke identification\n),\n\n-- Step 2: Calculate in-hospital mortality, LOS, and ICU status\npatient_outcomes AS (\n  SELECT \n    sa.subject_id, sa.hadm_id,\n    a.hospital_expire_flag AS in_hospital_mortality,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    icu.hadm_id IS NOT NULL AS icu_admission\n  FROM stroke_admissions sa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON sa.hadm_id = a.hadm_id\n  LEFT JOIN (SELECT DISTINCT hadm_id FROM `physionet-data.mimiciv_3_1_icu.icustays`) icu ON sa.hadm_id = icu.hadm_id\n),\n\n-- Step 3: Calculate comorbidity burden (simplified as count of distinct diagnoses)\ncomorbidity_burden AS (\n  SELECT hadm_id, COUNT(DISTINCT icd_code) AS num_comorbidities\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n)\n\n-- Final analysis\nSELECT \n  IF(po.icu_admission, 'ICU', 'Non-ICU') AS icu_status,\n  IF(po.los <= 5, 'LOS <= 5', 'LOS > 5') AS los_category,\n  -- Simplified comorbidity burden categorization\n  IF(cb.num_comorbidities <= 3, 'Low', 'High') AS comorbidity_burden,\n  COUNT(*) AS total_patients,\n  SUM(po.in_hospital_mortality) AS num_deaths,\n  -- Calculate mortality rate and 95% CI\n  (SUM(po.in_hospital_mortality) / COUNT(*)) * 100 AS mortality_rate,\n  -- Simplified 95% CI calculation using binomial proportion CI\n  ((SUM(po.in_hospital_mortality) / COUNT(*)) + 1.96 * SQRT((SUM(po.in_hospital_mortality) / COUNT(*)) * (1 - (SUM(po.in_hospital_mortality) / COUNT(*))) / COUNT(*))) * 100 AS mortality_rate_upper_ci,\n  ((SUM(po.in_hospital_mortality) / COUNT(*)) - 1.96 * SQRT((SUM(po.in_hospital_mortality) / COUNT(*)) * (1 - (SUM(po.in_hospital_mortality) / COUNT(*))) / COUNT(*))) * 100 AS mortality_rate_lower_ci\nFROM patient_outcomes po\nINNER JOIN comorbidity_burden cb ON po.hadm_id = cb.hadm_id\nGROUP BY icu_status, los_category, comorbidity_burden\nORDER BY icu_status, los_category, comorbidity_burden;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function COUNT with no arguments\n  Signature: COUNT(T1)\n    Signature requires at least 1 argument, found 0 arguments at [42:92]; reason: invalidQuery, location: query, message: No matching signature for aggregate function COUNT with no arguments\n  Signature: COUNT(T1)\n    Signature requires at least 1 argument, found 0 arguments at [42:92]\n\nLocation: US\nJob ID: 75eba518-758b-4332-8d4a-c3df57d01a43\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

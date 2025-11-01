@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating an 88\u2011year\u2011old male. Among male patients 83\u201393 with ACS, stratified by 1\u20134 vs 5\u20137 day stay and primary vs secondary diagnosis, what are mean, min, max ultrasounds per admission?",
+  "final_sql": "WITH acs_admissions AS (\n  -- Filter male patients aged 83-93 with ACS diagnoses\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    d.seq_num,\n    CASE WHEN d.seq_num = 1 THEN 'Primary' ELSE 'Secondary' END AS diagnosis_type\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON p.subject_id = a.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 83 AND 93\n    AND d.icd_code LIKE 'I2%'  -- ACS: I20-I22 (unstable angina, acute/subsequent MI)\n    AND a.hospital_expire_flag = 0  -- Exclude in-hospital deaths (LOS=0)\n),\nlos_stratified AS (\n  -- Add LOS stratum\n  SELECT \n    *,\n    DATE_DIFF(DATE(dischtime), DATE(admittime), DAY) AS los_days,\n    CASE \n      WHEN DATE_DIFF(DATE(dischtime), DATE(admittime), DAY) BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN DATE_DIFF(DATE(dischtime), DATE(admittime), DAY) BETWEEN 5 AND 7 THEN '5-7 days'\n      ELSE 'Other'\n    END AS los_stratum\n  FROM acs_admissions\n  WHERE DATE_DIFF(DATE(dischtime), DATE(admittime), DAY) BETWEEN 1 AND 7  -- Focus on specified strata\n),\nultrasounds AS (\n  -- Identify ultrasound procedures per admission\n  SELECT \n    pe.hadm_id,\n    COUNT(DISTINCT CASE WHEN di.category = 'Imaging' OR di.label LIKE '%echo%' OR di.label LIKE '%ultrasound%' THEN pe.itemid END) AS ultrasound_count\n  FROM \n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` di\n  ON pe.itemid = di.itemid\n  GROUP BY pe.hadm_id\n),\nadmissions_with_ultrasounds AS (\n  -- Join ultrasounds to admissions (default to 0 if no procedures)\n  SELECT \n    ls.*,\n    COALESCE(u.ultrasound_count, 0) AS ultrasound_count\n  FROM los_stratified ls\n  LEFT JOIN ultrasounds u\n  ON ls.hadm_id = u.hadm_id\n  WHERE los_stratum != 'Other'  -- Only 1-4 and 5-7 days\n)\n-- Aggregate statistics by strata\nSELECT \n  'Male 83-93' AS demographic_group,\n  los_stratum,\n  diagnosis_type,\n  COUNT(*) AS num_admissions,\n  AVG(ultrasound_count) AS mean_ultrasounds,\n  MIN(ultrasound_count) AS min_ultrasounds,\n  MAX(ultrasound_count) AS max_ultrasounds\nFROM admissions_with_ultrasounds\nGROUP BY los_stratum, diagnosis_type\nORDER BY los_stratum, diagnosis_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

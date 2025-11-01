@@ -1,0 +1,28 @@
+{
+  "query": "For a 44\u2011year\u2011old man: among male 39\u201349 with pneumonia (aspiration vs community\u2011acquired), provide in\u2011hospital mortality (%) by LOS (1\u20133/4\u20137/\u22658 days) and day\u20111 ICU status; report absolute/relative differences and average comorbidity count.",
+  "final_sql": "WITH\n-- Define pneumonia types\npneumonia_codes AS (\n  SELECT\n    icd_code,\n    CASE\n      WHEN icd_code IN ('J690', 'J698', 'J699') THEN 'Aspiration'\n      WHEN icd_code BETWEEN 'J120' AND 'J189' AND icd_code NOT LIKE 'J69%' THEN 'Community-acquired'\n      ELSE NULL\n    END AS pneumonia_type\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_version = 10\n),\n\n-- Get patient admissions with pneumonia\npneumonia_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    d.icd_code,\n    pc.pneumonia_type,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN pneumonia_codes pc ON d.icd_code = pc.icd_code\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND pc.pneumonia_type IS NOT NULL\n),\n\n-- Identify ICU status on day 1\nicu_status AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    MAX(CASE\n        WHEN (t.careunit LIKE '%ICU%' AND TIMESTAMP_DIFF(t.intime, pa.admittime, HOUR) <= 24)\n          OR (i.intime IS NOT NULL AND TIMESTAMP_DIFF(i.intime, pa.admittime, HOUR) <= 24)\n        THEN 1 ELSE 0 END) AS day1_icu\n  FROM pneumonia_admissions pa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.transfers` t ON pa.hadm_id = t.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON pa.hadm_id = i.hadm_id\n  GROUP BY pa.subject_id, pa.hadm_id\n),\n\n-- Calculate comorbidity count (excluding pneumonia codes)\ncomorbidity_count AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    COUNT(DISTINCT d.icd_code) AS comorbidity_count\n  FROM pneumonia_admissions pa\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON pa.hadm_id = d.hadm_id\n  JOIN pneumonia_codes pc ON d.icd_code = pc.icd_code\n  WHERE pc.pneumonia_type IS NULL  -- Exclude pneumonia codes from comorbidity count\n  GROUP BY pa.subject_id, pa.hadm_id\n),\n\n-- Combine all data\ncombined_data AS (\n  SELECT\n    pa.pneumonia_type,\n    CASE\n      WHEN pa.los_days BETWEEN 1 AND 3 THEN '1-3 days'\n      WHEN pa.los_days BETWEEN 4 AND 7 THEN '4-7 days'\n      WHEN pa.los_days >= 8 THEN '8+ days'\n      ELSE NULL\n    END AS los_group,\n    i.day1_icu,\n    pa.hospital_expire_flag,\n    c.comorbidity_count\n  FROM pneumonia_admissions pa\n  JOIN icu_status i ON pa.subject_id = i.subject_id AND pa.hadm_id = i.hadm_id\n  JOIN comorbidity_count c ON pa.subject_id = c.subject_id AND pa.hadm_id = c.hadm_id\n  WHERE pa.los_days >= 1  -- Ensure we have complete LOS data\n),\n\n-- Aggregate results\nfinal_results AS (\n  SELECT\n    pneumonia_type,\n    los_group,\n    day1_icu,\n    COUNT(*) AS patient_count,\n    SUM(hospital_expire_flag) AS death_count,\n    ROUND(SUM(hospital_expire_flag) / COUNT(*) * 100, 2) AS mortality_rate,\n    ROUND(AVG(comorbidity_count), 2) AS avg_comorbidity_count\n  FROM combined_data\n  GROUP BY pneumonia_type, los_group, day1_icu\n)\n\n-- Final output with differences\nSELECT\n  pneumonia_type,\n  los_group,\n  day1_icu,\n  patient_count,\n  death_count,\n  mortality_rate,\n  avg_comorbidity_count,\n  -- Calculate absolute and relative differences\n  CASE\n    WHEN day1_icu = 1 THEN\n      ROUND(mortality_rate - FIRST_VALUE(mortality_rate) OVER (PARTITION BY pneumonia_type, los_group ORDER BY day1_icu), 2)\n    ELSE NULL\n  END AS abs_diff_with_icu,\n  CASE\n    WHEN day1_icu = 1 AND\n         FIRST_VALUE(mortality_rate) OVER (PARTITION BY pneumonia_type, los_group ORDER BY day1_icu) > 0 THEN\n      ROUND((mortality_rate - FIRST_VALUE(mortality_rate) OVER (PARTITION BY pneumonia_type, los_group ORDER BY day1_icu)) /\n            NULLIF(FIRST_VALUE(mortality_rate) OVER (PARTITION BY pneumonia_type, los_group ORDER BY day1_icu), 0) * 100, 2)\n    ELSE NULL\n  END AS rel_diff_with_icu\nFROM final_results\nORDER BY pneumonia_type, los_group, day1_icu;",
+  "execution_success": true,
+  "row_count": 12,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_icu.transfers was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_icu.transfers was not found in location US\n\nLocation: US\nJob ID: 43fca51c-5001-4ef2-9f76-cbc62cc0f90d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/86407f63-3cfb-484d-b4ea-4d110d196cb1?maxResults=0&location=US&prettyPrint=false: division by zero: 29.03 / 0\n\nLocation: US\nJob ID: 86407f63-3cfb-484d-b4ea-4d110d196cb1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 12,
+      "error": null
+    }
+  ]
+}

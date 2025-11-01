@@ -1,0 +1,16 @@
+{
+  "query": "In women 83\u201393 with heart failure, stratified by ICU vs non\u2011ICU, LOS <8 vs \u22658, and comorbidity burden (0\u20131/2/\u22653), report mortality (%), median LOS, CKD and diabetes prevalence.",
+  "final_sql": "WITH\n-- Base patient cohort: women 83-93 with heart failure\npatient_cohort AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END AS is_icu,\n    -- Comorbidity count (excluding heart failure)\n    COUNT(DISTINCT CASE WHEN d.icd_code NOT LIKE 'I50.%' AND d.icd_code NOT LIKE '428.%' THEN d.icd_code END) AS comorbidity_count,\n    -- CKD flag\n    MAX(CASE WHEN d.icd_code LIKE 'N18.%' THEN 1 ELSE 0 END) AS has_ckd,\n    -- Diabetes flag\n    MAX(CASE WHEN d.icd_code LIKE 'E11.%' OR d.icd_code LIKE '250.%' THEN 1 ELSE 0 END) AS has_diabetes\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON a.subject_id = diag.subject_id AND a.hadm_id = diag.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 83 AND 93\n    AND (d.icd_code LIKE 'I50.%' OR d.icd_code LIKE '428.%') -- Heart failure codes\n  GROUP BY\n    p.subject_id, p.gender, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, los_days, is_icu\n),\n\n-- Stratified results\nstratified_results AS (\n  SELECT\n    is_icu,\n    CASE WHEN los_days < 8 THEN 'LOS <8' ELSE 'LOS \u22658' END AS los_stratum,\n    CASE\n      WHEN comorbidity_count BETWEEN 0 AND 1 THEN '0-1'\n      WHEN comorbidity_count = 2 THEN '2'\n      ELSE '\u22653'\n    END AS comorbidity_stratum,\n    COUNT(*) AS patient_count,\n    SUM(hospital_expire_flag) AS death_count,\n    ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 1) AS mortality_pct,\n    ROUND(AVG(los_days), 1) AS median_los,\n    SUM(has_ckd) AS ckd_count,\n    ROUND(100 * SUM(has_ckd) / COUNT(*), 1) AS ckd_prevalence,\n    SUM(has_diabetes) AS diabetes_count,\n    ROUND(100 * SUM(has_diabetes) / COUNT(*), 1) AS diabetes_prevalence\n  FROM\n    patient_cohort\n  GROUP BY\n    is_icu, los_stratum, comorbidity_stratum\n)\n\n-- Final output\nSELECT\n  CASE WHEN is_icu = 1 THEN 'ICU' ELSE 'Non-ICU' END AS icu_status,\n  los_stratum,\n  comorbidity_stratum,\n  patient_count,\n  mortality_pct,\n  median_los,\n  ckd_prevalence,\n  diabetes_prevalence\nFROM\n  stratified_results\nORDER BY\n  is_icu, los_stratum, comorbidity_stratum;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

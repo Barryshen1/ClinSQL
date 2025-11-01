@@ -1,0 +1,16 @@
+{
+  "query": "I have an 83-year-old female inpatient. Among female patients aged 78\u201388 with acute ischemic stroke, what was the minimum 72-hour laboratory instability score? Also compare cohort average critical lab events to general inpatients and report cohort LOS and in-hospital mortality.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n),\nfiltered_admissions AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    admittime, \n    dischtime, \n    hospital_expire_flag,\n    age_admit\n  FROM base_admissions\n  WHERE age_admit BETWEEN 78 AND 88\n),\nstroke_codes AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND (icd_code LIKE '433%' OR icd_code LIKE '434%' OR icd_code = '436')) OR\n    (icd_version = 10 AND (icd_code LIKE 'I63%' OR icd_code = 'I64'))\n),\nadmissions_with_stroke AS (\n  SELECT \n    f.*,\n    CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS is_stroke\n  FROM filtered_admissions f\n  LEFT JOIN stroke_codes s\n    ON f.hadm_id = s.hadm_id\n),\ncritical_lab_counts AS (\n  SELECT \n    a.hadm_id,\n    COUNT(l.labevent_id) AS critical_lab_count\n  FROM admissions_with_stroke a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND a.subject_id = l.subject_id\n    AND l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND l.flag IS NOT NULL  -- Critical = any flagged abnormal result\n  GROUP BY a.hadm_id\n),\ncohort_data AS (\n  SELECT \n    a.hadm_id,\n    c.critical_lab_count,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    a.hospital_expire_flag\n  FROM admissions_with_stroke a\n  INNER JOIN critical_lab_counts c\n    ON a.hadm_id = c.hadm_id\n  WHERE a.is_stroke = 1  -- Stroke cohort\n),\ncontrol_data AS (\n  SELECT \n    c.critical_lab_count\n  FROM admissions_with_stroke a\n  INNER JOIN critical_lab_counts c\n    ON a.hadm_id = c.hadm_id\n  WHERE a.is_stroke = 0  -- Control group (no stroke)\n),\ncohort_summary AS (\n  SELECT\n    MIN(critical_lab_count) AS min_72hr_lab_instability_score,\n    AVG(critical_lab_count) AS cohort_avg_critical_lab_events,\n    AVG(los_days) AS cohort_avg_los,\n    AVG(hospital_expire_flag) AS cohort_mortality_rate\n  FROM cohort_data\n),\ncontrol_summary AS (\n  SELECT\n    AVG(critical_lab_count) AS control_avg_critical_lab_events\n  FROM control_data\n)\nSELECT\n  min_72hr_lab_instability_score,\n  cohort_avg_critical_lab_events,\n  control_avg_critical_lab_events,\n  cohort_avg_los,\n  cohort_mortality_rate\nFROM cohort_summary, control_summary;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 95\u2011year\u2011old man. Among male patients aged 90\u2013100 admitted with ACS, what are counts, percentages, and mean length of stay for index Troponin T categorized as normal/borderline/elevated?",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 90 AND 100\n),\nacs_admissions AS (\n  SELECT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_code = 'I21'\n     OR d.icd_code = 'I22'\n     OR d.icd_code = 'I200'\n     OR d.icd_code LIKE 'I21%'\n     OR d.icd_code LIKE 'I22%'\n),\ntroponin_t_lab AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_labitems\n  WHERE LOWER(label) = 'troponin t'\n),\nindex_troponin AS (\n  SELECT \n    le.hadm_id,\n    le.valuenum,\n    le.charttime,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  JOIN troponin_t_lab t ON le.itemid = t.itemid\n  WHERE le.valuenum IS NOT NULL\n),\nfirst_troponin_per_admission AS (\n  SELECT hadm_id, valuenum\n  FROM index_troponin\n  WHERE rn = 1\n),\nadmissions_with_troponin AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    ft.valuenum AS troponin_t\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN patients_filtered p ON a.subject_id = p.subject_id\n  JOIN acs_admissions acs ON a.hadm_id = acs.hadm_id\n  JOIN first_troponin_per_admission ft ON a.hadm_id = ft.hadm_id\n),\ntroponin_categories AS (\n  SELECT \n    hadm_id,\n    troponin_t,\n    los_days,\n    CASE\n      WHEN troponin_t <= 0.014 THEN 'normal'\n      WHEN troponin_t <= 0.050 THEN 'borderline'\n      ELSE 'elevated'\n    END AS category\n  FROM admissions_with_troponin\n)\nSELECT\n  category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(los_days), 2) AS mean_los_days\nFROM troponin_categories\nGROUP BY category\nORDER BY \n  CASE category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'elevated' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: FIELD at [69:10]; reason: invalidQuery, location: query, message: Function not found: FIELD at [69:10]\n\nLocation: US\nJob ID: 8b9cb12f-b0b5-4a41-b25b-ba5cb4a15605\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

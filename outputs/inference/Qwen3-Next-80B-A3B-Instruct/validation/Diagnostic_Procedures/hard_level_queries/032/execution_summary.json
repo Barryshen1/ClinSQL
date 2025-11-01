@@ -1,0 +1,28 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT \n    i.subject_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n),\nsepsis_diagnoses AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d \n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%sepsis%' \n     OR LOWER(d.long_title) LIKE '%septicemia%'\n     OR di.icd_code IN ('995.91', '995.92', 'A41.9', 'R65.20', 'R65.21', 'R65.22')\n),\npatients_filtered AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    fi.stay_id,\n    fi.intime,\n    fi.los AS icu_los,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN first_icu_stays fi \n    ON p.subject_id = fi.subject_id AND fi.rn = 1\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id AND fi.hadm_id = a.hadm_id\n  WHERE p.gender = 'F' \n    AND p.anchor_age BETWEEN 66 AND 76\n),\nsepsis_cohort AS (\n  SELECT DISTINCT \n    pf.subject_id,\n    pf.hadm_id,\n    pf.intime,\n    pf.hospital_expire_flag,\n    DATETIME_DIFF(pf.dischtime, pf.admittime, DAY) AS hospital_los\n  FROM patients_filtered pf\n  JOIN sepsis_diagnoses sd \n    ON pf.subject_id = sd.subject_id AND pf.hadm_id = sd.hadm_id\n),\ncontrol_cohort AS (\n  SELECT DISTINCT \n    pf.subject_id,\n    pf.hadm_id,\n    pf.intime,\n    pf.hospital_expire_flag,\n    DATETIME_DIFF(pf.dischtime, pf.admittime, DAY) AS hospital_los\n  FROM patients_filtered pf\n  LEFT JOIN sepsis_diagnoses sd \n    ON pf.subject_id = sd.subject_id AND pf.hadm_id = sd.hadm_id\n  WHERE sd.subject_id IS NULL\n),\nprocedures_in_48h AS (\n  SELECT \n    pe.stay_id,\n    pe.itemid,\n    pe.starttime\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  JOIN sepsis_cohort sc \n    ON pe.stay_id = sc.stay_id\n  WHERE pe.starttime >= sc.intime \n    AND pe.starttime <= sc.intime + INTERVAL 48 HOUR\n),\ndistinct_procedures_per_patient AS (\n  SELECT \n    sc.subject_id,\n    COUNT(DISTINCT pi.itemid) AS num_distinct_procedures\n  FROM sepsis_cohort sc\n  LEFT JOIN procedures_in_48h pi \n    ON sc.stay_id = pi.stay_id\n  GROUP BY sc.subject_id\n),\nsepsis_summary AS (\n  SELECT \n    PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY dpp.num_distinct_procedures) AS p90_procedures_sepsis,\n    AVG(sc.hospital_los) AS avg_los_sepsis,\n    AVG(CAST(sc.hospital_expire_flag AS FLOAT64)) AS mortality_rate_sepsis\n  FROM distinct_procedures_per_patient dpp\n  JOIN sepsis_cohort sc \n    ON dpp.subject_id = sc.subject_id\n),\ncontrol_summary AS (\n  SELECT \n    AVG(cc.hospital_los) AS avg_los_control,\n    AVG(CAST(cc.hospital_expire_flag AS FLOAT64)) AS mortality_rate_control\n  FROM control_cohort cc\n)\nSELECT \n  s.p90_procedures_sepsis,\n  s.avg_los_sepsis,\n  s.mortality_rate_sepsis,\n  c.avg_los_control,\n  c.mortality_rate_control\nFROM sepsis_summary s\nCROSS JOIN control_summary c;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [85:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [85:26]\n\nLocation: US\nJob ID: cd606ddb-cdae-4c78-9d57-41880cef9d87\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:12]\n\nLocation: US\nJob ID: b79d8367-55fc-448a-9824-a1fb7ea1913d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \")\" at [73:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \")\" at [73:1]\n\nLocation: US\nJob ID: 620b8d4b-5d31-470f-bc75-8becf8466d76\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [85:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [85:26]\n\nLocation: US\nJob ID: cd606ddb-cdae-4c78-9d57-41880cef9d87\n"
+    }
+  ]
+}

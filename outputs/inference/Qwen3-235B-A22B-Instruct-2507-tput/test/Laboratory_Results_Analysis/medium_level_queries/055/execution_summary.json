@@ -1,0 +1,16 @@
+{
+  "query": "I have an 86\u2011year\u2011old female. Among female patients aged 81\u201391 admitted for chest pain or AMI, what's the distribution of index hs\u2011TnT (normal/borderline/myocardial injury), with counts, percentages, and mean LOS?",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT \n    a.hadm_id,\n    p.subject_id,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 81 AND 91\n),\n\n-- Filter admissions with chest pain or AMI (ICD-10 codes)\nadmissions_with_diagnosis AS (\n  SELECT DISTINCT pa.hadm_id\n  FROM patient_admissions pa\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON pa.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE di.icd_version = 10\n    AND (\n      d.icd_code LIKE 'I21%'  -- AMI codes\n      OR d.icd_code = 'R07.9' -- Chest pain, unspecified\n    )\n),\n\n-- Get first (index) hs-TnT value per admission\ntroponin_values AS (\n  SELECT \n    le.hadm_id,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl ON le.itemid = dl.itemid\n  WHERE dl.label = 'Troponin T' -- Assuming this is hs-TnT; itemid 50341 in MIMIC-IV\n    AND le.valuenum IS NOT NULL\n),\n\nindex_troponin AS (\n  SELECT hadm_id, valuenum\n  FROM troponin_values\n  WHERE rn = 1\n),\n\n-- Combine with diagnosis and classify troponin\nclassified_troponin AS (\n  SELECT \n    it.hadm_id,\n    it.valuenum,\n    CASE\n      WHEN it.valuenum < 14 THEN 'Normal'\n      WHEN it.valuenum BETWEEN 14 AND 59 THEN 'Borderline'\n      WHEN it.valuenum >= 60 THEN 'Myocardial injury'\n      ELSE 'Unknown'\n    END AS troponin_category\n  FROM index_troponin it\n  INNER JOIN admissions_with_diagnosis ad ON it.hadm_id = ad.hadm_id\n),\n\n-- Add LOS from admissions\nlos_data AS (\n  SELECT \n    a.hadm_id,\n    c.troponin_category,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN classified_troponin c ON a.hadm_id = c.hadm_id\n)\n\n-- Final aggregation\nSELECT \n  troponin_category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(los_days), 2) AS mean_los_days\nFROM los_data\nGROUP BY troponin_category\nORDER BY troponin_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

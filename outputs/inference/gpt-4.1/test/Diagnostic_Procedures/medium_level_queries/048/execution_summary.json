@@ -1,0 +1,22 @@
+{
+  "query": "I have a 95-year-old man with heart failure. Among men 90\u2013100 with HF, what are admission counts and mean MRI/CT per admission for LOS 1\u20133 vs 4\u20137, stratified primary vs secondary?",
+  "final_sql": "WITH heart_failure_icds AS (\n  -- Get all ICD codes for heart failure (ICD-9: 428.*, ICD-10: I50.*)\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND icd_code LIKE '428%')\n     OR (icd_version = 10 AND icd_code LIKE 'I50%')\n),\nhf_admissions AS (\n  -- Admissions for men aged 90-100 with HF diagnosis\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.anchor_age,\n    pat.gender,\n    adm.admittime,\n    adm.dischtime,\n    diag.seq_num,\n    diag.icd_code,\n    diag.icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN heart_failure_icds hf\n    ON diag.icd_code = hf.icd_code AND diag.icd_version = hf.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 90 AND 100\n),\nadmission_hf_type AS (\n  -- For each admission, determine if HF is primary (seq_num=1) or secondary (seq_num>1)\n  SELECT\n    subject_id,\n    hadm_id,\n    MIN(seq_num) AS min_seq_num\n  FROM hf_admissions\n  GROUP BY subject_id, hadm_id\n),\nadmission_los AS (\n  -- Calculate LOS and bin\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\nmri_ct_icds AS (\n  -- Get all ICD procedure codes for MRI or CT\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE LOWER(long_title) LIKE '%mri%'\n     OR LOWER(long_title) LIKE '%ct%'\n),\nadmission_mri_ct_count AS (\n  -- Count MRI/CT procedures per admission\n  SELECT\n    proc.hadm_id,\n    COUNT(*) AS mri_ct_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n  JOIN mri_ct_icds mri_ct\n    ON proc.icd_code = mri_ct.icd_code AND proc.icd_version = mri_ct.icd_version\n  GROUP BY proc.hadm_id\n),\nfinal AS (\n  -- Combine all info per admission\n  SELECT\n    t.subject_id,\n    t.hadm_id,\n    l.los_days,\n    CASE\n      WHEN l.los_days BETWEEN 1 AND 3 THEN 'LOS 1-3'\n      WHEN l.los_days BETWEEN 4 AND 7 THEN 'LOS 4-7'\n      ELSE NULL\n    END AS los_bin,\n    CASE\n      WHEN t.min_seq_num = 1 THEN 'Primary'\n      ELSE 'Secondary'\n    END AS hf_type,\n    IFNULL(m.mri_ct_count, 0) AS mri_ct_count\n  FROM admission_hf_type t\n  JOIN admission_los l\n    ON t.hadm_id = l.hadm_id\n  LEFT JOIN admission_mri_ct_count m\n    ON t.hadm_id = m.hadm_id\n)\nSELECT\n  los_bin,\n  hf_type,\n  COUNT(*) AS admission_count,\n  ROUND(AVG(mri_ct_count),2) AS mean_mri_ct_per_admission\nFROM final\nWHERE los_bin IS NOT NULL\nGROUP BY los_bin, hf_type\nORDER BY los_bin, hf_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: a at [69:5]; reason: invalidQuery, location: query, message: Unrecognized name: a at [69:5]\n\nLocation: US\nJob ID: 2c24c4e7-c229-4bd1-8a06-774aab56bc80\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

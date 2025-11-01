@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH sepsis_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.subject_id = d.subject_id\n     AND a.hadm_id = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n     AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND LOWER(dd.long_title) LIKE '%sepsis%'\n    AND LOWER(dd.long_title) NOT LIKE '%shock%'\n  GROUP BY\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n),\nicu_flag AS (\n  SELECT\n    hadm_id,\n    'ICU' AS icu_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\nultrasound_counts AS (\n  SELECT\n    hadm_id,\n    COUNT(*) AS us_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n  WHERE\n    LOWER(short_description) LIKE '%ultrasound%'\n  GROUP BY hadm_id\n),\nadmission_metrics AS (\n  SELECT\n    sa.subject_id,\n    sa.hadm_id,\n    -- LOS in days\n    TIMESTAMP_DIFF(sa.dischtime, sa.admittime, DAY) AS los_days,\n    -- LOS bin\n    CASE\n      WHEN TIMESTAMP_DIFF(sa.dischtime, sa.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4'\n      WHEN TIMESTAMP_DIFF(sa.dischtime, sa.admittime, DAY) BETWEEN 5 AND 8 THEN '5-8'\n      ELSE NULL\n    END AS los_bin,\n    -- ICU vs No ICU\n    COALESCE(ic.icu_flag, 'No ICU') AS icu_flag,\n    -- Ultrasound count (0 if none)\n    COALESCE(us.us_count, 0) AS us_count\n  FROM\n    sepsis_admissions sa\n    LEFT JOIN icu_flag ic\n      ON sa.hadm_id = ic.hadm_id\n    LEFT JOIN ultrasound_counts us\n      ON sa.hadm_id = us.hadm_id\n)\nSELECT\n  icu_flag,\n  los_bin,\n  COUNT(*) AS num_admissions,\n  ROUND(AVG(us_count), 3) AS mean_ultrasounds_per_admission\nFROM\n  admission_metrics\nWHERE\n  los_bin IS NOT NULL\nGROUP BY\n  icu_flag,\n  los_bin\nORDER BY\n  icu_flag,\n  los_bin;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

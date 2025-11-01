@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating a 74\u2011year\u2011old female with intracranial hemorrhage. For female inpatients aged 69\u201379 with ICH, stratify admissions into quintiles by the composite risk score and report, per quintile: n, 30\u2011day mortality %, major complication %, and median survivor LOS.",
+  "final_sql": "WITH ich_admissions AS (\n  -- Admissions with any ICH diagnosis (ICD-9: 430/431/432*, ICD-10: I60/I61/I62*)\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND (\n           icd_code LIKE '430%' OR icd_code LIKE '431%' OR icd_code LIKE '432%'\n        ))\n     OR (icd_version = 10 AND (\n           icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%'\n        ))\n),\n\ndiag_counts AS (\n  -- Composite risk score proxy: number of distinct diagnosis codes on the admission\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT icd_code) AS composite_score\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\n\ncohort AS (\n  -- Admissions for female patients age 69-79 with ICH\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime            AS adm_deathtime,\n    p.dod                  AS patient_dod,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag,\n    -- best available death timestamp (in-hospital or patient-level date of death)\n    COALESCE(CAST(a.deathtime AS TIMESTAMP), CAST(p.dod AS TIMESTAMP)) AS death_time,\n    IFNULL(dc.composite_score, 0) AS composite_score,\n    -- major complication proxy: any ICU stay during this admission\n    CASE WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_icu.icustays` ic\n        WHERE ic.hadm_id = a.hadm_id\n      ) THEN 1 ELSE 0 END AS had_icu\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN ich_admissions ia\n    ON a.hadm_id = ia.hadm_id\n  LEFT JOIN diag_counts dc\n    ON a.hadm_id = dc.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 69 AND 79\n    AND a.admittime IS NOT NULL\n)\n\n-- Final aggregation by quintile of composite score\nSELECT\n  quintile,\n  COUNT(*) AS n,\n  -- 30-day mortality percentage\n  ROUND(100.0 * SUM(CASE WHEN death_time IS NOT NULL\n                          AND death_time <= TIMESTAMP_ADD(CAST(admittime AS TIMESTAMP), INTERVAL 30 DAY)\n                     THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_30day_mortality,\n  -- Major complication percentage (ICU during admission)\n  ROUND(100.0 * SUM(had_icu) / COUNT(*), 2) AS pct_major_complication,\n  -- Median LOS (days) among survivors to discharge (hospital_expire_flag = 0)\n  ROUND(\n    COALESCE(\n      (APPROX_QUANTILES(\n        CASE\n          WHEN hospital_expire_flag = 0 AND dischtime IS NOT NULL\n          THEN TIMESTAMP_DIFF(CAST(dischtime AS TIMESTAMP), CAST(admittime AS TIMESTAMP), SECOND) / 86400.0\n          ELSE NULL\n        END, 100\n      ))[OFFSET(50)],\n      NULL\n    )\n  , 2) AS median_survivor_los_days\nFROM (\n  SELECT c.*,\n         NTILE(5) OVER (ORDER BY composite_score) AS quintile\n  FROM cohort c\n) q\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function COALESCE\n  Argument types: DATETIME, TIMESTAMP\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [35:5]; reason: invalidQuery, location: query, message: No matching signature for function COALESCE\n  Argument types: DATETIME, TIMESTAMP\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [35:5]\n\nLocation: US\nJob ID: 5f925e1d-1a23-4e33-bc9a-24ceeefe6cc0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator <= for argument types: TIMESTAMP, DATETIME\n  Signature: T1 <= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [61:31]; reason: invalidQuery, location: query, message: No matching signature for operator <= for argument types: TIMESTAMP, DATETIME\n  Signature: T1 <= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [61:31]\n\nLocation: US\nJob ID: 49656f90-6503-4948-addb-f6c6e2310713\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

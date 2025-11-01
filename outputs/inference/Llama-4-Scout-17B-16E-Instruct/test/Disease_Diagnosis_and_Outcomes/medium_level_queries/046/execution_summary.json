@@ -1,0 +1,22 @@
+{
+  "query": "For my 77\u2011yo male with heart failure: among males 72\u201382 with HF, compare ICU vs non\u2011ICU by LOS (\u22643, 4\u20136, 7\u201310, >10 days); report in\u2011hospital mortality, median LOS, average comorbidity count.",
+  "final_sql": "WITH \n  -- Identify patients of interest\n  patients_of_interest AS (\n    SELECT \n      p.subject_id,\n      p.anchor_age,\n      p.gender,\n      a.hadm_id,\n      a.admittime,\n      a.dischtime,\n      a.hospital_expire_flag\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON \n      p.subject_id = a.subject_id\n    WHERE \n      p.gender = 'M'\n      AND p.anchor_age BETWEEN 72 AND 82\n      AND a.hadm_id IN (\n        SELECT \n          hadm_id \n        FROM \n          `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n        WHERE \n          icd_code IN ('428.0', '428.1', '428.2', '428.3', '428.4', '428.9')  -- Heart Failure ICD-9 codes\n          OR icd_code IN ('I11.0', 'I13.0', 'I13.2', 'I50.1', 'I50.2', 'I50.9')  -- Heart Failure ICD-10 codes\n      )\n  ),\n\n  -- Identify ICU stays for patients of interest\n  icu_stays AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      outtime,\n      TIMESTAMP_DIFF(outtime, intime, DAY) AS los\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays`\n    WHERE \n      hadm_id IN (SELECT hadm_id FROM patients_of_interest)\n  ),\n\n  -- Categorize LOS for ICU and non-ICU stays\n  los_categories AS (\n    SELECT \n      'ICU' AS care_type,\n      hadm_id,\n      CASE \n        WHEN los <= 3 THEN '\u22643 days'\n        WHEN los BETWEEN 4 AND 6 THEN '4\u20136 days'\n        WHEN los BETWEEN 7 AND 10 THEN '7\u201310 days'\n        ELSE '>10 days'\n      END AS los_category\n    FROM \n      icu_stays\n    UNION ALL\n    SELECT \n      'Non-ICU' AS care_type,\n      hadm_id,\n      CASE \n        WHEN TIMESTAMP_DIFF(dischtime, admittime, DAY) <= 3 THEN '\u22643 days'\n        WHEN TIMESTAMP_DIFF(dischtime, admittime, DAY) BETWEEN 4 AND 6 THEN '4\u20136 days'\n        WHEN TIMESTAMP_DIFF(dischtime, admittime, DAY) BETWEEN 7 AND 10 THEN '7\u201310 days'\n        ELSE '>10 days'\n      END AS los_category\n    FROM \n      patients_of_interest\n    WHERE \n      hadm_id NOT IN (SELECT hadm_id FROM icu_stays)\n  ),\n\n  -- Calculate in-hospital mortality and comorbidity count\n  outcomes AS (\n    SELECT \n      hadm_id,\n      hospital_expire_flag,\n      COALESCE(drg_count, 0) AS comorbidity_count\n    FROM \n      patients_of_interest\n    LEFT JOIN \n      (\n        SELECT \n          subject_id,\n          hadm_id,\n          COUNT(DISTINCT drg_code) AS drg_count\n        FROM \n          `physionet-data.mimiciv_3_1_hosp.drgcodes`\n        GROUP BY \n          subject_id, hadm_id\n      ) \n    USING (hadm_id)\n  )\n\n-- Final analysis\nSELECT \n  lc.los_category,\n  lc.care_type,\n  COUNT(DISTINCT o.hadm_id) AS num_patients,\n  SUM(CASE WHEN o.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(DISTINCT o.hadm_id) AS in_hospital_mortality_rate,\n  APPROX_QUANTILES(o.comorbidity_count, 1000)[500] AS median_comorbidity_count\nFROM \n  los_categories lc\nJOIN \n  outcomes o\nON \n  lc.hadm_id = o.hadm_id\nGROUP BY \n  lc.los_category, lc.care_type\nORDER BY \n  lc.los_category, lc.care_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [104:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [104:24]\n\nLocation: US\nJob ID: ddd1c517-20d3-49eb-9f31-48712613524e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For my 73\u2011year\u2011old male: among males 68\u201378 with diabetes plus acute HF, give insulin vs oral agent initiation rates (%) in first 24h vs final 24h and absolute percentage\u2011point differences.",
+  "final_sql": "WITH\n-- Define age range and gender\neligible_patients AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n),\n\n-- Identify patients with diabetes and acute HF\ndiabetes_hf_patients AS (\n  SELECT DISTINCT\n    ep.subject_id,\n    ep.hadm_id,\n    ep.admittime,\n    ep.dischtime\n  FROM\n    eligible_patients ep\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag_diabetes\n  ON\n    ep.hadm_id = diag_diabetes.hadm_id\n    AND diag_diabetes.icd_code LIKE 'E11.%'  -- Type 2 diabetes\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag_hf\n  ON\n    ep.hadm_id = diag_hf.hadm_id\n    AND diag_hf.icd_code IN (\n      'I50.1', 'I50.2', 'I50.3', 'I50.4', 'I50.9'  -- Acute heart failure codes\n    )\n),\n\n-- Identify insulin prescriptions\ninsulin_prescriptions AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id,\n    d.admittime,\n    d.dischtime,\n    p.starttime AS insulin_starttime\n  FROM\n    diabetes_hf_patients d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  ON\n    d.hadm_id = p.hadm_id\n  WHERE\n    LOWER(p.drug) LIKE '%insulin%'\n),\n\n-- Identify oral diabetes agent prescriptions\noral_agents_prescriptions AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id,\n    d.admittime,\n    d.dischtime,\n    p.starttime AS oral_agent_starttime\n  FROM\n    diabetes_hf_patients d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  ON\n    d.hadm_id = p.hadm_id\n  WHERE\n    LOWER(p.drug) IN (\n      'metformin', 'glipizide', 'glyburide', 'glimepiride',\n      'pioglitazone', 'rosiglitazone', 'sitagliptin', 'saxagliptin',\n      'repaglinide', 'nateglinide', 'acarbose', 'miglitol',\n      'canagliflozin', 'dapagliflozin', 'empagliflozin', 'ertugliflozin'\n    )\n),\n\n-- Calculate first 24h and final 24h windows\ntime_windows AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    TIMESTAMP_ADD(admittime, INTERVAL 24 HOUR) AS first_24h_end,\n    TIMESTAMP_SUB(dischtime, INTERVAL 24 HOUR) AS final_24h_start\n  FROM\n    diabetes_hf_patients\n),\n\n-- Count insulin initiations in each time window\ninsulin_counts AS (\n  SELECT\n    COUNT(DISTINCT CASE WHEN i.insulin_starttime BETWEEN t.admittime AND t.first_24h_end THEN i.subject_id END) AS first_24h_insulin,\n    COUNT(DISTINCT CASE WHEN i.insulin_starttime BETWEEN t.final_24h_start AND t.dischtime THEN i.subject_id END) AS final_24h_insulin,\n    COUNT(DISTINCT t.subject_id) AS total_patients\n  FROM\n    time_windows t\n  LEFT JOIN\n    insulin_prescriptions i\n  ON\n    t.subject_id = i.subject_id AND t.hadm_id = i.hadm_id\n),\n\n-- Count oral agent initiations in each time window\noral_agents_counts AS (\n  SELECT\n    COUNT(DISTINCT CASE WHEN o.oral_agent_starttime BETWEEN t.admittime AND t.first_24h_end THEN o.subject_id END) AS first_24h_oral,\n    COUNT(DISTINCT CASE WHEN o.oral_agent_starttime BETWEEN t.final_24h_start AND t.dischtime THEN o.subject_id END) AS final_24h_oral,\n    COUNT(DISTINCT t.subject_id) AS total_patients\n  FROM\n    time_windows t\n  LEFT JOIN\n    oral_agents_prescriptions o\n  ON\n    t.subject_id = o.subject_id AND t.hadm_id = o.hadm_id\n)\n\n-- Final results\nSELECT\n  'Insulin' AS medication_type,\n  ROUND(100 * first_24h_insulin / NULLIF(total_patients, 0), 2) AS first_24h_percentage,\n  ROUND(100 * final_24h_insulin / NULLIF(total_patients, 0), 2) AS final_24h_percentage,\n  ROUND(100 * (final_24h_insulin - first_24h_insulin) / NULLIF(total_patients, 0), 2) AS absolute_difference\nFROM\n  insulin_counts\nWHERE\n  total_patients > 0\n\nUNION ALL\n\nSELECT\n  'Oral Agents' AS medication_type,\n  ROUND(100 * first_24h_oral / NULLIF(total_patients, 0), 2) AS first_24h_percentage,\n  ROUND(100 * final_24h_oral / NULLIF(total_patients, 0), 2) AS final_24h_percentage,\n  ROUND(100 * (final_24h_oral - first_24h_oral) / NULLIF(total_patients, 0), 2) AS absolute_difference\nFROM\n  oral_agents_counts\nWHERE\n  total_patients > 0\nORDER BY\n  medication_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [5:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [5:5]\n\nLocation: US\nJob ID: 9374fac9-3a45-4286-af82-41c4cece409a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 650e9b5a-0fdf-47e2-8b7e-6519ccdf92fe\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

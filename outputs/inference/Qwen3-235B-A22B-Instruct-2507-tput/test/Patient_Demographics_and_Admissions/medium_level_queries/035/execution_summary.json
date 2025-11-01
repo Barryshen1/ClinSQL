@@ -1,0 +1,22 @@
+{
+  "query": "For my 48-year-old female patient: among female inpatients 43\u201353 admitted from the ED, report median LOS, IQR, and percentile rank of a 14\u2011day stay by discharge outcome (home, facility, death).",
+  "final_sql": "WITH patient_los AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    -- Compute LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.dischtime >= a.admittime\n    AND (\n      UPPER(a.admission_location) LIKE 'EMER%'\n      OR UPPER(a.admission_location) LIKE '%ER%'\n    )\n),\nfiltered_los AS (\n  SELECT *\n  FROM patient_los\n  WHERE age_at_admission BETWEEN 43 AND 53\n    AND los_days >= 0\n),\ncategorized_los AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    los_days,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'death'\n      WHEN UPPER(discharge_location) LIKE '%HOME%' THEN 'home'\n      ELSE 'facility'\n    END AS discharge_group\n  FROM filtered_los\n),\nstats_per_group AS (\n  SELECT\n    discharge_group,\n    los_days,\n    PERCENTILE_CONT(los_days, 0.25) OVER (PARTITION BY discharge_group) AS q1,\n    PERCENTILE_CONT(los_days, 0.50) OVER (PARTITION BY discharge_group) AS median_los,\n    PERCENTILE_CONT(los_days, 0.75) OVER (PARTITION BY discharge_group) AS q3,\n    -- Compute cumulative distribution: fraction of rows <= current row\n    CUME_DIST() OVER (PARTITION BY discharge_group ORDER BY los_days) AS cume_dist\n  FROM categorized_los\n)\nSELECT\n  discharge_group,\n  ROUND(median_los, 2) AS median_los_days,\n  ROUND(q1, 2) AS q1_los_days,\n  ROUND(q3, 2) AS q3_los_days,\n  -- Format IQR as \"Q1 - Q3\"\n  CONCAT(ROUND(q1, 2), ' - ', ROUND(q3, 2)) AS iqr_los_days,\n  -- Percentile rank of 14-day stay: max cume_dist for los_days <= 14\n  ROUND(MAX(CASE WHEN los_days <= 14 THEN cume_dist END), 4) AS percentile_rank_of_14day\nFROM stats_per_group\nGROUP BY discharge_group, median_los, q1, q3\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for analytic function CUME_DIST\n  Argument types: INT64\n  Signature: CUME_DIST()\n    Signature accepts at most 0 arguments, found 1 argument at [50:5]; reason: invalidQuery, location: query, message: No matching signature for analytic function CUME_DIST\n  Argument types: INT64\n  Signature: CUME_DIST()\n    Signature accepts at most 0 arguments, found 1 argument at [50:5]\n\nLocation: US\nJob ID: 910c484f-3a96-44f5-bd36-c42ebe435384\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

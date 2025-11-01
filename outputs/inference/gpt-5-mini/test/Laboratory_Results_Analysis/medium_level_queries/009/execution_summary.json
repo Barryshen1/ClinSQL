@@ -1,0 +1,16 @@
+{
+  "query": "I have a 64-year-old female to evaluate. Among female admissions aged 59\u201369 whose first hs-TnT >0.014 ng/mL, what are the 25th, 50th, 75th percentiles and min\u2013max of initial hs-TnT?",
+  "final_sql": "WITH hs_tn_items AS (\n  -- candidate troponin T items (labels containing \"troponin t\")\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n     OR LOWER(label) LIKE '%hs troponin t%'\n     OR LOWER(label) LIKE '%high sensitivity troponin t%'\n),\n\ntnt_per_admission AS (\n  -- all troponin T lab rows that fall within the hospital admission\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.valueuom\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN hs_tn_items hti\n    ON le.itemid = hti.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON le.hadm_id = a.hadm_id\n   AND le.subject_id = a.subject_id\n  WHERE le.valuenum IS NOT NULL\n    -- prefer measurements in ng (ng/mL). Allow rows with missing unit too.\n    AND (LOWER(COALESCE(le.valueuom, '')) LIKE '%ng%' OR le.valueuom IS NULL)\n    -- restrict lab to occur during the admission\n    AND le.charttime BETWEEN a.admittime AND a.dischtime\n),\n\nfirst_tnt_per_admission AS (\n  -- take the earliest troponin per admission (initial hs-TnT)\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum AS initial_tnt,\n    charttime,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC) AS rn\n  FROM tnt_per_admission\n)\n\nSELECT\n  MIN(initial_tnt) AS initial_tnt_min,\n  MAX(initial_tnt) AS initial_tnt_max,\n  -- APPROX_QUANTILES(..., 100) returns 101 values (0..100 percentiles)\n  -- OFFSET(25) ~ 25th percentile, OFFSET(50) ~ median, OFFSET(75) ~ 75th percentile\n  approx_quantiles(initial_tnt, 100)[OFFSET(25)] AS initial_tnt_p25,\n  approx_quantiles(initial_tnt, 100)[OFFSET(50)] AS initial_tnt_p50,\n  approx_quantiles(initial_tnt, 100)[OFFSET(75)] AS initial_tnt_p75,\n  COUNT(1) AS n_admissions\nFROM (\n  -- join to patients & admissions to get age/gender and filter initial tnt > 0.014\n  SELECT fta.hadm_id, fta.subject_id, fta.initial_tnt\n  FROM first_tnt_per_admission fta\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON fta.hadm_id = a.hadm_id\n   AND fta.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON fta.subject_id = p.subject_id\n  WHERE fta.rn = 1\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND fta.initial_tnt > 0.014\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

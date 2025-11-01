@@ -1,0 +1,22 @@
+{
+  "query": "I have a 56\u2011year\u2011old female on invasive mechanical ventilation. Among female ICU patients aged 51\u201361, what percentile is an instability score of 80 in the first 48 hours? Also report ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    pat.anchor_age,\n    adm.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 51 AND 61\n),\n\n-- Identify patients on invasive mechanical ventilation in first 48h\nvent AS (\n  SELECT DISTINCT\n    ce.stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON ce.stay_id = icu.stay_id\n  WHERE\n    di.label IN (\n      'Invasive Ventilation',\n      'Mechanical Ventilation',\n      'Ventilation'\n    )\n    AND ce.charttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 48 HOUR)\n),\n\n-- Compute instability score components in first 48h\nscores AS (\n  SELECT\n    c.stay_id,\n    c.los,\n    c.hospital_expire_flag,\n    MIN(ce.valuenum) AS gcs_min,\n    MAX(CASE WHEN di.label = 'Arterial Pressure Mean' THEN ce.valuenum END) AS map_max,\n    MAX(CASE WHEN di.label = 'Bilirubin' THEN ce.valuenum END) AS bilirubin_max,\n    MIN(CASE WHEN di.label = 'Platelets' THEN ce.valuenum END) AS platelets_min,\n    MAX(CASE WHEN di.label = 'Creatinine' THEN ce.valuenum END) AS creatinine_max,\n    MIN(CASE WHEN di.label IN ('PaO2', 'PO2') THEN ce.valuenum END) AS pao2_min\n  FROM\n    cohort c\n  JOIN\n    vent v ON c.stay_id = v.stay_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE\n    ce.charttime BETWEEN c.intime AND TIMESTAMP_ADD(c.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY\n    c.stay_id, c.los, c.hospital_expire_flag\n),\n\n-- Compute instability score (simple additive proxy)\ninstability_scores AS (\n  SELECT\n    stay_id,\n    los,\n    hospital_expire_flag,\n    COALESCE(gcs_min, 15) +\n    COALESCE(map_max, 0) +\n    COALESCE(bilirubin_max, 0) +\n    (150 - COALESCE(platelets_min, 150)) +\n    COALESCE(creatinine_max, 0) +\n    (500 - COALESCE(pao2_min, 500)) AS instability_score\n  FROM\n    scores\n),\n\n-- Add percentiles\nscore_percentiles AS (\n  SELECT\n    *,\n    PERCENT_RANK() OVER (ORDER BY instability_score) * 100 AS percentile_rank\n  FROM\n    instability_scores\n),\n\n-- Find percentile of score = 80\npercentile_of_80 AS (\n  SELECT\n    MAX(CASE WHEN instability_score <= 80 THEN percentile_rank END) AS percentile_of_80\n  FROM\n    score_percentiles\n),\n\n-- Top decile (most unstable)\ntop_decile AS (\n  SELECT\n    *\n  FROM\n    score_percentiles\n  WHERE\n    percentile_rank >= 90\n)\n\n-- Final output\nSELECT\n  (SELECT percentile_of_80 FROM percentile_of_80) AS percentile_of_score_80,\n  AVG(los) AS avg_icu_los_top_decile,\n  AVG(hospital_expire_flag) AS mortality_rate_top_decile\nFROM\n  top_decile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name stay_id_intime not found inside ce at [39:33]; reason: invalidQuery, location: query, message: Name stay_id_intime not found inside ce at [39:33]\n\nLocation: US\nJob ID: 99fff6f1-f2b7-4db6-b385-2d496c418a0c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

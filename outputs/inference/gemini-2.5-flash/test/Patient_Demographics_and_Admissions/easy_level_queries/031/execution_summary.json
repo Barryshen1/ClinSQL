@@ -1,0 +1,22 @@
+{
+  "query": "For my 43-year-old female, among women 38\u201348 with heart failure, what's the average 30\u2011day readmission rate after first HF admission?",
+  "final_sql": "WITH PatientDemographic AS (\n    -- CTE 1: Filter patients based on demographic criteria (female, age 38-48)\n    SELECT\n        p.subject_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 38 AND 48\n),\nHFAmissions AS (\n    -- CTE 2: Identify all admissions for these patients that include a Heart Failure diagnosis\n    SELECT\n        pd.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime,\n        ad.hospital_expire_flag\n    FROM\n        PatientDemographic pd\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON pd.subject_id = ad.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON ad.hadm_id = di.hadm_id\n    WHERE\n        -- ICD-9 codes for Heart Failure (e.g., 428.xx)\n        (di.icd_version = 9 AND di.icd_code LIKE '428%')\n        -- OR ICD-10 codes for Heart Failure (e.g., I50.xx)\n        OR (di.icd_version = 10 AND di.icd_code LIKE 'I50%')\n    GROUP BY -- Group by hadm_id to ensure that if an admission has multiple HF codes, it's counted once\n        pd.subject_id, ad.hadm_id, ad.admittime, ad.dischtime, ad.hospital_expire_flag\n),\nefh AS (\n    -- CTE 3: For each patient, find their first admission with a Heart Failure diagnosis\n    SELECT\n        subject_id,\n        hadm_id AS first_hf_hadm_id,\n        admittime AS first_hf_admittime,\n        dischtime AS first_hf_dischtime,\n        hospital_expire_flag\n    FROM\n        (\n            SELECT\n                *,\n                ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n            FROM\n                HFAmissions\n        ) AS RankedHFAmissions -- Alias for the subquery\n    WHERE\n        rn = 1\n        -- Exclude patients who died during their first HF admission, as they cannot be readmitted\n        AND hospital_expire_flag = 0\n),\nr30 AS (\n    -- CTE 4: Identify patients with a 30-day readmission after their first eligible HF admission\n    SELECT DISTINCT\n        efh_cte.subject_id\n    FROM\n        efh AS efh_cte -- Alias to differentiate from the CTE \"efh\" itself when referencing\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad_sub\n        ON efh_cte.subject_id = ad_sub.subject_id\n    WHERE\n        -- The subsequent admission must be strictly after the discharge of the first HF admission\n        ad_sub.admittime > efh_cte.first_hf_dischtime\n        -- Ensure it's not the same admission (though the above condition should handle this)\n        AND ad_sub.hadm_id != efh_cte.first_hf_hadm_id\n        -- A readmission is considered '30-day' if it occurs within 30 days (inclusive)\n        AND DATETIME_DIFF(ad_sub.admittime, efh_cte.first_hf_dischtime, DAY) <= 30\n)\n-- Final SELECT statement to calculate the readmission rate\nSELECT\n    -- Total patients eligible for first heart failure admission (denominator)\n    COUNT(DISTINCT efh.subject_id) AS total_patients_first_hf_admission,\n    -- Number of unique patients from the above group who had at least one 30-day readmission (numerator)\n    COUNT(DISTINCT r30.subject_id) AS patients_with_30_day_readmission,\n    -- Calculate the 30-day readmission rate as a percentage.\n    -- Handle division by zero if no eligible patients are found.\n    IF(COUNT(DISTINCT efh.subject_id) > 0,\n       COUNT(DISTINCT r30.subject_id) * 100.0 / COUNT(DISTINCT efh.subject_id),\n       0.0) AS readmission_rate_percentage\nFROM\n    efh\nLEFT JOIN\n    r30 ON efh.subject_id = r30.subject_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword FIRST at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword FIRST at [1:8]\n\nLocation: US\nJob ID: 33e3583b-8ec0-43d6-881e-500fc2b4224b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For a 63\u2011year\u2011old female ICU patient: among women 58\u201368 on renal replacement therapy, in the first 72h report IQR and 25th/50th/75th/90th percentiles of the vital\u2011instability index (avg concurrent MAP<65, HR>100) and compare hypotensive/tachycardic hours, ICU LOS, mortality to other RRT patients.",
+  "final_sql": "WITH \n  -- Identify RRT patients\n  rrt_patients AS (\n    SELECT DISTINCT \n      i.subject_id, \n      i.hadm_id, \n      i.stay_id\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON \n      i.subject_id = c.subject_id \n      AND i.hadm_id = c.hadm_id \n      AND i.stay_id = c.stay_id\n    WHERE \n      c.itemid IN (\n        220050,  -- Arterial Line Blood Pressure\n        220179   -- Heart Rate\n      )\n      AND c.charttime BETWEEN i.intime AND i.outtime\n  ),\n\n  -- Filter patients of interest\n  patients_of_interest AS (\n    SELECT \n      a.subject_id, \n      a.hadm_id\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON \n      a.subject_id = p.subject_id\n    WHERE \n      p.gender = 'F'\n      AND p.anchor_age BETWEEN 58 AND 68\n  ),\n\n  -- Calculate vital instability index\n  vital_instability AS (\n    SELECT \n      i.stay_id,\n      i.subject_id,\n      i.hadm_id,\n      TIMESTAMP_DIFF(c.charttime, i.intime, HOUR) AS hours_in_icu,\n      CASE \n        WHEN c.itemid = 220050 AND c.valuenum < 65 THEN 1\n        ELSE 0\n      END AS hypotensive_hours,\n      CASE \n        WHEN c.itemid = 220179 AND c.valuenum > 100 THEN 1\n        ELSE 0\n      END AS tachycardic_hours\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON \n      i.subject_id = c.subject_id \n      AND i.hadm_id = c.hadm_id \n      AND i.stay_id = c.stay_id\n    WHERE \n      c.charttime BETWEEN i.intime AND i.outtime\n      AND c.itemid IN (220050, 220179)\n  ),\n\n  -- Aggregate data\n  aggregated_data AS (\n    SELECT \n      stay_id,\n      subject_id,\n      hadm_id,\n      SUM(hypotensive_hours) AS total_hypotensive_hours,\n      SUM(tachycardic_hours) AS total_tachycardic_hours,\n      COUNT(hours_in_icu) AS total_hours_in_icu\n    FROM \n      vital_instability\n    GROUP BY \n      stay_id, subject_id, hadm_id\n  )\n\n-- Final query\nSELECT \n  APPROX_QUANTILES(total_hypotensive_hours + total_tachycardic_hours, 100)[OFFSET(25)] AS p25_vital_instability,\n  APPROX_QUANTILES(total_hypotensive_hours + total_tachycardic_hours, 100)[OFFSET(50)] AS p50_vital_instability,\n  APPROX_QUANTILES(total_hypotensive_hours + total_tachycardic_hours, 100)[OFFSET(75)] AS p75_vital_instability,\n  APPROX_QUANTILES(total_hypotensive_hours + total_tachycardic_hours, 100)[OFFSET(90)] AS p90_vital_instability,\n  APPROX_QUANTILES(total_hypotensive_hours + total_tachycardic_hours, 100)[OFFSET(75)] - \n  APPROX_QUANTILES(total_hypotensive_hours + total_tachycardic_hours, 100)[OFFSET(25)] AS iqr_hypotensive_tachycardic_hours,\n  AVG(total_hours_in_icu) AS avg_icu_los,\n  COUNT(*) AS num_patients\nFROM \n  aggregated_data\n  JOIN patients_of_interest poi ON aggregated_data.subject_id = poi.subject_id AND aggregated_data.hadm_id = poi.hadm_id\n  JOIN rrt_patients rrt ON aggregated_data.stay_id = rrt.stay_id AND aggregated_data.subject_id = rrt.subject_id AND aggregated_data.hadm_id = rrt.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [85:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [85:25]\n\nLocation: US\nJob ID: 5e050687-1cf7-4c25-9413-543446e81367\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Double function call parentheses at [85:24]; reason: invalidQuery, location: query, message: Syntax error: Double function call parentheses at [85:24]\n\nLocation: US\nJob ID: a6e54e37-eba8-4e7f-9deb-c2cadcf59a21\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

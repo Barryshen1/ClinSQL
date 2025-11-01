@@ -1,0 +1,22 @@
+{
+  "query": "I have a 75-year-old female inpatient with pulmonary embolism. For female inpatients aged 70\u201380 with PE, stratify into risk-score quintiles and report per quintile: 90\u2011day mortality, general 70\u201380 female 90\u2011day mortality (comparison), AKI and ARDS rates, and median survivor LOS",
+  "final_sql": "WITH pe_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    p.dod,\n    -- crude risk score = number of unique diagnosis codes for this admission\n    COUNT(DISTINCT CONCAT(d2.icd_code, '-', d2.icd_version)) AS risk_score,\n    -- outcome flags\n    CASE \n      WHEN p.dod IS NOT NULL \n       AND DATETIME_DIFF(p.dod, a.admittime, DAY) <= 90 THEN 1 ELSE 0 \n    END AS mort90_flag,\n    MAX(CASE \n      WHEN (d3.icd_version = 9 AND d3.icd_code LIKE '584%')\n        OR (d3.icd_version = 10 AND d3.icd_code LIKE 'N17%')\n      THEN 1 ELSE 0 END) AS aki_flag,\n    MAX(CASE \n      WHEN (d3.icd_version = 9 AND d3.icd_code = '51882')\n        OR (d3.icd_version = 10 AND d3.icd_code = 'J80')\n      THEN 1 ELSE 0 END) AS ards_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  -- join for PE selection\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d1\n    ON a.hadm_id = d1.hadm_id\n  -- join again for comorbidity count\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n    ON a.hadm_id = d2.hadm_id\n  -- join again for AKI/ARDS detection\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d3\n    ON a.hadm_id = d3.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND (\n      (d1.icd_version = 9 AND d1.icd_code LIKE '4151%')\n      OR (d1.icd_version = 10 AND d1.icd_code LIKE 'I26%')\n    )\n  GROUP BY a.subject_id, a.hadm_id, p.gender, p.anchor_age, a.admittime, a.dischtime, p.dod, mort90_flag\n),\npe_quintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM pe_cohort\n),\npe_summary AS (\n  SELECT\n    risk_quintile,\n    AVG(mort90_flag) AS pe_mort90_rate,\n    AVG(aki_flag) AS aki_rate,\n    AVG(ards_flag) AS ards_rate,\n    APPROX_QUANTILES(IF(mort90_flag = 0, los_days, NULL), 100)[OFFSET(50)] AS median_survivor_los\n  FROM pe_quintiles\n  GROUP BY risk_quintile\n),\ngeneral_female AS (\n  SELECT\n    AVG(CASE \n      WHEN p.dod IS NOT NULL \n           AND DATETIME_DIFF(p.dod, a.admittime, DAY) <= 90 THEN 1 ELSE 0 END) AS general_mort90_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n)\nSELECT\n  s.risk_quintile,\n  s.pe_mort90_rate,\n  g.general_mort90_rate,\n  s.aki_rate,\n  s.ards_rate,\n  s.median_survivor_los\nFROM pe_summary s\nCROSS JOIN general_female g\nORDER BY risk_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \"(\" at [59:14]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \"(\" at [59:14]\n\nLocation: US\nJob ID: 7169e040-d809-450e-8e5d-d8900a8094dc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

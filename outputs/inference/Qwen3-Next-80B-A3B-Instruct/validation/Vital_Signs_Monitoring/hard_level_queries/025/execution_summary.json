@@ -1,0 +1,28 @@
+{
+  "query": "I have a 60-year-old man post\u2013cardiac arrest in the ICU. Among male ICU patients 55\u201365 with post-arrest, what percentile is a first\u201124h vital\u2011sign instability score of 70? Also report mean ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH cardiac_arrest_patients AS (\n  SELECT DISTINCT \n    i.stay_id, \n    i.subject_id, \n    i.intime, \n    i.los,\n    p.gender, \n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays i\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p ON i.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON i.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d ON i.subject_id = d.subject_id AND i.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses dic ON d.icd_code = dic.icd_code AND d.icd_version = dic.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 55 AND 65\n    AND (\n      (d.icd_version = 9 AND d.icd_code = '427.5')\n      OR (d.icd_version = 10 AND LOWER(dic.long_title) LIKE '%cardiac arrest%')\n    )\n),\n\nvital_signs_24h AS (\n  SELECT \n    c.stay_id,\n    AVG(CASE WHEN di.label = 'Heart Rate' THEN c.valuenum END) AS mean_hr,\n    AVG(CASE WHEN di.label = 'MAP' THEN c.valuenum END) AS mean_map,\n    AVG(CASE WHEN di.label = 'SpO2' THEN c.valuenum END) AS mean_spo2,\n    AVG(CASE WHEN di.label = 'Respiratory Rate' THEN c.valuenum END) AS mean_rr\n  FROM `physionet-data.mimiciv_3_1_icu`.chartevents c\n  JOIN cardiac_arrest_patients cap ON c.stay_id = cap.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu`.d_items di ON c.itemid = di.itemid\n  WHERE c.charttime >= cap.intime \n    AND c.charttime < DATE_ADD(cap.intime, INTERVAL 24 HOUR)\n    AND di.label IN ('Heart Rate', 'MAP', 'SpO2', 'Respiratory Rate')\n    AND c.valuenum IS NOT NULL\n  GROUP BY c.stay_id\n),\n\ninstability_score AS (\n  SELECT \n    cap.stay_id,\n    cap.los,\n    cap.hospital_expire_flag,\n    -- Compute z-score deviations for each vital sign\n    -- HR: normal 60\u2013100 \u2192 mean 80, sd 20 \u2192 z = |HR - 80| / 20\n    -- MAP: normal 70\u2013100 \u2192 mean 85, sd 15 \u2192 z = |MAP - 85| / 15\n    -- SpO2: normal \u226595 \u2192 z = max(0, (95 - SpO2)/10) if <95, else 0\n    -- RR: normal 12\u201320 \u2192 mean 16, sd 4 \u2192 z = |RR - 16| / 4\n    COALESCE(ABS(v.mean_hr - 80) / 20, 0) +\n    COALESCE(ABS(v.mean_map - 85) / 15, 0) +\n    COALESCE(CASE WHEN v.mean_spo2 < 95 THEN (95 - v.mean_spo2) / 10 ELSE 0 END, 0) +\n    COALESCE(ABS(v.mean_rr - 16) / 4, 0) AS instability_score\n  FROM cardiac_arrest_patients cap\n  JOIN vital_signs_24h v ON cap.stay_id = v.stay_id\n  WHERE v.mean_hr IS NOT NULL \n    AND v.mean_map IS NOT NULL \n    AND v.mean_spo2 IS NOT NULL \n    AND v.mean_rr IS NOT NULL\n),\n\npercentile_and_decile AS (\n  SELECT \n    instability_score,\n    los,\n    hospital_expire_flag,\n    PERCENT_RANK() OVER (ORDER BY instability_score) AS percentile_rank,\n    NTILE(10) OVER (ORDER BY instability_score) AS decile\n  FROM instability_score\n)\n\nSELECT \n  -- Percentile of score = 70\n  SUM(CASE WHEN instability_score <= 70 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS percentile_of_70,\n  -- Mean LOS and mortality for top decile (decile = 10)\n  AVG(CASE WHEN decile = 10 THEN los END) AS mean_los_top_decile,\n  AVG(CASE WHEN decile = 10 THEN hospital_expire_flag END) AS mortality_rate_top_decile\nFROM percentile_and_decile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Ordering by expressions of type STRUCT is not allowed at [67:35]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [67:35]\n\nLocation: US\nJob ID: f185137c-66fb-43c6-8ef9-703097e7e31d\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"-\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"-\" at [1:10]\n\nLocation: US\nJob ID: 6c55769a-61a6-4b6e-ba94-a18ff9ad379e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [37:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [37:3]\n\nLocation: US\nJob ID: e96f0684-e428-404f-8039-82eeedb31790\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [67:35]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [67:35]\n\nLocation: US\nJob ID: f185137c-66fb-43c6-8ef9-703097e7e31d\n"
+    }
+  ]
+}

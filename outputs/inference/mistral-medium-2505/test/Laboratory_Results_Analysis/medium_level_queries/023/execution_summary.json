@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72-year-old woman. Among female patients 67\u201377 admitted with ACS, report counts, percent of admissions, and in-hospital mortality rates for initial Troponin T: \u22640.04 normal; >0.04\u20130.1 borderline; >0.1 elevated.",
+  "final_sql": "WITH\n-- Get female patients aged 67-77\nfemale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 67 AND 77\n),\n\n-- Get admissions with ACS diagnosis (I20-I25 range)\nacs_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    female_patients fp\n  ON\n    a.subject_id = fp.subject_id\n  WHERE\n    d.icd_code BETWEEN 'I20' AND 'I25'\n    AND d.icd_version = 10\n),\n\n-- Get first Troponin T measurement per admission\nfirst_troponin AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.itemid,\n    le.valuenum,\n    le.charttime,\n    aa.hospital_expire_flag,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n  ON\n    le.itemid = dli.itemid\n  JOIN\n    acs_admissions aa\n  ON\n    le.subject_id = aa.subject_id AND le.hadm_id = aa.hadm_id\n  WHERE\n    dli.label LIKE '%Troponin T%'\n    AND le.valuenum IS NOT NULL\n),\n\n-- Categorize Troponin T values\ntroponin_categories AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    CASE\n      WHEN valuenum <= 0.04 THEN 'Normal (\u22640.04)'\n      WHEN valuenum > 0.04 AND valuenum <= 0.1 THEN 'Borderline (>0.04\u20130.1)'\n      WHEN valuenum > 0.1 THEN 'Elevated (>0.1)'\n    END AS troponin_category,\n    hospital_expire_flag\n  FROM\n    first_troponin\n  WHERE\n    rn = 1  -- Only first measurement per admission\n)\n\n-- Final aggregation\nSELECT\n  troponin_category,\n  COUNT(*) AS admission_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percent_of_admissions,\n  ROUND(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS mortality_rate\nFROM\n  troponin_categories\nGROUP BY\n  troponin_category\nORDER BY\n  CASE troponin_category\n    WHEN 'Normal (\u22640.04)' THEN 1\n    WHEN 'Borderline (>0.04\u20130.1)' THEN 2\n    WHEN 'Elevated (>0.1)' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hospital_expire_flag at [70:5]; reason: invalidQuery, location: query, message: Unrecognized name: hospital_expire_flag at [70:5]\n\nLocation: US\nJob ID: 21a833e8-a3ef-442e-98cc-9cbea365c910\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

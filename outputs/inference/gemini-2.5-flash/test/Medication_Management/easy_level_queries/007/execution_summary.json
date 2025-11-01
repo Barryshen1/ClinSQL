@@ -1,0 +1,16 @@
+{
+  "query": "For my 95-year-old female patient, in hospitalized women aged 90\u2013100, what is the IQR (days) of thiazide\u2011like inpatient prescription durations?",
+  "final_sql": "WITH PatientFilter AS (\n    SELECT\n        pa.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` pa\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON pa.subject_id = ad.subject_id\n    WHERE\n        pa.gender = 'F'\n        AND pa.anchor_age >= 90\n        AND pa.anchor_age <= 100\n),\nThiazidePrescriptions_Raw AS (\n    SELECT\n        pf.subject_id,\n        pf.hadm_id,\n        -- Using LIKE to cover common thiazide-like diuretics and potential variations\n        pr.drug,\n        pr.starttime,\n        pr.stoptime,\n        pf.admittime,\n        pf.dischtime\n    FROM\n        PatientFilter pf\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        ON pf.subject_id = pr.subject_id AND pf.hadm_id = pr.hadm_id\n    WHERE\n        pr.stoptime IS NOT NULL\n        AND pr.starttime IS NOT NULL\n        AND (\n            LOWER(pr.drug) LIKE '%hydrochlorothiazide%' OR\n            LOWER(pr.drug) LIKE '%hctz%' OR\n            LOWER(pr.drug) LIKE '%chlorthalidone%' OR\n            LOWER(pr.drug) LIKE '%indapamide%' OR\n            LOWER(pr.drug) LIKE '%metolazone%' OR\n            LOWER(pr.drug) LIKE '%zaroxolyn%' -- Brand name for metolazone\n        )\n),\nThiazidePrescriptions_EffectiveDuration AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        drug,\n        -- Cap prescription start/stop times to admission start/end times\n        GREATEST(starttime, admittime) AS effective_start_time,\n        LEAST(stoptime, dischtime) AS effective_stop_time\n    FROM\n        ThiazidePrescriptions_Raw\n),\nFinalDurations AS (\n    SELECT\n        DATE_DIFF(effective_stop_time, effective_start_time, DAY) AS duration_days\n    FROM\n        ThiazidePrescriptions_EffectiveDuration\n    WHERE\n        -- Ensure the effective period has a valid duration (start <= end)\n        effective_stop_time >= effective_start_time\n)\nSELECT\n    PERCENTILE_CONT(duration_days, 0.75) OVER() - PERCENTILE_CONT(duration_days, 0.25) OVER() AS iqr_duration_days\nFROM\n    FinalDurations\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

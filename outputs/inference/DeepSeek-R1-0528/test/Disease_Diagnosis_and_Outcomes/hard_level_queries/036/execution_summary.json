@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 78\u2011year\u2011old male with pneumonia and high comorbidity. In male patients 73\u201383 with pneumonia and top\u2011quartile comorbidity, what is his composite risk percentile? Provide cohort in\u2011hospital mortality %, major complication %, and median survival days.",
+  "final_sql": "WITH pneumonia_icd AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE REGEXP_CONTAINS(LOWER(long_title), r'pneumonia')\n),\nbase_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.dod,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.hadm_id = diag.hadm_id\n  INNER JOIN pneumonia_icd\n    ON diag.icd_code = pneumonia_icd.icd_code\n    AND diag.icd_version = pneumonia_icd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 73 AND 83\n),\ncomorbidity AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT icd_code) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\ncohort_with_cc AS (\n  SELECT\n    bc.*,\n    COALESCE(c.comorbidity_count, 0) AS comorbidity_count\n  FROM base_cohort bc\n  LEFT JOIN comorbidity c\n    ON bc.hadm_id = c.hadm_id\n),\ncohort_percentiles AS (\n  SELECT\n    *,\n    PERCENT_RANK() OVER (ORDER BY comorbidity_count) * 100 AS comorbidity_percentile\n  FROM cohort_with_cc\n),\ncomorbidity_threshold AS (\n  SELECT\n    APPROX_QUANTILES(comorbidity_count, 100)[OFFSET(75)] AS p75\n  FROM cohort_with_cc\n),\ntop_quartile_cohort AS (\n  SELECT\n    cp.*\n  FROM cohort_percentiles cp\n  CROSS JOIN comorbidity_threshold\n  WHERE comorbidity_count >= p75\n),\ncohort_icu_flag AS (\n  SELECT\n    t.hadm_id,\n    MAX(CASE WHEN i.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS had_icu_stay\n  FROM top_quartile_cohort t\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON t.hadm_id = i.hadm_id\n  GROUP BY t.hadm_id\n),\ncohort_survival AS (\n  SELECT\n    hadm_id,\n    DATE_DIFF(dod, admittime, DAY) AS survival_days\n  FROM top_quartile_cohort\n  WHERE dod IS NOT NULL\n)\nSELECT\n  APPROX_QUANTILES(comorbidity_percentile, 100)[OFFSET(50)] AS composite_risk_percentile,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS in_hospital_mortality_percent,\n  ROUND(AVG(had_icu_stay) * 100, 2) AS major_complication_percent,\n  APPROX_QUANTILES(survival_days, 100)[OFFSET(50)] AS median_survival_days\nFROM top_quartile_cohort t\nINNER JOIN cohort_icu_flag icu\n  ON t.hadm_id = icu.hadm_id\nLEFT JOIN cohort_survival s\n  ON t.hadm_id = s.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "I have a 56\u2011year\u2011old male in the ICU. Among male ICU patients aged 51\u201361, categorize first\u201148\u2011hour per\u2011stay average SpO2 (<90, 90\u201392, 93\u201395, >95) and report patient counts and AKI rates.",
+  "final_sql": "WITH patient_stays AS (\n  SELECT \n    icustays.stay_id,\n    icustays.hadm_id,\n    icustays.subject_id,\n    icustays.intime,\n    patients.anchor_age,\n    patients.anchor_year,\n    patients.gender,\n    patients.anchor_age + (EXTRACT(YEAR FROM icustays.intime) - patients.anchor_year) AS age_at_icu\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icustays\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` patients\n    ON icustays.subject_id = patients.subject_id\n  WHERE patients.gender = 'M'\n    AND patients.anchor_age + (EXTRACT(YEAR FROM icustays.intime) - patients.anchor_year) BETWEEN 51 AND 61\n),\n\nspo2_measurements AS (\n  SELECT \n    ce.stay_id,\n    AVG(ce.valuenum) AS avg_spo2\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN patient_stays ps ON ce.stay_id = ps.stay_id\n  WHERE ce.itemid = 220277  -- SpO2 itemid\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n    AND ce.charttime BETWEEN ps.intime AND DATETIME_ADD(ps.intime, INTERVAL 48 HOUR)\n  GROUP BY ce.stay_id\n),\n\naki_status AS (\n  SELECT \n    hadm_id,\n    MAX(CASE WHEN valuenum >= 2.0 THEN 1 ELSE 0 END) AS has_aki\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n  WHERE itemid = 50912  -- Creatinine itemid\n    AND valuenum IS NOT NULL\n    AND valuenum > 0\n  GROUP BY hadm_id\n),\n\ncombined_data AS (\n  SELECT \n    ps.stay_id,\n    ps.hadm_id,\n    sm.avg_spo2,\n    CASE \n      WHEN sm.avg_spo2 < 90 THEN '<90'\n      WHEN sm.avg_spo2 <= 92 THEN '90-92'\n      WHEN sm.avg_spo2 <= 95 THEN '93-95'\n      ELSE '>95'\n    END AS spo2_category,\n    COALESCE(aks.has_aki, 0) AS has_aki\n  FROM patient_stays ps\n  LEFT JOIN spo2_measurements sm ON ps.stay_id = sm.stay_id\n  LEFT JOIN aki_status aks ON ps.hadm_id = aks.hadm_id\n)\n\nSELECT \n  spo2_category,\n  COUNT(*) AS patient_count,\n  AVG(has_aki) AS aki_rate\nFROM combined_data\nWHERE spo2_category IS NOT NULL\nGROUP BY spo2_category\nORDER BY \n  CASE spo2_category\n    WHEN '<90' THEN 1\n    WHEN '90-92' THEN 2\n    WHEN '93-95' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"dates\" at [1:17]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"dates\" at [1:17]\n\nLocation: US\nJob ID: 8f18c129-5291-42d5-a630-980725c7f8d5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

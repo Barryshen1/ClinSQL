@@ -1,0 +1,16 @@
+{
+  "query": "For my 80-year-old male patient, among men 75\u201385 with ischemic heart disease/ACS and COPD, what's the 75th-percentile hospital LOS (days)?",
+  "final_sql": "WITH qualifying_hadms AS (\n  -- Step 1: Find all hospital admissions (hadm_id) that have diagnoses for BOTH\n  -- Ischemic Heart Disease/ACS AND COPD.\n  SELECT\n    hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  GROUP BY\n    hadm_id\n  HAVING\n    -- Use MAX with CASE to check for the presence of at least one IHD/ACS diagnosis\n    MAX(\n      CASE\n        WHEN\n          LOWER(dd.long_title) LIKE '%acute myocardial infarction%'\n          OR LOWER(dd.long_title) LIKE '%unstable angina%'\n          OR LOWER(dd.long_title) LIKE '%ischemic cardiomyopathy%'\n          OR LOWER(dd.long_title) LIKE '%coronary arteriosclerosis%' -- a common form of IHD\n          OR LOWER(dd.long_title) LIKE '%acute coronary syndrome%'\n          OR LOWER(dd.long_title) LIKE '%ischemic heart disease%'\n          THEN 1\n        ELSE 0\n      END\n    ) = 1\n    AND\n    -- And check for the presence of at least one COPD diagnosis\n    MAX(\n      CASE\n        WHEN\n          LOWER(dd.long_title) LIKE '%chronic obstructive pulmonary disease%'\n          OR LOWER(dd.long_title) LIKE '%copd%'\n          OR LOWER(dd.long_title) LIKE '%emphysema%'\n          OR LOWER(dd.long_title) LIKE '%chronic bronchitis%'\n          THEN 1\n        ELSE 0\n      END\n    ) = 1\n), cohort_los AS (\n  -- Step 2: Join with admissions and patients to filter by demographics\n  -- and calculate LOS for the qualifying admissions.\n  SELECT\n    -- Calculate LOS in fractional days for higher precision before aggregation\n    TIMESTAMP_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  -- Ensure the admission has the required comorbidities by joining with the previous CTE\n  INNER JOIN\n    qualifying_hadms AS qh\n    ON adm.hadm_id = qh.hadm_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 75 AND 85\n    -- Sanity checks for a valid LOS calculation\n    AND adm.dischtime IS NOT NULL\n    AND adm.admittime IS NOT NULL\n    AND adm.dischtime > adm.admittime\n)\n-- Step 3: Calculate the 75th percentile of the LOS for the final cohort\nSELECT\n  APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS los_days_75th_percentile\nFROM\n  cohort_los;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

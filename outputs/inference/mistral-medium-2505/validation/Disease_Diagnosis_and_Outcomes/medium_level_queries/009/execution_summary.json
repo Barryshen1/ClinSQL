@@ -1,0 +1,22 @@
+{
+  "query": "58\u2011year\u2011old man: among men 53\u201363 with sepsis (excluding septic shock), what are in\u2011hospital mortality (%) and prevalence (%) of mechanical ventilation, vasopressors, and RRT by LOS (<8 vs \u22658) and day\u20111 ICU?",
+  "final_sql": "WITH sepsis_patients AS (\n  -- Get male patients aged 53-63 with sepsis diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    i.stay_id,\n    i.intime AS icu_intime,\n    i.outtime AS icu_outtime,\n    TIMESTAMP_DIFF(i.outtime, i.intime, DAY) AS icu_los,\n    DATE_DIFF(DATE(i.intime), DATE(a.admittime), DAY) AS day1_icu\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i ON a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND (\n      -- Sepsis ICD-10 codes (excluding septic shock)\n      (di.icd_code LIKE 'A41.%' OR di.icd_code LIKE 'R65.2%')\n      AND di.icd_code NOT LIKE 'R65.21' -- Exclude septic shock\n    )\n    -- Only first ICU stay per admission\n    AND i.stay_id = (\n      SELECT MIN(stay_id)\n      FROM `physionet-data.mimiciv_3_1_icu.icustays`\n      WHERE hadm_id = a.hadm_id\n    )\n),\n\nmechanical_ventilation AS (\n  -- Identify patients with mechanical ventilation\n  SELECT DISTINCT\n    subject_id,\n    hadm_id,\n    stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents`\n  WHERE\n    itemid IN (\n      -- Item IDs for mechanical ventilation procedures\n      SELECT itemid\n      FROM `physionet-data.mimiciv_3_1_icu.d_items`\n      WHERE label LIKE '%ventilation%' OR label LIKE '%ventilator%'\n    )\n),\n\nvasopressors AS (\n  -- Identify patients receiving vasopressors\n  SELECT DISTINCT\n    subject_id,\n    hadm_id,\n    stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.inputevents`\n  WHERE\n    itemid IN (\n      -- Item IDs for vasopressor drugs\n      SELECT itemid\n      FROM `physionet-data.mimiciv_3_1_icu.d_items`\n      WHERE label LIKE '%vasopressor%' OR label LIKE '%norepinephrine%' OR label LIKE '%epinephrine%'\n    )\n),\n\nrrt AS (\n  -- Identify patients receiving renal replacement therapy\n  SELECT DISTINCT\n    subject_id,\n    hadm_id,\n    stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents`\n  WHERE\n    itemid IN (\n      -- Item IDs for RRT procedures\n      SELECT itemid\n      FROM `physionet-data.mimiciv_3_1_icu.d_items`\n      WHERE label LIKE '%dialysis%' OR label LIKE '%hemofiltration%'\n    )\n)\n\n-- Final aggregation\nSELECT\n  CASE WHEN icu_los < 8 THEN 'LOS <8 days' ELSE 'LOS \u22658 days' END AS los_group,\n  CASE WHEN day1_icu = 1 THEN 'Day 1 ICU' ELSE 'Not Day 1 ICU' END AS day1_icu_group,\n  COUNT(DISTINCT s.subject_id) AS total_patients,\n  SUM(s.hospital_expire_flag) AS deaths,\n  ROUND(100 * SUM(s.hospital_expire_flag) / COUNT(DISTINCT s.subject_id), 2) AS mortality_rate,\n  ROUND(100 * COUNT(DISTINCT mv.subject_id) / COUNT(DISTINCT s.subject_id), 2) AS mv_prevalence,\n  ROUND(100 * COUNT(DISTINCT v.subject_id) / COUNT(DISTINCT s.subject_id), 2) AS vasopressor_prevalence,\n  ROUND(100 * COUNT(DISTINCT r.subject_id) / COUNT(DISTINCT s.subject_id), 2) AS rrt_prevalence\nFROM\n  sepsis_patients s\nLEFT JOIN\n  mechanical_ventilation mv ON s.subject_id = mv.subject_id AND s.hadm_id = mv.hadm_id AND s.stay_id = mv.stay_id\nLEFT JOIN\n  vasopressors v ON s.subject_id = v.subject_id AND s.hadm_id = v.hadm_id AND s.stay_id = v.stay_id\nLEFT JOIN\n  rrt r ON s.subject_id = r.subject_id AND s.hadm_id = r.hadm_id AND s.stay_id = r.stay_id\nGROUP BY\n  los_group, day1_icu_group\nORDER BY\n  los_group, day1_icu_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [95:18]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [95:18]\n\nLocation: US\nJob ID: e747eccb-9564-4744-bf26-e0a3025e4aef\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

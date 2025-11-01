@@ -1,0 +1,28 @@
+{
+  "query": "For my 44\u2011y\u2011old female: among 39\u201349\u2011y females with T2DM and heart failure (LOS\u226572h), report percent initiating basal, bolus, basal\u2013bolus, sliding\u2011scale insulin in first 72h vs final 48h, with absolute percentage\u2011point differences.",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (a.admittime BETWEEN DATETIME(p.anchor_year - (50 - p.anchor_age), 1, 1, 0, 0, 0) \n                  AND DATETIME(p.anchor_year - (40 - p.anchor_age), 12, 31, 23, 59, 59))\n    AND TIMESTAMPDIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\nt2dm_hf_cohort AS (\n  SELECT pc.subject_id\n  FROM patient_cohort pc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pc.subject_id = di.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (d.icd_code LIKE 'E11%' AND d.icd_version = 10)  -- T2DM\n  GROUP BY pc.subject_id\n  HAVING COUNT(CASE WHEN d.icd_code LIKE 'I50%' THEN 1 END) >= 1  -- Heart Failure\n),\ninsulin_orders AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    pr.drug,\n    pr.starttime,\n    CASE\n      WHEN LOWER(pr.drug) LIKE '%basal%' OR LOWER(pr.drug) LIKE '%long%' OR LOWER(pr.drug) LIKE '%glargine%'\n        OR LOWER(pr.drug) LIKE '%detemir%' OR LOWER(pr.drug) LIKE '%degludec%' THEN 'basal'\n      WHEN LOWER(pr.drug) LIKE '%bolus%' OR LOWER(pr.drug) LIKE '%rapid%' OR LOWER(pr.drug) LIKE '%lispro%'\n        OR LOWER(pr.drug) LIKE '%aspart%' OR LOWER(pr.drug) LIKE '%glulisine%' THEN 'bolus'\n      WHEN (LOWER(pr.drug) LIKE '%basal%' OR LOWER(pr.drug) LIKE '%long%') \n        AND (LOWER(pr.drug) LIKE '%bolus%' OR LOWER(pr.drug) LIKE '%rapid%') THEN 'basal-bolus'\n      WHEN LOWER(pr.drug) LIKE '%sliding scale%' OR LOWER(pr.drug) LIKE '%correction%' THEN 'sliding-scale'\n      ELSE NULL\n    END AS insulin_type\n  FROM t2dm_hf_cohort t\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON t.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.prescriptions pr\n    ON a.hadm_id = pr.hadm_id\n  WHERE LOWER(pr.drug) LIKE '%insulin%'\n    AND pr.starttime IS NOT NULL\n),\ntime_windows AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    starttime,\n    insulin_type,\n    CASE WHEN starttime <= DATETIME_ADD(admittime, INTERVAL 72 HOUR) THEN 1 ELSE 0 END AS in_first_72h,\n    CASE WHEN starttime >= DATETIME_ADD(dischtime, INTERVAL -48 HOUR) THEN 1 ELSE 0 END AS in_final_48h\n  FROM insulin_orders\n),\nregimen_initiation AS (\n  SELECT \n    insulin_type,\n    MAX(in_first_72h) AS initiated_first_72h,\n    MAX(in_final_48h) AS initiated_final_48h\n  FROM time_windows\n  WHERE insulin_type IS NOT NULL\n  GROUP BY subject_id, hadm_id, insulin_type\n),\nsummary_stats AS (\n  SELECT\n    insulin_type,\n    AVG(CAST(initiated_first_72h AS FLOAT64)) * 100 AS pct_first_72h,\n    AVG(CAST(initiated_final_48h AS FLOAT64)) * 100 AS pct_final_48h\n  FROM regimen_initiation\n  GROUP BY insulin_type\n)\nSELECT\n  insulin_type,\n  ROUND(pct_first_72h, 2) AS pct_first_72h,\n  ROUND(pct_final_48h, 2) AS pct_final_48h,\n  ROUND(pct_final_48h - pct_first_72h, 2) AS absolute_difference\nFROM summary_stats\nORDER BY insulin_type;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [9:9]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [9:9]\n\nLocation: US\nJob ID: b976048b-e2bf-47e4-bbab-613ceb557ebe\n",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]\n\nLocation: US\nJob ID: 72edc593-073c-4dff-bf74-393919822f2e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword AND at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AND at [1:1]\n\nLocation: US\nJob ID: 519cc2fc-36e2-4c5b-90cc-88cf9037b90c\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [9:9]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [9:9]\n\nLocation: US\nJob ID: b976048b-e2bf-47e4-bbab-613ceb557ebe\n"
+    }
+  ]
+}

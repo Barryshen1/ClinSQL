@@ -1,0 +1,28 @@
+{
+  "query": "For my 57-year-old male inpatient, among non-emergency male admissions aged 52\u201362, report LOS percentiles (p50, p75, p90, p95) by discharged alive vs in-hospital death, and percentile rank of 7 days.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND EXTRACT(YEAR FROM a.admittime) >= 2008  -- Exclude anchor age 0 cases\n    AND a.admission_type != 'EMERGENCY'\n),\nlos_stats AS (\n  SELECT \n    hospital_expire_flag,\n    CASE hospital_expire_flag \n      WHEN 0 THEN 'Discharged Alive' \n      WHEN 1 THEN 'In-Hospital Death' \n    END AS outcome_group,\n    \n    -- Use APPROX_QUANTILES with 100 quantiles for precise percentile extraction\n    APPROX_QUANTILES(los, 100)[OFFSET(50)] AS p50_los,\n    APPROX_QUANTILES(los, 100)[OFFSET(75)] AS p75_los,\n    APPROX_QUANTILES(los, 100)[OFFSET(90)] AS p90_los,\n    APPROX_QUANTILES(los, 100)[OFFSET(95)] AS p95_los\n    \n  FROM cohort\n  WHERE los >= 0  -- Ensure non-negative LOS\n  GROUP BY hospital_expire_flag\n),\npercentile_ranks AS (\n  SELECT \n    hospital_expire_flag,\n    -- Percentile rank of 7-day LOS: % of patients with LOS < 7 days\n    ROUND(SUM(CASE WHEN los < 7 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS p7day_rank_pct\n  FROM cohort\n  WHERE los >= 0\n  GROUP BY hospital_expire_flag\n)\nSELECT \n  ls.outcome_group,\n  ls.p50_los,\n  ls.p75_los,\n  ls.p90_los,\n  ls.p95_los,\n  pr.p7day_rank_pct\nFROM los_stats ls\nINNER JOIN percentile_ranks pr ON ls.hospital_expire_flag = pr.hospital_expire_flag\nORDER BY ls.hospital_expire_flag;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: dba4b817-d4c2-4a49-b1e7-1e95f59a0fda\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic functions cannot be arguments to aggregate functions at [47:11]; reason: invalidQuery, location: query, message: Analytic functions cannot be arguments to aggregate functions at [47:11]\n\nLocation: US\nJob ID: d5cc0147-039d-4847-9101-95c23b2985a1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

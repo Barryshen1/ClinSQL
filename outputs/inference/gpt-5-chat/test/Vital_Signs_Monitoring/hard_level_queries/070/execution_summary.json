@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83\u2011year\u2011old man to evaluate. Among male ICU patients aged 78\u201388 with HHS, for the top quartile by 24\u2011hour HR/MAP/RR CV sum, report stay instability score, decile, abnormal vital count, ICU LOS, and in\u2011hospital mortality.",
+  "final_sql": "WITH hhs_admissions AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%hyperosmolar%'\n),\nmale_elderly AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 78 AND 88\n),\nvital_itemids AS (\n  SELECT \n    MAX(CASE WHEN LOWER(label) = 'heart rate' THEN itemid END) AS hr_itemid,\n    MAX(CASE WHEN LOWER(label) = 'mean arterial pressure' THEN itemid END) AS map_itemid,\n    MAX(CASE WHEN LOWER(label) = 'respiratory rate' THEN itemid END) AS rr_itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) IN ('heart rate','mean arterial pressure','respiratory rate')\n),\nfirst24h_vitals AS (\n  SELECT ce.stay_id,\n         ce.itemid,\n         ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON ce.stay_id = icu.stay_id\n  JOIN male_elderly me ON icu.subject_id = me.subject_id\n  JOIN hhs_admissions ha ON icu.hadm_id = ha.hadm_id\n                        AND icu.subject_id = ha.subject_id\n  CROSS JOIN vital_itemids vi\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.itemid IN (vi.hr_itemid, vi.map_itemid, vi.rr_itemid)\n    AND ce.charttime BETWEEN icu.intime\n                         AND DATETIME_ADD(icu.intime, INTERVAL 24 HOUR)\n),\ncv_per_stay AS (\n  SELECT\n    stay_id,\n    STDDEV(IF(itemid = hr_itemid, valuenum, NULL)) / AVG(IF(itemid = hr_itemid, valuenum, NULL)) AS cv_hr,\n    STDDEV(IF(itemid = map_itemid, valuenum, NULL)) / AVG(IF(itemid = map_itemid, valuenum, NULL)) AS cv_map,\n    STDDEV(IF(itemid = rr_itemid, valuenum, NULL)) / AVG(IF(itemid = rr_itemid, valuenum, NULL)) AS cv_rr,\n    SUM(\n      CASE \n        WHEN itemid = hr_itemid AND (valuenum < 60 OR valuenum > 100) THEN 1\n        WHEN itemid = map_itemid AND (valuenum < 70 OR valuenum > 105) THEN 1\n        WHEN itemid = rr_itemid AND (valuenum < 12 OR valuenum > 20) THEN 1\n        ELSE 0\n      END\n    ) AS abnormal_vital_count\n  FROM first24h_vitals f\n  CROSS JOIN vital_itemids vi\n  GROUP BY stay_id\n),\ncv_summary AS (\n  SELECT\n    stay_id,\n    (cv_hr + cv_map + cv_rr) AS instability_score,\n    abnormal_vital_count\n  FROM cv_per_stay\n),\nquartile_cut AS (\n  SELECT APPROX_QUANTILES(instability_score, 4)[OFFSET(3)] AS q3\n  FROM cv_summary\n),\nscored AS (\n  SELECT\n    s.stay_id,\n    s.instability_score,\n    NTILE(10) OVER (ORDER BY s.instability_score) AS decile,\n    s.abnormal_vital_count,\n    icu.los AS icu_los,\n    adm.hospital_expire_flag\n  FROM cv_summary s\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON s.stay_id = icu.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  WHERE s.instability_score >= (SELECT q3 FROM quartile_cut)\n)\nSELECT stay_id,\n       instability_score,\n       decile,\n       abnormal_vital_count,\n       icu_los,\n       hospital_expire_flag\nFROM scored\nORDER BY instability_score DESC;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: STDDEV_IF at [41:5]; reason: invalidQuery, location: query, message: Function not found: STDDEV_IF at [41:5]\n\nLocation: US\nJob ID: 0864c559-7921-473d-8737-cae0ae19f8c3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

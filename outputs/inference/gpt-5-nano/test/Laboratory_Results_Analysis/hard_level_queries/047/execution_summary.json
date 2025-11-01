@@ -1,0 +1,28 @@
+{
+  "query": "I have a 76-year-old man. Among male inpatients with ARDS aged 71\u201381, what is the 90th\u2011percentile instability score in the first 72 hours? For patients at/above that threshold, report mortality, mean LOS, and compare critical lab rates to general inpatients.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    ON a.subject_id = dx.subject_id AND a.hadm_id = dx.hadm_id\n  WHERE p.gender = 'Male'\n    AND p.anchor_age BETWEEN 71 AND 81\n    AND (\n      (dx.icd_version = 9  AND dx.icd_code = '518.82') OR\n      (dx.icd_version = 10 AND dx.icd_code = 'J80')\n    )\n),\ninstability_per_admission AS (\n  SELECT\n    ea.hadm_id,\n    COALESCE(SUM(\n      CASE\n        WHEN le.valuenum IS NOT NULL AND (\n             (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower) OR\n             (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper)\n        )\n        THEN 1\n        ELSE 0\n      END\n    ), 0) AS instability_score\n  FROM eligible_admissions AS ea\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.subject_id = ea.subject_id\n   AND le.hadm_id = ea.hadm_id\n   AND le.charttime >= ea.admittime\n   AND le.charttime < TIMESTAMP_ADD(ea.admittime, INTERVAL 72 HOUR)\n  GROUP BY ea.hadm_id\n),\nadmission_info AS (\n  SELECT\n    ei.hadm_id,\n    ei.subject_id,\n    ei.admittime,\n    ei.dischtime,\n    ei.hospital_expire_flag,\n    TIMESTAMP_DIFF(ei.dischtime, ei.admittime, SECOND) / 86400.0 AS los_days\n  FROM eligible_admissions AS ei\n),\ncritical_lab_flag AS (\n  SELECT\n    ei.hadm_id,\n    MAX(\n      CASE\n        WHEN le.valuenum IS NOT NULL AND (\n             (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower) OR\n             (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper)\n        )\n        THEN 1 ELSE 0\n      END\n    ) AS has_crit_lab\n  FROM eligible_admissions AS ei\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.subject_id = ei.subject_id\n   AND le.hadm_id = ei.hadm_id\n   AND le.charttime >= ei.admittime\n   AND le.charttime < TIMESTAMP_ADD(ei.admittime, INTERVAL 72 HOUR)\n  GROUP BY ei.hadm_id\n),\nthreshold_p90 AS (\n  -- Compute the 90th percentile of instability_score across eligible admissions\n  SELECT quantiles[OFFSET(90)] AS p90\n  FROM (\n    SELECT APPROX_QUANTILES(ip.instability_score, 100) AS quantiles\n    FROM instability_per_admission AS ip\n  ) AS t\n)\nSELECT\n  CASE\n    WHEN ip.instability_score >= t.p90 THEN 'High instability (>= 90th percentile)'\n    ELSE 'General (below 90th percentile)'\n  END AS group_label,\n  AVG(CAST(ai.hospital_expire_flag AS INT64)) AS mortality_rate,\n  AVG(ai.los_days) AS mean_los_days,\n  AVG(cl.has_crit_lab) AS mean_critical_lab_rate,\n  t.p90 AS instability_p90\nFROM instability_per_admission AS ip\nJOIN admission_info AS ai\n  ON ip.hadm_id = ai.hadm_id\nJOIN critical_lab_flag AS cl\n  ON ip.hadm_id = cl.hadm_id\nCROSS JOIN threshold_p90 AS t\nGROUP BY group_label, t.p90\nORDER BY group_label;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword WITH at [7:1]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword WITH at [7:1]\n\nLocation: US\nJob ID: 4502188e-9bd0-416d-9cfb-86fdfe73b29c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [75:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [75:5]\n\nLocation: US\nJob ID: 1c0537bd-ef42-4f2f-a875-10c0149a5427\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

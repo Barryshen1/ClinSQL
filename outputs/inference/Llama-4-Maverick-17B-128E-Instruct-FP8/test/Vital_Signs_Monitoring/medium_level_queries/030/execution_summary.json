@@ -1,0 +1,16 @@
+{
+  "query": "For my 86\u2011year\u2011old female ICU patient: among female ICU patients 81\u201391, classify per\u2011stay mean temperature in first 24h (<36.0, 36.0\u201337.9, \u226538.0\u00b0C) and report N, mean, median, IQR, and MI rate (%).",
+  "final_sql": "WITH temp_measurements AS (\n  SELECT \n    ie.stay_id,\n    AVG(ce.valuenum) AS mean_temp\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce ON ie.stay_id = ce.stay_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p ON ie.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F' AND p.anchor_age BETWEEN 81 AND 91\n    AND ce.itemid = 223762  -- Verify this itemid for temperature\n    AND ce.charttime BETWEEN ie.intime AND TIMESTAMP_ADD(ie.intime, INTERVAL 24 HOUR)\n  GROUP BY \n    ie.stay_id\n),\nclassified_temp AS (\n  SELECT \n    stay_id,\n    mean_temp,\n    CASE \n      WHEN mean_temp < 36.0 THEN '<36.0'\n      WHEN mean_temp >= 38.0 THEN '>=38.0'\n      ELSE '36.0-37.9'\n    END AS temp_category\n  FROM \n    temp_measurements\n),\nmortality AS (\n  SELECT \n    ie.stay_id,\n    CASE \n      WHEN ad.deathtime IS NOT NULL AND ie.outtime >= ad.deathtime THEN 1 \n      WHEN ad.hospital_expire_flag = 1 THEN 1 \n      ELSE 0 \n    END AS died\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` ad ON ie.hadm_id = ad.hadm_id\n),\nstats AS (\n  SELECT \n    ct.temp_category,\n    COUNT(*) AS N,\n    AVG(ct.mean_temp) AS mean,\n    APPROX_QUANTILES(ct.mean_temp, 100)[OFFSET(50)] AS median,\n    APPROX_QUANTILES(ct.mean_temp, 100)[OFFSET(75)] - APPROX_QUANTILES(ct.mean_temp, 100)[OFFSET(25)] AS IQR,\n    AVG(m.died) * 100 AS MI_rate\n  FROM \n    classified_temp ct\n  INNER JOIN \n    mortality m ON ct.stay_id = m.stay_id\n  GROUP BY \n    ct.temp_category\n)\nSELECT \n  temp_category,\n  N,\n  mean,\n  median,\n  IQR,\n  MI_rate\nFROM \n  stats;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

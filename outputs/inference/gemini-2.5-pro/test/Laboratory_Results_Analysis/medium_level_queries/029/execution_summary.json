@@ -1,0 +1,16 @@
+{
+  "query": "For context on my 63-year-old male: among males aged 58\u201368 admitted with chest pain or AMI with initial Troponin T >0.04 ng/mL, give summary statistics including in-hospital mortality rate.",
+  "final_sql": "WITH\n-- Step 1: Identify male patients aged 58-68\npatients_cohort AS (\n  SELECT\n    subject_id,\n    anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 58 AND 68\n),\n\n-- Step 2: Identify admissions with a diagnosis of Chest Pain or AMI\ndiagnoses_cohort AS (\n  SELECT DISTINCT\n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    -- ICD-9 codes for AMI (410.xx) or Chest Pain (786.5x)\n    (\n      icd_version = 9 AND (\n        SUBSTR(icd_code, 1, 3) = '410'\n        OR SUBSTR(icd_code, 1, 4) = '7865'\n      )\n    ) OR\n    -- ICD-10 codes for AMI (I21, I22) or Chest Pain (R07)\n    (\n      icd_version = 10 AND (\n        SUBSTR(icd_code, 1, 3) IN ('I21', 'I22')\n        OR SUBSTR(icd_code, 1, 3) = 'R07'\n      )\n    )\n),\n\n-- Step 3: Identify admissions where the initial Troponin T was > 0.04 ng/mL\ninitial_troponin AS (\n  SELECT\n    hadm_id\n  FROM (\n    SELECT\n      hadm_id,\n      valuenum,\n      -- Rank Troponin T tests by time for each admission\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.labevents`\n    WHERE\n      itemid = 51003 -- d_labitems.label = 'Troponin T'\n      AND valuenum IS NOT NULL\n      AND hadm_id IS NOT NULL\n      -- The unit for itemid 51003 is 'ng/mL'\n  )\n  WHERE\n    rn = 1 -- Filter for the first measurement\n    AND valuenum > 0.04\n),\n\n-- Step 4: Combine all criteria to form the final cohort of admissions\nfinal_cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.hospital_expire_flag,\n    pt.anchor_age,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  INNER JOIN patients_cohort AS pt\n    ON adm.subject_id = pt.subject_id\n  INNER JOIN diagnoses_cohort AS dx\n    ON adm.hadm_id = dx.hadm_id\n  INNER JOIN initial_troponin AS trop\n    ON adm.hadm_id = trop.hadm_id\n)\n\n-- Step 5: Calculate and display summary statistics for the final cohort\nSELECT\n  COUNT(DISTINCT subject_id) AS number_of_patients,\n  COUNT(DISTINCT hadm_id) AS number_of_admissions,\n  -- Mortality Statistics\n  SUM(hospital_expire_flag) AS total_in_hospital_deaths,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_rate_percent,\n  -- Age Statistics\n  AVG(anchor_age) AS mean_age,\n  MIN(anchor_age) AS min_age,\n  MAX(anchor_age) AS max_age,\n  -- Length of Stay Statistics\n  AVG(los_days) AS mean_los_days,\n  MIN(los_days) AS min_los_days,\n  MAX(los_days) AS max_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(25)] AS p25_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS p75_los_days\nFROM final_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

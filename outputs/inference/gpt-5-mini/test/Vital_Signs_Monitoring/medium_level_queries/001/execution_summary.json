@@ -1,0 +1,16 @@
+{
+  "query": "For my 50-year-old female patient, among female ICU patients aged 45\u201355, report counts of unique patients by per-stay average SBP over the first 24 hours: <140, 140\u2013159, \u2265160 mmHg.",
+  "final_sql": "WITH sbp_items_events AS (\n  -- Select systolic BP measurements from chartevents using d_items text matching\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE (\n      LOWER(di.label) LIKE '%systolic%'    -- capture labels that mention systolic\n      OR LOWER(di.abbreviation) LIKE '%sys%' -- capture abbreviations\n    )\n    -- prefer mmHg units where available (valueuom may be null for some rows)\n    AND (\n      LOWER(COALESCE(ce.valueuom, di.unitname, '')) LIKE '%mmhg%'\n      OR di.unitname IS NOT NULL\n    )\n    AND ce.valuenum IS NOT NULL\n    -- reasonable physiologic bounds for systolic BP\n    AND ce.valuenum BETWEEN 30 AND 300\n),\n\nstay_avg_sbp AS (\n  -- Compute per-stay average SBP within first 24 hours of ICU admission\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    AVG(se.valuenum) AS avg_sbp\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN sbp_items_events se\n    ON se.stay_id = icu.stay_id\n   AND se.charttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n  GROUP BY icu.subject_id, icu.hadm_id, icu.stay_id\n),\n\nfiltered_stay_avgs AS (\n  -- Keep only female patients aged 45-55\n  SELECT\n    s.subject_id,\n    s.stay_id,\n    s.avg_sbp\n  FROM stay_avg_sbp s\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 45 AND 55\n)\n\n-- Final aggregation: count distinct patients per SBP category.\nSELECT\n  category,\n  COUNT(DISTINCT subject_id) AS unique_patient_count,\n  COUNT(*) AS num_stays_in_category\nFROM (\n  SELECT\n    subject_id,\n    stay_id,\n    avg_sbp,\n    CASE\n      WHEN avg_sbp < 140 THEN '<140'\n      WHEN avg_sbp >= 140 AND avg_sbp < 160 THEN '140-159'\n      ELSE '>=160'\n    END AS category\n  FROM filtered_stay_avgs\n)\nGROUP BY category\nORDER BY\n  CASE category WHEN '<140' THEN 1 WHEN '140-159' THEN 2 ELSE 3 END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

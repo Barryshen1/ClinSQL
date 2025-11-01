@@ -1,0 +1,22 @@
+{
+  "query": "I have an 88\u2011year\u2011old man with chest pain/AMI and initial troponin T above the 99th percentile. Among male patients aged 83\u201393, provide N, mean age, mean LOS, and troponin summary.",
+  "final_sql": "WITH troponin_items AS (\n  -- identify Troponin T lab itemids (case-insensitive match)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\n\ncohort_admissions AS (\n  -- admissions for male patients aged 83-93 that have a diagnosis of AMI or chest pain\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime, p.anchor_age, p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON a.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n    ON dx.icd_code = ddi.icd_code\n    AND dx.icd_version = ddi.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 83 AND 93\n    AND (\n      LOWER(ddi.long_title) LIKE '%myocardial infarction%'\n      OR LOWER(ddi.long_title) LIKE '%chest pain%'\n    )\n),\n\ninitial_troponin AS (\n  -- first (earliest) troponin T measurement per admission (hadm_id)\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum\n  FROM (\n    SELECT\n      le.*,\n      ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC, le.storetime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    JOIN troponin_items ti\n      ON le.itemid = ti.itemid\n    WHERE le.valuenum IS NOT NULL\n      -- restrict to labs that belong to cohort admissions\n      AND le.hadm_id IN (SELECT hadm_id FROM cohort_admissions)\n  ) le\n  WHERE rn = 1\n),\n\ntrop_stats AS (\n  -- compute the 99th percentile threshold across initial troponin values (for admissions in the cohort)\n  SELECT\n    APPROX_QUANTILES(valuenum, 100)[OFFSET(99)] AS trop_99pct\n  FROM initial_troponin\n)\n\nSELECT\n  COUNT(DISTINCT ca.hadm_id) AS n_admissions,\n  COUNT(DISTINCT ca.subject_id) AS n_distinct_patients,\n  -- mean patient age (anchor_age)\n  ROUND(AVG(ca.anchor_age), 2) AS mean_age_years,\n  -- mean hospital LOS in days\n  ROUND(AVG(TIMESTAMP_DIFF(ca.dischtime, ca.admittime, MINUTE) / 1440.0), 2) AS mean_los_days,\n  -- troponin measurement summaries\n  SUM(CASE WHEN it.valuenum IS NOT NULL THEN 1 ELSE 0 END) AS n_with_initial_troponin,\n  ROUND(AVG(it.valuenum), 4) AS mean_initial_troponin,\n  -- approximate median\n  (SELECT APPROX_QUANTILES(valuenum, 2)[OFFSET(1)] FROM initial_troponin) AS median_initial_troponin,\n  ROUND(STDDEV_SAMP(it.valuenum), 4) AS sd_initial_troponin,\n  MIN(it.valuenum) AS min_initial_troponin,\n  MAX(it.valuenum) AS max_initial_troponin,\n  -- 99th percentile threshold and counts above it (referenced via scalar subquery)\n  (SELECT trop_99pct FROM trop_stats) AS initial_troponin_99pct_threshold,\n  SUM(CASE WHEN it.valuenum IS NOT NULL AND it.valuenum > (SELECT trop_99pct FROM trop_stats) THEN 1 ELSE 0 END) AS n_initial_trop_above_99pct,\n  ROUND(100.0 * SUM(CASE WHEN it.valuenum IS NOT NULL AND it.valuenum > (SELECT trop_99pct FROM trop_stats) THEN 1 ELSE 0 END)\n        / NULLIF(SUM(CASE WHEN it.valuenum IS NOT NULL THEN 1 ELSE 0 END), 0), 2) AS pct_initial_trop_above_99pct\nFROM cohort_admissions ca\nLEFT JOIN initial_troponin it\n  ON ca.hadm_id = it.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references ts.trop_99pct which is neither grouped nor aggregated at [71:3]; reason: invalidQuery, location: query, message: SELECT list expression references ts.trop_99pct which is neither grouped nor aggregated at [71:3]\n\nLocation: US\nJob ID: 8a6f80ff-e0b4-477f-a7ac-ab7ca7b47d6e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

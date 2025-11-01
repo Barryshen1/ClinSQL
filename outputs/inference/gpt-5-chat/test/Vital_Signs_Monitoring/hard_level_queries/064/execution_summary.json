@@ -1,0 +1,22 @@
+{
+  "query": "For a 50-year-old male ICU patient with ARF: among male ICU patients 45\u201355, what is the 95th\u2011percentile composite instability score in the first 48 h? For the top quartile, compare hypotension (MAP<65), tachycardia, ICU LOS, and mortality to age\u2011matched cohort.",
+  "final_sql": "WITH arf_male_icu AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    p.anchor_age,\n    p.gender,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON icu.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON icu.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND LOWER(dd.long_title) LIKE '%acute respiratory failure%'\n),\ninstability_events AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.stay_id,\n    SUM(CASE WHEN LOWER(di.label) LIKE '%mean arterial pressure%' AND ce.valuenum < 65 THEN 1 ELSE 0 END) AS hypotension_count,\n    SUM(CASE WHEN LOWER(di.label) LIKE '%heart rate%' AND ce.valuenum > 100 THEN 1 ELSE 0 END) AS tachycardia_count\n  FROM arf_male_icu a\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON a.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN a.intime AND TIMESTAMP_ADD(a.intime, INTERVAL 48 HOUR)\n  GROUP BY a.subject_id, a.hadm_id, a.stay_id\n),\nscores AS (\n  SELECT\n    a.*,\n    e.hypotension_count,\n    e.tachycardia_count,\n    (e.hypotension_count + e.tachycardia_count) AS composite_score\n  FROM arf_male_icu a\n  LEFT JOIN instability_events e\n    ON a.subject_id = e.subject_id\n    AND a.hadm_id = e.hadm_id\n    AND a.stay_id = e.stay_id\n),\npercentiles AS (\n  SELECT\n    APPROX_QUANTILES(composite_score, 100)[OFFSET(95)] AS p95,\n    APPROX_QUANTILES(composite_score, 4)[OFFSET(3)] AS p75\n  FROM scores\n),\ntagged AS (\n  SELECT\n    s.*,\n    p.p95,\n    p.p75,\n    CASE WHEN s.composite_score >= p.p75 THEN 1 ELSE 0 END AS top_quartile\n  FROM scores s\n  CROSS JOIN percentiles p\n)\nSELECT\n  'Cohort metrics' AS metric_group,\n  p95 AS composite_score_95th_percentile,\n  NULL AS hypotension_rate,\n  NULL AS tachycardia_rate,\n  NULL AS mean_icu_los_days,\n  NULL AS mortality_rate\nFROM percentiles\n\nUNION ALL\n\nSELECT\n  CASE WHEN top_quartile = 1 THEN 'Top quartile patients' ELSE 'Other patients' END AS metric_group,\n  NULL AS composite_score_95th_percentile,\n  AVG(CASE WHEN hypotension_count > 0 THEN 1 ELSE 0 END) AS hypotension_rate,\n  AVG(CASE WHEN tachycardia_count > 0 THEN 1 ELSE 0 END) AS tachycardia_rate,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM tagged\nGROUP BY top_quartile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Queries in UNION ALL have mismatched column count; query 1 has 2 columns, query 2 has 5 columns at [76:1]; reason: invalidQuery, location: query, message: Queries in UNION ALL have mismatched column count; query 1 has 2 columns, query 2 has 5 columns at [76:1]\n\nLocation: US\nJob ID: 72febb09-1c24-4c4b-9a33-714fde0e9959\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

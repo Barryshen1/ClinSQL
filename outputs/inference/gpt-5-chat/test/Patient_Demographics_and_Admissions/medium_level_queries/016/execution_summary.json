@@ -1,0 +1,22 @@
+{
+  "query": "I have a 49-year-old male inpatient; among males 44\u201354 on general wards, report LOS p50/p75/p90/p95 and the percentile rank of a 7\u2011day stay, stratified by discharge home/hospice/death.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.discharge_location,\n    p.gender,\n    p.anchor_age,\n    -- length of stay in days (fractional)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE\n      WHEN a.hospital_expire_flag = 1 THEN 'death'\n      WHEN UPPER(a.discharge_location) LIKE '%HOSPICE%' THEN 'hospice'\n      WHEN UPPER(a.discharge_location) LIKE 'HOME%' THEN 'home'\n      ELSE 'other'\n    END AS discharge_group\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  LEFT JOIN\n    (SELECT DISTINCT hadm_id\n     FROM `physionet-data.mimiciv_3_1_icu.icustays`) icu\n    ON a.hadm_id = icu.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND icu.hadm_id IS NULL  -- exclude ICU admissions\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\nfiltered AS (\n  SELECT *\n  FROM cohort\n  WHERE discharge_group IN ('home', 'hospice', 'death')\n),\nstats AS (\n  SELECT\n    discharge_group,\n    PERCENTILE_CONT(los_days, 0.5) OVER w AS p50,\n    PERCENTILE_CONT(los_days, 0.75) OVER w AS p75,\n    PERCENTILE_CONT(los_days, 0.90) OVER w AS p90,\n    PERCENTILE_CONT(los_days, 0.95) OVER w AS p95,\n    SAFE_DIVIDE(\n      SUM(CASE WHEN los_days <= 7 THEN 1 ELSE 0 END) OVER w,\n      COUNT(*) OVER w\n    ) AS percentile_rank_7day\n  FROM filtered\n  WINDOW w AS (PARTITION BY discharge_group)\n)\nSELECT DISTINCT\n  discharge_group,\n  p50,\n  p75,\n  p90,\n  p95,\n  percentile_rank_7day\nFROM stats\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword GROUP at [50:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword GROUP at [50:1]\n\nLocation: US\nJob ID: bfe9c579-2828-41a9-94e5-73c1e2b52697\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

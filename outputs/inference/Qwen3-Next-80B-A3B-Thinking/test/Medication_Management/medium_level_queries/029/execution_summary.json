@@ -1,0 +1,23 @@
+{
+  "query": "For my 74-year-old female inpatient: among women 69\u201379 with T2DM and heart failure, report percent receiving drug classes (insulin, metformin, sulfonylurea, DPP\u20114, SGLT2, GLP\u20111, TZD) in first and last 72 hours.",
+  "final_sql": "WITH drug_classes AS (\n  SELECT 'insulin' AS drug_class UNION ALL\n  SELECT 'metformin' UNION ALL\n  SELECT 'sulfonylurea' UNION ALL\n  SELECT 'dpp4' UNION ALL\n  SELECT 'sglt2' UNION ALL\n  SELECT 'glp1' UNION ALL\n  SELECT 'tzd'\n),\ncohort AS (\n  SELECT t2dm.subject_id, t2dm.hadm_id\n  FROM (\n    SELECT subject_id, hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_code LIKE 'E11%'\n  ) t2dm\n  INNER JOIN (\n    SELECT subject_id, hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_code LIKE 'I50%'\n  ) hf ON t2dm.subject_id = hf.subject_id AND t2dm.hadm_id = hf.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON t2dm.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 69 AND 79\n),\ncohort_with_times AS (\n  SELECT c.subject_id, c.hadm_id, a.admittime, a.dischtime\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON c.hadm_id = a.hadm_id\n),\nprescriptions_filtered AS (\n  SELECT \n    p.hadm_id,\n    p.starttime,\n    CASE\n      WHEN LOWER(p.drug) LIKE '%insulin%' THEN 'insulin'\n      WHEN LOWER(p.drug) LIKE '%metformin%' THEN 'metformin'\n      WHEN LOWER(p.drug) LIKE '%glipizide%' OR LOWER(p.drug) LIKE '%glyburide%' OR LOWER(p.drug) LIKE '%glimepiride%' THEN 'sulfonylurea'\n      WHEN LOWER(p.drug) LIKE '%sitagliptin%' OR LOWER(p.drug) LIKE '%saxagliptin%' OR LOWER(p.drug) LIKE '%linagliptin%' OR LOWER(p.drug) LIKE '%alogliptin%' THEN 'dpp4'\n      WHEN LOWER(p.drug) LIKE '%canagliflozin%' OR LOWER(p.drug) LIKE '%dapagliflozin%' OR LOWER(p.drug) LIKE '%empagliflozin%' THEN 'sglt2'\n      WHEN LOWER(p.drug) LIKE '%liraglutide%' OR LOWER(p.drug) LIKE '%exenatide%' OR LOWER(p.drug) LIKE '%semaglutide%' OR LOWER(p.drug) LIKE '%dulaglutide%' THEN 'glp1'\n      WHEN LOWER(p.drug) LIKE '%pioglitazone%' OR LOWER(p.drug) LIKE '%rosiglitazone%' THEN 'tzd'\n      ELSE NULL\n    END AS drug_class\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN cohort_with_times cwt ON p.hadm_id = cwt.hadm_id\n  WHERE p.drug IS NOT NULL\n),\nfirst_72 AS (\n  SELECT \n    drug_class,\n    cwt.hadm_id,\n    MAX(CASE WHEN starttime BETWEEN admittime AND admittime + INTERVAL 72 HOUR THEN 1 ELSE 0 END) AS received_first\n  FROM prescriptions_filtered\n  INNER JOIN cohort_with_times cwt ON prescriptions_filtered.hadm_id = cwt.hadm_id\n  WHERE drug_class IS NOT NULL\n  GROUP BY drug_class, cwt.hadm_id\n),\nlast_72 AS (\n  SELECT \n    drug_class,\n    cwt.hadm_id,\n    MAX(CASE WHEN starttime BETWEEN dischtime - INTERVAL 72 HOUR AND dischtime THEN 1 ELSE 0 END) AS received_last\n  FROM prescriptions_filtered\n  INNER JOIN cohort_with_times cwt ON prescriptions_filtered.hadm_id = cwt.hadm_id\n  WHERE drug_class IS NOT NULL\n  GROUP BY drug_class, cwt.hadm_id\n),\ntotal_patients AS (\n  SELECT COUNT(*) AS total\n  FROM cohort\n)\nSELECT \n  dc.drug_class,\n  COALESCE(SUM(f.received_first), 0) * 100.0 / t.total AS first_72_percent,\n  COALESCE(SUM(l.received_last), 0) * 100.0 / t.total AS last_72_percent\nFROM drug_classes dc\nLEFT JOIN first_72 f ON dc.drug_class = f.drug_class\nLEFT JOIN last_72 l ON dc.drug_class = l.drug_class\nCROSS JOIN total_patients t\nGROUP BY dc.drug_class, t.total;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [52:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [52:5]\n\nLocation: US\nJob ID: f85bd95f-638c-4e28-bfd7-f374c6e37c4d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

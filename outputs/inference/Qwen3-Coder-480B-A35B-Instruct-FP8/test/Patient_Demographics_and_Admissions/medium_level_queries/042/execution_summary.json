@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 62-year-old man. Among male non\u2011elective medicine inpatients aged 57\u201367, report mean, median (p50), p75, p90 LOS by discharged alive versus in\u2011hospital death, and percentile rank of 5\u2011day stay.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 57 AND 67\n    AND a.admission_type <> 'ELECTIVE'\n    AND a.dischtime IS NOT NULL\n    AND a.admittime IS NOT NULL\n),\nlatest_service AS (\n  SELECT\n    s.hadm_id,\n    s.curr_service,\n    ROW_NUMBER() OVER (PARTITION BY s.hadm_id ORDER BY s.transfertime DESC) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.services` s\n),\nfiltered_cohort AS (\n  SELECT\n    c.*,\n    ls.curr_service\n  FROM\n    cohort c\n  JOIN\n    latest_service ls\n  ON\n    c.hadm_id = ls.hadm_id\n  WHERE\n    ls.rn = 1\n    AND ls.curr_service = 'MED'\n),\nstats AS (\n  SELECT\n    hospital_expire_flag,\n    AVG(los_days) AS mean_los,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS p75_los,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(90)] AS p90_los\n  FROM\n    filtered_cohort\n  GROUP BY\n    hospital_expire_flag\n),\npercentile_rank_5day AS (\n  SELECT\n    hospital_expire_flag,\n    PERCENT_RANK() OVER (PARTITION BY hospital_expire_flag ORDER BY los_days) AS percentile_rank_5day\n  FROM\n    filtered_cohort\n  WHERE\n    los_days <= 5\n)\nSELECT\n  s.*,\n  MAX(CASE WHEN p.hospital_expire_flag = 0 THEN p.percentile_rank_5day END) AS percentile_rank_5day_alive,\n  MAX(CASE WHEN p.hospital_expire_flag = 1 THEN p.percentile_rank_5day END) AS percentile_rank_5day_death\nFROM\n  stats s\nLEFT JOIN\n  percentile_rank_5day p\nON\n  s.hospital_expire_flag = p.hospital_expire_flag\nGROUP BY\n  s.hospital_expire_flag,\n  s.mean_los,\n  s.median_los,\n  s.p75_los,\n  s.p90_los\nORDER BY\n  s.hospital_expire_flag;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

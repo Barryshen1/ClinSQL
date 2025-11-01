@@ -1,0 +1,22 @@
+{
+  "query": "Consult: 70-year-old woman admitted for lower GI bleeding. For women 65\u201375 with lower GI bleed within first 72 hours, what is the 25th percentile lab instability score? Compare critical lab-event frequency with general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH\n-- Filter females 65\u201375 with lower GI bleed diagnosis\nlgib_cohort AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, p.anchor_age, p.gender,\n         a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND (\n      (LOWER(dd.long_title) LIKE '%lower%' AND LOWER(dd.long_title) LIKE '%gastro%')\n       OR (LOWER(dd.long_title) LIKE '%lower%' AND LOWER(dd.long_title) LIKE '%hemorrhage%')\n       OR LOWER(dd.long_title) LIKE '%gi bleed%'\n       OR (LOWER(dd.long_title) LIKE '%diverticul%' AND LOWER(dd.long_title) LIKE '%hemorrhage%')\n    )\n),\n\n-- All admissions with lab instability score in first 72h\nlab_scores AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    COUNTIF(LOWER(le.flag) = 'abnormal') AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON a.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n  GROUP BY a.subject_id, a.hadm_id\n),\n\n-- Combine with LOS/mortality info\nadmission_scores AS (\n  SELECT\n    a.subject_id, a.hadm_id,\n    ls.lab_instability_score,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN lab_scores ls\n    ON a.subject_id = ls.subject_id AND a.hadm_id = ls.hadm_id\n)\n\n-- Final outputs\nSELECT\n  -- 25th percentile lab instability score in target cohort\n  (SELECT\n     APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(25)]\n   FROM admission_scores ads\n   JOIN lgib_cohort l\n     ON ads.hadm_id = l.hadm_id\n  ) AS lab_instability_score_p25,\n\n  -- Compare freq of critical labs between cohort and general inpatients\n  (SELECT AVG(lab_instability_score)\n   FROM admission_scores ads\n   JOIN lgib_cohort l\n     ON ads.hadm_id = l.hadm_id\n  ) AS avg_abnormal_labs_cohort,\n\n  (SELECT AVG(lab_instability_score)\n   FROM admission_scores ads\n   WHERE hadm_id NOT IN (SELECT hadm_id FROM lgib_cohort)\n  ) AS avg_abnormal_labs_general,\n\n  -- Cohort LOS and mortality\n  (SELECT AVG(los_days)\n   FROM admission_scores ads\n   JOIN lgib_cohort l\n     ON ads.hadm_id = l.hadm_id\n  ) AS avg_los_days_cohort,\n\n  (SELECT 100.0 * SUM(ads.hospital_expire_flag) / COUNT(*)\n   FROM admission_scores ads\n   JOIN lgib_cohort l\n     ON ads.hadm_id = l.hadm_id\n  ) AS mortality_rate_pct_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hospital_expire_flag is ambiguous at [77:23]; reason: invalidQuery, location: query, message: Column name hospital_expire_flag is ambiguous at [77:23]\n\nLocation: US\nJob ID: 487d636f-072a-4f38-a10c-520ee3a4d29f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

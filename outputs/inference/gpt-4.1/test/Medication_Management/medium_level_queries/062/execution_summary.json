@@ -1,0 +1,16 @@
+{
+  "query": "For my 55-year-old female patient: among female inpatients 50\u201360 with diabetes and heart failure, report initiation rates of injectable GLP\u20111s in first 72h versus final 72h, with absolute and relative change.",
+  "final_sql": "WITH cohort AS (\n  -- Female inpatients aged 50-60 with diabetes AND heart failure\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  -- Age and gender filter\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND a.hospital_expire_flag = 0 -- exclude in-hospital deaths if desired\n    AND EXISTS (\n      -- Diabetes diagnosis\n      SELECT 1 FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d1\n      WHERE d1.hadm_id = a.hadm_id\n        AND (\n          (d1.icd_version = 9 AND d1.icd_code LIKE '250%')\n          OR (d1.icd_version = 10 AND d1.icd_code BETWEEN 'E08' AND 'E13')\n        )\n    )\n    AND EXISTS (\n      -- Heart failure diagnosis\n      SELECT 1 FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d2\n      WHERE d2.hadm_id = a.hadm_id\n        AND (\n          (d2.icd_version = 9 AND d2.icd_code LIKE '428%')\n          OR (d2.icd_version = 10 AND d2.icd_code LIKE 'I50%')\n        )\n    )\n),\n\nglp1_emar AS (\n  -- Identify GLP-1 injectable administrations\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    MIN(e.charttime) AS first_admin_time\n  FROM physionet-data.mimiciv_3_1_hosp.emar e\n  WHERE LOWER(e.medication) LIKE '%liraglutide%'\n     OR LOWER(e.medication) LIKE '%semaglutide%'\n     OR LOWER(e.medication) LIKE '%exenatide%'\n     OR LOWER(e.medication) LIKE '%dulaglutide%'\n     OR LOWER(e.medication) LIKE '%albiglutide%'\n     OR LOWER(e.medication) LIKE '%glp-1%'\n  GROUP BY e.subject_id, e.hadm_id\n),\n\ntiming AS (\n  -- Classify initiation timing for each admission\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR) AS adm_hours,\n    g.first_admin_time,\n    CASE\n      WHEN g.first_admin_time IS NULL THEN 'none'\n      WHEN g.first_admin_time <= TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n        THEN 'first72h'\n      WHEN g.first_admin_time >= TIMESTAMP_SUB(c.dischtime, INTERVAL 72 HOUR)\n        THEN 'final72h'\n      ELSE 'other'\n    END AS initiation_window\n  FROM cohort c\n  LEFT JOIN glp1_emar g\n    ON c.subject_id = g.subject_id AND c.hadm_id = g.hadm_id\n  WHERE TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR) >= 144 -- at least 6 days\n),\n\nsummary AS (\n  SELECT\n    COUNT(*) AS n_admissions,\n    COUNTIF(initiation_window = 'first72h') AS n_first72h,\n    COUNTIF(initiation_window = 'final72h') AS n_final72h\n  FROM timing\n)\n\nSELECT\n  n_admissions,\n  n_first72h,\n  n_final72h,\n  n_final72h - n_first72h AS absolute_change,\n  SAFE_DIVIDE(n_final72h - n_first72h, n_first72h) AS relative_change\nFROM summary;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

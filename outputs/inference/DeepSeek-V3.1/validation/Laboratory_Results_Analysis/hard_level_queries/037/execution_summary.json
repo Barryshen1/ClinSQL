@@ -1,0 +1,28 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    adm.subject_id, \n    adm.hadm_id,\n    -- Calculate LOS in days\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days,\n    adm.hospital_expire_flag AS mortality\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE \n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 70 AND 80\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE adm.hadm_id = diag.hadm_id\n        AND diag.icd_version = 10\n        AND (diag.icd_code LIKE 'I60%' OR diag.icd_code LIKE 'I61%' OR diag.icd_code LIKE 'I62%')\n),\n\nlabs_first_48h AS (\n  SELECT \n    adm.subject_id,\n    adm.hadm_id,\n    -- Count distinct abnormal lab events in first 48h\n    COUNT(DISTINCT le.itemid) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON adm.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN adm.admittime AND DATETIME_ADD(adm.admittime, INTERVAL 48 HOUR)\n    AND le.flag IS NOT NULL  -- Only flagged (abnormal) values\n  GROUP BY adm.subject_id, adm.hadm_id\n),\n\ncohort_with_labs AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.los_days,\n    c.mortality,\n    COALESCE(l.lab_instability_score, 0) AS lab_instability_score\n  FROM cohort c\n  LEFT JOIN labs_first_48h l\n    ON c.hadm_id = l.hadm_id\n),\n\ngeneral_population_labs AS (\n  SELECT \n    AVG(score) AS avg_general_score\n  FROM (\n    SELECT \n      adm.subject_id,\n      adm.hadm_id,\n      COUNT(DISTINCT le.itemid) AS score\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON adm.hadm_id = le.hadm_id\n      AND le.charttime BETWEEN adm.admittime AND DATETIME_ADD(adm.admittime, INTERVAL 48 HOUR)\n      AND le.flag IS NOT NULL\n    GROUP BY adm.subject_id, adm.hadm_id\n  )\n)\n\nSELECT \n  -- For the cohort: get the 25th percentile of lab instability score\n  (SELECT approx_quantiles(lab_instability_score, 100)[OFFSET(25)] \n   FROM cohort_with_labs) AS percentile_25_score,\n  AVG(los_days) AS mean_los_days,\n  AVG(mortality) AS in_hospital_mortality_rate,\n  -- For comparison\n  (SELECT avg_general_score FROM general_population_labs) AS general_population_avg_score\nFROM cohort_with_labs;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got \",\" at [20:2]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [20:2]\n\nLocation: US\nJob ID: 8ef7a7eb-e245-49dc-887f-d6d275c59785\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references labs.lab_instability_score which is neither grouped nor aggregated at [53:19]; reason: invalidQuery, location: query, message: SELECT list expression references labs.lab_instability_score which is neither grouped nor aggregated at [53:19]\n\nLocation: US\nJob ID: f0e99af1-5c6f-4451-bb4f-1adad181d495\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [65:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [65:3]\n\nLocation: US\nJob ID: b8274001-9d39-4f85-8bea-9759324ad7b0\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [20:2]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [20:2]\n\nLocation: US\nJob ID: 8ef7a7eb-e245-49dc-887f-d6d275c59785\n"
+    }
+  ]
+}

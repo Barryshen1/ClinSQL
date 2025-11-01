@@ -1,0 +1,28 @@
+{
+  "query": "I have a 60-year-old man post\u2013cardiac arrest in the ICU. Among male ICU patients 55\u201365 with post-arrest, what percentile is a first\u201124h vital\u2011sign instability score of 70? Also report mean ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "with ca_cohort AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON i.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON i.subject_id = p.subject_id\n  WHERE (p.gender = 'M' OR p.gender = 'Male')\n    AND p.anchor_age BETWEEN 55 AND 65\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n        ON di.icd_code = dd.icd_code\n       AND di.icd_version = dd.icd_version\n      WHERE di.subject_id = i.subject_id\n        AND di.hadm_id = i.hadm_id\n        AND LOWER(dd.long_title) LIKE '%cardiac arrest%'\n    )\n),\n\n-- Pull vitals within first 24h of ICU stay, mapped to vital groups\nvitals_24h AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.intime,\n    CASE\n      WHEN LOWER(di.label) LIKE '%heart rate%' THEN 'HR'\n      WHEN LOWER(di.label) LIKE '%respiratory rate%' THEN 'RR'\n      WHEN LOWER(di.label) LIKE '%systolic blood pressure%' THEN 'SBP'\n      WHEN LOWER(di.label) LIKE '%diastolic blood pressure%' THEN 'DBP'\n      WHEN LOWER(di.label) LIKE '%mean arterial pressure%' THEN 'MAP'\n      WHEN LOWER(di.label) LIKE '%temperature%' THEN 'Temp'\n      WHEN LOWER(di.label) LIKE '%spo2%' OR LOWER(di.label) LIKE '%oxygen saturation%' THEN 'SpO2'\n      ELSE NULL\n    END AS vitals_group,\n    ce.valuenum\n  FROM ca_cohort AS c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ce.subject_id = c.subject_id\n   AND ce.hadm_id = c.hadm_id\n   AND ce.stay_id = c.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime < TIMESTAMP_ADD(c.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\n\n-- Compute per-stay per-vital-range\nvital_ranges AS (\n  SELECT\n    stay_id,\n    vitals_group,\n    MAX(valuenum) - MIN(valuenum) AS grp_range\n  FROM vitals_24h\n  WHERE vitals_group IS NOT NULL\n  GROUP BY stay_id, vitals_group\n),\n\n-- Total instability for each stay (sum of ranges across vitals)\ninstability_raw AS (\n  SELECT\n    stay_id,\n    SUM(IFNULL(grp_range, 0)) AS instability_raw\n  FROM vital_ranges\n  GROUP BY stay_id\n),\n\n-- Normalize to 0-100 scale\ninstability_norm AS (\n  SELECT\n    ir.stay_id,\n    ir.instability_raw,\n    MIN(ir.instability_raw) OVER () AS min_ir,\n    MAX(ir.instability_raw) OVER () AS max_ir\n  FROM instability_raw ir\n),\n\ninstability_score AS (\n  SELECT\n    inr.stay_id,\n    CASE\n      WHEN max_ir > min_ir THEN 100.0 * (inr.instability_raw - min_ir) / (max_ir - min_ir)\n      ELSE 0.0\n    END AS instability_score\n  FROM instability_norm inr\n),\n\n-- Join back to ICU stays and admissions to get LOS and death flag\nfinal_stays AS (\n  SELECT\n    iscore.stay_id,\n    iscore.instability_score,\n    icu.los AS icu_los,\n    a.hospital_expire_flag AS death_flag\n  FROM instability_score AS iscore\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    ON iscore.stay_id = icu.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON icu.hadm_id = a.hadm_id\n),\n\n-- Decile assignment to identify the most unstable decile (top 10%)\ndeciled AS (\n  SELECT\n    stay_id,\n    instability_score,\n    icu_los,\n    death_flag,\n    NTILE(10) OVER (ORDER BY instability_score DESC) AS decile\n  FROM final_stays\n)\n\n-- Final outputs:\n-- 1) percentile of a score of 70\n-- 2) mean ICU LOS and mortality for the most unstable decile (decile = 1)\nSELECT\n  -- Percentile (proportion of stays with instability_score <= 70)\n  100.0 * SUM(CASE WHEN instability_score <= 70.0 THEN 1 ELSE 0 END) / COUNT(*) AS percentile_of_70,\n  -- Mean ICU LOS for the most unstable decile (top 10%)\n  AVG(CASE WHEN decile = 1 THEN icu_los END) AS mean_icu_los_top_decile,\n  -- Mortality (in-hospital) for the most unstable decile\n  SUM(CASE WHEN decile = 1 AND death_flag = 1 THEN 1 ELSE 0 END) /\n  NULLIF(SUM(CASE WHEN decile = 1 THEN 1 ELSE 0 END), 0) AS mortality_top_decile\nFROM deciled;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"-\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"-\" at [1:10]\n\nLocation: US\nJob ID: d6a70c64-13fb-4c26-94a7-01947439dd85\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 A valid date part name is required but found H at [52:60]; reason: invalidQuery, location: query, message: A valid date part name is required but found H at [52:60]\n\nLocation: US\nJob ID: aabba9e2-3aa7-4c0d-913b-3fa60888b3f7\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

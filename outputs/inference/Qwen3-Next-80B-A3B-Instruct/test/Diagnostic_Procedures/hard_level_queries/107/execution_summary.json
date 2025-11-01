@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH pe_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n    ON p.subject_id = di.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON di.icd_code = dicd.icd_code AND di.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND LOWER(dicd.long_title) LIKE '%pulmonary embolism%'\n),\n\nfirst_icu_stay AS (\n  SELECT \n    i.subject_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN pe_patients pe ON i.subject_id = pe.subject_id\n),\n\nfirst_icu_with_procedures AS (\n  SELECT \n    fis.subject_id,\n    fis.stay_id,\n    fis.intime,\n    fis.los,\n    COUNT(*) AS procedure_count\n  FROM first_icu_stay fis\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON fis.stay_id = pe.stay_id\n    AND pe.starttime >= fis.intime\n    AND pe.starttime <= DATETIME_ADD(fis.intime, INTERVAL 72 HOUR)\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.d_items di\n    ON pe.itemid = di.itemid\n  WHERE di.label IN (\n    'CT PULMONARY ANGI',\n    'CT ANGI',\n    'CT ANGIOGRAM',\n    'CT ANGIOGRAPHY',\n    'VENTILATION/PERFUSION SCAN',\n    'PULMONARY ANGIOGRAPHY',\n    'ULTRASOUND',\n    'DOPPLER ULTRASOUND',\n    'V/Q SCAN',\n    'PULMONARY ANGI',\n    'CT ANGIOGRAPHY - PULMONARY',\n    'CT PULMONARY ANGIOGRAM',\n    'PULMONARY ANGIOGRAM',\n    'VENTILATION PERFUSION SCAN',\n    'CT ANGIOGRAPHY PULMONARY'\n  )\n  GROUP BY fis.subject_id, fis.stay_id, fis.intime, fis.los\n),\n\nquartiles AS (\n  SELECT \n    subject_id,\n    procedure_count,\n    los,\n    NTILE(4) OVER (ORDER BY procedure_count) AS procedure_quartile\n  FROM first_icu_with_procedures\n)\n\nSELECT \n  procedure_quartile,\n  COUNT(*) AS N,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(CAST(a.hospital_expire_flag AS FLOAT64)) * 100 AS hospital_mortality_percent\nFROM quartiles q\nINNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n  ON q.subject_id = a.subject_id\nGROUP BY procedure_quartile\nORDER BY procedure_quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name procedureevent_id not found inside pe at [31:14]; reason: invalidQuery, location: query, message: Name procedureevent_id not found inside pe at [31:14]\n\nLocation: US\nJob ID: 4484bd17-d98a-47cf-b258-2d947d35f987\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

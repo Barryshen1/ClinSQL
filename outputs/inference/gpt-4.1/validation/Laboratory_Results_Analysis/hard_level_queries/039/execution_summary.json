@@ -1,0 +1,16 @@
+{
+  "query": "I have a 65\u2011year\u2011old man admitted with primary pneumonia. In male inpatients aged 60\u201370 with primary pneumonia, what is the 75th percentile of the 72\u2011hour laboratory instability score? Also compare mean critical\u2011event frequency to all inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH pneumonia_icd AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE\n    -- ICD-9: 480-486\n    (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^48[0-6]$'))\n    -- ICD-10: J12-J18\n    OR (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^J1[2-8]'))\n),\n\n-- Cohort: male, age 60-70, primary pneumonia\ncohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.anchor_age,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN pneumonia_icd icd\n    ON diag.icd_code = icd.icd_code AND diag.icd_version = icd.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 60 AND 70\n    AND diag.seq_num = 1\n),\n\n-- 72-hour lab instability score per admission\nlab_instability AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNTIF(lab.flag = 'abnormal'\n      AND lab.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n    ) AS instability_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` lab\n    ON c.hadm_id = lab.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n),\n\n-- ICU stays per admission (critical-event frequency)\nicu_freq_cohort AS (\n  SELECT\n    c.hadm_id,\n    COUNT(DISTINCT icu.stay_id) AS icu_stays\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON c.hadm_id = icu.hadm_id\n  GROUP BY c.hadm_id\n),\n\nicu_freq_all AS (\n  SELECT\n    adm.hadm_id,\n    COUNT(DISTINCT icu.stay_id) AS icu_stays\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON adm.hadm_id = icu.hadm_id\n  GROUP BY adm.hadm_id\n),\n\n-- Cohort LOS and mortality\ncohort_stats AS (\n  SELECT\n    COUNT(*) AS n_admissions,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR)/24.0) AS mean_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM cohort\n)\n\n-- Final output\nSELECT\n  -- Part 1: 75th percentile of instability score\n  (\n    SELECT APPROX_QUANTILES(instability_score, 4)[3]\n    FROM lab_instability\n  ) AS instability_score_75th_percentile,\n\n  -- Part 2: Mean critical-event frequency (ICU stays/admission)\n  (\n    SELECT AVG(icu_stays)\n    FROM icu_freq_cohort\n  ) AS mean_icu_stays_per_admission_cohort,\n\n  (\n    SELECT AVG(icu_stays)\n    FROM icu_freq_all\n  ) AS mean_icu_stays_per_admission_all_inpatients,\n\n  -- Cohort LOS and mortality\n  cs.mean_los_days,\n  cs.mortality_rate,\n  cs.n_admissions\nFROM cohort_stats cs;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

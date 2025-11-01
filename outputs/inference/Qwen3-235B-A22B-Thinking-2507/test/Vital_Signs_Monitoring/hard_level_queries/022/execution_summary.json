@@ -1,0 +1,23 @@
+{
+  "query": "I have a 90\u2011year\u2011old male. Among male ICU patients aged 85\u201395 with acute respiratory failure, what is the percentile rank of a first\u201124\u2011hour vital\u2011sign instability score of 85? Also report average ICU length\u2011of\u2011stay and in\u2011hospital mortality for the most unstable quartile.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 85 AND 95\n),\nicu_stays AS (\n  SELECT \n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id,\n    ie.intime,\n    ie.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN patients_filtered pf\n    ON ie.subject_id = pf.subject_id\n),\narf_diagnoses AS (\n  SELECT \n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 10 AND icd_code LIKE 'J96.0%')\n     OR (icd_version = 9 AND icd_code = '51881')\n  GROUP BY hadm_id\n),\ntarget_population AS (\n  SELECT \n    is1.subject_id,\n    is1.hadm_id,\n    is1.stay_id,\n    is1.intime,\n    is1.los\n  FROM icu_stays is1\n  INNER JOIN arf_diagnoses ad\n    ON is1.hadm_id = ad.hadm_id\n),\nvital_sign_scores AS (\n  SELECT \n    tp.*,\n    COUNT(ce.charttime) AS instability_score,\n    a.hospital_expire_flag\n  FROM target_population tp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON tp.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON tp.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN tp.intime AND DATETIME_ADD(tp.intime, INTERVAL 24 HOUR)\n  GROUP BY tp.subject_id, tp.hadm_id, tp.stay_id, tp.intime, tp.los, a.hospital_expire_flag\n),\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY instability_score DESC) AS quartile\n  FROM vital_sign_scores\n)\nSELECT \n  (SELECT (COUNTIF(instability_score <= 85) * 100.0) / COUNT(*) \n   FROM vital_sign_scores) AS percentile_rank,\n  (SELECT AVG(los) \n   FROM quartiles \n   WHERE quartile = 1) AS avg_los,\n  (SELECT AVG(hospital_expire_flag) \n   FROM quartiles \n   WHERE quartile = 1) AS mortality_rate;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"respiratory\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"respiratory\" at [1:12]\n\nLocation: US\nJob ID: 13f41a26-45c2-43bd-8879-8df43a82432a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

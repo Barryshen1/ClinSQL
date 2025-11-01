@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 48\u2011year\u2011old woman. Among female patients aged 43\u201353 admitted with suspected ACS, what are counts, percentages, and average hospital LOS for initial Troponin T: Normal, Borderline, Elevated?",
+  "final_sql": "WITH troponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\nfemale_age_cohort AS (\n  SELECT a.subject_id,\n         a.hadm_id,\n         a.admittime,\n         a.dischtime,\n         p.anchor_age,\n         p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING (subject_id)\n  WHERE LOWER(p.gender) = 'f'\n    AND p.anchor_age BETWEEN 43 AND 53\n),\nfirst_troponin AS (\n  -- earliest Troponin T within 24 hours of admission\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    le.charttime,\n    COALESCE(le.valuenum, SAFE_CAST(le.value AS FLOAT64)) AS valuenum,\n    le.ref_range_upper,\n    le.storetime,\n    le.itemid\n  FROM female_age_cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = c.hadm_id\n   AND le.subject_id = c.subject_id\n  JOIN troponin_items t\n    ON le.itemid = t.itemid\n  WHERE le.charttime >= c.admittime\n    AND le.charttime < TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR)\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY c.hadm_id ORDER BY le.charttime, le.storetime) = 1\n),\ncategorized AS (\n  SELECT\n    ft.*,\n    TIMESTAMP_DIFF(ft.dischtime, ft.admittime, SECOND) / 86400.0 AS hosp_los_days,\n    CASE\n      WHEN valuenum IS NULL THEN 'Unknown'\n      WHEN ref_range_upper IS NOT NULL THEN\n        CASE\n          WHEN valuenum <= ref_range_upper THEN 'Normal'\n          WHEN valuenum > ref_range_upper AND valuenum < 2 * ref_range_upper THEN 'Borderline'\n          ELSE 'Elevated'\n        END\n      ELSE\n        CASE\n          WHEN valuenum < 0.01 THEN 'Normal'\n          WHEN valuenum >= 0.01 AND valuenum <= 0.03 THEN 'Borderline'\n          ELSE 'Elevated'\n        END\n    END AS tn_category\n  FROM first_troponin ft\n)\nSELECT\n  tn_category AS troponin_category,\n  admissions_count,\n  ROUND(100.0 * admissions_count / SUM(admissions_count) OVER (), 2) AS pct_of_cohort,\n  ROUND(avg_los, 2) AS avg_hospital_los_days\nFROM (\n  SELECT tn_category, COUNT(DISTINCT hadm_id) AS admissions_count, AVG(hosp_los_days) AS avg_los\n  FROM categorized\n  WHERE tn_category IN ('Normal', 'Borderline', 'Elevated')\n  GROUP BY tn_category\n) t\nORDER BY\n  CASE tn_category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Elevated' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"Troponin\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"Troponin\" at [1:8]\n\nLocation: US\nJob ID: 16392ff0-aa6f-49e3-beff-e4a45b24df7e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

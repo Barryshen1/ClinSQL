@@ -1,0 +1,22 @@
+{
+  "query": "My 50\u2011year\u2011old male: among male inpatients 45\u201355 with diabetes and heart failure, compare initiation (%) of insulin vs oral antidiabetics in first 12\u2009h vs final 72\u2009h pre-discharge; give rates and pp difference (first\u2212final).",
+  "final_sql": "WITH cohort AS (\n  -- male inpatients age 45-55 with both DM and HF\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 45 AND 55\n),\ndx_dm AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE ( (icd_version = 9 AND icd_code LIKE '250%')\n       OR (icd_version = 10 AND icd_code LIKE 'E10%')\n       OR (icd_version = 10 AND icd_code LIKE 'E11%')\n       OR (icd_version = 10 AND icd_code LIKE 'E13%') )\n),\ndx_hf AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE ( (icd_version = 9 AND icd_code LIKE '428%')\n       OR (icd_version = 10 AND icd_code LIKE 'I50%') )\n),\ncohort_dx AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN dx_dm dm ON c.hadm_id = dm.hadm_id\n  JOIN dx_hf hf ON c.hadm_id = hf.hadm_id\n),\nmed_class AS (\n  SELECT \n    hadm_id,\n    CASE \n      WHEN UPPER(drug) LIKE '%INSULIN%' THEN 'insulin'\n      WHEN UPPER(drug) LIKE '%METFORMIN%' \n        OR UPPER(drug) LIKE '%GLIPIZIDE%'\n        OR UPPER(drug) LIKE '%GLYBURIDE%'\n        OR UPPER(drug) LIKE '%PIOGLITAZONE%'\n        OR UPPER(drug) LIKE '%SITAGLIPTIN%'\n        OR UPPER(drug) LIKE '%LINAGLIPTIN%'\n        OR UPPER(drug) LIKE '%ALOGIPTIN%'\n        OR UPPER(drug) LIKE '%GLIMEPIRIDE%'\n        OR UPPER(drug) LIKE '%NATEGLINIDE%'\n        OR UPPER(drug) LIKE '%REPAGLINIDE%'\n        OR UPPER(drug) LIKE '%ACARBOSE%'\n        OR UPPER(drug) LIKE '%CANAGLIFLOZIN%'\n        OR UPPER(drug) LIKE '%DAPAGLIFLOZIN%'\n        OR UPPER(drug) LIKE '%EMPAGLIFLOZIN%'\n      THEN 'oral_antidiabetic'\n      ELSE NULL\n    END AS drug_cat,\n    starttime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n),\nmed_in_windows AS (\n  SELECT\n    cd.hadm_id,\n    mc.drug_cat,\n    CASE \n      WHEN mc.starttime BETWEEN cd.admittime \n           AND DATETIME_ADD(cd.admittime, INTERVAL 12 HOUR)\n      THEN 'first12h'\n      WHEN mc.starttime BETWEEN DATETIME_SUB(cd.dischtime, INTERVAL 72 HOUR) \n           AND cd.dischtime\n      THEN 'final72h'\n      ELSE NULL\n    END AS time_window\n  FROM cohort_dx cd\n  JOIN med_class mc\n    ON cd.hadm_id = mc.hadm_id\n  WHERE mc.drug_cat IS NOT NULL\n),\nadm_flag AS (\n  -- flag each hadm for initiation in given window/drug_cat\n  SELECT hadm_id, drug_cat, time_window\n  FROM med_in_windows\n  WHERE time_window IS NOT NULL\n  GROUP BY hadm_id, drug_cat, time_window\n),\nstats AS (\n  SELECT\n    f.drug_cat,\n    f.time_window,\n    COUNT(DISTINCT f.hadm_id) AS n_init,\n    COUNT(DISTINCT cd.hadm_id) AS n_total,\n    SAFE_DIVIDE(COUNT(DISTINCT f.hadm_id), COUNT(DISTINCT cd.hadm_id)) * 100 AS pct_init\n  FROM cohort_dx cd\n  LEFT JOIN adm_flag f\n    ON cd.hadm_id = f.hadm_id\n  GROUP BY f.drug_cat, f.time_window\n)\nSELECT \n  drug_cat,\n  MAX(CASE WHEN time_window = 'first12h' THEN pct_init END) AS pct_first12h,\n  MAX(CASE WHEN time_window = 'final72h' THEN pct_init END) AS pct_final72h,\n  MAX(CASE WHEN time_window = 'first12h' THEN pct_init END)\n   - MAX(CASE WHEN time_window = 'final72h' THEN pct_init END) AS pp_diff_first_minus_final\nFROM stats\nGROUP BY drug_cat\nORDER BY drug_cat;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [86:20]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [86:20]\n\nLocation: US\nJob ID: 373299c2-7bf4-4fe6-860e-93bb2a9831c0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

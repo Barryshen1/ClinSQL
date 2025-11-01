@@ -1,0 +1,1 @@
+SELECT stddev(p.systolic_blood_pressure_mmhg) AS standard_deviation FROM patients p JOIN admissions a ON p.subject_id = a.subject_id JOIN labevents l ON a.subject_id = l.subject_id WHERE p.gender = 'F' AND p.anchor_age = 58 AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2018 AND 2020 AND l.itemid = 84807002 AND EXTRACT(HOUR FROM l.charttime) BETWEEN 0 AND 6;

@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 78\u2011year\u2011old male with pneumonia and high comorbidity. In male patients 73\u201383 with pneumonia and top\u2011quartile comorbidity, what is his composite risk percentile? Provide cohort in\u2011hospital mortality %, major complication %, and median survival days.",
+  "final_sql": "WITH pneumonia_patients AS (\n    SELECT DISTINCT\n        p.subject_id, \n        p.anchor_age,\n        a.hadm_id,\n        a.hospital_expire_flag,\n        a.admittime,\n        a.dischtime,\n        a.deathtime\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        ON a.hadm_id = d.hadm_id\n    WHERE \n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 73 AND 83\n        AND (\n            (d.icd_version = 9 AND d.icd_code LIKE '486%') OR\n            (d.icd_version = 10 AND d.icd_code LIKE 'J18%')\n        )\n),\nelixhauser AS (\n    -- Simplified: count number of Elixhauser categories present\n    SELECT \n        hadm_id,\n        COUNT(DISTINCT \n            CASE \n                WHEN icd_version = 9 AND icd_code IN ('39891','40201','40211','40291','40401','40403','40411','40413','40491','40493') THEN 'CHF'\n                -- Note: This is a simplified example - a complete Elixhauser implementation would include all categories\n                ELSE NULL\n            END\n        ) AS comorbidity_count\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    GROUP BY hadm_id\n),\ncohort AS (\n    SELECT \n        pp.*,\n        COALESCE(e.comorbidity_count, 0) AS comorbidity_count\n    FROM pneumonia_patients pp\n    LEFT JOIN elixhauser e\n        ON pp.hadm_id = e.hadm_id\n),\npercentile_calc AS (\n    SELECT \n        APPROX_QUANTILES(comorbidity_count, 100)[OFFSET(75)] AS q3\n    FROM cohort\n),\ntop_quartile_cohort AS (\n    SELECT *\n    FROM cohort\n    CROSS JOIN percentile_calc\n    WHERE comorbidity_count >= q3\n),\nmajor_complications AS (\n    SELECT \n        hadm_id,\n        MAX(CASE \n            WHEN (icd_version = 9 AND (icd_code LIKE '995.91%' OR icd_code LIKE '995.92%')) OR\n                 (icd_version = 10 AND (icd_code LIKE 'R65.20%' OR icd_code LIKE 'R65.21%')) THEN 1\n            ELSE 0 \n        END) AS sepsis,\n        MAX(CASE \n            WHEN (icd_version = 9 AND icd_code LIKE '584%') OR\n                 (icd_version = 10 AND icd_code LIKE 'N17%') THEN 1\n            ELSE 0 \n        END) AS renal_failure\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    GROUP BY hadm_id\n),\nventilation AS (\n    SELECT \n        ce.hadm_id,\n        MAX(CASE WHEN ce.itemid IN (223848, 223849) THEN 1 ELSE 0 END) AS mech_vent\n    FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON ce.stay_id = icu.stay_id\n    GROUP BY ce.hadm_id\n),\ncohort_with_complications AS (\n    SELECT \n        tqc.*,\n        COALESCE(mc.sepsis, 0) AS sepsis,\n        COALESCE(mc.renal_failure, 0) AS renal_failure,\n        COALESCE(v.mech_vent, 0) AS mech_vent,\n        CASE WHEN tqc.hospital_expire_flag = 1 THEN \n            DATE_DIFF(DATE(tqc.deathtime), DATE(tqc.admittime), DAY) \n        END AS survival_days\n    FROM top_quartile_cohort tqc\n    LEFT JOIN major_complications mc\n        ON tqc.hadm_id = mc.hadm_id\n    LEFT JOIN ventilation v\n        ON tqc.hadm_id = v.hadm_id\n)\nSELECT \n    COUNT(*) AS total_patients,\n    ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS in_hospital_mortality_percent,\n    ROUND(100.0 * SUM(CASE WHEN sepsis = 1 OR renal_failure = 1 OR mech_vent = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS major_complication_percent,\n    APPROX_QUANTILES(survival_days, 100)[OFFSET(50)] AS median_survival_days\nFROM cohort_with_complications;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: c3ce251c-2667-4a62-82d7-44a35e22a261\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column hospital_expire_flag which is neither grouped nor aggregated at [85:19]; reason: invalidQuery, location: query, message: SELECT list expression references column hospital_expire_flag which is neither grouped nor aggregated at [85:19]\n\nLocation: US\nJob ID: 0e48bdaa-c6c0-4cf3-a763-f464ba926667\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

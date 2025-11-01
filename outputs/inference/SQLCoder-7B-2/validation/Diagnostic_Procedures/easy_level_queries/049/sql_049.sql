@@ -1,0 +1,1 @@
+SELECT stddev(p.procedure_code) AS standard_deviation FROM physionet-data.mimiciv_3_1_hosp.procedures_icd p JOIN physionet-data.mimiciv_3_1_hosp.patients pt ON p.subject_id = pt.subject_id WHERE pt.gender = 'M' AND pt.age >= 81 AND pt.age <= 91 AND p.itemid IN (SELECT itemid FROM physionet-data.mimiciv_3_1_hosp.labitems WHERE label ilike '%ECG%' OR label ilike '%telemetry%');

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72-year-old woman. Among female patients 67\u201377 admitted with ACS, report counts, percent of admissions, and in-hospital mortality rates for initial Troponin T: \u22640.04 normal; >0.04\u20130.1 borderline; >0.1 elevated.",
+  "final_sql": "WITH troponin_first AS (\n  SELECT\n    le.hadm_id,\n    le.valuenum,\n    le.charttime,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC) AS rn\n  FROM\n    physionet-data.mimiciv_3_1_hosp.labevents le\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_labitems di\n    ON le.itemid = di.itemid\n  WHERE\n    LOWER(di.label) = 'troponin t'\n    AND le.valuenum IS NOT NULL\n),\nacs_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    -- ICD-10 codes for ACS: I20-I25 (approximate range)\n    (\n      (d.icd_version = 10 AND d.icd_code BETWEEN 'I20' AND 'I259')\n      OR\n      (d.icd_version = 9 AND d.icd_code BETWEEN '410' AND '41499')\n    )\n),\nfiltered_patients AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 67 AND 77\n),\nvalid_troponin AS (\n  SELECT\n    tf.hadm_id,\n    tf.valuenum\n  FROM\n    troponin_first tf\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    ON tf.hadm_id = a.hadm_id\n  WHERE\n    tf.rn = 1\n    AND tf.valuenum IS NOT NULL\n    AND tf.charttime BETWEEN a.admittime AND a.dischtime\n),\ncombined_data AS (\n  SELECT\n    fp.hadm_id,\n    fp.hospital_expire_flag,\n    CASE\n      WHEN vt.valuenum <= 0.04 THEN 'Normal (\u22640.04)'\n      WHEN vt.valuenum > 0.04 AND vt.valuenum <= 0.1 THEN 'Borderline (>0.04\u20130.1)'\n      WHEN vt.valuenum > 0.1 THEN 'Elevated (>0.1)'\n      ELSE 'Other'\n    END AS troponin_group\n  FROM\n    filtered_patients fp\n  JOIN\n    acs_admissions aa\n    ON fp.hadm_id = aa.hadm_id\n  JOIN\n    valid_troponin vt\n    ON fp.hadm_id = vt.hadm_id\n),\ngrouped_stats AS (\n  SELECT\n    troponin_group,\n    COUNT(*) AS admission_count,\n    SUM(hospital_expire_flag) AS death_count\n  FROM\n    combined_data\n  GROUP BY\n    troponin_group\n),\ntotal_admissions AS (\n  SELECT COUNT(*) AS total FROM combined_data\n)\nSELECT\n  gs.troponin_group,\n  gs.admission_count,\n  ROUND(gs.admission_count * 100.0 / ta.total, 2) AS percent_of_total,\n  ROUND(gs.death_count * 100.0 / gs.admission_count, 2) AS in_hospital_mortality_percent\nFROM\n  grouped_stats gs\nCROSS JOIN\n  total_admissions ta\nORDER BY\n  CASE gs.troponin_group\n    WHEN 'Normal (\u22640.04)' THEN 1\n    WHEN 'Borderline (>0.04\u20130.1)' THEN 2\n    WHEN 'Elevated (>0.1)' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside tf at [62:12]; reason: invalidQuery, location: query, message: Name charttime not found inside tf at [62:12]\n\nLocation: US\nJob ID: cc6d302d-6636-4a24-9575-4941029600ed\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

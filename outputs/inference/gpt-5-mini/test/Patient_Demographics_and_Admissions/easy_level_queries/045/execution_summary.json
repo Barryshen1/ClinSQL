@@ -1,0 +1,16 @@
+{
+  "query": "I have a 56-year-old male with pneumonia; among males 51\u201361, what is the 25th percentile of first-admission ICU LOS (days)?",
+  "final_sql": "WITH first_icustays AS (\n  -- pick each subject's first ICU stay (earliest intime)\n  SELECT * EXCEPT (rn)\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime ASC) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_icu.icustays`\n  )\n  WHERE rn = 1\n),\n\nmale_age_filtered AS (\n  -- male patients aged 51-61 (anchor_age is age capped at 89)\n  SELECT subject_id, anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 51 AND 61\n),\n\n-- select subjects whose first ICU stay is on an admission that has any pneumonia diagnosis\npneumonia_first_icu AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.los\n  FROM first_icustays f\n  JOIN male_age_filtered p\n    ON f.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.subject_id = a.subject_id\n   AND f.hadm_id = a.hadm_id\n  WHERE f.los IS NOT NULL\n    AND f.los >= 0\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n       AND d.icd_version = dd.icd_version\n      WHERE d.hadm_id = f.hadm_id\n        AND LOWER(dd.long_title) LIKE '%pneumonia%'\n    )\n)\n\nSELECT\n  -- approximate 25th percentile of first-ICU LOS (days)\n  APPROX_QUANTILES(los, 100)[OFFSET(25)] AS los_25th_percentile_days,\n  COUNT(*) AS n_subjects_in_group\nFROM (\n  -- ensure one row per subject (distinct subject + their first ICU LOS)\n  SELECT DISTINCT subject_id, los\n  FROM pneumonia_first_icu\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

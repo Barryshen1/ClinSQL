@@ -1,0 +1,16 @@
+{
+  "query": "For my 76\u2011year\u2011old female (age 71\u201381) with complications of care, compare ICU vs non\u2011ICU: report in\u2011hospital mortality by LOS quartile (Q1\u2013Q4), absolute/relative vs Q1, and % mechanical ventilation, vasopressors, RRT.",
+  "final_sql": "WITH \nfiltered_admissions AS (\n  SELECT a.hadm_id, p.subject_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 71 AND 81\n),\nhosp_los AS (\n  SELECT hadm_id, DATETIME_DIFF(dischtime, admittime, HOUR) AS los,\n         hospital_expire_flag,\n         CASE WHEN hadm_id IN (SELECT hadm_id FROM `physionet-data.mimiciv_3_1_icu.icustays`) THEN 'ICU' ELSE 'Non-ICU' END AS icu_status\n  FROM filtered_admissions\n),\nlos_quartiles AS (\n  SELECT icu_status, \n         APPROX_QUANTILES(los, 4) AS los_quartiles\n  FROM hosp_los\n  GROUP BY icu_status\n),\nlos_quartile_assignment AS (\n  SELECT h.hadm_id, h.los, h.icu_status, h.hospital_expire_flag,\n         CASE \n           WHEN h.los <= l.los_quartiles[OFFSET(1)] THEN 'Q1'\n           WHEN h.los <= l.los_quartiles[OFFSET(2)] THEN 'Q2'\n           WHEN h.los <= l.los_quartiles[OFFSET(3)] THEN 'Q3'\n           ELSE 'Q4'\n         END AS los_quartile\n  FROM hosp_los h\n  JOIN los_quartiles l ON h.icu_status = l.icu_status\n),\ntreatments AS (\n  SELECT i.hadm_id, \n         MAX(CASE WHEN di.label LIKE '%Vent%' THEN 1 ELSE 0 END) AS mech_vent,\n         MAX(CASE WHEN di.label LIKE '%Vasopressor%' THEN 1 ELSE 0 END) AS vasopressor,\n         MAX(CASE WHEN di.label LIKE '%RRT%' OR di.label LIKE '%Dialysis%' THEN 1 ELSE 0 END) AS rrt\n  FROM `physionet-data.mimiciv_3_1_icu.inputevents` i\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON i.itemid = di.itemid\n  GROUP BY i.hadm_id\n),\ncombined_data AS (\n  SELECT l.hadm_id, l.icu_status, l.los_quartile, l.hospital_expire_flag,\n         t.mech_vent, t.vasopressor, t.rrt\n  FROM los_quartile_assignment l\n  LEFT JOIN treatments t ON l.hadm_id = t.hadm_id\n)\nSELECT \n  icu_status,\n  los_quartile,\n  COUNT(*) AS total_patients,\n  SUM(hospital_expire_flag) AS in_hospital_mortality,\n  AVG(mech_vent) * 100 AS perc_mech_vent,\n  AVG(vasopressor) * 100 AS perc_vasopressor,\n  AVG(rrt) * 100 AS perc_rrt\nFROM combined_data\nGROUP BY icu_status, los_quartile\nORDER BY icu_status, los_quartile;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

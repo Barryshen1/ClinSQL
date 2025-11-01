@@ -1,0 +1,17 @@
+{
+  "query": "For a 92-year-old woman: among female ICU patients aged 87\u201397 with lower GI bleeding (first ICU stay), stratify by quintiles of distinct procedures in the first 48 hours and report mean procedure count, mean ICU LOS (days), and in-hospital mortality%.",
+  "final_sql": "WITH first_icu_stay AS (\n    SELECT \n        i.subject_id,\n        i.hadm_id,\n        i.stay_id,\n        i.intime,\n        i.los,\n        ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n),\ncohort AS (\n    SELECT \n        p.subject_id,\n        p.gender,\n        p.anchor_age,\n        fis.hadm_id,\n        fis.stay_id,\n        fis.intime,\n        fis.los,\n        a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN first_icu_stay fis ON p.subject_id = fis.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON fis.hadm_id = a.hadm_id\n    WHERE p.gender = 'F' \n        AND p.anchor_age BETWEEN 87 AND 97\n        AND fis.rn = 1\n        AND EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n            JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi \n                ON di.icd_code = ddi.icd_code AND di.icd_version = ddi.icd_version\n            WHERE di.subject_id = p.subject_id \n                AND di.hadm_id = fis.hadm_id\n                AND (ddi.long_title LIKE '%gastrointestinal bleeding%' \n                     OR ddi.long_title LIKE '%lower gastrointestinal bleeding%' \n                     OR ddi.long_title LIKE '%rectal hemorrhage%' \n                     OR ddi.long_title LIKE '%colonic hemorrhage%')\n        )\n),\nprocedure_counts AS (\n    SELECT \n        c.stay_id,\n        COUNT(DISTINCT pe.itemid) AS procedure_count\n    FROM cohort c\n    JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe \n        ON c.stay_id = pe.stay_id\n    WHERE pe.starttime BETWEEN c.intime AND TIMESTAMP_ADD(c.intime, INTERVAL 48 HOUR)\n    GROUP BY c.stay_id\n),\ncohort_with_procedures AS (\n    SELECT \n        c.*,\n        COALESCE(pc.procedure_count, 0) AS procedure_count\n    FROM cohort c\n    LEFT JOIN procedure_counts pc ON c.stay_id = pc.stay_id\n),\nquintiles AS (\n    SELECT \n        NTILE(5) OVER (ORDER BY procedure_count) AS quintile,\n        procedure_count,\n        los,\n        hospital_expire_flag\n    FROM cohort_with_procedures\n)\nSELECT \n    quintile,\n    AVG(procedure_count) AS mean_procedure_count,\n    AVG(los) AS mean_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "query": "I have a 72-year-old woman. Among female patients 67\u201377 admitted with ACS, report counts, percent of admissions, and in-hospital mortality rates for initial Troponin T: \u22640.04 normal; >0.04\u20130.1 borderline; >0.1 elevated.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    a.hospital_expire_flag,\n    COALESCE(a.edregtime, a.admittime) AS start_time\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 67 AND 77\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE \n        d.hadm_id = a.hadm_id\n        AND d.seq_num = 1\n        AND d.icd_version = 10\n        AND d.icd_code IN ('I20.0', 'I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4')\n    )\n),\nfirst_troponin AS (\n  SELECT \n    c.hadm_id,\n    c.hospital_expire_flag,\n    le.valuenum AS troponin_t,\n    ROW_NUMBER() OVER (\n      PARTITION BY c.hadm_id \n      ORDER BY le.charttime\n    ) AS rn\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.hadm_id = le.hadm_id\n  WHERE \n    le.itemid = 50191  -- Troponin T\n    AND le.charttime >= c.start_time\n    AND le.valuenum IS NOT NULL\n),\ncategorized AS (\n  SELECT \n    hadm_id,\n    hospital_expire_flag,\n    CASE \n      WHEN troponin_t <= 0.04 THEN 'normal'\n      WHEN troponin_t > 0.04 AND troponin_t <= 0.1 THEN 'borderline'\n      WHEN troponin_t > 0.1 THEN 'elevated'\n    END AS category\n  FROM first_troponin\n  WHERE rn = 1\n)\nSELECT \n  category,\n  COUNT(*) AS count_admissions,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percent_admissions,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_rate\nFROM categorized\nWHERE category IS NOT NULL\nGROUP BY category\nORDER BY \n  CASE category \n    WHEN 'normal' THEN 1 \n    WHEN 'borderline' THEN 2 \n    WHEN 'elevated' THEN 3 \n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

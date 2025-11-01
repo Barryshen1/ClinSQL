@@ -1,0 +1,28 @@
+{
+  "query": "Female patient, 57: among female patients aged 52\u201362 with ischemic versus hemorrhagic stroke, report in\u2011hospital mortality (%), median LOS (<8 vs \u22658 days) and CKD/diabetes prevalence by comorbidity tertile",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(TIMESTAMP(a.dischtime), TIMESTAMP(a.admittime), DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 52 AND 62\n),\nstrokes AS (\n  SELECT \n    hadm_id,\n    MAX(CASE \n      WHEN icd_code LIKE '433%' OR icd_code LIKE '434%' OR icd_code LIKE '436%' OR icd_code LIKE 'I63%' \n      THEN 1 ELSE 0 \n    END) AS has_ischemic,\n    MAX(CASE \n      WHEN icd_code LIKE '430%' OR icd_code LIKE '431%' OR icd_code LIKE '432%' OR icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%' \n      THEN 1 ELSE 0 \n    END) AS has_hemorrhagic\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\ncohort_stroke AS (\n  SELECT \n    c.*,\n    s.has_ischemic,\n    s.has_hemorrhagic\n  FROM cohort c\n  INNER JOIN strokes s\n    ON c.hadm_id = s.hadm_id\n  WHERE (s.has_ischemic = 1 AND s.has_hemorrhagic = 0) OR (s.has_hemorrhagic = 1 AND s.has_ischemic = 0)\n),\ncomorb AS (\n  SELECT \n    cs.subject_id,\n    cs.hadm_id,\n    cs.los,\n    cs.hospital_expire_flag,\n    cs.has_ischemic,\n    cs.has_hemorrhagic,\n    MAX(CASE \n      WHEN (d.icd_version = 9 AND d.icd_code LIKE '250%') \n        OR (d.icd_version = 10 AND (d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E12%' OR d.icd_code LIKE 'E13%')) \n      THEN 1 ELSE 0 \n    END) AS has_diabetes,\n    MAX(CASE \n      WHEN d.icd_code LIKE '585%' OR d.icd_code = '586' OR d.icd_code = 'V420' OR d.icd_code LIKE 'V451%' OR d.icd_code LIKE 'N18%' \n      THEN 1 ELSE 0 \n    END) AS has_ckd,\n    MAX(CASE \n      WHEN (d.icd_version = 9 AND d.icd_code LIKE '40[1-5]%') \n        OR (d.icd_version = 10 AND (d.icd_code = 'I10' OR d.icd_code LIKE 'I11%' OR d.icd_code LIKE 'I12%' OR d.icd_code LIKE 'I13%' OR d.icd_code LIKE 'I15%' OR d.icd_code LIKE 'I16%')) \n      THEN 1 ELSE 0 \n    END) AS has_htn,\n    MAX(CASE \n      WHEN d.icd_code LIKE '428%' OR d.icd_code LIKE 'I50%' \n      THEN 1 ELSE 0 \n    END) AS has_chf,\n    MAX(CASE \n      WHEN (d.icd_version = 9 AND (d.icd_code LIKE '490%' OR d.icd_code LIKE '491%' OR d.icd_code LIKE '492%' OR d.icd_code LIKE '493%' OR d.icd_code LIKE '494%' OR d.icd_code LIKE '495%' OR d.icd_code LIKE '496%')) \n        OR (d.icd_version = 10 AND d.icd_code LIKE 'J4[0-7]%') \n      THEN 1 ELSE 0 \n    END) AS has_copd,\n    MAX(CASE \n      WHEN (d.icd_version = 9 AND (d.icd_code LIKE '14[0-9]%' OR d.icd_code LIKE '15[0-9]%' OR d.icd_code LIKE '16[0-9]%' OR d.icd_code LIKE '17[0-9]%' OR d.icd_code LIKE '18[0-9]%' OR d.icd_code LIKE '19[0-9]%' OR d.icd_code LIKE '20[0-8]%')) \n        OR (d.icd_version = 10 AND d.icd_code LIKE 'C%') \n      THEN 1 ELSE 0 \n    END) AS has_cancer\n  FROM cohort_stroke cs\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON cs.hadm_id = d.hadm_id\n  GROUP BY \n    cs.subject_id, cs.hadm_id, cs.los, cs.hospital_expire_flag, \n    cs.has_ischemic, cs.has_hemorrhagic\n),\nscored AS (\n  SELECT \n    *,\n    CASE \n      WHEN has_hemorrhagic = 1 THEN 'hemorrhagic'\n      ELSE 'ischemic'\n    END AS stroke_type,\n    (has_diabetes + has_ckd + has_htn + has_chf + has_copd + has_cancer) AS comorb_score\n  FROM comorb\n),\ntertile AS (\n  SELECT \n    *,\n    NTILE(3) OVER (PARTITION BY stroke_type ORDER BY comorb_score) AS comorbidity_tertile\n  FROM scored\n)\nSELECT \n  stroke_type,\n  comorbidity_tertile,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct,\n  APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_los,\n  ROUND(AVG(CASE WHEN los < 8 THEN 1.0 ELSE 0 END) * 100, 2) AS pct_los_lt8,\n  ROUND(AVG(CASE WHEN los >= 8 THEN 1.0 ELSE 0 END) * 100, 2) AS pct_los_ge8,\n  ROUND(AVG(has_ckd) * 100, 2) AS ckd_prevalence,\n  ROUND(AVG(has_diabetes) * 100, 2) AS diabetes_prevalence\nFROM tertile\nGROUP BY stroke_type, comorbidity_tertile\nORDER BY stroke_type, comorbidity_tertile;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [50:13]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [50:13]\n\nLocation: US\nJob ID: a6dbdf14-6a16-466f-a4c6-26d4e697a6f7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: c3c0c199-f514-471f-a7e6-a9333636c79d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

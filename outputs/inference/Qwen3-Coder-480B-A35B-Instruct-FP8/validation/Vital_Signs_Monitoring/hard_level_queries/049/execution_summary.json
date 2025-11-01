@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 83-year-old man with sepsis. Among male ICU patients aged 78\u201388 with sepsis, what percentile rank does an instability score of 85 in the first 24 hours have? Also report mean ICU LOS and hospital mortality for quartile 4.",
+  "final_sql": "WITH sepsis_icu_cohort AS (\n  SELECT DISTINCT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los AS icu_los,\n    adm.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_dx\n    ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 78 AND 88\n    AND LOWER(d_dx.long_title) LIKE '%sepsis%'\n),\n\n-- Approximate SOFA score using chartevents\nsofa_scores AS (\n  SELECT\n    ce.stay_id,\n    MAX(CASE WHEN itemid IN (227428, 223835) THEN valuenum ELSE NULL END) AS sofa_respiratory, -- PaO2/FiO2\n    MAX(CASE WHEN itemid IN (227442, 220635) THEN valuenum ELSE NULL END) AS sofa_coagulation, -- Platelets\n    MAX(CASE WHEN itemid IN (227444, 226770) THEN valuenum ELSE NULL END) AS sofa_liver, -- Bilirubin\n    MAX(CASE WHEN itemid IN (227010, 223901) THEN valuenum ELSE NULL END) AS sofa_cardio, -- MAP or dopamine\n    MAX(CASE WHEN itemid IN (227009, 226755) THEN valuenum ELSE NULL END) AS sofa_cns, -- GCS\n    MAX(CASE WHEN itemid IN (227443, 220615) THEN valuenum ELSE NULL END) AS sofa_renal -- Creatinine\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    sepsis_icu_cohort coh\n    ON ce.stay_id = coh.stay_id\n  WHERE\n    ce.charttime >= coh.intime\n    AND ce.charttime <= DATETIME_ADD(coh.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY\n    ce.stay_id\n),\n\n-- Compute total SOFA score (sum of component scores, capped at max per component)\nsofa_total AS (\n  SELECT\n    stay_id,\n    LEAST(4, GREATEST(0, sofa_respiratory)) +\n    LEAST(4, GREATEST(0, sofa_coagulation)) +\n    LEAST(4, GREATEST(0, sofa_liver)) +\n    LEAST(4, GREATEST(0, sofa_cardio)) +\n    LEAST(4, GREATEST(0, sofa_cns)) +\n    LEAST(4, GREATEST(0, sofa_renal)) AS sofa_score\n  FROM\n    sofa_scores\n),\n\n-- Add back cohort info\nfull_cohort AS (\n  SELECT\n    coh.*,\n    sofa.sofa_score\n  FROM\n    sepsis_icu_cohort coh\n  JOIN\n    sofa_total sofa\n    ON coh.stay_id = sofa.stay_id\n  WHERE\n    sofa.sofa_score IS NOT NULL\n),\n\n-- Percentile rank of score = 85\npercentile_rank AS (\n  SELECT\n    PERCENT_RANK() OVER (ORDER BY sofa_score) AS pct_rank_85\n  FROM\n    full_cohort\n  WHERE\n    sofa_score <= 85\n  ORDER BY\n    sofa_score DESC\n  LIMIT 1\n),\n\n-- Quartile 4 stats\nquartile_stats AS (\n  SELECT\n    sofa_score,\n    icu_los,\n    hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY sofa_score) AS sofa_quartile\n  FROM\n    full_cohort\n),\n\nq4_stats AS (\n  SELECT\n    AVG(icu_los) AS mean_icu_los_q4,\n    AVG(hospital_expire_flag) AS mortality_q4\n  FROM\n    quartile_stats\n  WHERE\n    sofa_quartile = 4\n)\n\n-- Final output\nSELECT\n  (SELECT pct_rank_85 FROM percentile_rank) AS percentile_rank_85,\n  (SELECT mean_icu_los_q4 FROM q4_stats) AS mean_icu_los_q4,\n  (SELECT mortality_q4 FROM q4_stats) AS mortality_q4;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [33:5]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [33:5]\n\nLocation: US\nJob ID: 121215f0-4316-4394-91a9-f0616ecfe2b0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

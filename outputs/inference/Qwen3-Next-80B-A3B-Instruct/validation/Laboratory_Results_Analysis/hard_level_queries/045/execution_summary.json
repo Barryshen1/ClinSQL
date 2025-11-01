@@ -1,0 +1,28 @@
+{
+  "query": "I have a 57\u2011year\u2011old man admitted with asthma exacerbation. Among male inpatients aged 52\u201362 with asthma exacerbation, what is the 90th\u2011percentile 72\u2011hour lab instability score? For the top decile, report mortality, mean LOS, average critical lab events, and compare to age\u2011matched males.",
+  "final_sql": "WITH target_population AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND LOWER(did.long_title) LIKE '%asthma%exacerbation%'\n    AND d.icd_version = 10\n),\n\nlab_events_72h AS (\n  SELECT\n    le.hadm_id,\n    le.charttime,\n    le.flag,\n    dl.label\n  FROM physionet-data.mimiciv_3_1_hosp.labevents le\n  JOIN physionet-data.mimiciv_3_1_hosp.d_labitems dl\n    ON le.itemid = dl.itemid\n  JOIN target_population tp\n    ON le.hadm_id = tp.hadm_id\n  WHERE le.valuenum IS NOT NULL\n    AND le.charttime >= tp.admittime\n    AND le.charttime <= DATETIME_ADD(tp.admittime, INTERVAL 72 HOUR)\n    AND le.flag IN ('Abnormal', 'High', 'Low')\n),\n\nlab_instability_score AS (\n  SELECT\n    hadm_id,\n    COUNT(*) AS critical_lab_events\n  FROM lab_events_72h\n  GROUP BY hadm_id\n),\n\npercentile_90 AS (\n  SELECT\n    PERCENTILE_CONT(critical_lab_events, 0.9) AS p90_score\n  FROM lab_instability_score\n),\n\ntop_decile AS (\n  SELECT\n    lis.hadm_id,\n    lis.critical_lab_events,\n    tp.hospital_expire_flag,\n    ic.los AS icu_los\n  FROM lab_instability_score lis\n  JOIN target_population tp ON lis.hadm_id = tp.hadm_id\n  JOIN physionet-data.mimiciv_3_1_icu.icustays ic\n    ON tp.hadm_id = ic.hadm_id\n  CROSS JOIN percentile_90 p90\n  WHERE lis.critical_lab_events >= p90.p90_score\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY lis.hadm_id ORDER BY ic.intime) = 1\n),\n\noverall_population AS (\n  SELECT\n    lis.critical_lab_events,\n    tp.hospital_expire_flag,\n    ic.los AS icu_los\n  FROM lab_instability_score lis\n  JOIN target_population tp ON lis.hadm_id = tp.hadm_id\n  JOIN physionet-data.mimiciv_3_1_icu.icustays ic\n    ON tp.hadm_id = ic.hadm_id\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY lis.hadm_id ORDER BY ic.intime) = 1\n)\n\nSELECT\n  -- 90th percentile value\n  (SELECT p90_score FROM percentile_90) AS p90_lab_instability_score,\n\n  -- Top decile metrics\n  COUNT(top.hadm_id) AS top_decile_n,\n  AVG(CAST(top.hospital_expire_flag AS FLOAT64)) AS top_decile_mortality,\n  AVG(top.icu_los) AS top_decile_mean_los,\n  AVG(top.critical_lab_events) AS top_decile_avg_critical_labs,\n\n  -- Overall population metrics for comparison\n  COUNT(overall.hadm_id) AS overall_n,\n  AVG(CAST(overall.hospital_expire_flag AS FLOAT64)) AS overall_mortality,\n  AVG(overall.icu_los) AS overall_mean_los,\n  AVG(overall.critical_lab_events) AS overall_avg_critical_labs\n\nFROM top_decile top\nCROSS JOIN overall_population overall;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name hadm_id not found inside overall at [91:17]; reason: invalidQuery, location: query, message: Name hadm_id not found inside overall at [91:17]\n\nLocation: US\nJob ID: 6ced3179-fd23-43f6-be32-ffe53d3d5cc2\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"exacerbation\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"exacerbation\" at [1:13]\n\nLocation: US\nJob ID: 6d5d5f4f-f923-4850-9be6-39bc68cc20ee\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dl at [36:12]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dl at [36:12]\n\nLocation: US\nJob ID: fcb86c78-dfbd-4d19-8d46-8156782b143f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside overall at [91:17]; reason: invalidQuery, location: query, message: Name hadm_id not found inside overall at [91:17]\n\nLocation: US\nJob ID: 6ced3179-fd23-43f6-be32-ffe53d3d5cc2\n"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "query": "I have a 48-year-old male inpatient. Among male inpatients aged 43\u201353 with a transplant diagnosis, compute medication complexity score over the first 7 hospital days, stratify into quartiles, and report per quartile: n, mean score, LOS, in-hospital mortality, and 30-day readmission",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 43 AND 53\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE 'V42%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'Z94%')\n        )\n    )\n),\nmed_complexity AS (\n  SELECT \n    c.hadm_id,\n    c.subject_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY) AS los_days,\n    COUNT(DISTINCT LOWER(pres.drug)) AS med_complexity_score,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = c.subject_id\n          AND a2.admittime > c.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 ELSE 0 \n    END AS readmitted_30d\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n    ON c.hadm_id = pres.hadm_id\n    AND pres.starttime >= c.admittime\n    AND pres.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY 1, 2, 3, 4, 5\n),\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY med_complexity_score) AS quartile\n  FROM med_complexity\n)\nSELECT \n  quartile,\n  COUNT(*) AS n,\n  AVG(med_complexity_score) AS mean_score,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) AS in_hospital_mortality,\n  AVG(readmitted_30d) AS readmission_30d\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

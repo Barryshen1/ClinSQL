@@ -1,0 +1,16 @@
+{
+  "query": "For my 61-year-old male ICU patient: among male ICU patients aged 56\u201366, categorize per-stay mean arterial pressure (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report patient counts and stroke rates.",
+  "final_sql": "WITH\n-- Get male patients aged 56-66\nmale_patients AS (\n  SELECT\n    subject_id,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 56 AND 66\n),\n\n-- Get ICU stays for these patients\nicu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    male_patients p ON s.subject_id = p.subject_id\n),\n\n-- Get MAP measurements (using common itemids for MAP)\nmap_measurements AS (\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum AS map_value\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  WHERE\n    ce.itemid IN (220050, 220051)  -- MAP and MAP Invasive itemids\n    AND ce.valuenum IS NOT NULL\n),\n\n-- Calculate average MAP per stay\navg_map_per_stay AS (\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.stay_id,\n    AVG(m.map_value) AS avg_map\n  FROM\n    map_measurements m\n  GROUP BY\n    m.subject_id, m.hadm_id, m.stay_id\n),\n\n-- Categorize MAP into groups\nmap_categories AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.stay_id,\n    CASE\n      WHEN a.avg_map < 65 THEN '<65'\n      WHEN a.avg_map BETWEEN 65 AND 74 THEN '65-74'\n      WHEN a.avg_map BETWEEN 75 AND 84 THEN '75-84'\n      ELSE '>=85'\n    END AS map_category\n  FROM\n    avg_map_per_stay a\n),\n\n-- Identify stroke diagnoses (using common stroke ICD-10 codes)\nstroke_patients AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE\n    d.icd_code LIKE 'I60%' OR\n    d.icd_code LIKE 'I61%' OR\n    d.icd_code LIKE 'I63%' OR\n    d.icd_code LIKE 'I64%' OR\n    d.icd_code LIKE 'G45%' OR\n    d.icd_code LIKE 'G46%' OR\n    d.icd_code LIKE 'H34.1%' OR\n    d.icd_code LIKE 'H34.2%'\n),\n\n-- Combine all data\nfinal_data AS (\n  SELECT\n    m.map_category,\n    COUNT(DISTINCT m.subject_id) AS patient_count,\n    COUNT(DISTINCT s.subject_id) AS stroke_count\n  FROM\n    map_categories m\n  LEFT JOIN\n    stroke_patients s ON m.subject_id = s.subject_id AND m.hadm_id = s.hadm_id\n  GROUP BY\n    m.map_category\n)\n\n-- Calculate stroke rates\nSELECT\n  map_category,\n  patient_count,\n  stroke_count,\n  ROUND((stroke_count / patient_count) * 100, 2) AS stroke_rate_percentage\nFROM\n  final_data\nORDER BY\n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65-74' THEN 2\n    WHEN '75-84' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

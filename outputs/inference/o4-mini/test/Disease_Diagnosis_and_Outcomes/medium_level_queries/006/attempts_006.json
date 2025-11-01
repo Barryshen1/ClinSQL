@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH\n-- Step 1 & 2: Identify sepsis admissions in male patients aged 64\u201374, excluding septic shock\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          -- ICD-9 sepsis codes\n          (d.icd_version = 9 AND d.icd_code LIKE '038.%')\n          OR\n          -- ICD-10 sepsis codes\n          (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^(A40|A41)'))\n        )\n    )\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n      WHERE d2.hadm_id = a.hadm_id\n        AND (\n          -- ICD-9 septic shock\n          (d2.icd_version = 9 AND d2.icd_code = '785.52')\n          OR\n          -- ICD-10 septic shock\n          (d2.icd_version = 10 AND d2.icd_code = 'R65.21')\n        )\n    )\n),\n-- Step 5: Flag CKD and diabetes per admission\nflags AS (\n  SELECT\n    c.hadm_id,\n    -- CKD ICD-9 585.*, ICD-10 N18.*\n    MAX(IF(\n      (d.icd_version = 9 AND d.icd_code LIKE '585.%')\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'N18.%'),\n      1, 0\n    )) AS ckd_flag,\n    -- Diabetes ICD-9 250.*, ICD-10 E10.*, E11.*\n    MAX(IF(\n      (d.icd_version = 9 AND d.icd_code LIKE '250.%')\n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'E10.%' OR d.icd_code LIKE 'E11.%')),\n      1, 0\n    )) AS diabetes_flag\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON c.hadm_id = d.hadm_id\n  GROUP BY\n    c.hadm_id\n),\n-- Step 4: Assign quartiles based on LOS\nquartiles AS (\n  SELECT\n    c.*,\n    NTILE(4) OVER (ORDER BY los_days) AS los_quartile\n  FROM\n    cohort c\n)\n-- Step 6: Aggregate outcomes by quartile\nSELECT\n  q.los_quartile AS quartile,\n  COUNT(*) AS n_admissions,\n  ROUND(100.0 * SUM(q.hospital_expire_flag) / COUNT(*), 1) AS mortality_rate_pct,\n  ROUND(100.0 * SUM(f.ckd_flag) / COUNT(*), 1)    AS ckd_prevalence_pct,\n  ROUND(100.0 * SUM(f.diabetes_flag) / COUNT(*), 1) AS diabetes_prevalence_pct\nFROM\n  quartiles q\n  LEFT JOIN flags f\n    ON q.hadm_id = f.hadm_id\nGROUP BY\n  los_quartile\nORDER BY\n  los_quartile;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.95) within GROUP (ORDER BY instability_ratio) AS high_instability_threshold FROM instability_score;

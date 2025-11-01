@@ -1,0 +1,28 @@
+{
+  "query": "I have a 90\u2011year\u2011old male. Among male ICU patients aged 85\u201395 with acute respiratory failure, what is the percentile rank of a first\u201124\u2011hour vital\u2011sign instability score of 85? Also report average ICU length\u2011of\u2011stay and in\u2011hospital mortality for the most unstable quartile.",
+  "final_sql": "WITH respiratory_failure_patients AS (\n  SELECT DISTINCT i.stay_id, i.subject_id, i.intime, i.los, p.anchor_age, p.gender, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON i.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON i.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag ON d.icd_code = d_diag.icd_code AND d.icd_version = d_diag.icd_version\n  WHERE p.anchor_age BETWEEN 85 AND 95\n    AND p.gender = 'M'\n    AND LOWER(d_diag.long_title) LIKE '%acute respiratory failure%'\n),\n\nvital_signs_first_24h AS (\n  SELECT \n    rfp.stay_id,\n    ce.itemid,\n    ce.valuenum,\n    di.label,\n    ce.charttime\n  FROM respiratory_failure_patients rfp\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON rfp.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  WHERE ce.charttime >= rfp.intime \n    AND ce.charttime < TIMESTAMP_ADD(rfp.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n    AND di.label IN ('Heart Rate', 'Systolic BP', 'Respiratory Rate', 'Temperature', 'SpO2')\n),\n\nvital_sign_stats AS (\n  SELECT \n    label,\n    AVG(valuenum) AS mean_val,\n    STDDEV(valuenum) AS std_val\n  FROM vital_signs_first_24h\n  GROUP BY label\n),\n\npatient_vital_zscores AS (\n  SELECT \n    vsf.stay_id,\n    vsf.label,\n    (vsf.valuenum - vs.mean_val) / vs.std_val AS z_score\n  FROM vital_signs_first_24h vsf\n  JOIN vital_sign_stats vs ON vsf.label = vs.label\n),\n\npatient_instability_score AS (\n  SELECT \n    stay_id,\n    SUM(ABS(z_score)) AS raw_instability_score\n  FROM patient_vital_zscores\n  GROUP BY stay_id\n),\n\nscaled_instability AS (\n  SELECT \n    stay_id,\n    raw_instability_score,\n    (raw_instability_score - MIN(raw_instability_score) OVER()) * 100.0 / \n    (MAX(raw_instability_score) OVER() - MIN(raw_instability_score) OVER()) AS scaled_instability_score\n  FROM patient_instability_score\n),\n\npercentile_ranking AS (\n  SELECT \n    stay_id,\n    scaled_instability_score,\n    PERCENT_RANK() OVER (ORDER BY scaled_instability_score) AS percentile_rank\n  FROM scaled_instability\n),\n\nquartile_analysis AS (\n  SELECT \n    stay_id,\n    scaled_instability_score,\n    NTILE(4) OVER (ORDER BY scaled_instability_score) AS quartile,\n    rfp.los,\n    rfp.hospital_expire_flag\n  FROM scaled_instability si\n  JOIN respiratory_failure_patients rfp ON si.stay_id = rfp.stay_id\n)\n\nSELECT \n  (SELECT MAX(percentile_rank) FROM percentile_ranking WHERE scaled_instability_score >= 85) AS percentile_rank_of_85,\n  AVG(CASE WHEN quartile = 4 THEN los END) AS avg_los_top_quartile,\n  AVG(CASE WHEN quartile = 4 THEN hospital_expire_flag END) AS mortality_top_quartile\nFROM quartile_analysis;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Column name stay_id is ambiguous at [74:5]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [74:5]\n\nLocation: US\nJob ID: 4f982e63-f519-44ca-8cad-098c2ed9d0cf\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"score\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"score\" at [1:1]\n\nLocation: US\nJob ID: e2fe70cf-77d7-44c7-bc2b-60dd8cbbbd5f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"respiratory\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"respiratory\" at [1:12]\n\nLocation: US\nJob ID: fb6e8014-3b82-4592-9b50-2637b3e07606\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [74:5]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [74:5]\n\nLocation: US\nJob ID: 4f982e63-f519-44ca-8cad-098c2ed9d0cf\n"
+    }
+  ]
+}

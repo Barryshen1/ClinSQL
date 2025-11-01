@@ -1,0 +1,1 @@
+SELECT percent_rank() OVER (ORDER BY AVG(labevents.value)) AS percentile_rank FROM icustays JOIN labevents ON icustays.hadm_id = labevents.subject_id WHERE icustays.subject_id = 44 AND icustays.gender = 1 AND EXTRACT(YEAR FROM icustays.intime) BETWEEN 2015 AND 2016 AND labevents.itemid = 848070 AND labevents.value > 75 GROUP BY icustays.hadm_id;

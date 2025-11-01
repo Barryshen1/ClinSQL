@@ -1,0 +1,16 @@
+{
+  "query": "For my 42-year-old male, among men 37\u201347 receiving inpatient DAPT, what is the SD of in-hospital mortality (first admission)?",
+  "final_sql": "WITH\n  -- Step 1: Identify male patients aged 37-47\n  patient_cohort AS (\n    SELECT\n      subject_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE\n      gender = 'M'\n      AND anchor_age BETWEEN 37 AND 47\n  ),\n\n  -- Step 2: Isolate the first hospital admission for this cohort\n  first_admissions AS (\n    SELECT\n      adm.subject_id,\n      adm.hadm_id,\n      adm.hospital_expire_flag\n    FROM (\n      SELECT\n        subject_id,\n        hadm_id,\n        hospital_expire_flag,\n        ROW_NUMBER() OVER (\n          PARTITION BY\n            subject_id\n          ORDER BY\n            admittime ASC\n        ) AS rn\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions`\n      WHERE\n        subject_id IN (\n          SELECT\n            subject_id\n          FROM\n            patient_cohort\n        )\n    ) AS adm\n    WHERE\n      adm.rn = 1\n  ),\n\n  -- Step 3: Identify admissions where DAPT was prescribed\n  -- DAPT = Aspirin + a P2Y12 Inhibitor (Clopidogrel, Prasugrel, Ticagrelor)\n  dapt_admissions AS (\n    SELECT\n      hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.prescriptions`\n    WHERE\n      -- Filter to only prescriptions for the admissions we care about\n      hadm_id IN (\n        SELECT\n          hadm_id\n        FROM\n          first_admissions\n      )\n      -- Use a CASE statement to classify the antiplatelet drug type\n      AND (\n        CASE\n          WHEN LOWER(drug) LIKE '%aspirin%'\n          THEN 'aspirin'\n          WHEN\n            LOWER(drug) LIKE '%clopidogrel%'\n            OR LOWER(drug) LIKE '%prasugrel%'\n            OR LOWER(drug) LIKE '%ticagrelor%'\n          THEN 'p2y12_inhibitor'\n          ELSE NULL\n        END\n      ) IS NOT NULL\n    GROUP BY\n      hadm_id\n    -- Ensure both drug classes were prescribed for the admission\n    HAVING\n      COUNT(\n        DISTINCT (\n          CASE\n            WHEN LOWER(drug) LIKE '%aspirin%'\n            THEN 'aspirin'\n            WHEN\n              LOWER(drug) LIKE '%clopidogrel%'\n              OR LOWER(drug) LIKE '%prasugrel%'\n              OR LOWER(drug) LIKE '%ticagrelor%'\n            THEN 'p2y12_inhibitor'\n          END\n        )\n      ) = 2\n  )\n\n-- Step 4: Calculate the standard deviation of mortality for the final cohort\nSELECT\n  STDDEV_SAMP(fa.hospital_expire_flag) AS sd_in_hospital_mortality\nFROM\n  first_admissions AS fa\n-- Join to filter for only those admissions that received DAPT\nINNER JOIN\n  dapt_admissions AS da\n  ON fa.hadm_id = da.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

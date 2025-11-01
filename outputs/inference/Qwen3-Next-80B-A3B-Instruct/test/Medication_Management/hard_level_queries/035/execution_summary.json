@@ -1,0 +1,28 @@
+{
+  "query": "Patient: 45-year-old woman. Among female inpatients aged 40\u201350 with neutropenic fever, stratify admissions by medication complexity score (first 48 hours) into quartiles and report per quartile: patient count, mean/min/max score, mean LOS, mortality %, and 30-day readmission %.",
+  "final_sql": "WITH neutropenic_fever_patients AS (\n  SELECT DISTINCT\n    i.stay_id,\n    i.subject_id,\n    i.hadm_id,\n    i.intime,\n    i.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n      WHERE le.subject_id = i.subject_id\n        AND le.itemid = 51300  -- ANC\n        AND le.valuenum < 500\n        AND le.charttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 48 HOUR)\n    )\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      WHERE ce.stay_id = i.stay_id\n        AND ce.itemid = 223762  -- Temperature Celsius\n        AND ce.valuenum > 38.3\n        AND ce.charttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 48 HOUR)\n    )\n),\n\nmedication_complexity AS (\n  SELECT\n    nfp.stay_id,\n    COUNT(DISTINCT p.drug) AS med_count\n  FROM neutropenic_fever_patients nfp\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON nfp.hadm_id = p.hadm_id\n    AND p.starttime >= nfp.intime\n    AND p.starttime < TIMESTAMP_ADD(nfp.intime, INTERVAL 48 HOUR)\n  GROUP BY nfp.stay_id\n),\n\nquartiles AS (\n  SELECT\n    mc.stay_id,\n    mc.med_count,\n    NTILE(4) OVER (ORDER BY mc.med_count) AS quartile,\n    nfp.los,\n    nfp.subject_id,  -- Added missing subject_id\n    a.hospital_expire_flag,\n    a.dischtime\n  FROM medication_complexity mc\n  INNER JOIN neutropenic_fever_patients nfp ON mc.stay_id = nfp.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON nfp.hadm_id = a.hadm_id\n),\n\nreadmission AS (\n  SELECT\n    q.stay_id,\n    CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM quartiles q\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON q.subject_id = a2.subject_id\n    AND a2.admittime > q.dischtime\n    AND a2.admittime <= TIMESTAMP_ADD(q.dischtime, INTERVAL 30 DAY)\n)\n\nSELECT\n  quartile,\n  COUNT(*) AS patient_count,\n  AVG(med_count) AS mean_med_complexity,\n  MIN(med_count) AS min_med_complexity,\n  MAX(med_count) AS max_med_complexity,\n  AVG(los) AS mean_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent,\n  AVG(CAST(readmitted_30d AS FLOAT64)) * 100 AS readmission_30d_percent\nFROM quartiles q\nLEFT JOIN readmission r ON q.stay_id = r.stay_id\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"d_items\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"d_items\" at [1:1]\n\nLocation: US\nJob ID: 7cfe2829-fabb-4c2f-8403-ca745cc3504a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name subject_id not found inside q at [62:10]; reason: invalidQuery, location: query, message: Name subject_id not found inside q at [62:10]\n\nLocation: US\nJob ID: 11e7b9c0-81cc-48e5-980d-e1482380f204\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

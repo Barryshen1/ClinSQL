@@ -1,0 +1,23 @@
+{
+  "query": "I have a 93-year-old male with sepsis\u2014what is the 75th percentile platelet count on discharge day among male sepsis admissions?",
+  "final_sql": "WITH /* sepsis_admissions CTE: Identify sepsis admissions for 93-year-old males */\nsepsis_admissions AS (\n  SELECT \n    a.hadm_id, \n    a.subject_id, \n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE \n    (d.icd_code LIKE 'A40%' OR d.icd_code LIKE 'A41%') \n    AND d.icd_version = 10\n    AND p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year = 93\n),\n\n/* platelet_events CTE: Get platelet lab events with numeric values */\nplatelet_events AS (\n  SELECT \n    l.hadm_id,\n    l.subject_id,\n    l.charttime,\n    l.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl \n    ON l.itemid = dl.itemid\n  WHERE \n    dl.itemid = 51265  -- platelet count itemid\n    AND l.valuenum IS NOT NULL\n),\n\n/* discharge_day_platelets CTE: Filter platelet events to discharge day */\ndischarge_day_platelets AS (\n  SELECT \n    s.hadm_id,\n    s.subject_id,\n    s.dischtime,\n    p.charttime,\n    p.valuenum\n  FROM sepsis_admissions s\n  INNER JOIN platelet_events p \n    ON s.hadm_id = p.hadm_id\n    AND DATE(p.charttime) = DATE(s.dischtime)  -- same date\n),\n\n/* ranked_platelets CTE: Rank platelet events per admission by charttime descending */\nranked_platelets AS (\n  SELECT \n    hadm_id,\n    valuenum,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime DESC) as rn\n  FROM discharge_day_platelets\n),\n\n/* last_platelet_per_admission CTE: Get the last platelet measurement per admission */\nlast_platelet_per_admission AS (\n  SELECT \n    hadm_id,\n    valuenum as platelet_count\n  FROM ranked_platelets\n  WHERE rn = 1\n)\n\n/* Main query: Compute the 75th percentile of platelet counts */\nSELECT \n  APPROX_QUANTILES(platelet_count, 100)[OFFSET(75)] AS p75_platelet_count\nFROM last_platelet_per_admission;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:12]\n\nLocation: US\nJob ID: 599e16cf-eb60-42d8-8636-0b59bad7691d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT MAX(l.value) AS max_creatinine_value FROM labevents l JOIN patients p ON l.subject_id = p.subject_id JOIN admissions a ON l.hadm_id = a.hadm_id WHERE p.gender = 'M' AND a.admission_type = 'sepsis' AND p.anchor_age = 83;

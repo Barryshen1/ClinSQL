@@ -1,0 +1,16 @@
+{
+  "query": "Among male patients aged 49\u201359 with primary heart failure (patient is 54), for LOS 1\u20134 vs 5\u20137 days stratified by ICU use, what are admission counts and mean CT/MRI per admission?",
+  "final_sql": "WITH heart_failure_admissions AS (\n  SELECT \n    ad.hadm_id,\n    ad.subject_id,\n    p.gender,\n    p.anchor_age,\n    TIMESTAMP_DIFF(ad.dischtime, ad.admittime, DAY) AS los_days\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` ad\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ad.subject_id = p.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON ad.hadm_id = diag.hadm_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON diag.icd_code = d_icd.icd_code \n    AND diag.icd_version = d_icd.icd_version\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND diag.seq_num = 1\n    AND LOWER(d_icd.long_title) LIKE '%heart failure%'\n    AND ad.dischtime > ad.admittime  -- Ensure valid LOS\n),\nicu_flag AS (\n  SELECT \n    hfa.*,\n    CASE WHEN icu.stay_id IS NOT NULL THEN 1 ELSE 0 END AS has_icu\n  FROM \n    heart_failure_admissions hfa\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON hfa.subject_id = icu.subject_id \n    AND hfa.hadm_id = icu.hadm_id\n),\nlos_strata AS (\n  SELECT \n    *,\n    CASE \n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7 days'\n      ELSE 'Other'\n    END AS los_bucket\n  FROM \n    icu_flag\n),\nimaging_counts AS (\n  SELECT \n    proc.hadm_id,\n    COUNT(proc.seq_num) AS imaging_count\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d_proc\n    ON proc.icd_code = d_proc.icd_code \n    AND proc.icd_version = d_proc.icd_version\n  WHERE \n    LOWER(d_proc.long_title) LIKE '%ct%' \n    OR LOWER(d_proc.long_title) LIKE '%computed tomography%' \n    OR LOWER(d_proc.long_title) LIKE '%mri%' \n    OR LOWER(d_proc.long_title) LIKE '%magnetic resonance%'\n  GROUP BY \n    proc.hadm_id\n)\nSELECT \n  ls.los_bucket,\n  ls.has_icu,\n  COUNT(DISTINCT ls.hadm_id) AS admission_count,\n  AVG(COALESCE(im.imaging_count, 0)) AS mean_imaging_per_admission\nFROM \n  los_strata ls\nLEFT JOIN \n  imaging_counts im\n  ON ls.hadm_id = im.hadm_id\nWHERE \n  ls.los_bucket != 'Other'\nGROUP BY \n  ls.los_bucket, \n  ls.has_icu\nORDER BY \n  ls.los_bucket, \n  ls.has_icu;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

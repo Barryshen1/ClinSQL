@@ -1,0 +1,22 @@
+{
+  "query": "Concerned about my 75-year-old female ICU patient: among female ICU patients aged 70\u201380, based on maximum SBP in first 24h, report percent by SBP category (<130;130\u2013139;140\u2013159;\u2265160) and stroke rate.",
+  "final_sql": "WITH patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 70 AND 80\n),\nfirst_stays AS (\n  SELECT subject_id, stay_id, hadm_id, intime\n  FROM (\n    SELECT subject_id, stay_id, hadm_id, intime,\n           ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    WHERE i.subject_id IN (SELECT subject_id FROM patients)\n  )\n  WHERE rn = 1\n),\nsbp_max AS (\n  SELECT fs.subject_id, fs.stay_id, fs.hadm_id,\n         MAX(ce.valuenum) AS max_sbp\n  FROM first_stays fs\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON fs.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime >= fs.intime\n    AND ce.charttime < TIMESTAMP_ADD(fs.intime, INTERVAL 1 DAY)\n    AND di.label = 'Systolic blood pressure'\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n  GROUP BY fs.subject_id, fs.stay_id, fs.hadm_id\n),\nstrokes AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  WHERE (icd_version = 10 AND icd_code LIKE 'I6[1-4]%')\n     OR (icd_version = 9 AND icd_code IN ('430', '431', '432', '433', '434', '436'))\n),\ncategorized AS (\n  SELECT sm.*,\n         CASE\n           WHEN max_sbp < 130 THEN '<130'\n           WHEN max_sbp >= 130 AND max_sbp <= 139 THEN '130\u2013139'\n           WHEN max_sbp >= 140 AND max_sbp <= 159 THEN '140\u2013159'\n           ELSE '\u2265160'\n         END AS sbp_category,\n         CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_stroke\n  FROM sbp_max sm\n  LEFT JOIN strokes s\n    ON sm.hadm_id = s.hadm_id\n)\nSELECT\n  sbp_category,\n  COUNT(*) AS num_patients,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percent,\n  SUM(has_stroke) AS stroke_count,\n  ROUND(AVG(has_stroke) * 100.0, 2) AS stroke_rate_percent\nFROM categorized\nGROUP BY sbp_category\nORDER BY\n  CASE sbp_category\n    WHEN '<130' THEN 1\n    WHEN '130\u2013139' THEN 2\n    WHEN '140\u2013159' THEN 3\n    WHEN '\u2265160' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [35:10]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [35:10]\n\nLocation: US\nJob ID: 031a31d0-873c-4cc7-9c04-df1ae4f93fd7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

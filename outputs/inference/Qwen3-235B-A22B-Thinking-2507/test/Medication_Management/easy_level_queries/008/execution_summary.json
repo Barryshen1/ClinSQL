@@ -1,0 +1,29 @@
+{
+  "query": "For my hospitalized 69-year-old man: among men 64\u201374 given aspirin plus a P2Y12 inhibitor, median inpatient antiplatelet prescription duration (days)?",
+  "final_sql": "WITH admissions_filtered AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age - (p.anchor_year - EXTRACT(YEAR FROM a.admittime))) BETWEEN 64 AND 74\n),\naspirin AS (\n  SELECT \n    p.hadm_id,\n    GREATEST(p.starttime, a.admittime) AS start_time,\n    LEAST(COALESCE(p.stoptime, a.dischtime), a.dischtime) AS end_time\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN admissions_filtered a\n    ON p.hadm_id = a.hadm_id\n  WHERE LOWER(p.drug) LIKE '%aspirin%'\n),\np2y12 AS (\n  SELECT \n    p.hadm_id,\n    GREATEST(p.starttime, a.admittime) AS start_time,\n    LEAST(COALESCE(p.stoptime, a.dischtime), a.dischtime) AS end_time\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN admissions_filtered a\n    ON p.hadm_id = a.hadm_id\n  WHERE REGEXP_CONTAINS(LOWER(p.drug), r'clopidogrel|prasugrel|ticagrelor')\n),\nevents AS (\n  SELECT \n    hadm_id,\n    start_time AS time,\n    1 AS aspirin_delta,\n    0 AS p2y12_delta\n  FROM aspirin\n  UNION ALL\n  SELECT \n    hadm_id,\n    end_time,\n    -1,\n    0\n  FROM aspirin\n  UNION ALL\n  SELECT \n    hadm_id,\n    start_time,\n    0,\n    1\n  FROM p2y12\n  UNION ALL\n  SELECT \n    hadm_id,\n    end_time,\n    0,\n    -1\n  FROM p2y12\n),\ntimeline AS (\n  SELECT \n    hadm_id,\n    time,\n    SUM(aspirin_delta) OVER w AS aspirin_count,\n    SUM(p2y12_delta) OVER w AS p2y12_count\n  FROM events\n  WINDOW w AS (PARTITION BY hadm_id ORDER BY time)\n),\ntimeline_with_lead AS (\n  SELECT \n    hadm_id,\n    time,\n    aspirin_count,\n    p2y12_count,\n    LEAD(time) OVER w AS next_time\n  FROM timeline\n  WINDOW w AS (PARTITION BY hadm_id ORDER BY time)\n),\ndual_therapy_seconds AS (\n  SELECT \n    hadm_id,\n    SUM(TIMESTAMP_DIFF(next_time, time, SECOND)) AS dual_therapy_seconds\n  FROM timeline_with_lead\n  WHERE aspirin_count > 0 \n    AND p2y12_count > 0\n    AND next_time IS NOT NULL\n  GROUP BY hadm_id\n  HAVING SUM(TIMESTAMP_DIFF(next_time, time, SECOND)) > 0\n),\ndual_therapy_days AS (\n  SELECT \n    hadm_id,\n    dts.dual_therapy_seconds / (24 * 60 * 60) AS duration_days\n  FROM dual_therapy_seconds dts\n),\nordered AS (\n  SELECT \n    duration_days,\n    ROW_NUMBER() OVER (ORDER BY duration_days) AS rn,\n    COUNT(*) OVER () AS cnt\n  FROM dual_therapy_days\n)\nSELECT \n  AVG(duration_days) AS median_duration_days\nFROM ordered\nWHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2));",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator /\n  Argument types: STRUCT<hadm_id INT64, dual_therapy_seconds INT64>, INT64\n  Signature: FLOAT64 / FLOAT64\n    Argument 1: Unable to coerce type STRUCT<hadm_id INT64, dual_therapy_seconds INT64> to expected type FLOAT64\n  Signature: NUMERIC / NUMERIC\n    Argument 1: Unable to coerce type STRUCT<hadm_id INT64, dual_therapy_seconds INT64> to expected type NUMERIC\n  Signature: BIGNUMERIC / BIGNUMERIC\n    Argument 1: Unable to coerce type STRUCT<hadm_id INT64, dual_therapy_seconds INT64> to expected type BIGNUMERIC\n  Signature: INTERVAL / INT64\n    Argument 1: Unable to coerce type STRUCT<hadm_id INT64, dual_therapy_seconds INT64> to expected type INTERVAL at [94:5]; reason: invalidQuery, location: query, message: No matching signature for operator /\n  Argument types: STRUCT<hadm_id INT64, dual_therapy_seconds INT64>, INT64\n  Signature: FLOAT64 / FLOAT64\n    Argument 1: Unable to coerce type STRUCT<hadm_id INT64, dual_therapy_seconds INT64> to expected type FLOAT64\n  Signature: NUMERIC / NUMERIC\n    Argument 1: Unable to coerce type STRUCT<hadm_id INT64, dual_therapy_seconds INT64> to expected type NUMERIC\n  Signature: BIGNUMERIC / BIGNUMERIC\n    Argument 1: Unable to coerce type STRUCT<hadm_id INT64, dual_therapy_seconds INT64> to expected type BIGNUMERIC\n  Signature: INTERVAL / INT64\n    Argument 1: Unable to coerce type STRUCT<hadm_id INT64, dual_therapy_seconds INT64> to expected type INTERVAL at [94:5]\n\nLocation: US\nJob ID: 35f48ee9-cb6e-434b-924f-c7cc87f09ad5\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [100:33]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [100:33]\n\nLocation: US\nJob ID: 33f33d9c-02aa-4812-b92d-c10c7738f0e1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

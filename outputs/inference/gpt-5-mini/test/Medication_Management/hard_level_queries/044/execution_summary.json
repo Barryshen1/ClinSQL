@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH pe_admissions AS (\n  -- admissions for PE among women aged 64-74\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON a.hadm_id = di.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n      ON di.icd_code = d.icd_code\n         AND di.icd_version = d.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 64 AND 74\n    -- look for pulmonary embolism in the diagnosis description\n    AND LOWER(d.long_title) LIKE '%pulmonary%'\n    AND LOWER(d.long_title) LIKE '%embol%'\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n),\n\nmeds_first24 AS (\n  -- union prescriptions and pharmacy medication starts within first 24 hours of admission\n  SELECT\n    pa.hadm_id,\n    LOWER(TRIM(medname)) AS medname\n  FROM\n    pe_admissions pa\n  JOIN (\n    -- prescriptions\n    SELECT hadm_id, starttime, drug AS medname FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n    UNION ALL\n    -- pharmacy table (some meds may appear here)\n    SELECT hadm_id, starttime, medication AS medname FROM `physionet-data.mimiciv_3_1_hosp.pharmacy`\n  ) meds\n    ON meds.hadm_id = pa.hadm_id\n    AND meds.medname IS NOT NULL\n    AND TRIM(meds.medname) <> ''\n    AND meds.starttime IS NOT NULL\n    AND meds.starttime >= pa.admittime\n    AND meds.starttime <= TIMESTAMP_ADD(pa.admittime, INTERVAL 24 HOUR)\n),\n\nmed_counts AS (\n  -- distinct medication count per admission in first 24 hours\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT medname) AS med_count\n  FROM meds_first24\n  GROUP BY hadm_id\n),\n\ncohort_with_med AS (\n  -- combine cohort admissions with med counts and compute LOS and 30-day readmit flag\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.admittime,\n    pa.dischtime,\n    COALESCE(mc.med_count, 0) AS med_count,\n    -- LOS in days with fractional part\n    ROUND(SAFE_DIVIDE(TIMESTAMP_DIFF(pa.dischtime, pa.admittime, SECOND), 86400.0), 2) AS los_days,\n    pa.hospital_expire_flag,\n    -- 30-day readmission flag: any subsequent admission for the same subject within 30 days after discharge\n    IF (\n      EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = pa.subject_id\n          AND a2.admittime > pa.dischtime\n          AND TIMESTAMP_DIFF(a2.admittime, pa.dischtime, DAY) <= 30\n      ), 1, 0\n    ) AS readmit_30d\n  FROM\n    pe_admissions pa\n    LEFT JOIN med_counts mc\n      ON pa.hadm_id = mc.hadm_id\n),\n\nranked AS (\n  -- assign tertiles across the cohort by med_count\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY med_count) AS med_tertile\n  FROM\n    cohort_with_med\n)\n\n-- Aggregate results by tertile\nSELECT\n  med_tertile AS tertile,\n  COUNT(*) AS admissions,\n  MIN(med_count) AS med_count_min,\n  MAX(med_count) AS med_count_max,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(100.0 * SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)), 2) AS in_hospital_mortality_pct,\n  ROUND(100.0 * SAFE_DIVIDE(SUM(readmit_30d), COUNT(*)), 2) AS readmit_30d_pct\nFROM\n  ranked\nGROUP BY\n  med_tertile\nORDER BY\n  med_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"PE\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"PE\" at [1:8]\n\nLocation: US\nJob ID: 81a1b10f-d334-47da-82b7-ba36ba4cb38c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"PE\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"PE\" at [1:8]\n\nLocation: US\nJob ID: 661fce71-0262-4982-ad20-3517d776a22e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

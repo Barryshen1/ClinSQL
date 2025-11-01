@@ -1,0 +1,22 @@
+{
+  "query": "For a 63\u2011year\u2011old female: among patients aged 58\u201368 admitted with chest pain or AMI whose first Troponin T >0.01 ng/mL, report Troponin T distribution (mean, SD, min\u2013max).",
+  "final_sql": "WITH\n    -- Step 1 & 2: Identify admissions for female patients aged 58-68 with chest pain or AMI diagnosis\n    cohort_admissions AS (\n        SELECT DISTINCT\n            adm.subject_id,\n            adm.hadm_id\n        FROM\n            `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n        INNER JOIN\n            `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n            ON adm.subject_id = pat.subject_id\n        INNER JOIN\n            `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n            ON adm.hadm_id = diag.hadm_id\n        WHERE\n            pat.gender = 'F'\n            AND pat.anchor_age BETWEEN 58 AND 68 -- Age range 58-68\n            AND (\n                diag.icd_code LIKE 'I21%' -- Acute myocardial infarction (all sub-codes)\n                OR diag.icd_code = 'R074' -- Chest pain, unspecified\n                OR diag.icd_code = 'I209' -- Angina pectoris, unspecified\n            )\n    ),\n    -- Step 3 & 4: Find the first Troponin T measurement for each qualifying admission\n    first_troponin_t_per_admission AS (\n        SELECT\n            le.subject_id,\n            le.hadm_id,\n            le.valuenum AS first_troponin_t_value,\n            ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n        FROM\n            `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n        INNER JOIN\n            cohort_admissions AS ca\n            ON le.hadm_id = ca.hadm_id AND le.subject_id = ca.subject_id\n        WHERE\n            le.itemid = 50993 -- itemid for Troponin T (confirmed from d_labitems)\n            AND le.valuenum IS NOT NULL\n            AND le.valueuom = 'NG/ML' -- Ensure values are in ng/mL\n    ),\n    -- Step 4 (cont.): Filter for admissions where the first Troponin T > 0.01 ng/mL\n    final_patient_cohort AS (\n        SELECT DISTINCT\n            subject_id,\n            hadm_id\n        FROM\n            first_troponin_t_per_admission\n        WHERE\n            rn = 1 -- Only consider the first measurement\n            AND first_troponin_t_value > 0.01 -- Filter for elevated first Troponin T\n    )\n-- Step 5 & 6: Retrieve all Troponin T measurements for the final cohort and calculate statistics\nSELECT\n    COUNT(le.valuenum) AS num_troponin_t_measurements,\n    ROUND(AVG(le.valuenum), 4) AS mean_troponin_t_ng_per_ml,\n    ROUND(STDDEV(le.valuenum), 4) AS stddev_troponin_t_ng_per_ml,\n    ROUND(MIN(le.valuenum), 4) AS min_troponin_t_ng_per_ml,\n    ROUND(MAX(le.valuenum), 4) AS max_troponin_t_ng_per_ml\nFROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` AS le\nINNER JOIN\n    final_patient_cohort AS fpc\n    ON le.hadm_id = fpc.hadm_id AND le.subject_id = fpc.subject_id\nWHERE\n    le.itemid = 50993 -- Ensure we are only pulling Troponin T\n    AND le.valuenum IS NOT NULL\n    AND le.valueuom = 'NG/ML'; -- Ensure values are in ng/mL and consistent;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Illegal input character \"\\321\" at [57:39]; reason: invalidQuery, location: query, message: Syntax error: Illegal input character \"\\321\" at [57:39]\n\nLocation: US\nJob ID: e1fbb451-cc83-4c08-9144-1f3605ffbc0f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

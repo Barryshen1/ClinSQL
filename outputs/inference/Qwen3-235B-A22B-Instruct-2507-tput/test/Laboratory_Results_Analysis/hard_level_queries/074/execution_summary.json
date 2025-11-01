@@ -1,0 +1,22 @@
+{
+  "query": "For a 42-year-old man with heart failure, among male inpatients aged 37\u201347 within the first 72 hours what is the maximum laboratory instability score (unique critically abnormal lab types)? Compare critical-event rate to general inpatients, and report LOS and mortality.",
+  "final_sql": "WITH patients_with_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n),\nheart_failure_patients AS (\n  SELECT DISTINCT\n    pwa.*\n  FROM patients_with_age pwa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pwa.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_code LIKE 'I50%'\n    AND di.icd_version = 10\n),\ntarget_cohort AS (\n  SELECT DISTINCT\n    hfp.subject_id,\n    hfp.hadm_id,\n    hfp.admittime,\n    hfp.dischtime,\n    hfp.hospital_expire_flag,\n    hfp.deathtime\n  FROM heart_failure_patients hfp\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays icu\n    ON hfp.hadm_id = icu.hadm_id\n  WHERE hfp.gender = 'M'\n    AND hfp.age_at_admission BETWEEN 37 AND 47\n    AND icu.intime <= hfp.admittime + INTERVAL '72' HOUR\n),\ngeneral_inpatients AS (\n  SELECT\n    pwa.subject_id,\n    pwa.hadm_id,\n    pwa.admittime,\n    pwa.dischtime,\n    pwa.hospital_expire_flag,\n    pwa.deathtime\n  FROM patients_with_age pwa\n),\ntarget_lab_scores AS (\n  SELECT\n    tc.hadm_id,\n    tc.admittime,\n    tc.dischtime,\n    tc.hospital_expire_flag,\n    tc.deathtime,\n    COUNT(DISTINCT le.itemid) AS unique_critical_labs\n  FROM target_cohort tc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.labevents le\n    ON tc.hadm_id = le.hadm_id\n    AND le.charttime <= tc.admittime + INTERVAL '72' HOUR\n    AND LOWER(le.flag) IN ('critically high', 'critically low')\n  GROUP BY tc.hadm_id, tc.admittime, tc.dischtime, tc.hospital_expire_flag, tc.deathtime\n),\ngeneral_lab_scores AS (\n  SELECT\n    gi.hadm_id,\n    gi.admittime,\n    gi.dischtime,\n    gi.hospital_expire_flag,\n    gi.deathtime,\n    COUNT(DISTINCT le.itemid) AS unique_critical_labs\n  FROM general_inpatients gi\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.labevents le\n    ON gi.hadm_id = le.hadm_id\n    AND le.charttime <= gi.admittime + INTERVAL '72' HOUR\n    AND LOWER(le.flag) IN ('critically high', 'critically low')\n  GROUP BY gi.hadm_id, gi.admittime, gi.dischtime, gi.hospital_expire_flag, gi.deathtime\n),\ntarget_stats AS (\n  SELECT\n    'Target Cohort' AS cohort,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS avg_los_days,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(unique_critical_labs) AS avg_unique_critical_labs\n  FROM target_lab_scores\n),\ngeneral_stats AS (\n  SELECT\n    'General Inpatients' AS cohort,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS avg_los_days,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(unique_critical_labs) AS avg_unique_critical_labs\n  FROM general_lab_scores\n)\nSELECT\n  cohort,\n  ROUND(avg_los_days, 2) AS avg_los_days,\n  ROUND(mortality_rate * 100, 2) AS mortality_rate_percent,\n  ROUND(avg_unique_critical_labs, 2) AS avg_unique_critical_labs\nFROM target_stats\nUNION ALL\nSELECT\n  cohort,\n  ROUND(avg_los_days, 2) AS avg_los_days,\n  ROUND(mortality_rate * 100, 2) AS mortality_rate_percent,\n  ROUND(avg_unique_critical_labs, 2) AS avg_unique_critical_labs\nFROM general_stats\nORDER BY cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [86:9]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [86:9]\n\nLocation: US\nJob ID: 483dec1f-57cf-4de9-b178-fcb2e6e352bd\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

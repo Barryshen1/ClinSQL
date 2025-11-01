@@ -1,0 +1,16 @@
+{
+  "query": "54\u2011year\u2011old male inpatient: among male inpatients aged 49\u201359 with ischemic stroke, what is the 75th percentile of the 72\u2011hour lab instability score? For the high\u2011instability stroke group report LOS, mortality, and compare critical lab rates to age\u2011matched controls.",
+  "final_sql": "WITH stroke_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    (TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 3600.0) AS los_hours,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND di.icd_code LIKE 'I63%'\n    AND di.icd_version = 9\n  GROUP BY\n    a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.hospital_expire_flag,\n    p.gender, p.anchor_age\n),\n\n-- 2) Compute 72-hour lab metrics per admission\nlabs72 AS (\n  SELECT\n    sa.hadm_id,\n    sa.subject_id,\n    sa.admittime,\n    sa.dischtime,\n    sa.hospital_expire_flag AS mortality_flag,\n    sa.los_hours,\n    sa.gender,\n    sa.anchor_age,\n    COALESCE(STDDEV_POP(le.valuenum), 0) AS instability,\n    COUNT(le.valuenum) AS total_lab_events72h,\n    SUM(CASE\n          WHEN ((le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower)\n                OR\n                (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper))\n          THEN 1 ELSE 0 END) AS critical_lab_events72h\n  FROM stroke_admissions sa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.subject_id = sa.subject_id\n   AND le.hadm_id = sa.hadm_id\n   AND le.charttime BETWEEN sa.admittime AND TIMESTAMP_ADD(sa.admittime, INTERVAL 72 HOUR)\n  GROUP BY\n    sa.hadm_id, sa.subject_id, sa.admittime, sa.dischtime,\n    sa.hospital_expire_flag, sa.los_hours, sa.gender, sa.anchor_age\n),\n\n-- 3) Compute derived metrics per admission\ncomputed AS (\n  SELECT\n    l.*,\n    CASE\n      WHEN l.total_lab_events72h > 0 THEN l.critical_lab_events72h * 1.0 / l.total_lab_events72h\n      ELSE 0\n    END AS critical_rate\n  FROM labs72 l\n),\n\n-- 4) Determine 75th percentile instability threshold from the cohort\nthreshold AS (\n  SELECT APPROX_QUANTILES(instability, 100)[OFFSET(74)] AS p75_instability\n  FROM computed\n),\n\n-- 5) Classify into high-instability vs controls and summarize\nfinal AS (\n  SELECT\n    CASE\n      WHEN instability >= t.p75_instability THEN 'High instability'\n      ELSE 'Control'\n    END AS group_name,\n    COUNT(*) AS n_admissions,\n    AVG(los_hours) AS mean_los_hours,\n    AVG(mortality_flag) AS mortality_rate,\n    AVG(critical_rate) AS mean_critical_lab_rate\n  FROM computed c\n  CROSS JOIN threshold t\n  GROUP BY group_name\n  ORDER BY group_name\n)\n\nSELECT * FROM final;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

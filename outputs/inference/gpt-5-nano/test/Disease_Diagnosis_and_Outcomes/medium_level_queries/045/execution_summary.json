@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 84-year-old woman. Among women 79\u201389 with community\u2011acquired or aspiration pneumonia, report in\u2011hospital mortality by LOS (\u22647 vs >7) and day\u20111 ICU, plus mech vent, vasopressor, and RRT prevalence.",
+  "final_sql": "WITH cohort AS (\n  /* One row per admission matching the age, sex, and pneumonia/aspiration criteria */\n  SELECT DISTINCT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.deathtime,\n    p.subject_id,\n    p.gender,\n    (CASE\n       WHEN p.anchor_age IS NOT NULL THEN\n         p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)\n     END) AS age_at_adm\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND (LOWER(dd.long_title) LIKE '%pneumonia%' OR LOWER(dd.long_title) LIKE '%aspiration%')\n    AND (CASE\n           WHEN p.anchor_age IS NOT NULL THEN\n             p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)\n         END) BETWEEN 79 AND 89\n    AND a.dischtime IS NOT NULL\n),\ncohort_with_metrics AS (\n  SELECT\n    c.*,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY) AS LOS_days,\n    CASE WHEN c.deathtime IS NOT NULL OR c.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS Mort_in_hosp\n  FROM cohort AS c\n),\nflags AS (\n  SELECT\n    cm.hadm_id,\n    cm.admittime,\n    cm.dischtime,\n    cm.hospital_expire_flag,\n    cm.deathtime,\n    cm.subject_id,\n    cm.gender,\n    cm.age_at_adm,\n    cm.LOS_days,\n    cm.Mort_in_hosp,\n    /* Day-1 ICU presence: ICU stay starting within first hospital day */\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n      WHERE i.hadm_id = cm.hadm_id\n        AND i.intime >= cm.admittime\n        AND i.intime < TIMESTAMP_ADD(cm.admittime, INTERVAL 1 DAY)\n    ) THEN 1 ELSE 0 END AS Day1_ICU,\n    /* Ventilation presence during stay */\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n        ON ce.itemid = di.itemid\n      WHERE ce.hadm_id = cm.hadm_id\n        AND ce.charttime >= cm.admittime\n        AND ce.charttime <= cm.dischtime\n        AND (LOWER(di.label) LIKE '%ventilation%' OR LOWER(di.label) LIKE '%ventilator%')\n    ) THEN 1 ELSE 0 END AS Vent_present,\n    /* Vasopressor presence during stay */\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.inputevents` ie\n      JOIN `physionet-data.mimiciv_3_1_icu.d_items` di2\n        ON ie.itemid = di2.itemid\n      WHERE ie.hadm_id = cm.hadm_id\n        AND ie.starttime <= cm.dischtime\n        AND ie.endtime >= cm.admittime\n        AND (LOWER(di2.label) LIKE '%norepinephrine%' OR LOWER(di2.label) LIKE '%epinephrine%'\n             OR LOWER(di2.label) LIKE '%dopamine%' OR LOWER(di2.label) LIKE '%phenylephrine%'\n             OR LOWER(di2.label) LIKE '%vasopressin%')\n    ) THEN 1 ELSE 0 END AS Vasopressor_present,\n    /* Renal replacement therapy / dialysis presence during stay */\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n      JOIN `physionet-data.mimiciv_3_1_icu.d_items` di3\n        ON pe.itemid = di3.itemid\n      WHERE pe.hadm_id = cm.hadm_id\n        AND (LOWER(di3.label) LIKE '%dialysis%' OR LOWER(di3.label) LIKE '%renal replacement%' OR LOWER(di3.label) LIKE '%hemofiltration%')\n    ) THEN 1 ELSE 0 END AS RRT_present\n  FROM cohort_with_metrics cm\n)\nSELECT\n  CASE WHEN LOS_days <= 7 THEN '\u22647' ELSE '>7' END AS LOS_group,\n  COUNT(*) AS n_admissions,\n  SUM(Mort_in_hosp) AS deaths,\n  ROUND(100.0 * AVG(Mort_in_hosp), 2) AS mortality_percent,\n  AVG(Day1_ICU) AS Day1_ICU_rate,\n  AVG(Vent_present) AS Vent_rate,\n  AVG(Vasopressor_present) AS Vasop_rate,\n  AVG(RRT_present) AS RRT_rate\nFROM flags\nGROUP BY LOS_group\nORDER BY LOS_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: 541af590-d28c-4354-89a9-36b01a830c5d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": ""
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

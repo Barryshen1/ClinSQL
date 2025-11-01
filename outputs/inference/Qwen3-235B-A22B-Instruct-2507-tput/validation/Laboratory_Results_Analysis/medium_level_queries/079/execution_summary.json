@@ -1,0 +1,16 @@
+{
+  "query": "For my 87\u2011year\u2011old female patient, among women 82\u201392 admitted with chest pain or AMI and initial troponin T >0.01 ng/mL, report p25, p50, p75 and min\u2013max.",
+  "final_sql": "WITH troponin_t_item AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) = 'troponin t'\n),\nfirst_troponin AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum AS troponin_t_value,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN troponin_t_item tti ON le.itemid = tti.itemid\n  WHERE le.valuenum IS NOT NULL\n),\ninitial_troponin AS (\n  SELECT subject_id, hadm_id, troponin_t_value\n  FROM first_troponin\n  WHERE rn = 1 AND troponin_t_value > 0.01\n),\nami_or_chest_pain_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (\n    LOWER(long_title) LIKE '%myocardial infarction%' OR\n    LOWER(long_title) LIKE '%acute%' AND LOWER(long_title) LIKE '%mi%' OR\n    LOWER(long_title) LIKE '%chest pain%'\n  )\n  -- Adding common ICD-10 codes explicitly for safety\n  UNION DISTINCT\n  SELECT 'I21.9' AS icd_code UNION DISTINCT\n  SELECT 'I21.02' UNION DISTINCT\n  SELECT 'I21.1' UNION DISTINCT\n  SELECT 'I21.2' UNION DISTINCT\n  SELECT 'I21.3' UNION DISTINCT\n  SELECT 'I21.4' UNION DISTINCT\n  SELECT 'I22' UNION DISTINCT\n  SELECT 'R07.9'\n),\nqualifying_admissions AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  INNER JOIN ami_or_chest_pain_codes c ON di.icd_code = c.icd_code\n),\neligible_patients AS (\n  SELECT\n    p.subject_id,\n    it.troponin_t_value\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN initial_troponin it ON p.subject_id = it.subject_id\n  INNER JOIN qualifying_admissions qa ON it.hadm_id = qa.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 82 AND 92\n)\nSELECT\n  APPROX_QUANTILES(troponin_t_value, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(troponin_t_value, 100)[OFFSET(50)] AS p50,\n  APPROX_QUANTILES(troponin_t_value, 100)[OFFSET(75)] AS p75,\n  MIN(troponin_t_value) AS min_value,\n  MAX(troponin_t_value) AS max_value\nFROM eligible_patients;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 56\u2011year\u2011old female postoperative patient. Among female surgical admissions aged 51\u201361, stratified by 24\u2011h medication complexity quartiles (unique drugs plus weighted high\u2011risk classes), report LOS, in\u2011hospital mortality (%) and 30\u2011day readmission (%) and counts by quartile for comparison.",
+  "final_sql": "WITH \nsurgical_admissions AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 51 AND 61\n  AND a.hadm_id IN (SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd`)\n),\nmed_complexity AS (\n  SELECT hadm_id, \n         COUNT(DISTINCT drug) AS unique_drugs,\n         COUNT(DISTINCT drug) + COUNT(DISTINCT pharmacy_id) AS complexity_score\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE hadm_id IN (SELECT hadm_id FROM surgical_admissions)\n  AND starttime BETWEEN (SELECT MIN(admittime) FROM `physionet-data.mimiciv_3_1_hosp.admissions` WHERE hadm_id IN (SELECT hadm_id FROM surgical_admissions)) \n  AND (SELECT MIN(admittime) FROM `physionet-data.mimiciv_3_1_hosp.admissions` WHERE hadm_id IN (SELECT hadm_id FROM surgical_admissions)) + INTERVAL 1 DAY\n  GROUP BY hadm_id\n),\nquartiles AS (\n  SELECT hadm_id, \n         NTILE(4) OVER (ORDER BY complexity_score) AS quartile\n  FROM med_complexity\n),\noutcomes AS (\n  SELECT \n    q.hadm_id,\n    q.quartile,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours,\n    a.hospital_expire_flag AS in_hospital_mortality,\n    CASE \n      WHEN LEAD(a.admittime, 1) OVER (PARTITION BY a.subject_id ORDER BY a.admittime) <= a.dischtime + INTERVAL 30 DAY THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM quartiles q\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON q.hadm_id = a.hadm_id\n)\nSELECT \n  quartile,\n  COUNT(*) AS count,\n  AVG(los_hours) AS avg_los_hours,\n  AVG(in_hospital_mortality) * 100 AS in_hospital_mortality_pct,\n  AVG(readmitted_30d) * 100 AS readmitted_30d_pct\nFROM outcomes\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

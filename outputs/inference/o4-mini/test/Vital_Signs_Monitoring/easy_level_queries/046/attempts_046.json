@@ -1,0 +1,27 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH first_spo2_per_stay AS (\n  SELECT\n    cs.stay_id,\n    -- Subquery to get the first SpO2 measurement on ICU admission\n    (\n      SELECT ce.valuenum\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n        ON ce.itemid = di.itemid\n      WHERE ce.stay_id = cs.stay_id\n        AND ce.charttime >= cs.intime\n        AND ce.valuenum IS NOT NULL\n        AND (\n          di.label ILIKE '%oxygen saturation%'\n          OR di.abbreviation ILIKE '%spO2%'\n        )\n      ORDER BY ce.charttime\n      LIMIT 1\n    ) AS first_spo2\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` cs\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON cs.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n)\n, spo2_values AS (\n  SELECT first_spo2\n  FROM first_spo2_per_stay\n  WHERE first_spo2 IS NOT NULL\n)\nSELECT\n  quantiles[OFFSET(25)] AS p25_spo2,\n  quantiles[OFFSET(75)] AS p75_spo2,\n  quantiles[OFFSET(75)] - quantiles[OFFSET(25)] AS iqr_spo2\nFROM (\n  SELECT APPROX_QUANTILES(first_spo2, 100) AS quantiles\n  FROM spo2_values\n);",
+      "success": false,
+      "error": "400 Syntax error: Expected \",\" but got identifier \"ILIKE\" at [14:20]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got identifier \"ILIKE\" at [14:20]\n\nLocation: US\nJob ID: 847528fe-0260-449a-9748-1b4e0060c7d6\n",
+      "row_count": 0
+    },
+    {
+      "attempt": 2,
+      "sql": "WITH first_spo2_per_stay AS (\n  SELECT\n    cs.stay_id,\n    (\n      SELECT ce.valuenum\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n        ON ce.itemid = di.itemid\n      WHERE ce.stay_id = cs.stay_id\n        AND ce.charttime >= cs.intime\n        AND ce.valuenum IS NOT NULL\n        AND (\n          LOWER(di.label) LIKE '%oxygen saturation%'\n          OR LOWER(di.abbreviation) LIKE '%spo2%'\n        )\n      ORDER BY ce.charttime\n      LIMIT 1\n    ) AS first_spo2\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` cs\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON cs.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n),\nspo2_values AS (\n  SELECT first_spo2\n  FROM first_spo2_per_stay\n  WHERE first_spo2 IS NOT NULL\n)\nSELECT\n  quantiles[OFFSET(25)] AS p25_spo2,\n  quantiles[OFFSET(75)] AS p75_spo2,\n  quantiles[OFFSET(75)] - quantiles[OFFSET(25)] AS iqr_spo2\nFROM (\n  SELECT APPROX_QUANTILES(first_spo2, 100) AS quantiles\n  FROM spo2_values\n);",
+      "success": false,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: a8bd2c08-1347-47bc-af65-8e3fd81ba41d\n",
+      "row_count": 0
+    },
+    {
+      "attempt": 3,
+      "sql": "WITH selected_stays AS (\n  SELECT\n    cs.stay_id,\n    cs.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` cs\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON cs.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n),\nspo2_events AS (\n  SELECT\n    ss.stay_id,\n    ce.valuenum AS spo2,\n    ROW_NUMBER() OVER (PARTITION BY ss.stay_id ORDER BY ce.charttime) AS rn\n  FROM selected_stays ss\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = ss.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime >= ss.intime\n    AND ce.valuenum IS NOT NULL\n    AND (\n      LOWER(di.label) LIKE '%oxygen saturation%'\n      OR LOWER(di.abbreviation) LIKE '%spo2%'\n    )\n),\nfirst_spo2_per_stay AS (\n  SELECT\n    stay_id,\n    spo2 AS first_spo2\n  FROM spo2_events\n  WHERE rn = 1\n),\nspo2_values AS (\n  SELECT\n    first_spo2\n  FROM first_spo2_per_stay\n  WHERE first_spo2 IS NOT NULL\n)\nSELECT\n  quantiles[OFFSET(25)] AS p25_spo2,\n  quantiles[OFFSET(75)] AS p75_spo2,\n  quantiles[OFFSET(75)] - quantiles[OFFSET(25)] AS iqr_spo2\nFROM (\n  SELECT\n    APPROX_QUANTILES(first_spo2, 100) AS quantiles\n  FROM spo2_values\n);",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 53-year-old man with upper GI bleeding. Among male ICU patients aged 48\u201358 with UGIB, stratify first 24\u2011hour diagnostic procedure counts into quintiles and report average procedures, hospital LOS (days), and in\u2011hospital mortality (%) per quintile.",
+  "final_sql": "WITH ugib_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%gastrointest%bleed%'\n    OR (icd_version = 10 AND icd_code IN ('K920', 'K921', 'K922'))\n    OR (icd_version = 9 AND icd_code IN ('5780', '5781', '5789'))\n),\nugib_admissions AS (\n  SELECT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  INNER JOIN ugib_codes u\n    ON di.icd_code = u.icd_code AND di.icd_version = u.icd_version\n  GROUP BY di.hadm_id\n),\neligible_patients AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n),\nicu_stays_with_ugib AS (\n  SELECT ie.subject_id, ie.hadm_id, ie.stay_id, ie.intime, ie.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN ugib_admissions ua ON ie.hadm_id = ua.hadm_id\n  INNER JOIN eligible_patients ep ON ie.subject_id = ep.subject_id\n),\nprocedure_counts_24h AS (\n  SELECT \n    iwu.stay_id,\n    iwu.hadm_id,\n    COUNT(pe.stay_id) AS procedure_count_24h\n  FROM icu_stays_with_ugib iwu\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON iwu.stay_id = pe.stay_id\n    AND pe.starttime >= iwu.intime\n    AND pe.starttime < DATETIME_ADD(iwu.intime, INTERVAL 24 HOUR)\n    AND pe.starttime IS NOT NULL\n  GROUP BY iwu.stay_id, iwu.hadm_id\n),\nquintiles AS (\n  SELECT \n    stay_id,\n    hadm_id,\n    procedure_count_24h,\n    NTILE(5) OVER (ORDER BY procedure_count_24h) AS quintile\n  FROM procedure_counts_24h\n)\nSELECT\n  q.quintile,\n  AVG(q.procedure_count_24h) AS avg_procedures,\n  AVG(DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0) AS avg_hospital_los_days,\n  AVG(a.hospital_expire_flag) AS in_hospital_mortality_rate\nFROM quintiles q\nINNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON q.hadm_id = a.hadm_id\nGROUP BY q.quintile\nORDER BY q.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

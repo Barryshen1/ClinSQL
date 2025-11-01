@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY value) - percentile_cont(0.25) within GROUP (ORDER BY value) AS interquartile_range FROM labevents WHERE hadm_id IN (SELECT hadm_id FROM male_admissions) AND itemid = 2703511;

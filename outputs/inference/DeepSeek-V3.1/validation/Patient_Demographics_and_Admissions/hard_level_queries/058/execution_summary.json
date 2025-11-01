@@ -1,0 +1,28 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.hadm_id = diag.hadm_id\n  WHERE \n    p.anchor_age BETWEEN 50 AND 60\n    AND p.gender = 'M'\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'EMERGENCY ROOM'\n    AND diag.seq_num = 1\n    AND (\n      -- ICD-10 codes\n      (diag.icd_version = 10 AND (\n        diag.icd_code LIKE 'K92.0%' OR  -- Hematemesis\n        diag.icd_code LIKE 'K92.1%' OR  -- Melaena\n        diag.icd_code LIKE 'K92.2%' OR  -- Gastrointestinal hemorrhage, unspecified\n        diag.icd_code LIKE 'K62.5%'     -- Hemorrhage of anus and rectum\n      ))\n      OR\n      -- ICD-9 codes\n      (diag.icd_version = 9 AND (\n        diag.icd_code LIKE '578%'       -- Gastrointestinal hemorrhage\n      ))\n    )\n    AND a.dischtime IS NOT NULL\n    AND a.deathtime IS NULL\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY a.admittime) = 1\n),\n\nreadmissions AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.los_days,\n    CASE WHEN readmit.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` readmit\n    ON c.subject_id = readmit.subject_id\n    AND readmit.admittime > c.dischtime\n    AND readmit.admittime <= DATETIME_ADD(c.dischtime, INTERVAL 30 DAY)\n    AND readmit.hadm_id != c.hadm_id\n),\n\nlos_stats AS (\n  SELECT\n    readmitted_30d,\n    PERCENTILE_DISC(los_days, 0.5) OVER(PARTITION BY readmitted_30d) AS median_los\n  FROM readmissions\n  GROUP BY readmitted_30d, los_days\n)\n\nSELECT \n  COUNT(*) AS total_patients,\n  SUM(readmitted_30d) AS readmitted_count,\n  ROUND(100.0 * SUM(readmitted_30d) / COUNT(*), 2) AS readmission_rate_percent,\n  MAX(CASE WHEN readmitted_30d = 1 THEN median_los END) AS median_los_readmitted,\n  MAX(CASE WHEN readmitted_30d = 0 THEN median_los END) AS median_los_not_readmitted,\n  ROUND(100.0 * SUM(CASE WHEN readmitted_30d = 1 AND los_days > 6 THEN 1 ELSE 0 END) / NULLIF(SUM(readmitted_30d), 0), 2) AS pct_readmitted_los_gt_6,\n  ROUND(100.0 * SUM(CASE WHEN readmitted_30d = 0 AND los_days > 6 THEN 1 ELSE 0 END) / NULLIF(COUNT(*) - SUM(readmitted_30d), 0), 2) AS pct_not_readmitted_los_gt_6\nFROM readmissions\nCROSS JOIN los_stats\nGROUP BY readmitted_30d;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Column name readmitted_30d is ambiguous at [64:7]; reason: invalidQuery, location: query, message: Column name readmitted_30d is ambiguous at [64:7]\n\nLocation: US\nJob ID: 48c728a3-4a7d-481f-beef-f39bceac2453\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [47:25]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [47:25]\n\nLocation: US\nJob ID: 129a72e9-21b9-4fb8-b07e-dbc96f43ee2e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 092173bc-6371-4822-9034-9580a3946663\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name readmitted_30d is ambiguous at [64:7]; reason: invalidQuery, location: query, message: Column name readmitted_30d is ambiguous at [64:7]\n\nLocation: US\nJob ID: 48c728a3-4a7d-481f-beef-f39bceac2453\n"
+    }
+  ]
+}

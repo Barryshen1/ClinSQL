@@ -1,0 +1,1 @@
+with analyzing mortality, median LOS, CKD and diabetes prevalence among 56-year-old male patients admitted with postoperative complications, stratified by ICU vs non-ICU, and further by LOS and Charlson comorbidity groups.;

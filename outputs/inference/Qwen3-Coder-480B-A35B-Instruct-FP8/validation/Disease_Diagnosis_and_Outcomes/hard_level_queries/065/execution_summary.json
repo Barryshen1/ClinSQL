@@ -1,0 +1,28 @@
+{
+  "query": "I have a 76\u2011year\u2011old man with DVT. Among male inpatients aged 71\u201381 with DVT and high comorbidity, what are median (IQR) risk score and 90\u2011day mortality? Compare major complication rate and survivor LOS to general inpatients; give his risk percentile.",
+  "final_sql": "with dvt_cohort as (\n  select distinct\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    p.dod,\n    a.hospital_expire_flag,\n    icu.los as icu_los,\n    date_diff(cast(a.dischtime as date), cast(a.admittime as date), day) as hosp_los,\n    case\n      when p.dod is not null and p.dod <= datetime_add(a.admittime, interval 90 day) then 1\n      else 0\n    end as died_within_90_days,\n    case\n      when p.dod is null or p.dod > a.dischtime then 1\n      else 0\n    end as survived_hosp,\n    drg.drg_severity\n  from physionet-data.mimiciv_3_1_hosp.admissions a\n  join physionet-data.mimiciv_3_1_hosp.patients p on a.subject_id = p.subject_id\n  join physionet-data.mimiciv_3_1_hosp.diagnoses_icd d on a.hadm_id = d.hadm_id\n  join physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_icd on d.icd_code = d_icd.icd_code and d.icd_version = d_icd.icd_version\n  left join physionet-data.mimiciv_3_1_hosp.drgcodes drg on a.hadm_id = drg.hadm_id\n  left join physionet-data.mimiciv_3_1_icu.icustays icu on a.hadm_id = icu.hadm_id\n  where\n    p.gender = 'M'\n    and p.anchor_age between 71 and 81\n    and lower(d_icd.long_title) like '%deep vein thrombosis%'\n    and drg.drg_severity = 4\n),\n\ncomplications as (\n  select distinct\n    d.hadm_id\n  from physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  join physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_icd\n    on d.icd_code = d_icd.icd_code and d.icd_version = d_icd.icd_version\n  where lower(d_icd.long_title) like '%hemorrhage%' or lower(d_icd.long_title) like '%bleeding%'\n),\n\ndvt_with_complications as (\n  select\n    dvt.*,\n    case when c.hadm_id is not null then 1 else 0 end as had_complication\n  from dvt_cohort dvt\n  left join complications c on dvt.hadm_id = c.hadm_id\n),\n\ngeneral_inpatients as (\n  select\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    p.dod,\n    a.hospital_expire_flag,\n    date_diff(cast(a.dischtime as date), cast(a.admittime as date), day) as hosp_los,\n    case\n      when p.dod is not null and p.dod <= datetime_add(a.admittime, interval 90 day) then 1\n      else 0\n    end as died_within_90_days,\n    case\n      when p.dod is null or p.dod > a.dischtime then 1\n      else 0\n    end as survived_hosp\n  from physionet-data.mimiciv_3_1_hosp.admissions a\n  join physionet-data.mimiciv_3_1_hosp.patients p on a.subject_id = p.subject_id\n  where p.gender = 'M' and p.anchor_age between 71 and 81\n),\n\ndvt_stats as (\n  select\n    approx_quantiles(drg_severity, 100)[offset(50)] as median_risk,\n    approx_quantiles(drg_severity, 100)[offset(25)] as q1_risk,\n    approx_quantiles(drg_severity, 100)[offset(75)] as q3_risk,\n    avg(drg_severity) as mean_risk,\n    avg(cast(died_within_90_days as float64)) as mortality_90,\n    avg(cast(had_complication as float64)) as complication_rate,\n    avg(case when survived_hosp = 1 then hosp_los else null end) as mean_survivor_los,\n    count(*) as n_dvt\n  from dvt_with_complications\n),\n\ngeneral_stats as (\n  select\n    avg(cast(died_within_90_days as float64)) as gen_mortality_90,\n    avg(case when survived_hosp = 1 then hosp_los else null end) as gen_mean_survivor_los\n  from general_inpatients\n)\n\nselect\n  ds.median_risk,\n  ds.q1_risk,\n  ds.q3_risk,\n  ds.mortality_90,\n  ds.complication_rate,\n  ds.mean_survivor_los,\n  gs.gen_mortality_90,\n  gs.gen_mean_survivor_los,\n  percentile_cont(ds.mean_risk, 0.5) over() as risk_percentile\nfrom dvt_stats ds\ncross join general_stats gs;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \"*\" at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \"*\" at [1:6]\n\nLocation: US\nJob ID: b8114c02-e058-4fd2-b281-8170ebcf0415\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \"*\" at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \"*\" at [1:6]\n\nLocation: US\nJob ID: 500a4c35-1e15-4be0-af7c-7371308b8bd0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

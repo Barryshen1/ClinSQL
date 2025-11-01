@@ -1,0 +1,16 @@
+{
+  "query": "I have a 68\u2011year\u2011old male patient. Among male inpatients 63\u201373 with septic shock and >15 diagnoses, what are mean risk score and 90\u2011day mortality? Compare major complication rate and survivor LOS to general inpatients; give percentile for that profile (68M, 16 diagnoses).",
+  "final_sql": "WITH patient_base AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    p.dod\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n),\ndiagnosis_counts AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT seq_num) AS dx_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nseptic_shock_flags AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%septic shock%'\n),\ndrg_info AS (\n  SELECT\n    hadm_id,\n    MAX(CAST(drg_severity AS INT64)) AS drg_severity\n  FROM `physionet-data.mimiciv_3_1_hosp.drgcodes`\n  GROUP BY hadm_id\n),\ngeneral_inpatients AS (\n  SELECT\n    pb.subject_id,\n    pb.hadm_id,\n    dc.dx_count,\n    di.drg_severity,\n    DATETIME_DIFF(pb.dischtime, pb.admittime, DAY) AS los_days,\n    CASE\n      WHEN (pb.deathtime IS NOT NULL AND DATETIME_DIFF(pb.deathtime, pb.admittime, DAY) <= 90)\n        OR (pb.dod IS NOT NULL AND DATETIME_DIFF(pb.dod, pb.admittime, DAY) <= 90)\n      THEN 1 ELSE 0\n    END AS mort_90d,\n    CASE\n      WHEN di.drg_severity >= 3 THEN 1 ELSE 0\n    END AS major_complication\n  FROM patient_base pb\n  LEFT JOIN diagnosis_counts dc ON pb.hadm_id = dc.hadm_id\n  LEFT JOIN drg_info di ON pb.hadm_id = di.hadm_id\n),\ncohort AS (\n  SELECT g.*\n  FROM general_inpatients g\n  JOIN `septic_shock_flags` ss ON g.hadm_id = ss.hadm_id\n  JOIN patient_base pb ON g.hadm_id = pb.hadm_id\n  WHERE pb.gender = 'M'\n    AND pb.anchor_age BETWEEN 63 AND 73\n    AND g.dx_count > 15\n)\nSELECT\n  -- Cohort stats\n  AVG(drg_severity) AS mean_risk_score,\n  AVG(mort_90d) AS mort_90d_rate,\n  -- Compare complication rate and survivor LOS to general inpatients\n  AVG(major_complication) AS major_complication_rate_cohort,\n  (SELECT AVG(major_complication) FROM general_inpatients) AS major_complication_rate_general,\n  AVG(CASE WHEN mort_90d = 0 THEN los_days END) AS survivor_los_cohort,\n  (SELECT AVG(CASE WHEN mort_90d = 0 THEN los_days END) FROM general_inpatients) AS survivor_los_general,\n  -- Percentile for profile: 68M, 16 diagnoses\n  (SELECT DISTINCT PERCENT_RANK() OVER (ORDER BY los_days)\n   FROM general_inpatients gi\n   JOIN patient_base pb ON gi.hadm_id = pb.hadm_id\n   WHERE pb.gender = 'M' AND pb.anchor_age = 68 AND dx_count = 16\n   LIMIT 1) AS los_percentile_profile\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "My 78-year-old female with multi\u2011trauma: among females 73\u201383, what are mean, min, and max ultrasounds per admission (including echocardiography) for 1\u20133 vs 4\u20137 day stays, stratified by ED vs elective?",
+  "final_sql": "WITH\n-- Get female patients aged 73-83\nfemale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 73 AND 83\n),\n\n-- Get relevant admissions with LOS calculation\nrelevant_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_type,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE\n      WHEN a.admission_type = 'EMERGENCY' THEN 'ED'\n      WHEN a.admission_type = 'ELECTIVE' THEN 'Elective'\n      ELSE 'Other'\n    END AS admission_category\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    female_patients p ON a.subject_id = p.subject_id\n  WHERE\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\n\n-- Identify ultrasound procedures (using HCPCS codes)\nultrasound_procedures AS (\n  SELECT\n    h.subject_id,\n    h.hadm_id,\n    COUNT(DISTINCT h.hcpcs_cd) AS ultrasound_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d ON h.hcpcs_cd = d.code\n  WHERE\n    -- Common ultrasound HCPCS codes (this may need adjustment based on actual data)\n    h.hcpcs_cd IN (\n      '76700', '76705', '76770', '76775', '76801', '76802', '76810', '76811',\n      '76815', '76816', '76817', '76820', '76821', '76825', '76826', '76827',\n      '76828', '76830', '76856', '76857', '76870', '76872', '76881', '76882',\n      '76937', '76942', '76945', '76946', '76970', '76975', '76977', '76981',\n      '76982', '76985', '76999', '93303', '93304', '93306', '93307', '93308',\n      '93312', '93313', '93314', '93315', '93316', '93317', '93318', '93320',\n      '93321', '93325', '93350', '93351', '93352'\n    )\n    OR\n    -- Additional filter for echocardiogram-related procedures\n    LOWER(d.short_description) LIKE '%echo%'\n    OR LOWER(d.short_description) LIKE '%ultrasound%'\n  GROUP BY\n    h.subject_id, h.hadm_id\n),\n\n-- Combine all data with ultrasound counts (including 0 counts)\nadmission_stats AS (\n  SELECT\n    r.hadm_id,\n    r.admission_category,\n    CASE\n      WHEN r.los_days BETWEEN 1 AND 3 THEN '1-3 days'\n      WHEN r.los_days BETWEEN 4 AND 7 THEN '4-7 days'\n      ELSE 'Other'\n    END AS los_category,\n    COALESCE(u.ultrasound_count, 0) AS ultrasound_count\n  FROM\n    relevant_admissions r\n  LEFT JOIN\n    ultrasound_procedures u ON r.hadm_id = u.hadm_id\n)\n\n-- Final aggregation\nSELECT\n  admission_category,\n  los_category,\n  COUNT(hadm_id) AS admission_count,\n  AVG(ultrasound_count) AS mean_ultrasounds,\n  MIN(ultrasound_count) AS min_ultrasounds,\n  MAX(ultrasound_count) AS max_ultrasounds\nFROM\n  admission_stats\nGROUP BY\n  admission_category, los_category\nORDER BY\n  admission_category, los_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

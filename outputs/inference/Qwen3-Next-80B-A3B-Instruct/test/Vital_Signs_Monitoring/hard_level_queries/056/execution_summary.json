@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating a 79\u2011year\u2011old man with hemorrhagic stroke. Among male ICU patients 74\u201384, what is the 90th\u2011percentile first\u201148\u2011h instability (hours with fever>38.5\u00b0C, SpO2<90% or RR>20), and for the top decile report n, mean ICU LOS, mortality%, and mean hours fever, hypoxemia, tachypnea?",
+  "final_sql": "WITH target_patients AS (\n  SELECT \n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    p.anchor_age,\n    p.gender,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON i.subject_id = p.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON i.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 74 AND 84\n),\n\nvital_events AS (\n  SELECT \n    ce.stay_id,\n    DATETIME_TRUNC(ce.charttime, HOUR) AS hour_bin,\n    CASE \n      WHEN di.label = 'Temperature' AND ce.valuenum > 38.5 THEN 1 \n      ELSE 0 \n    END AS has_fever,\n    CASE \n      WHEN di.label = 'SpO2' AND ce.valuenum < 90 THEN 1 \n      ELSE 0 \n    END AS has_hypoxemia,\n    CASE \n      WHEN di.label = 'Respiratory Rate' AND ce.valuenum > 20 THEN 1 \n      ELSE 0 \n    END AS has_tachypnea\n  FROM physionet-data.mimiciv_3_1_icu.chartevents ce\n  INNER JOIN physionet-data.mimiciv_3_1_icu.d_items di\n    ON ce.itemid = di.itemid\n  INNER JOIN target_patients tp\n    ON ce.stay_id = tp.stay_id\n  WHERE ce.charttime >= tp.intime\n    AND ce.charttime < DATETIME_ADD(tp.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n    AND di.label IN ('Temperature', 'SpO2', 'Respiratory Rate')\n),\n\ninstability_hours AS (\n  SELECT \n    stay_id,\n    COUNT(DISTINCT CASE WHEN has_fever = 1 OR has_hypoxemia = 1 OR has_tachypnea = 1 THEN hour_bin END) AS total_instability_hours,\n    COUNT(DISTINCT CASE WHEN has_fever = 1 THEN hour_bin END) AS fever_hours,\n    COUNT(DISTINCT CASE WHEN has_hypoxemia = 1 THEN hour_bin END) AS hypoxemia_hours,\n    COUNT(DISTINCT CASE WHEN has_tachypnea = 1 THEN hour_bin END) AS tachypnea_hours\n  FROM vital_events\n  GROUP BY stay_id\n),\n\npercentile_90 AS (\n  SELECT PERCENTILE_CONT(total_instability_hours, 0.9) OVER () AS p90_instability\n  FROM instability_hours\n  LIMIT 1\n),\n\ntop_decile AS (\n  SELECT \n    ih.*,\n    tp.los,\n    tp.hospital_expire_flag\n  FROM instability_hours ih\n  INNER JOIN target_patients tp ON ih.stay_id = tp.stay_id\n  CROSS JOIN percentile_90 p90\n  WHERE ih.total_instability_hours >= p90.p90_instability\n)\n\nSELECT \n  COUNT(*) AS n,\n  AVG(los) AS mean_icu_los,\n  AVG(hospital_expire_flag) * 100 AS mortality_percent,\n  AVG(fever_hours) AS mean_hours_fever,\n  AVG(hypoxemia_hours) AS mean_hours_hypoxemia,\n  AVG(tachypnea_hours) AS mean_hours_tachypnea\nFROM top_decile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

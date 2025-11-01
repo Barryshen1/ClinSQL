@@ -1,0 +1,23 @@
+{
+  "query": "Male patient, 94. Among male ICU patients aged 89\u201399, what is the 95th\u2011percentile 48\u2011hour instability score for ischemic stroke? For the top instability quartile, compare ischemic stroke versus general ICU: N, mean instability, mean abnormal episodes, mean ICU LOS (hrs), and mortality.",
+  "final_sql": "WITH male_89_99 AS (\n  SELECT \n    p.subject_id, \n    i.hadm_id, \n    i.stay_id, \n    i.intime,  -- Added missing intime column\n    i.los, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON p.subject_id = i.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON i.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 89 AND 99\n),\n\nabnormal_events AS (\n  SELECT \n    c.stay_id, \n    COUNT(*) AS abnormal_count\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` d \n    ON c.itemid = d.itemid\n  JOIN male_89_99 m \n    ON c.stay_id = m.stay_id\n  WHERE c.valuenum IS NOT NULL\n    AND (c.valuenum < d.lownormalvalue OR c.valuenum > d.highnormalvalue)\n    AND c.charttime BETWEEN m.intime AND DATETIME_ADD(m.intime, INTERVAL 48 HOUR)\n  GROUP BY c.stay_id\n),\n\ninstability_scores AS (\n  SELECT \n    m.subject_id, \n    m.hadm_id, \n    m.stay_id, \n    m.los, \n    m.hospital_expire_flag,\n    COALESCE(a.abnormal_count, 0) AS instability_score\n  FROM male_89_99 m\n  LEFT JOIN abnormal_events a \n    ON m.stay_id = a.stay_id\n),\n\nischemic_stroke AS (\n  SELECT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE (d.icd_version = 9 AND (d.icd_code LIKE '433%' OR d.icd_code LIKE '434%' OR d.icd_code LIKE '436%'))\n     OR (d.icd_version = 10 AND d.icd_code LIKE 'I63%')\n),\n\nstroke_patients AS (\n  SELECT \n    i.subject_id, \n    i.hadm_id, \n    i.stay_id, \n    i.los, \n    i.hospital_expire_flag, \n    i.instability_score,\n    CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS is_stroke\n  FROM instability_scores i\n  LEFT JOIN ischemic_stroke s \n    ON i.hadm_id = s.hadm_id\n),\n\nninety_fifth_percentile AS (\n  SELECT \n    PERCENTILE_CONT(instability_score, 0.95) WITHIN GROUP (ORDER BY instability_score) AS ninety_fifth_percentile\n  FROM stroke_patients\n  WHERE is_stroke = 1\n),\n\ntop_quartile AS (\n  SELECT *\n  FROM stroke_patients\n  WHERE instability_score >= (\n    SELECT PERCENTILE_CONT(instability_score, 0.75) WITHIN GROUP (ORDER BY instability_score) \n    FROM stroke_patients\n  )\n)\n\nSELECT ninety_fifth_percentile FROM ninety_fifth_percentile\n\nUNION ALL\n\nSELECT \n  'ischemic_stroke' AS group_type,\n  COUNT(*) AS N,\n  AVG(instability_score) AS mean_instability,\n  AVG(instability_score) AS mean_abnormal_episodes,\n  AVG(los * 24) AS mean_icu_los_hours,\n  AVG(hospital_expire_flag) AS mortality\nFROM top_quartile\nWHERE is_stroke = 1\n\nUNION ALL\n\nSELECT \n  'non_stroke' AS group_type,\n  COUNT(*) AS N,\n  AVG(instability_score) AS mean_instability,\n  AVG(instability_score) AS mean_abnormal_episodes,\n  AVG(los * 24) AS mean_icu_los_hours,\n  AVG(hospital_expire_flag) AS mortality\nFROM top_quartile\nWHERE is_stroke = 0;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [69:46]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [69:46]\n\nLocation: US\nJob ID: ea8acb79-2246-4176-a795-fe3e21607485\n",
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [68:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [68:27]\n\nLocation: US\nJob ID: 5ac511d8-cad8-439d-af06-f3696a067429\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [69:46]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [69:46]\n\nLocation: US\nJob ID: ea8acb79-2246-4176-a795-fe3e21607485\n"
+    }
+  ]
+}

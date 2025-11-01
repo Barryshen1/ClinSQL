@@ -1,0 +1,22 @@
+{
+  "query": "I have a 46-year-old female ICU patient. Among female ICU patients 41\u201351, how many had per\u2011stay average RR <12, 12\u201320, 21\u201329, \u226530 in first 48h, and what were stroke rates?",
+  "final_sql": "WITH \n  -- Extract relevant patient data\n  patient_data AS (\n    SELECT \n      p.subject_id,\n      p.gender,\n      p.anchor_age,\n      a.hadm_id,\n      a.admittime\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n  ),\n\n  -- Extract ICU stay data\n  icu_stay_data AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      outtime\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays`\n  ),\n\n  -- Extract RR data\n  rr_data AS (\n    SELECT \n      ce.subject_id,\n      ce.hadm_id,\n      ce.stay_id,\n      ce.charttime,\n      ce.valuenum AS rr_value\n    FROM \n      `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.d_items` di\n      ON ce.itemid = di.itemid\n    WHERE \n      di.label = 'Respiratory Rate'\n  ),\n\n  -- Calculate per-stay average RR\n  avg_rr_data AS (\n    SELECT \n      rr.subject_id,\n      rr.hadm_id,\n      rr.stay_id,\n      AVG(rr.rr_value) AS avg_rr\n    FROM \n      rr_data rr\n    JOIN \n      icu_stay_data isd\n      ON rr.hadm_id = isd.hadm_id AND rr.stay_id = isd.stay_id\n    WHERE \n      rr.charttime BETWEEN isd.intime AND TIMESTAMP_ADD(isd.intime, INTERVAL 48 HOUR)\n    GROUP BY \n      rr.subject_id,\n      rr.hadm_id,\n      rr.stay_id\n  ),\n\n  -- Categorize average RR\n  categorized_rr AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      CASE \n        WHEN avg_rr < 12 THEN '<12'\n        WHEN avg_rr BETWEEN 12 AND 20 THEN '12-20'\n        WHEN avg_rr BETWEEN 21 AND 29 THEN '21-29'\n        ELSE '>=30'\n      END AS avg_rr_category\n    FROM \n      avg_rr_data\n  ),\n\n  -- Extract stroke data\n  stroke_data AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      icd_code\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      icd_code IN (\n        SELECT \n          icd_code \n        FROM \n          `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` \n        WHERE \n          long_title LIKE '%Stroke%' \n          OR long_title LIKE '%Cerebrovascular%'\n      )\n  ),\n\n  -- Join and group data\n  final_data AS (\n    SELECT \n      p.anchor_age,\n      p.gender,\n      cr.avg_rr_category,\n      COUNT(DISTINCT cr.stay_id) AS num_patients,\n      SUM(CASE WHEN sd.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS num_stroke\n    FROM \n      patient_data p\n    JOIN \n      categorized_rr cr\n      ON p.subject_id = cr.subject_id AND p.hadm_id = cr.hadm_id\n    LEFT JOIN \n      stroke_data sd\n      ON p.subject_id = sd.subject_id AND p.hadm_id = sd.hadm_id\n    WHERE \n      p.gender = 'F'\n      AND p.anchor_age BETWEEN 41 AND 51\n    GROUP BY \n      p.anchor_age,\n      p.gender,\n      cr.avg_rr_category\n  )\n\nSELECT \n  anchor_age,\n  gender,\n  avg_rr_category,\n  num_patients,\n  num_stroke\nFROM \n  final_data\nORDER BY \n  anchor_age,\n  gender,\n  avg_rr_category;",
+  "execution_success": true,
+  "row_count": 43,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword JOIN at [45:5]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword JOIN at [45:5]\n\nLocation: US\nJob ID: 44926515-5311-4d14-b384-d3b09d18611d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 43,
+      "error": null
+    }
+  ]
+}

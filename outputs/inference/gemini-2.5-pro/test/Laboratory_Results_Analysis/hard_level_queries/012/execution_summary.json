@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 49-year-old man with AMI. In male inpatients aged 44\u201354 with AMI, what is the 75th percentile of the first 72\u2011hour lab instability score? Also compare critical lab frequency to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "with Acute Myocardial Infarction (AMI).\n-- It finds the 75th percentile of this score for the AMI cohort and compares the cohort's\n-- average number of critical labs, length of stay (LOS), and mortality rate\n-- to the general inpatient population.\n\nWITH\n-- Step 1: Find all ICD codes related to Acute Myocardial Infarction (AMI).\nami_icd AS (\n  SELECT\n    icd_code,\n    icd_version\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE\n    REGEXP_CONTAINS(LOWER(long_title), 'acute myocardial infarction')\n),\n\n-- Step 2: Identify the hospital admissions (hadm_id) for the specific AMI cohort.\n-- Cohort criteria: Male, aged 44-54 at admission, with an AMI diagnosis.\nami_cohort_hadms AS (\n  SELECT DISTINCT\n    dx.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n  INNER JOIN\n    ami_icd\n    ON dx.icd_code = ami_icd.icd_code AND dx.icd_version = ami_icd.icd_version\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON dx.hadm_id = adm.hadm_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON dx.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'M'\n    AND (pat.anchor_age + EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) BETWEEN 44 AND 54\n),\n\n-- Step 3: Categorize all hospital admissions into one of two groups for comparison using an efficient LEFT JOIN.\nall_cohorts AS (\n  SELECT\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    CASE\n      WHEN ami_cohort.hadm_id IS NOT NULL\n      THEN 'AMI (Male, 44-54)'\n      ELSE 'General Inpatient'\n    END AS cohort_group\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  LEFT JOIN\n    ami_cohort_hadms AS ami_cohort\n    ON adm.hadm_id = ami_cohort.hadm_id\n),\n\n-- Step 4: Calculate the \"lab instability score\" for each admission.\n-- The score is the count of abnormal labs in the first 72 hours.\n-- Carry forward columns needed for later calculations to avoid a redundant join.\nlab_instability_scores AS (\n  SELECT\n    co.hadm_id,\n    co.cohort_group,\n    co.admittime,\n    co.dischtime,\n    co.hospital_expire_flag,\n    COUNT(le.labevent_id) AS instability_score\n  FROM\n    all_cohorts AS co\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON co.hadm_id = le.hadm_id\n    AND le.flag = 'abnormal'\n    AND le.charttime BETWEEN co.admittime AND TIMESTAMP_ADD(co.admittime, INTERVAL 72 HOUR)\n  GROUP BY\n    co.hadm_id,\n    co.cohort_group,\n    co.admittime,\n    co.dischtime,\n    co.hospital_expire_flag\n),\n\n-- Step 5: Calculate the 75th percentile of the instability score for the AMI cohort.\nami_75th_percentile AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(75)] AS p75_instability_score\n  FROM\n    lab_instability_scores\n  WHERE\n    cohort_group = 'AMI (Male, 44-54)'\n),\n\n-- Step 6: Calculate summary statistics (patient count, avg lab freq, avg LOS, mortality) for each cohort.\ncohort_summary AS (\n  SELECT\n    lis.cohort_group,\n    COUNT(DISTINCT lis.hadm_id) AS num_admissions,\n    AVG(lis.instability_score) AS avg_critical_lab_count_72h,\n    AVG(TIMESTAMP_DIFF(lis.dischtime, lis.admittime, HOUR) / 24.0) AS avg_los_days,\n    AVG(CAST(lis.hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM\n    lab_instability_scores AS lis\n  GROUP BY\n    lis.cohort_group\n)\n\n-- Final Step: Combine the 75th percentile result with the cohort comparison table.\nSELECT\n  p75.p75_instability_score AS p75_ami_lab_instability_score,\n  cs.cohort_group,\n  cs.num_admissions,\n  cs.avg_critical_lab_count_72h,\n  cs.avg_los_days,\n  cs.mortality_rate\nFROM\n  cohort_summary AS cs\nCROSS JOIN\n  ami_75th_percentile AS p75\nORDER BY\n  -- Show the AMI cohort first for easy comparison\n  CASE WHEN cs.cohort_group = 'AMI (Male, 44-54)' THEN 1 ELSE 2 END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected keyword AS but got identifier \"Myocardial\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"Myocardial\" at [1:12]\n\nLocation: US\nJob ID: c83b70a6-e911-4aab-bc0d-f1132a90a844\n",
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: abc20783-0edc-4e85-8b21-e023b3a10bd1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: d4ce654a-f467-40f3-a897-8679c2aabedc\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"Myocardial\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"Myocardial\" at [1:12]\n\nLocation: US\nJob ID: c83b70a6-e911-4aab-bc0d-f1132a90a844\n"
+    }
+  ]
+}

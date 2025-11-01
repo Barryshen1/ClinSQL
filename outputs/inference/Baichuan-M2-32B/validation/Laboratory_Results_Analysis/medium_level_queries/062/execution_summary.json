@@ -1,0 +1,29 @@
+{
+  "query": "I have a 51-year-old female with suspected ACS. Among female ACS admissions age 46\u201356, what are counts, percentages, and mean hospital length of stay for first hs\u2011TnT: Normal, Borderline, Myocardial Injury?",
+  "final_sql": "WITH \n  hstnt_itemids AS (\n    SELECT itemid\n    FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n    WHERE label LIKE '%hs-TnT%' OR label LIKE '%high-sensitivity troponin t%'\n  ),\n  eligible_patients AS (\n    SELECT \n      p.subject_id,\n      a.hadm_id,\n      a.admittime,\n      a.dischtime,\n      EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n      AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 46 AND 56\n      AND a.dischtime IS NOT NULL\n  ),\n  acs_admissions AS (\n    SELECT DISTINCT\n      d.subject_id,\n      d.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE d.icd_code IN (\n      'I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4', 'I21.9',\n      'I24.0', 'I24.1', 'I24.2', 'I24.3', 'I24.4', 'I24.8', 'I24.9'\n    )\n      AND d.icd_version = 10\n  ),\n  first_hstnt AS (\n    SELECT \n      le.subject_id,\n      le.hadm_id,\n      le.valuenum,\n      le.ref_range_lower,\n      le.ref_range_upper,\n      CASE \n        WHEN le.valuenum BETWEEN le.ref_range_lower AND le.ref_range_upper THEN 'Normal'\n        WHEN le.valuenum > le.ref_range_upper AND le.valuenum <= (le.ref_range_upper * 1.5) THEN 'Borderline'\n        WHEN le.valuenum > (le.ref_range_upper * 1.5) THEN 'Myocardial Injury'\n        ELSE NULL\n      END AS category\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    WHERE le.itemid IN (SELECT itemid FROM hstnt_itemids)\n      AND le.valuenum IS NOT NULL\n      AND le.ref_range_lower IS NOT NULL\n      AND le.ref_range_upper IS NOT NULL\n      AND le.hadm_id IN (SELECT hadm_id FROM acs_admissions) -- Filter early for efficiency\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) = 1\n  ),\n  combined AS (\n    SELECT \n      ep.subject_id,\n      ep.hadm_id,\n      (TIMESTAMP_DIFF(ep.dischtime, ep.admittime, SECOND) / 86400.0) AS los_days,\n      fhstnt.category\n    FROM eligible_patients ep\n    INNER JOIN acs_admissions aa \n      ON ep.subject_id = aa.subject_id AND ep.hadm_id = aa.hadm_id\n    INNER JOIN first_hstnt fhstnt \n      ON ep.hadm_id = fhstnt.hadm_id\n  )\nSELECT \n  category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM combined), 2) AS percentage,\n  ROUND(AVG(los_days), 2) AS mean_los_days\nFROM combined\nGROUP BY category\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"ACS\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"ACS\" at [1:16]\n\nLocation: US\nJob ID: 84e7a76e-4209-4018-bf69-038b0bf9e3d3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"ACS\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"ACS\" at [1:16]\n\nLocation: US\nJob ID: 0a377c78-9cd9-4a78-b51e-cddbc6bfb079\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

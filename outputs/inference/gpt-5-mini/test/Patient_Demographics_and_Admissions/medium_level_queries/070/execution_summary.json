@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 62-year-old man. Among male ED admissions aged 57\u201367, report mean, median, p75 and p90 LOS for discharged home vs hospice vs in-hospital death, and percentile rank for 10 days.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    -- LOS in days, as a floating-point number (fractional days)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days,\n    a.hospital_expire_flag,\n    COALESCE(a.discharge_location, '') AS discharge_location\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  USING(subject_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 57 AND 67\n    -- require complete times and a positive LOS\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.dischtime > a.admittime\n    -- identify ED admissions (primary: edregtime populated; also capture common emergency labels)\n    AND (\n      a.edregtime IS NOT NULL\n      OR LOWER(a.admission_type) = 'emergency'\n      OR LOWER(COALESCE(a.admission_location, '')) LIKE '%emerg%'\n    )\n    -- restrict to admissions that end in one of the three outcomes of interest\n    AND (\n      a.hospital_expire_flag = 1\n      OR LOWER(COALESCE(a.discharge_location, '')) LIKE '%hospice%'\n      OR LOWER(COALESCE(a.discharge_location, '')) LIKE '%home%'\n    )\n),\n\nlabeled AS (\n  SELECT\n    *,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN LOWER(discharge_location) LIKE '%hospice%' THEN 'Hospice'\n      WHEN LOWER(discharge_location) LIKE '%home%' THEN 'Discharged home'\n      ELSE 'Other'\n    END AS outcome\n  FROM cohort\n)\n\nSELECT\n  outcome,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  -- approximate quantiles (APPROX_QUANTILES returns an array of 101 values for 0..100)\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS median_los_days,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(75)], 2) AS p75_los_days,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(90)], 2) AS p90_los_days,\n  -- empirical percentile rank of 10 days (percentage of admissions with LOS <= 10 days)\n  ROUND(100.0 * SUM(CASE WHEN los_days <= 10 THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_rank_of_10_days\nFROM\n  labeled\nWHERE\n  outcome IN ('Discharged home', 'Hospice', 'In-hospital death')\nGROUP BY\n  outcome\nORDER BY\n  CASE outcome\n    WHEN 'Discharged home' THEN 1\n    WHEN 'Hospice' THEN 2\n    WHEN 'In-hospital death' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

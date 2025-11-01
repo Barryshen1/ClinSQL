@@ -1,0 +1,22 @@
+{
+  "query": "For my 73\u2011year\u2011old male: among males 68\u201378 with diabetes plus acute HF, give insulin vs oral agent initiation rates (%) in first 24h vs final 24h and absolute percentage\u2011point differences.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE\n    LOWER(p.gender) = 'm'\n    AND p.anchor_age BETWEEN 68 AND 78\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  HAVING\n    SUM(CASE WHEN LOWER(dd.long_title) LIKE '%diabetes%' THEN 1 ELSE 0 END) > 0\n    AND SUM(CASE WHEN LOWER(dd.long_title) LIKE '%heart failure%' THEN 1 ELSE 0 END) > 0\n),\n\n-- For each admission, find earliest prescription starttime for insulin and for oral agents\nmed_times AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    MIN(CASE WHEN LOWER(pr.drug) LIKE '%insulin%' THEN pr.starttime END) AS insulin_first_start,\n    MIN(\n      CASE\n        WHEN NOT LOWER(pr.drug) LIKE '%insulin%'\n         AND REGEXP_CONTAINS(\n           LOWER(pr.drug),\n           '(metformin|glipizide|glyburide|glimepiride|sitagliptin|saxagliptin|linagliptin|alogliptin|canagliflozin|dapagliflozin|empagliflozin|pioglitazone|rosiglitazone|repaglinide|nateglinide|acarbose|miglitol|voglibose|tolbutamide|chlorpropamide)'\n         )\n        THEN pr.starttime\n      END\n    ) AS oral_first_start\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON pr.hadm_id = c.hadm_id\n    -- only consider prescriptions with a timestamp\n    AND pr.starttime IS NOT NULL\n  GROUP BY c.subject_id, c.hadm_id, c.admittime, c.dischtime\n)\n\nSELECT\n  med_class,\n  total_admissions,\n  n_first24,\n  ROUND(100.0 * SAFE_DIVIDE(n_first24, total_admissions), 2) AS pct_first24,\n  n_final24,\n  ROUND(100.0 * SAFE_DIVIDE(n_final24, total_admissions), 2) AS pct_final24,\n  ROUND(ABS(100.0 * SAFE_DIVIDE(n_first24, total_admissions) - 100.0 * SAFE_DIVIDE(n_final24, total_admissions)), 2) AS abs_pct_point_diff\nFROM (\n  SELECT\n    'insulin' AS med_class,\n    COUNT(*) AS total_admissions,\n    SUM(CASE\n          WHEN insulin_first_start IS NOT NULL\n           AND insulin_first_start BETWEEN admittime AND TIMESTAMP_ADD(admittime, INTERVAL 24 HOUR)\n          THEN 1 ELSE 0 END) AS n_first24,\n    SUM(CASE\n          WHEN insulin_first_start IS NOT NULL\n           AND insulin_first_start BETWEEN TIMESTAMP_SUB(dischtime, INTERVAL 24 HOUR) AND dischtime\n          THEN 1 ELSE 0 END) AS n_final24\n  FROM med_times\n\n  UNION ALL\n\n  SELECT\n    'oral' AS med_class,\n    COUNT(*) AS total_admissions,\n    SUM(CASE\n          WHEN oral_first_start IS NOT NULL\n           AND oral_first_start BETWEEN admittime AND TIMESTAMP_ADD(admittime, INTERVAL 24 HOUR)\n          THEN 1 ELSE 0 END) AS n_first24,\n    SUM(CASE\n          WHEN oral_first_start IS NOT NULL\n           AND oral_first_start BETWEEN TIMESTAMP_SUB(dischtime, INTERVAL 24 HOUR) AND dischtime\n          THEN 1 ELSE 0 END) AS n_final24\n  FROM med_times\n)\nORDER BY med_class;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diabetes\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diabetes\" at [1:11]\n\nLocation: US\nJob ID: b4d69c3d-af42-4935-8a0f-085734b31aa6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "query": "I\u2019m evaluating an 82\u2011year\u2011old man. Among male ICU patients aged 77\u201387 admitted with asthma exacerbation, stratify first 72\u2011hour ICU procedure burden into quartiles and report each quartile\u2019s mean procedure count, mean hospital LOS (days), and hospital mortality.",
+  "final_sql": "WITH eligible_patients AS (\n    SELECT\n        subject_id,\n        anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE gender = 'M'\n        AND anchor_age BETWEEN 77 AND 87\n),\nasthma_admissions AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        ON a.subject_id = d.subject_id\n        AND a.hadm_id = d.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n        AND d.icd_version = dd.icd_version\n    WHERE dd.long_title LIKE '%asthma%'\n        AND (dd.long_title LIKE '%exacerbation%' OR dd.long_title LIKE '%status asthmaticus%')\n        AND a.subject_id IN (SELECT subject_id FROM eligible_patients)\n    GROUP BY a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n),\nicu_stays AS (\n    SELECT\n        i.subject_id,\n        i.hadm_id,\n        i.stay_id,\n        i.intime,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    INNER JOIN asthma_admissions a\n        ON i.subject_id = a.subject_id\n        AND i.hadm_id = a.hadm_id\n),\nfirst72h_procedures AS (\n    SELECT\n        s.subject_id,\n        s.hadm_id,\n        s.stay_id,\n        COUNT(*) AS procedure_count\n    FROM icu_stays s\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n        ON s.subject_id = p.subject_id\n        AND s.hadm_id = p.hadm_id\n        AND s.stay_id = p.stay_id\n        AND p.starttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 72 HOUR)\n    GROUP BY s.subject_id, s.hadm_id, s.stay_id\n),\ncohort AS (\n    SELECT\n        s.subject_id,\n        s.hadm_id,\n        s.stay_id,\n        fp.procedure_count,\n        DATE_DIFF(s.dischtime, s.admittime, DAY) AS los_days,\n        s.hospital_expire_flag\n    FROM icu_stays s\n    INNER JOIN first72h_procedures fp\n        ON s.subject_id = fp.subject_id\n        AND s.hadm_id = fp.hadm_id\n        AND s.stay_id = fp.stay_id\n    WHERE s.dischtime IS NOT NULL\n),\nquartiles AS (\n    SELECT\n        *,\n        NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n    FROM cohort\n)\nSELECT\n    quartile,\n    AVG(procedure_count) AS mean_procedure_count,\n    AVG(los_days) AS mean_los_days,\n    AVG(hospital_expire_flag) AS hospital_mortality\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 58\u2011year\u2011old woman. Among female inpatients aged 53\u201363 with pulmonary embolism, what is the 75th percentile of the 72\u2011hour lab instability score? For patients \u2265that threshold, report mortality (%), mean LOS (days), and compare critical\u2011lab rates to inpatients.",
+  "final_sql": "WITH\n-- Define pulmonary embolism ICD codes (ICD-10: I26.*)\npe_icd_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code LIKE 'I26%'\n),\n\n-- Get female patients aged 53-63 with pulmonary embolism\ntarget_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN pe_icd_codes pe ON d.icd_code = pe.icd_code\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n),\n\n-- Get relevant lab tests within 72 hours of admission\nrelevant_labs AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.itemid,\n    l.charttime,\n    l.valuenum,\n    l.ref_range_lower,\n    l.ref_range_upper\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN target_patients t ON l.subject_id = t.subject_id AND l.hadm_id = t.hadm_id\n  WHERE\n    l.charttime BETWEEN t.admittime AND TIMESTAMP_ADD(t.admittime, INTERVAL 72 HOUR)\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n    AND l.valuenum IS NOT NULL\n),\n\n-- Calculate lab instability score for each patient\nlab_scores AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    SUM(\n      CASE\n        WHEN valuenum < ref_range_lower THEN POWER((ref_range_lower - valuenum) / NULLIF(ref_range_lower, 0), 2)\n        WHEN valuenum > ref_range_upper THEN POWER((valuenum - ref_range_upper) / NULLIF(ref_range_upper, 0), 2)\n        ELSE 0\n      END\n    ) AS instability_score\n  FROM relevant_labs\n  GROUP BY subject_id, hadm_id\n),\n\n-- Calculate 75th percentile of instability scores\nscore_threshold AS (\n  SELECT PERCENTILE_CONT(instability_score, 0.75) OVER() AS threshold\n  FROM lab_scores\n  LIMIT 1\n),\n\n-- Get patients with scores \u226575th percentile\nhigh_risk_patients AS (\n  SELECT\n    t.subject_id,\n    t.hadm_id,\n    t.los_days,\n    t.hospital_expire_flag,\n    s.instability_score\n  FROM target_patients t\n  JOIN lab_scores s ON t.subject_id = s.subject_id AND t.hadm_id = s.hadm_id\n  CROSS JOIN score_threshold st\n  WHERE s.instability_score >= st.threshold\n),\n\n-- Calculate overall inpatient metrics for comparison\ngeneral_inpatients AS (\n  SELECT\n    COUNT(*) AS total_patients,\n    SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS total_deaths,\n    AVG(los_days) AS avg_los\n  FROM target_patients\n)\n\n-- Final results\nSELECT\n  -- High-risk patient metrics\n  COUNT(*) AS high_risk_patients,\n  ROUND(100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS mortality_percentage,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n\n  -- Comparison to general inpatients\n  ROUND(100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) /\n    (SELECT total_deaths FROM general_inpatients) * (SELECT total_patients FROM general_inpatients), 2) AS mortality_ratio,\n  ROUND(AVG(los_days) / (SELECT avg_los FROM general_inpatients), 2) AS los_ratio\n\nFROM high_risk_patients;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside d at [35:7]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside d at [35:7]\n\nLocation: US\nJob ID: 488cba91-dd9b-4bfd-9843-1d9c127dd56e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

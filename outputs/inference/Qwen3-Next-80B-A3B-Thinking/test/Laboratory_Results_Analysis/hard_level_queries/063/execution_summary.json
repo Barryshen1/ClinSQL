@@ -1,0 +1,29 @@
+{
+  "query": "I'm evaluating a 58\u2011year\u2011old woman. Among female inpatients aged 53\u201363 with pulmonary embolism, what is the 75th percentile of the 72\u2011hour lab instability score? For patients \u2265that threshold, report mortality (%), mean LOS (days), and compare critical\u2011lab rates to inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di \n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND di.long_title LIKE '%pulmonary embolism%'\n),\n\nlab_abnormal AS (\n  SELECT \n    l.hadm_id, \n    COUNT(*) AS abnormal_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` di \n    ON l.itemid = di.itemid\n  JOIN cohort c \n    ON l.hadm_id = c.hadm_id\n  WHERE \n    l.ref_range_lower IS NOT NULL \n    AND l.ref_range_upper IS NOT NULL\n    AND l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n    AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n  GROUP BY l.hadm_id\n),\n\npercentile_75 AS (\n  SELECT APPROX_QUANTILES(abnormal_count, 100)[OFFSET(75)] AS p75\n  FROM lab_abnormal\n),\n\nhigh_score AS (\n  SELECT \n    la.hadm_id, \n    la.abnormal_count, \n    c.hospital_expire_flag, \n    c.dischtime, \n    c.admittime\n  FROM lab_abnormal la\n  JOIN cohort c \n    ON la.hadm_id = c.hadm_id\n  WHERE la.abnormal_count >= (SELECT p75 FROM percentile_75)\n)\n\nSELECT\n  AVG(CAST(h.hospital_expire_flag AS FLOAT64)) * 100 AS mortality_rate,\n  AVG(DATETIME_DIFF(h.dischtime, h.admittime, DAY)) AS mean_los,\n  AVG(h.abnormal_count) AS high_score_avg_abnormal,\n  (SELECT AVG(abnormal_count) FROM lab_abnormal) AS entire_cohort_avg_abnormal\nFROM high_score h;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside di at [30:8]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside di at [30:8]\n\nLocation: US\nJob ID: 1e78fbbf-d152-4ac5-b706-0284ab417f39\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references e.avg_abnormal which is neither grouped nor aggregated at [64:3]; reason: invalidQuery, location: query, message: SELECT list expression references e.avg_abnormal which is neither grouped nor aggregated at [64:3]\n\nLocation: US\nJob ID: e344523f-7a97-4644-b9f1-1b4392c4afd3\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old man admitted from a SNF with principal UTI. Among male Medicare patients 68\u201378 admitted from SNF with principal UTI, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of stays >6 days?",
+  "final_sql": "WITH index_admissions AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los,\n    CASE WHEN DATE_DIFF(adm.dischtime, adm.admittime, DAY) > 6 THEN 1 ELSE 0 END AS los_gt_6\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON adm.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag \n    ON adm.hadm_id = diag.hadm_id \n    AND adm.subject_id = diag.subject_id\n  WHERE \n    p.anchor_age BETWEEN 68 AND 78\n    AND p.gender = 'M'\n    AND adm.admission_location LIKE '%SNF%'  -- Changed to pattern match\n    AND adm.insurance = 'Medicare'\n    AND diag.seq_num = 1\n    AND (\n      (diag.icd_version = 10 AND diag.icd_code = 'N39.0') \n      OR \n      (diag.icd_version = 9 AND diag.icd_code = '599.0')\n    )\n    AND adm.hospital_expire_flag = 0  -- exclude died in hospital\n),\nreadmission_flag AS (\n  SELECT \n    ia.*,\n    CASE WHEN EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` readm\n      WHERE readm.subject_id = ia.subject_id\n        AND readm.hadm_id != ia.hadm_id\n        AND readm.admittime BETWEEN ia.dischtime AND DATETIME_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmitted_30d\n  FROM index_admissions ia\n)\nSELECT \n  COUNT(*) AS total_index_admissions,\n  AVG(readmitted_30d) * 100 AS readmission_rate_percent,\n  -- Median LOS for readmitted and non-readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los END, 2)[OFFSET(1)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los END, 2)[OFFSET(1)] AS median_los_non_readmitted,\n  AVG(CASE WHEN readmitted_30d = 1 THEN los_gt_6 END) * 100 AS percent_los_gt6_readmitted,\n  AVG(CASE WHEN readmitted_30d = 0 THEN los_gt_6 END) * 100 AS percent_los_gt6_non_readmitted\nFROM readmission_flag;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"adm\" at [14:5]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"adm\" at [14:5]\n\nLocation: US\nJob ID: 5c7ede5f-fa5d-48d4-8060-204dd69177c8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [44:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [44:3]\n\nLocation: US\nJob ID: 31ab2f83-60f8-461f-be6e-399b1ba4dddb\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

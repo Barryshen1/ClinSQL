@@ -1,0 +1,1 @@
+SELECT percent_rank() OVER (ORDER BY avg_respiratory_rate) AS percentile_rank FROM male_icu_stays_with_rate_12_per_min;

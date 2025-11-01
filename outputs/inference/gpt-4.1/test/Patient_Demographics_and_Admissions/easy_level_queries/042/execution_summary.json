@@ -1,0 +1,16 @@
+{
+  "query": "For a 79-year-old man, among males 74\u201384 undergoing CABG, what is the mean ICU LOS (days) for first CABG admission?",
+  "final_sql": "WITH cabg_procedures AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    MIN(a.admittime) AS first_cabg_admittime\n  FROM\n    physionet-data.mimiciv_3_1_hosp.procedures_icd p\n    JOIN physionet-data.mimiciv_3_1_hosp.d_icd_procedures d\n      ON p.icd_code = d.icd_code AND p.icd_version = d.icd_version\n    JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n      ON p.subject_id = a.subject_id AND p.hadm_id = a.hadm_id\n  WHERE\n    -- CABG ICD-9 codes: 36.10\u201336.19\n    p.icd_version = 9\n    AND SAFE_CAST(p.icd_code AS FLOAT64) BETWEEN 36.10 AND 36.19\n  GROUP BY\n    p.subject_id, p.hadm_id\n),\nfirst_cabg_admission AS (\n  SELECT\n    cp.subject_id,\n    cp.hadm_id,\n    cp.first_cabg_admittime\n  FROM (\n    SELECT\n      subject_id,\n      MIN(first_cabg_admittime) AS min_admittime\n    FROM cabg_procedures\n    GROUP BY subject_id\n  ) min_cabg\n  JOIN cabg_procedures cp\n    ON cp.subject_id = min_cabg.subject_id\n    AND cp.first_cabg_admittime = min_cabg.min_admittime\n),\ncabg_patients AS (\n  SELECT\n    fca.subject_id,\n    fca.hadm_id,\n    a.admittime,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    -- Calculate age at admission\n    (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM\n    first_cabg_admission fca\n    JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n      ON fca.subject_id = a.subject_id AND fca.hadm_id = a.hadm_id\n    JOIN physionet-data.mimiciv_3_1_hosp.patients p\n      ON fca.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 74 AND 84\n),\nfirst_icu_stay AS (\n  SELECT\n    cp.subject_id,\n    cp.hadm_id,\n    MIN(i.intime) AS first_icu_intime\n  FROM\n    cabg_patients cp\n    JOIN physionet-data.mimiciv_3_1_icu.icustays i\n      ON cp.subject_id = i.subject_id AND cp.hadm_id = i.hadm_id\n  GROUP BY\n    cp.subject_id, cp.hadm_id\n),\ncabg_icu_los AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.los\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays i\n    JOIN first_icu_stay fis\n      ON i.subject_id = fis.subject_id\n      AND i.hadm_id = fis.hadm_id\n      AND i.intime = fis.first_icu_intime\n)\nSELECT\n  COUNT(*) AS n_patients,\n  ROUND(AVG(los), 2) AS mean_icu_los_days\nFROM\n  cabg_icu_los\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

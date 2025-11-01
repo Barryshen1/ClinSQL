@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 87\u2011year\u2011old man. Among male ICU patients aged 82\u201392 with cardiogenic shock, stratify first\u201124\u2011hour procedure burden into quintiles and report for each quintile mean procedure count, mean hospital LOS in days, and in\u2011hospital mortality percentage.",
+  "final_sql": "WITH cardiogenic_shock_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    d.hadm_id,\n    a.hospital_expire_flag,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n    ON p.subject_id = d.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON d.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 82 AND 92\n    AND LOWER(dicd.long_title) LIKE '%cardiogenic shock%'\n),\n\nfirst_icu_stay AS (\n  SELECT\n    cs.subject_id,\n    cs.hadm_id,\n    cs.hospital_expire_flag,\n    cs.admittime,\n    cs.dischtime,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    ROW_NUMBER() OVER (PARTITION BY cs.hadm_id ORDER BY i.intime) AS rn\n  FROM cardiogenic_shock_patients cs\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays i\n    ON cs.subject_id = i.subject_id AND cs.hadm_id = i.hadm_id\n),\n\nfirst_24h_procedures AS (\n  SELECT\n    fis.stay_id,\n    COUNT(*) AS procedure_count_24h\n  FROM first_icu_stay fis\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pe\n    ON fis.stay_id = pe.stay_id\n    AND pe.starttime >= fis.intime\n    AND pe.starttime < TIMESTAMP_ADD(fis.intime, INTERVAL 24 HOUR)\n  WHERE fis.rn = 1\n  GROUP BY fis.stay_id\n),\n\nhospital_los AS (\n  SELECT\n    fis.subject_id,\n    fis.hadm_id,\n    fis.stay_id,\n    fis.hospital_expire_flag,\n    TIMESTAMP_DIFF(fis.dischtime, fis.admittime, DAY) AS hospital_los_days,\n    COALESCE(p24.procedure_count_24h, 0) AS procedure_count_24h\n  FROM first_icu_stay fis\n  LEFT JOIN first_24h_procedures p24\n    ON fis.stay_id = p24.stay_id\n  WHERE fis.rn = 1\n),\n\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY procedure_count_24h) AS procedure_quintile\n  FROM hospital_los\n)\n\nSELECT\n  procedure_quintile,\n  AVG(procedure_count_24h) AS mean_procedure_count,\n  AVG(hospital_los_days) AS mean_hospital_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT)) * 100 AS in_hospital_mortality_percentage\nFROM quintiles\nGROUP BY procedure_quintile\nORDER BY procedure_quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Type not found: FLOAT at [76:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [76:36]\n\nLocation: US\nJob ID: 0d34157f-5bd4-4498-831a-b7a7cdc1800f\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword WHERE at [47:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword WHERE at [47:3]\n\nLocation: US\nJob ID: e8626caa-4757-49c4-ab78-1e4d2ed649d1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name procedure_event_id not found inside pe at [41:14]; reason: invalidQuery, location: query, message: Name procedure_event_id not found inside pe at [41:14]\n\nLocation: US\nJob ID: 84be7ed0-079c-4fa8-8ed6-7b4a1e917a24\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [76:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [76:36]\n\nLocation: US\nJob ID: 0d34157f-5bd4-4498-831a-b7a7cdc1800f\n"
+    }
+  ]
+}

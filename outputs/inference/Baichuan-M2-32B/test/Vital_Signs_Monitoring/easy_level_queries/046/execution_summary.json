@@ -1,0 +1,17 @@
+{
+  "query": "Patient is a 42-year-old man \u2014 among male ICU patients aged 37\u201347, what's the IQR of first recorded SpO2 on admission?",
+  "final_sql": "WITH \n-- Step 1: Compute birth year and age at ICU admission for male patients\nicu_stays_with_age AS (\n  SELECT \n    i.stay_id,\n    i.subject_id,\n    i.hadm_id,\n    i.intime,\n    -- Compute birth year: anchor_year - anchor_age\n    p.anchor_year - p.anchor_age AS birth_year,\n    -- Age at ICU admission: year of intime minus birth_year\n    EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age) AS age\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'  -- male patients\n    AND EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age) BETWEEN 37 AND 47\n),\n\n-- Step 2: Get the first SpO2 measurement per ICU stay\nfirst_spo2_per_stay AS (\n  SELECT \n    s.stay_id,\n    s.subject_id,\n    s.hadm_id,\n    s.intime,\n    s.age,\n    -- Get the first chartevent after intime for SpO2\n    MIN(c.charttime) AS first_spo2_time\n  FROM \n    icu_stays_with_age s\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON s.subject_id = c.subject_id AND s.stay_id = c.stay_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON c.itemid = d.itemid\n  WHERE \n    d.category = 'Vitals' \n    AND (d.label LIKE '%SpO2%' OR d.label LIKE '%O2 saturation%')\n    AND c.charttime >= s.intime  -- only after ICU admission\n    AND c.valuenum IS NOT NULL   -- ensure we have a numeric value\n  GROUP BY \n    s.stay_id, s.subject_id, s.hadm_id, s.intime, s.age\n),\n\n-- Step 3: Get the SpO2 value at the first measurement time per stay\nspo2_values AS (\n  SELECT \n    f.stay_id,\n    f.subject_id,\n    f.hadm_id,\n    f.age,\n    c.valuenum AS first_spo2\n  FROM \n    first_spo2_per_stay f\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON f.subject_id = c.subject_id \n    AND f.stay_id = c.stay_id \n    AND f.first_spo2_time = c.charttime\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON c.itemid = d.itemid\n    AND d.category = 'Vitals' \n    AND (d.label LIKE '%SpO2%' OR d.label LIKE '%O2 saturation%')\n  WHERE \n    c.valuenum IS NOT NULL\n),\n\n-- Step 4: Compute the IQR of first_spo2\niqr_result AS (\n  SELECT \n    APPROX_QUANTILES(first_spo2, 100) AS quartiles\n  FROM \n    spo2_values\n)\n\n-- Step 5: Extract Q1, Q3, and IQR\nSELECT \n  quartiles[OFFSET(25)] AS q1,  -- 25th percentile\n  quartiles[OFFSET(75)] AS q3,  -- 75th percentile\n  quartiles[OFFSET(75)] - quartiles[OFFSET(25)] AS iqr\nFROM \n  iqr_result;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY AVG(omr.value)) AS percentile FROM omr JOIN patients ON omr.subject_id = patients.subject_id JOIN admissions ON omr.hadm_id = admissions.hadm_id WHERE patients.gender = 'F' AND EXTRACT(YEAR FROM age(CURRENT_DATE, patients.dob)) BETWEEN 39 AND 49;

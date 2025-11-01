@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating an 89-year-old woman. Among female patients aged 84\u201394 admitted with ACS whose initial Troponin I exceeded the 99th percentile ULN, report counts and mean, median, IQR.",
+  "final_sql": "WITH\n-- Get female patients aged 84-94\nfemale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 84 AND 94\n),\n\n-- Get admissions with ACS diagnosis\nacs_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM female_patients)\n    AND (\n      -- ICD-10 codes for ACS (I20-I25)\n      (d.icd_version = 10 AND di.icd_code BETWEEN 'I20' AND 'I25')\n      OR\n      -- ICD-9 codes for ACS (410-414)\n      (d.icd_version = 9 AND di.icd_code BETWEEN '410' AND '414')\n    )\n),\n\n-- Get Troponin I measurements (itemid 50912 for Troponin I in MIMIC-IV)\ntroponin_measurements AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.valuenum AS troponin_value,\n    ROW_NUMBER() OVER (PARTITION BY l.subject_id, l.hadm_id ORDER BY l.charttime) AS measurement_rank\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` dl ON l.itemid = dl.itemid\n  WHERE\n    l.subject_id IN (SELECT subject_id FROM female_patients)\n    AND l.hadm_id IN (SELECT hadm_id FROM acs_admissions)\n    AND dl.label = 'Troponin I'\n    AND l.valuenum IS NOT NULL\n),\n\n-- Get first Troponin I measurement per admission that exceeds 99th percentile ULN (0.04 ng/mL)\ninitial_high_troponin AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    CAST(troponin_value AS FLOAT64) AS troponin_value\n  FROM\n    troponin_measurements\n  WHERE\n    measurement_rank = 1\n    AND troponin_value > 0.04  -- 99th percentile ULN for Troponin I\n)\n\n-- Final aggregation\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(DISTINCT hadm_id) AS admission_count,\n  AVG(troponin_value) AS mean_troponin,\n  APPROX_QUANTILES(troponin_value, 100)[OFFSET(50)] AS median_troponin,\n  APPROX_QUANTILES(troponin_value, 100)[OFFSET(25)] AS q1_troponin,\n  APPROX_QUANTILES(troponin_value, 100)[OFFSET(75)] AS q3_troponin,\n  APPROX_QUANTILES(troponin_value, 100)[OFFSET(75)] - APPROX_QUANTILES(troponin_value, 100)[OFFSET(25)] AS iqr_troponin\nFROM\n  initial_high_troponin;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column troponin_value which is neither grouped nor aggregated at [71:19]; reason: invalidQuery, location: query, message: SELECT list expression references column troponin_value which is neither grouped nor aggregated at [71:19]\n\nLocation: US\nJob ID: 58879dd8-11b8-4317-b0ba-f570737626d1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For a 65-year-old man: among male ICU patients aged 60\u201370 with intracranial hemorrhage (first ICU stay), what is the 75th percentile of procedure burden in the first 72h? Report mean ICU LOS (days) and hospital mortality versus general ICU population.",
+  "final_sql": "WITH\n-- Get ICH patients (ICD-9: 430-432, ICD-10: I60-I62)\nich_patients AS (\n  SELECT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n  ON\n    d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    (d.icd_version = 9 AND d.icd_code BETWEEN '430' AND '432')\n    OR (d.icd_version = 10 AND d.icd_code BETWEEN 'I60' AND 'I62')\n),\n\n-- Get first ICU stay for each patient\nfirst_icu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime AS icu_intime,\n    s.outtime AS icu_outtime,\n    TIMESTAMP_DIFF(s.outtime, s.intime, HOUR) / 24 AS icu_los_days,\n    ROW_NUMBER() OVER (PARTITION BY s.subject_id ORDER BY s.intime) AS stay_rank\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  WHERE\n    s.subject_id IN (SELECT subject_id FROM ich_patients)\n),\n\n-- Filter to only first ICU stays\nich_first_stays AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    icu_intime,\n    icu_outtime,\n    icu_los_days\n  FROM\n    first_icu_stays\n  WHERE\n    stay_rank = 1\n),\n\n-- Get procedure burden in first 72 hours\nprocedure_burden AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.stay_id,\n    COUNT(DISTINCT p.itemid) AS procedure_count\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents` p\n  JOIN\n    ich_first_stays s\n  ON\n    p.subject_id = s.subject_id\n    AND p.hadm_id = s.hadm_id\n    AND p.stay_id = s.stay_id\n  WHERE\n    TIMESTAMP_DIFF(p.starttime, s.icu_intime, HOUR) <= 72\n  GROUP BY\n    p.subject_id, p.hadm_id, p.stay_id\n),\n\n-- Get patient demographics for ICH group\nich_group AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag,\n    s.icu_los_days,\n    pb.procedure_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    ich_first_stays s\n  ON\n    p.subject_id = s.subject_id\n    AND a.hadm_id = s.hadm_id\n  JOIN\n    procedure_burden pb\n  ON\n    p.subject_id = pb.subject_id\n    AND a.hadm_id = pb.hadm_id\n    AND s.stay_id = pb.stay_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 60 AND 70\n),\n\n-- Get general ICU population (excluding ICH patients)\ngeneral_icu_population AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag,\n    s.icu_los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    (\n      SELECT\n        subject_id,\n        hadm_id,\n        intime,\n        outtime,\n        TIMESTAMP_DIFF(outtime, intime, HOUR) / 24 AS icu_los_days,\n        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS stay_rank\n      FROM\n        `physionet-data.mimiciv_3_1_icu.icustays`\n    ) s\n  ON\n    p.subject_id = s.subject_id\n    AND a.hadm_id = s.hadm_id\n  WHERE\n    p.subject_id NOT IN (SELECT subject_id FROM ich_patients)\n    AND s.stay_rank = 1\n)\n\n-- Final results\nSELECT\n  -- ICH group metrics\n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(75)] AS ich_75th_percentile_procedure_burden,\n  AVG(icu_los_days) AS ich_mean_icu_los,\n  AVG(CAST(hospital_expire_flag AS INT64)) AS ich_hospital_mortality,\n\n  -- General ICU population metrics\n  (SELECT AVG(icu_los_days) FROM general_icu_population) AS general_mean_icu_los,\n  (SELECT AVG(CAST(hospital_expire_flag AS INT64)) FROM general_icu_population) AS general_hospital_mortality\n\nFROM\n  ich_group\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside p at [65:22]; reason: invalidQuery, location: query, message: Name charttime not found inside p at [65:22]\n\nLocation: US\nJob ID: 1f3b96de-86e7-4f11-a75b-9457d735039f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 12c7e036-d6f0-4622-9d99-0bc17dc33db1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

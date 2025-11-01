@@ -1,0 +1,16 @@
+{
+  "query": "I have a 64\u2011year\u2011old female inpatient. Among female inpatients 59\u201369 with PE and high comorbidity burden, state mean comorbidity risk score and 30\u2011day mortality; compare cardio/neurologic complication rates and survivor LOS to same\u2011age general inpatients, and state matched profile percentile vs controls.",
+  "final_sql": "WITH \n-- Step 1: Filter patients\npatients AS (\n  SELECT p.subject_id, p.gender, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 59 AND 69\n),\n\n-- Step 2: Identify admissions for these patients with PE diagnosis\nadmissions_pe AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN patients p ON a.subject_id = p.subject_id\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n    WHERE d.hadm_id = a.hadm_id AND dicd.long_title LIKE '%Pulmonary embolism%'\n  )\n),\n\n-- Step 3: Calculate comorbidity score (simplified example, actual might require more complex scoring)\ncomorbidity AS (\n  SELECT d.hadm_id, COUNT(DISTINCT d.icd_code) as comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN admissions_pe a ON d.hadm_id = a.hadm_id\n  GROUP BY d.hadm_id\n),\n\n-- Step 4: Determine 30-day mortality and LOS\noutcomes AS (\n  SELECT a.hadm_id,\n         CASE WHEN a.deathtime IS NOT NULL AND DATETIME_DIFF(a.deathtime, a.admittime, DAY) <= 30 THEN 1 ELSE 0 END AS mortality_30d,\n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM admissions_pe a\n),\n\n-- Step 5: Identify cardio/neurologic complications\ncomplications AS (\n  SELECT d.hadm_id,\n         MAX(CASE WHEN dicd.long_title LIKE '%Cardiac%' OR dicd.long_title LIKE '%Neurologic%' THEN 1 ELSE 0 END) AS cardio_neuro_complication\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  JOIN admissions_pe a ON d.hadm_id = a.hadm_id\n  GROUP BY d.hadm_id\n)\n\n-- Final aggregation\nSELECT \n  AVG(c.comorbidity_count) AS mean_comorbidity_score,\n  AVG(o.mortality_30d) AS mortality_30d_rate,\n  AVG(CASE WHEN o.los IS NOT NULL THEN o.los ELSE 0 END) AS mean_los,\n  AVG(comp.cardio_neuro_complication) AS cardio_neuro_complication_rate\nFROM admissions_pe a\nJOIN comorbidity c ON a.hadm_id = c.hadm_id\nJOIN outcomes o ON a.hadm_id = o.hadm_id\nJOIN complications comp ON a.hadm_id = comp.hadm_id\nWHERE c.comorbidity_count > (SELECT AVG(comorbidity_count) FROM comorbidity);  -- High comorbidity burden;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

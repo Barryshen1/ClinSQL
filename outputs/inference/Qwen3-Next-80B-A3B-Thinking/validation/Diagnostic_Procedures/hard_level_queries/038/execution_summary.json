@@ -1,0 +1,29 @@
+{
+  "query": "For a 65-year-old man: among male ICU patients aged 60\u201370 with intracranial hemorrhage (first ICU stay), what is the 75th percentile of procedure burden in the first 72h? Report mean ICU LOS (days) and hospital mortality versus general ICU population.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id, anchor_age, gender\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 60 AND 70\n),\nfirst_icu_stays AS (\n  SELECT \n    i.subject_id, \n    i.hadm_id, \n    i.stay_id, \n    i.intime, \n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN patients_filtered p ON i.subject_id = p.subject_id\n),\nfirst_icu_stays_rn1 AS (\n  SELECT *\n  FROM first_icu_stays\n  WHERE rn = 1\n),\nich_diagnosis AS (\n  SELECT f.subject_id, f.hadm_id, f.stay_id, f.intime, f.los\n  FROM first_icu_stays_rn1 f\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE d.hadm_id = f.hadm_id\n      AND d.icd_version = 10\n      AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%')\n  )\n),\nprocedure_counts AS (\n  SELECT \n    i.stay_id,\n    COUNT(pe.itemid) AS procedure_count\n  FROM ich_diagnosis i\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON i.stay_id = pe.stay_id\n    AND pe.starttime >= i.intime\n    AND pe.starttime <= i.intime + INTERVAL 72 HOUR\n  GROUP BY i.stay_id\n),\nspecific_cohort AS (\n  SELECT \n    pc.procedure_count,\n    i.los,\n    a.hospital_expire_flag\n  FROM ich_diagnosis i\n  LEFT JOIN procedure_counts pc ON i.stay_id = pc.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n),\ngeneral_population AS (\n  SELECT \n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n)\nSELECT\n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(75)] AS proc_75th,\n  AVG(los) AS mean_los_specific,\n  AVG(hospital_expire_flag) AS mortality_specific,\n  (SELECT AVG(los) FROM general_population) AS mean_los_general,\n  (SELECT AVG(hospital_expire_flag) FROM general_population) AS mortality_general\nFROM specific_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [62:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [62:25]\n\nLocation: US\nJob ID: 53eb91a1-e595-49b2-afe7-eb0ab0057453\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: d4a9f5c1-f740-4ed1-b242-16979cd597a5\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

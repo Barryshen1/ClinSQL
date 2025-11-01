@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    i.stay_id,\n    i.los AS icu_los,\n    a.hospital_expire_flag,\n    i.intime AS icu_intime\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n      ON p.subject_id = a.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_icu.icustays i\n      ON a.hadm_id = i.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n      ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND LOWER(dd.long_title) LIKE '%pulmonary embolism%'\n    AND i.stay_id IN (\n      SELECT stay_id\n      FROM (\n        SELECT stay_id, ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n        FROM physionet-data.mimiciv_3_1_icu.icustays\n      ) ranked\n      WHERE rn = 1\n    )\n),\n\nprocedures_in_72h AS (\n  SELECT\n    c.stay_id,\n    COUNT(*) AS procedure_count\n  FROM\n    cohort c\n  JOIN\n    physionet-data.mimiciv_3_1_icu.procedureevents pe\n      ON c.stay_id = pe.stay_id\n  JOIN\n    physionet-data.mimiciv_3_1_icu.d_items di\n      ON pe.itemid = di.itemid\n  WHERE\n    pe.starttime >= c.icu_intime\n    AND pe.starttime <= DATETIME_ADD(c.icu_intime, INTERVAL 72 HOUR)\n    AND di.category = 'Procedures'\n  GROUP BY\n    c.stay_id\n),\n\nquartiles AS (\n  SELECT\n    c.stay_id,\n    COALESCE(p.procedure_count, 0) AS procedure_count,\n    c.icu_los,\n    c.hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY COALESCE(p.procedure_count, 0)) AS quartile\n  FROM\n    cohort c\n  LEFT JOIN\n    procedures_in_72h p\n      ON c.stay_id = p.stay_id\n)\n\nSELECT\n  quartile,\n  COUNT(*) AS n,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(icu_los) AS mean_icu_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS hospital_mortality_percent\nFROM\n  quartiles\nGROUP BY\n  quartile\nORDER BY\n  quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [75:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [75:36]\n\nLocation: US\nJob ID: b162e400-e426-44b2-bd93-b35a40caece3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

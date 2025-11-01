@@ -1,0 +1,20 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "SELECT\n  discharge_outcome,\n  -- Median (50th percentile) LOS\n  PERCENTILE_CONT(los, 0.50) OVER (PARTITION BY discharge_outcome) AS p50_los,\n  -- 75th percentile LOS\n  PERCENTILE_CONT(los, 0.75) OVER (PARTITION BY discharge_outcome) AS p75_los,\n  -- 90th percentile LOS\n  PERCENTILE_CONT(los, 0.90) OVER (PARTITION BY discharge_outcome) AS p90_los,\n  -- 95th percentile LOS\n  PERCENTILE_CONT(los, 0.95) OVER (PARTITION BY discharge_outcome) AS p95_los,\n  -- % of ICU stays \u2264 7 days\n  SAFE_DIVIDE(\n    SUM(CASE WHEN los <= 7 THEN 1 ELSE 0 END),\n    COUNT(*)\n  ) * 100.0 AS pct_le_7d,\n  COUNT(*) AS n_stays\nFROM (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.los,\n    CASE\n      WHEN adm.hospital_expire_flag = 1 THEN 'in-hospital death'\n      WHEN UPPER(adm.discharge_location) LIKE '%HOSPICE%' THEN 'hospice'\n      WHEN UPPER(adm.discharge_location) LIKE 'HOME%' THEN 'home'\n      ELSE NULL\n    END AS discharge_outcome\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON icu.subject_id = pat.subject_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON icu.subject_id = adm.subject_id\n    AND icu.hadm_id = adm.hadm_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 40 AND 50\n) sub\nWHERE discharge_outcome IS NOT NULL\nGROUP BY discharge_outcome\nORDER BY\n  CASE discharge_outcome\n    WHEN 'home' THEN 1\n    WHEN 'hospice' THEN 2\n    WHEN 'in-hospital death' THEN 3\n    ELSE 4\n  END;",
+      "success": false,
+      "error": "400 SELECT list expression references column los which is neither grouped nor aggregated at [4:19]; reason: invalidQuery, location: query, message: SELECT list expression references column los which is neither grouped nor aggregated at [4:19]\n\nLocation: US\nJob ID: e3fd0479-7916-4377-a5db-19c47e180433\n",
+      "row_count": 0
+    },
+    {
+      "attempt": 2,
+      "sql": "SELECT\n  discharge_outcome,\n  quantiles[OFFSET(50)] AS p50_los,\n  quantiles[OFFSET(75)] AS p75_los,\n  quantiles[OFFSET(90)] AS p90_los,\n  quantiles[OFFSET(95)] AS p95_los,\n  SAFE_DIVIDE(sum_le7, total) * 100.0 AS pct_le_7d,\n  total AS n_stays\nFROM (\n  -- Aggregate per discharge outcome\n  SELECT\n    discharge_outcome,\n    APPROX_QUANTILES(los, 100) AS quantiles,\n    SUM(CASE WHEN los <= 7 THEN 1 ELSE 0 END) AS sum_le7,\n    COUNT(*) AS total\n  FROM (\n    -- Filter to female ICU stays, age 40\u201350, derive discharge outcome\n    SELECT\n      icu.los,\n      CASE\n        WHEN adm.hospital_expire_flag = 1 THEN 'in-hospital death'\n        WHEN UPPER(adm.discharge_location) LIKE '%HOSPICE%' THEN 'hospice'\n        WHEN UPPER(adm.discharge_location) LIKE 'HOME%' THEN 'home'\n        ELSE NULL\n      END AS discharge_outcome\n    FROM\n      `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON icu.subject_id = pat.subject_id\n    JOIN\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      ON icu.subject_id = adm.subject_id\n     AND icu.hadm_id = adm.hadm_id\n    WHERE\n      pat.gender = 'F'\n      AND pat.anchor_age BETWEEN 40 AND 50\n  ) sub\n  WHERE discharge_outcome IS NOT NULL\n  GROUP BY discharge_outcome\n)\nORDER BY\n  CASE discharge_outcome\n    WHEN 'home' THEN 1\n    WHEN 'hospice' THEN 2\n    WHEN 'in-hospital death' THEN 3\n    ELSE 4\n  END;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

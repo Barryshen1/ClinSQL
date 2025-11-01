@@ -1,0 +1,1 @@
+SELECT a.avg_spo2, COUNT(DISTINCT a.hadm_id) AS patient_count, SUM(CASE WHEN a.avg_spo2 < 90 THEN 1 ELSE 0 END) AS akis FROM avg_spo2 a WHERE a.avg_spo2 BETWEEN 90 AND 95 GROUP BY a.avg_spo2;

@@ -1,0 +1,29 @@
+{
+  "query": "I have a 63-year-old female. Among females 58\u201368 admitted with sepsis, what's the median ICU LOS per encounter?",
+  "final_sql": "WITH patient_admissions AS (\n    SELECT\n        p.subject_id,\n        a.hadm_id,\n        a.admittime,\n        -- Estimate birth date: anchor_year is the year of the anchor event, anchor_age is the age at that event.\n        -- We assume the anchor event is on January 1st of the anchor_year for simplicity.\n        DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), INTERVAL p.anchor_age YEAR) AS birth_date\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    WHERE p.gender = 'F'\n        -- We'll compute age later, but we can pre-filter by anchor_year to reduce data\n        AND p.anchor_year BETWEEN 1950 AND 2005  -- approximate birth years for 58-68 in 2012-2020 (typical admission years)\n),\nage_filtered AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        admittime,\n        birth_date,\n        TIMESTAMP_DIFF(admittime, birth_date, YEAR) AS age_at_admission\n    FROM patient_admissions\n    WHERE TIMESTAMP_DIFF(admittime, birth_date, YEAR) BETWEEN 58 AND 68\n),\nsepsis_admissions AS (\n    SELECT\n        af.subject_id,\n        af.hadm_id,\n        af.admittime,\n        af.age_at_admission\n    FROM age_filtered af\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON af.subject_id = di.subject_id\n        AND af.hadm_id = di.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON di.icd_code = dd.icd_code\n        AND di.icd_version = dd.icd_version\n    WHERE LOWER(dd.long_title) LIKE '%sepsis%'\n        OR LOWER(dd.long_title) LIKE '%septic%'\n    -- Remove duplicates per admission (if multiple sepsis diagnoses, we only need one per admission)\n    GROUP BY af.subject_id, af.hadm_id, af.admittime, af.age_at_admission\n),\nicu_stays AS (\n    SELECT\n        s.hadm_id,\n        SUM(s.los) AS total_icu_los\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n    GROUP BY s.hadm_id\n),\nadmission_icu_los AS (\n    SELECT\n        sa.subject_id,\n        sa.hadm_id,\n        sa.admittime,\n        sa.age_at_admission,\n        COALESCE(s.total_icu_los, 0) AS icu_los\n    FROM sepsis_admissions sa\n    LEFT JOIN icu_stays s\n        ON sa.hadm_id = s.hadm_id\n)\nSELECT\n    APPROX_QUANTILES(icu_los, 100)[OFFSET(49)] AS median_icu_los\nFROM admission_icu_los;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword IS at [57:18]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword IS at [57:18]\n\nLocation: US\nJob ID: 93c3f494-28d3-4283-abef-356ca6c626b3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword IS at [57:18]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword IS at [57:18]\n\nLocation: US\nJob ID: b63c22f4-1789-4e2b-beba-7de777cab836\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

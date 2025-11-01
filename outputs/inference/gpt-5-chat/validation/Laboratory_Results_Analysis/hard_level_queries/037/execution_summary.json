@@ -1,0 +1,16 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id,\n         adm.admittime, adm.dischtime, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.subject_id = dx.subject_id AND adm.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddx\n    ON dx.icd_code = ddx.icd_code AND dx.icd_version = ddx.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 70 AND 80\n    AND (\n         (dx.icd_version = 9 AND (\n            dx.icd_code LIKE '430%' OR\n            dx.icd_code LIKE '431%' OR\n            dx.icd_code LIKE '432%' ))\n         OR (dx.icd_version = 10 AND (\n            dx.icd_code LIKE 'I60%' OR\n            dx.icd_code LIKE 'I61%' OR\n            dx.icd_code LIKE 'I62%' ))\n        )\n),\nlabs_48h AS (\n  SELECT le.hadm_id,\n         COUNTIF(flag IS NOT NULL AND LOWER(flag) IN ('abnormal', 'critical')) AS critical_lab_events\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON le.hadm_id = adm.hadm_id\n  WHERE le.charttime BETWEEN adm.admittime AND TIMESTAMP_ADD(adm.admittime, INTERVAL 48 HOUR)\n  GROUP BY le.hadm_id\n),\ncohort_with_labs AS (\n  SELECT c.subject_id, c.hadm_id,\n         COALESCE(l.critical_lab_events, 0) AS instability_score,\n         TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR) / 24.0 AS los_days,\n         c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN labs_48h l\n    ON c.hadm_id = l.hadm_id\n),\ngeneral_pop AS (\n  SELECT adm.hadm_id,\n         COALESCE(l.critical_lab_events, 0) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  LEFT JOIN labs_48h l\n    ON adm.hadm_id = l.hadm_id\n)\nSELECT\n  APPROX_QUANTILES(instability_score, 100)[OFFSET(25)] AS cohort_p25_instability_score,\n  AVG(instability_score) AS cohort_mean_instability_score,\n  AVG(los_days) AS cohort_mean_los,\n  AVG(hospital_expire_flag) AS cohort_in_hosp_mortality_rate,\n  (SELECT AVG(instability_score) FROM general_pop) AS general_mean_instability_score\nFROM cohort_with_labs;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

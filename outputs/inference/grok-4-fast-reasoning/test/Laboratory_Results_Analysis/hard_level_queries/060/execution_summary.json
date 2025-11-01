@@ -1,0 +1,28 @@
+{
+  "query": "I have a 57-year-old female post\u2013cardiac arrest inpatient. Among females 52\u201362 with post\u2013cardiac arrest, in the first 48 h what is the instability score IQR (Q1, median)? Compare critical lab events/admission to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH patients_f AS (\n  SELECT subject_id, anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age BETWEEN 52 AND 62\n),\nadmissions_f AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN patients_f p ON a.subject_id = p.subject_id\n),\nca_diagnoses AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code LIKE '427.5%')\n     OR (icd_version = 10 AND icd_code LIKE 'I46%')\n),\ncohort AS (\n  SELECT a.*\n  FROM admissions_f a\n  INNER JOIN ca_diagnoses d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n),\ngeneral AS (\n  SELECT * FROM admissions_f\n),\nlab_abnormal AS (\n  SELECT le.hadm_id, COUNT(*) AS num_abnormal\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN admissions_f a ON le.hadm_id = a.hadm_id\n  WHERE le.charttime >= a.admittime\n    AND le.charttime < TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n    AND le.flag = 'abnormal'\n  GROUP BY le.hadm_id\n),\ncohort_scores AS (\n  SELECT \n    c.hadm_id, \n    COALESCE(l.num_abnormal, 0) AS instability_score,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR) / 24.0 AS los_days,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN lab_abnormal l ON c.hadm_id = l.hadm_id\n),\ngeneral_scores AS (\n  SELECT \n    g.hadm_id, \n    COALESCE(l.num_abnormal, 0) AS instability_score\n  FROM general g\n  LEFT JOIN lab_abnormal l ON g.hadm_id = l.hadm_id\n),\ncohort_stats AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 4)[OFFSET(1)] AS q1_instability,\n    APPROX_QUANTILES(instability_score, 4)[OFFSET(2)] AS median_instability,\n    AVG(instability_score) AS mean_instability_cohort,\n    APPROX_QUANTILES(los_days, 4)[OFFSET(2)] AS median_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_pct\n  FROM cohort_scores\n),\ngeneral_stats AS (\n  SELECT AVG(instability_score) AS mean_instability_general\n  FROM general_scores\n)\nSELECT \n  q1_instability,\n  median_instability,\n  mean_instability_cohort,\n  mean_instability_general,\n  median_los_days,\n  mortality_pct\nFROM cohort_stats\nCROSS JOIN general_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [14:10]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [14:10]\n\nLocation: US\nJob ID: 5aed8933-fcdb-458c-82e8-b5a88344375d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [56:38]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [56:38]\n\nLocation: US\nJob ID: d14187af-f755-4e45-a9e0-c53b64ca2cbf\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

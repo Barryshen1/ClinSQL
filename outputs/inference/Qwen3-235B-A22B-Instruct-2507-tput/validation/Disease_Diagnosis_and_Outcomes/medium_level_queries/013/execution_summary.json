@@ -1,0 +1,16 @@
+{
+  "query": "I have an 85\u2011year\u2011old woman. Among women 80\u201390 hospitalized with acute decompensated HF, report in\u2011hospital mortality (%) with 95% CI and median time\u2011to\u2011death by LOS: 1\u20133, 4\u20137, \u22658 days.",
+  "final_sql": "WITH hf_admissions AS (\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.deathtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND di.icd_version = 10\n    AND d.icd_code IN ('I50.21', 'I50.22', 'I50.23', 'I11.0') -- Acute HF codes\n    AND (a.admittime >= DATETIME(p.anchor_year, 1, 1, 0, 0, 0))\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 80 AND 90\n),\nlos_and_death AS (\n  SELECT\n    hadm_id,\n    admittime,\n    dischtime,\n    deathtime,\n    hospital_expire_flag,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days,\n    CASE\n      WHEN DATETIME_DIFF(dischtime, admittime, DAY) BETWEEN 1 AND 3 THEN '1-3 days'\n      WHEN DATETIME_DIFF(dischtime, admittime, DAY) BETWEEN 4 AND 7 THEN '4-7 days'\n      WHEN DATETIME_DIFF(dischtime, admittime, DAY) >= 8 THEN '>=8 days'\n      ELSE NULL\n    END AS los_group,\n    DATETIME_DIFF(deathtime, admittime, HOUR) AS hours_to_death\n  FROM hf_admissions\n  WHERE dischtime IS NOT NULL\n    AND admittime IS NOT NULL\n    AND DATETIME_DIFF(dischtime, admittime, DAY) >= 1  -- At least 1 day LOS\n),\nmortality_stats AS (\n  SELECT\n    los_group,\n    COUNT(*) AS n_admissions,\n    SUM(hospital_expire_flag) AS n_deaths,\n    APPROX_QUANTILES(IF(hospital_expire_flag = 1, hours_to_death, NULL), 100)[OFFSET(50)] AS median_hours_to_death\n  FROM los_and_death\n  WHERE los_group IS NOT NULL\n  GROUP BY los_group\n)\nSELECT\n  los_group,\n  n_admissions,\n  n_deaths,\n  ROUND(100.0 * n_deaths / n_admissions, 2) AS mortality_rate_pct,\n  -- Wilson score interval for 95% CI\n  ROUND(100.0 * (n_deaths + 1.92) / (n_admissions + 3.84) - 1.96 * SQRT((n_deaths * (n_admissions - n_deaths) / n_admissions + 0.96) / (n_admissions + 3.84)) / (n_admissions + 3.84), 2) AS lower_95ci,\n  ROUND(100.0 * (n_deaths + 1.92) / (n_admissions + 3.84) + 1.96 * SQRT((n_deaths * (n_admissions - n_deaths) / n_admissions + 0.96) / (n_admissions + 3.84)) / (n_admissions + 3.84), 2) AS upper_95ci,\n  median_hours_to_death\nFROM mortality_stats\nORDER BY\n  CASE los_group\n    WHEN '1-3 days' THEN 1\n    WHEN '4-7 days' THEN 2\n    WHEN '>=8 days' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

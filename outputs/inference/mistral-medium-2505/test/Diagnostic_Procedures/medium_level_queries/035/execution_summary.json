@@ -1,0 +1,22 @@
+{
+  "query": "Consult: For my 48\u2011year\u2011old male, among AKI admissions aged 43\u201353, what are patient counts and mean MRI/CTs per admission for LOS 1\u20134 vs 5\u20137 days, stratified by primary vs secondary AKI?",
+  "final_sql": "WITH\n-- Get AKI admissions with age, gender, and LOS\naki_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    d.seq_num,\n    d.icd_code,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    EXTRACT(YEAR FROM a.admittime) AS admission_year,\n    CASE WHEN d.seq_num = 1 THEN 'Primary AKI' ELSE 'Secondary AKI' END AS aki_type\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    -- AKI ICD-10 codes (N17.x)\n    d.icd_code LIKE 'N17%'\n    -- Age between 43-53 at admission\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 43 AND 53\n    -- Male patients\n    AND p.gender = 'M'\n    -- LOS between 1-7 days\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\n\n-- Count MRI/CT procedures per admission\nimaging_counts AS (\n  SELECT\n    h.subject_id,\n    h.hadm_id,\n    COUNT(DISTINCT h.hcpcs_cd) AS imaging_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh ON h.hcpcs_cd = dh.code\n  WHERE\n    -- Filter for MRI/CT procedures (example codes - adjust as needed)\n    (h.hcpcs_cd LIKE '704%' OR h.hcpcs_cd LIKE '705%')\n    AND dh.category IN (1, 2)  -- Changed from string to numeric values\n  GROUP BY\n    h.subject_id, h.hadm_id\n),\n\n-- Combine AKI admissions with imaging counts\ncombined_data AS (\n  SELECT\n    aa.hadm_id,\n    aa.los_days,\n    aa.aki_type,\n    COALESCE(ic.imaging_count, 0) AS imaging_count\n  FROM\n    aki_admissions aa\n  LEFT JOIN\n    imaging_counts ic ON aa.hadm_id = ic.hadm_id\n)\n\n-- Final aggregation\nSELECT\n  CASE\n    WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n    WHEN los_days BETWEEN 5 AND 7 THEN '5-7 days'\n  END AS los_group,\n  aki_type,\n  COUNT(DISTINCT hadm_id) AS patient_count,\n  AVG(imaging_count) AS mean_imaging_per_admission\nFROM\n  combined_data\nGROUP BY\n  los_group, aki_type\nORDER BY\n  los_group, aki_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator IN for argument types INT64 and {STRING} at [49:21]; reason: invalidQuery, location: query, message: No matching signature for operator IN for argument types INT64 and {STRING} at [49:21]\n\nLocation: US\nJob ID: 65c8fd48-ee6b-4ab6-9254-9d59ccf8c500\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

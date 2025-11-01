@@ -1,0 +1,16 @@
+{
+  "query": "I have an 88\u2011year\u2011old man with chest pain/AMI and initial troponin T above the 99th percentile. Among male patients aged 83\u201393, provide N, mean age, mean LOS, and troponin summary.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n      p.subject_id, \n      p.anchor_age,\n      a.hadm_id,\n      a.admittime,\n      a.dischtime,\n      DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 83 AND 93\n),\nami_admissions AS (\n  SELECT DISTINCT\n      c.subject_id,\n      c.anchor_age,\n      c.hadm_id,\n      c.admittime,\n      c.dischtime,\n      c.los_days\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      ON c.hadm_id = diag.hadm_id\n  WHERE \n      (diag.icd_version = 9 AND diag.icd_code LIKE '410%') \n      OR \n      (diag.icd_version = 10 AND (diag.icd_code LIKE 'I21%' OR diag.icd_code LIKE 'I22%'))\n),\ntroponin_events AS (\n  SELECT \n      a.hadm_id,\n      l.charttime,\n      l.valuenum AS troponin_value,\n      SAFE_CAST(l.ref_range_upper AS FLOAT64) AS ref_upper,\n      ROW_NUMBER() OVER (\n          PARTITION BY a.hadm_id \n          ORDER BY l.charttime, l.labevent_id\n      ) AS rn\n  FROM ami_admissions a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n      ON a.hadm_id = l.hadm_id\n  WHERE l.itemid IN (51002, 51003)  -- Troponin T item IDs\n      AND l.valuenum IS NOT NULL\n      AND SAFE_CAST(l.ref_range_upper AS FLOAT64) IS NOT NULL\n      AND l.valuenum > SAFE_CAST(l.ref_range_upper AS FLOAT64)\n),\nfirst_troponin AS (\n  SELECT \n      hadm_id,\n      troponin_value\n  FROM troponin_events\n  WHERE rn = 1  -- First qualifying troponin per admission\n)\nSELECT \n    COUNT(*) AS N,\n    ROUND(AVG(a.anchor_age), 1) AS mean_age,\n    ROUND(AVG(a.los_days), 1) AS mean_los,\n    MIN(ft.troponin_value) AS min_troponin,\n    MAX(ft.troponin_value) AS max_troponin,\n    ROUND(AVG(ft.troponin_value), 1) AS mean_troponin\nFROM ami_admissions a\nINNER JOIN first_troponin ft\n    ON a.hadm_id = ft.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

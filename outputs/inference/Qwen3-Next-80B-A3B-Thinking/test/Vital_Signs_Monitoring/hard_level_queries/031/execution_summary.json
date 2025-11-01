@@ -1,0 +1,29 @@
+{
+  "query": "I have a 68\u2011year\u2011old male post\u2011op ICU patient. Among male post\u2011op ICU patients aged 63\u201373 in the top quartile of instability, what is the 95th\u2011percentile instability score and how do fever (>38.5\u00b0C), SpO2<90%, RR>20 episodes, ICU LOS, and in\u2011hospital mortality compare to other post\u2011op patients?",
+  "final_sql": "WITH patients_icu AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.los,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON i.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 63 AND 73\n),\npost_op_patients AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.stay_id,\n    p.los,\n    p.hospital_expire_flag\n  FROM patients_icu p\n  JOIN `physionet-data.mimiciv_3_1_hosp.services` s ON p.hadm_id = s.hadm_id\n  WHERE s.curr_service = 'SURG'\n),\nqsofa_score AS (\n  SELECT\n    p.subject_id,\n    p.stay_id,\n    MAX(CASE WHEN ce.itemid = 220210 AND ce.valuenum >= 22 THEN 1 ELSE 0 END) AS rr_ge22,\n    MAX(CASE WHEN ce.itemid = 220050 AND ce.valuenum <= 100 THEN 1 ELSE 0 END) AS sbp_le100,\n    MAX(CASE WHEN ce.itemid = 223900 AND ce.valuenum < 15 THEN 1 ELSE 0 END) AS gcs_lt15,\n    (MAX(CASE WHEN ce.itemid = 220210 AND ce.valuenum >= 22 THEN 1 ELSE 0 END) +\n     MAX(CASE WHEN ce.itemid = 220050 AND ce.valuenum <= 100 THEN 1 ELSE 0 END) +\n     MAX(CASE WHEN ce.itemid = 223900 AND ce.valuenum < 15 THEN 1 ELSE 0 END)) AS qsofa_score\n  FROM post_op_patients p\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON p.stay_id = ce.stay_id\n  WHERE ce.itemid IN (220210, 220050, 223900)\n  GROUP BY p.subject_id, p.stay_id\n),\nqsofa_quartiles AS (\n  SELECT\n    subject_id,\n    stay_id,\n    qsofa_score,\n    NTILE(4) OVER (ORDER BY qsofa_score DESC) AS quartile\n  FROM qsofa_score\n),\ntop_quartile_95th AS (\n  SELECT\n    PERCENTILE_CONT(qsofa_score, 0.95) WITHIN GROUP (ORDER BY qsofa_score) AS qsofa_95th_percentile\n  FROM qsofa_quartiles\n  WHERE quartile = 1\n),\npatient_metrics AS (\n  SELECT\n    q.subject_id,\n    q.quartile,\n    MAX(CASE WHEN ce.itemid = 223761 AND ce.valuenum > 38.5 THEN 1 ELSE 0 END) AS has_fever,\n    MAX(CASE WHEN ce.itemid = 220277 AND ce.valuenum < 90 THEN 1 ELSE 0 END) AS has_spO2_lt90,\n    COUNT(CASE WHEN ce.itemid = 220210 AND ce.valuenum > 20 THEN 1 END) AS rr_gt20_count,\n    p.los,\n    p.hospital_expire_flag\n  FROM qsofa_quartiles q\n  JOIN post_op_patients p ON q.subject_id = p.subject_id AND q.stay_id = p.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON p.stay_id = ce.stay_id\n  GROUP BY q.subject_id, q.quartile, p.los, p.hospital_expire_flag\n)\nSELECT\n  (SELECT qsofa_95th_percentile FROM top_quartile_95th) AS instability_95th_percentile,\n  AVG(CASE WHEN quartile = 1 THEN has_fever END) AS top_quartile_fever_rate,\n  AVG(CASE WHEN quartile != 1 THEN has_fever END) AS other_fever_rate,\n  AVG(CASE WHEN quartile = 1 THEN has_spO2_lt90 END) AS top_quartile_spO2_lt90,\n  AVG(CASE WHEN quartile != 1 THEN has_spO2_lt90 END) AS other_spO2_lt90,\n  AVG(CASE WHEN quartile = 1 THEN rr_gt20_count END) AS top_quartile_rr_gt20,\n  AVG(CASE WHEN quartile != 1 THEN rr_gt20_count END) AS other_rr_gt20,\n  AVG(CASE WHEN quartile = 1 THEN los END) AS top_quartile_los,\n  AVG(CASE WHEN quartile != 1 THEN los END) AS other_los,\n  AVG(CASE WHEN quartile = 1 THEN hospital_expire_flag END) AS top_quartile_mortality,\n  AVG(CASE WHEN quartile != 1 THEN hospital_expire_flag END) AS other_mortality\nFROM patient_metrics;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [54:40]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [54:40]\n\nLocation: US\nJob ID: 59bb886f-cb90-476a-99e9-cb31a92a99e2\n",
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [54:40]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [54:40]\n\nLocation: US\nJob ID: dc3e8f68-2ad5-4fb7-a369-c6035019dff6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [54:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [54:27]\n\nLocation: US\nJob ID: 47fe6714-bf83-4eda-bd29-4173451582ae\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [54:40]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [54:40]\n\nLocation: US\nJob ID: 59bb886f-cb90-476a-99e9-cb31a92a99e2\n"
+    }
+  ]
+}

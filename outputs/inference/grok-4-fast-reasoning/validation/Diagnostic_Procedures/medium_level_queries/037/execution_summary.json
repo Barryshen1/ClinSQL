@@ -1,0 +1,22 @@
+{
+  "query": "For a 48\u2011year\u2011old man: among males 43\u201353 hospitalized with AMI, what's the median (IQR) number of radiography/CTs per admission for 1\u20133 vs 4\u20137\u2011day stays, stratified by primary vs secondary AMI?",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) + 1 AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) + 1 BETWEEN 1 AND 7\n),\nprimary_diag AS (\n  SELECT \n    hadm_id,\n    icd_code AS primary_icd,\n    icd_version AS primary_version\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE seq_num = 1\n),\nhas_ami AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code LIKE '410%')\n     OR (icd_version = 10 AND icd_code LIKE 'I21%')\n),\nwith_ami_type AS (\n  SELECT \n    ea.*,\n    pd.primary_icd,\n    pd.primary_version,\n    CASE WHEN ha.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_ami_flag,\n    CASE \n      WHEN ha.hadm_id IS NOT NULL \n           AND ((pd.primary_version = 9 AND pd.primary_icd LIKE '410%') \n                OR (pd.primary_version = 10 AND pd.primary_icd LIKE 'I21%')) \n      THEN 'primary'\n      WHEN ha.hadm_id IS NOT NULL THEN 'secondary'\n      ELSE NULL \n    END AS ami_type,\n    CASE WHEN ea.los <= 3 THEN '1-3' ELSE '4-7' END AS los_group\n  FROM eligible_admissions ea\n  LEFT JOIN primary_diag pd \n    ON ea.hadm_id = pd.hadm_id\n  LEFT JOIN has_ami ha \n    ON ea.hadm_id = ha.hadm_id\n  WHERE ha.hadm_id IS NOT NULL  -- Only AMI admissions\n),\nimaging_counts AS (\n  SELECT \n    proc.hadm_id,\n    COUNT(*) AS num_imaging\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dip \n    ON proc.icd_code = dip.icd_code \n    AND proc.icd_version = dip.icd_version\n  WHERE LOWER(dip.long_title) LIKE '%x-ray%'\n     OR LOWER(dip.long_title) LIKE '%radiography%'\n     OR LOWER(dip.long_title) LIKE '%ct%'\n     OR LOWER(dip.long_title) LIKE '%computed tomography%'\n     OR LOWER(dip.long_title) LIKE '%tomography%'\n  GROUP BY proc.hadm_id\n),\nstats AS (\n  SELECT \n    wat.los_group,\n    wat.ami_type,\n    COALESCE(ic.num_imaging, 0) AS num\n  FROM with_ami_type wat\n  LEFT JOIN imaging_counts ic \n    ON wat.hadm_id = ic.hadm_id\n  WHERE wat.ami_type IN ('primary', 'secondary')\n)\nSELECT \n  los_group,\n  ami_type,\n  ANY_VALUE(median) AS median,\n  ANY_VALUE(q1) AS q1,\n  ANY_VALUE(q3) AS q3\nFROM (\n  SELECT \n    *,\n    PERCENTILE_CONT(num, 0.5) OVER (PARTITION BY los_group, ami_type) AS median,\n    PERCENTILE_CONT(num, 0.25) OVER (PARTITION BY los_group, ami_type) AS q1,\n    PERCENTILE_CONT(num, 0.75) OVER (PARTITION BY los_group, ami_type) AS q3\n  FROM stats\n)\nGROUP BY los_group, ami_type\nORDER BY los_group, ami_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [26:10]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [26:10]\n\nLocation: US\nJob ID: 37619c92-433b-438d-8a34-8c1fc5b8a18d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

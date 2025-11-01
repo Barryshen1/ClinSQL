@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating an 80\u2011year\u2011old female on invasive mechanical ventilation. In female ICU patients age 75\u201385 on ventilation, what's the 90th percentile of the 48\u2011hour composite instability score, and what are hypotension, tachycardia, ICU LOS, and mortality in the top 25%?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    pat.gender,\n    pat.anchor_age AS age,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.subject_id = adm.subject_id\n    AND icu.hadm_id = adm.hadm_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 75 AND 85\n),\nvent_patients AS (\n  SELECT DISTINCT c.*\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.stay_id = pe.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON pe.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%vent%'\n     OR LOWER(pe.ordercategoryname) LIKE '%vent%'\n),\nvitals_48h AS (\n  SELECT\n    vp.stay_id,\n    SUM(CASE WHEN di.label LIKE 'Systolic Blood Pressure%' AND ce.valuenum < 90 THEN 1 ELSE 0 END) AS hypo_count,\n    SUM(CASE WHEN di.label LIKE 'Systolic Blood Pressure%' THEN 1 ELSE 0 END) AS sbp_count,\n    SUM(CASE WHEN di.label LIKE 'Heart Rate%' AND ce.valuenum > 120 THEN 1 ELSE 0 END) AS tachy_count,\n    SUM(CASE WHEN di.label LIKE 'Heart Rate%' THEN 1 ELSE 0 END) AS hr_count\n  FROM vent_patients vp\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON vp.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime BETWEEN vp.intime AND DATETIME_ADD(vp.intime, INTERVAL 48 HOUR)\n  GROUP BY vp.stay_id\n),\nscore_calc AS (\n  SELECT\n    vp.*,\n    SAFE_DIVIDE(v.hypo_count, v.sbp_count) AS hypo_rate,\n    SAFE_DIVIDE(v.tachy_count, v.hr_count) AS tachy_rate,\n    SAFE_DIVIDE(v.hypo_count, v.sbp_count) + SAFE_DIVIDE(v.tachy_count, v.hr_count) AS composite_score\n  FROM vent_patients vp\n  JOIN vitals_48h v\n    ON vp.stay_id = v.stay_id\n),\npercentiles AS (\n  SELECT\n    APPROX_QUANTILES(composite_score, 100)[OFFSET(90)] AS p90_score,\n    APPROX_QUANTILES(composite_score, 100)[OFFSET(75)] AS p75_score\n  FROM score_calc\n),\ntop_quartile AS (\n  SELECT sc.*\n  FROM score_calc sc\n  CROSS JOIN percentiles p\n  WHERE sc.composite_score >= p.p75_score\n),\nmetrics_top_quartile AS (\n  SELECT\n    AVG(CASE WHEN hypo_rate > 0 THEN 1 ELSE 0 END) AS prop_hypotension,\n    AVG(CASE WHEN tachy_rate > 0 THEN 1 ELSE 0 END) AS prop_tachycardia,\n    AVG(los) AS avg_icu_los_days,\n    AVG(hospital_expire_flag) AS hospital_mortality_rate\n  FROM top_quartile\n)\nSELECT\n  p.p90_score AS score_90th_percentile,\n  tq.prop_hypotension,\n  tq.prop_tachycardia,\n  tq.avg_icu_los_days,\n  tq.hospital_mortality_rate\nFROM metrics_top_quartile tq\nCROSS JOIN percentiles p;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references p.p90_score which is neither grouped nor aggregated at [72:3]; reason: invalidQuery, location: query, message: SELECT list expression references p.p90_score which is neither grouped nor aggregated at [72:3]\n\nLocation: US\nJob ID: 8de584df-ba05-47f1-94fc-58c7c74f24ef\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 46\u2011year\u2011old male: among male patients aged 41\u201351 admitted with chest pain or AMI, report counts, percentages, and mean, median, IQR of initial Troponin T by category (normal/borderline/elevated).",
+  "final_sql": "WITH troponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\n\ndx_cohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.subject_id = dx.subject_id\n   AND adm.hadm_id = dx.hadm_id\n  WHERE (\n      (dx.icd_version = 9 AND (\n          dx.icd_code LIKE '7865%'        -- chest pain\n          OR dx.icd_code LIKE '410%'      -- AMI\n      ))\n      OR (dx.icd_version = 10 AND (\n          dx.icd_code LIKE 'R07%'         -- chest pain\n          OR dx.icd_code LIKE 'I21%'      -- AMI\n      ))\n  )\n),\n\ncohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM dx_cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON c.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON c.subject_id = adm.subject_id AND c.hadm_id = adm.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 41 AND 51\n),\n\nearliest_trop AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN troponin_items t\n    ON l.itemid = t.itemid\n  JOIN cohort c\n    ON l.subject_id = c.subject_id AND l.hadm_id = c.hadm_id\n  WHERE l.valuenum IS NOT NULL\n),\n\ninitial_trop AS (\n  SELECT subject_id, hadm_id, valuenum\n  FROM earliest_trop\n  WHERE rn = 1\n),\n\ncategorized AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum,\n    CASE\n      WHEN valuenum <= 0.01 THEN 'normal'\n      WHEN valuenum <= 0.03 THEN 'borderline'\n      ELSE 'elevated'\n    END AS category\n  FROM initial_trop\n)\n\nSELECT\n  category,\n  COUNT(*) AS n,\n  ROUND(100 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS perc,\n  ROUND(AVG(valuenum), 4) AS mean_trop,\n  ROUND(APPROX_QUANTILES(valuenum, 100)[OFFSET(50)], 4) AS median_trop,\n  ROUND(APPROX_QUANTILES(valuenum, 4)[OFFSET(1)], 4) AS q1_trop,\n  ROUND(APPROX_QUANTILES(valuenum, 4)[OFFSET(3)], 4) AS q3_trop\nFROM categorized\nGROUP BY category\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

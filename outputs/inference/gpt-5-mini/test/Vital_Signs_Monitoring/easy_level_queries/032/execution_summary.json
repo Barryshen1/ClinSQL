@@ -1,0 +1,16 @@
+{
+  "query": "For a 43-year-old female in ICU, among females 38\u201348, what's the maximum respiratory rate in the first 24 hours?",
+  "final_sql": "WITH\n-- ICU stays for female patients aged 38-48\nicu_females AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    p.anchor_age,\n    p.gender\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  USING(subject_id)\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n),\n\n-- Identify candidate d_items corresponding to respiratory rate\nrr_itemids AS (\n  SELECT DISTINCT itemid\n  FROM\n    `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    -- look for common phrasing of respiratory rate in the item label / abbreviation\n    (\n      REGEXP_CONTAINS(LOWER(label), r'respirat.*rate')\n      OR REGEXP_CONTAINS(LOWER(label), r'\\bresp rate\\b')\n      OR REGEXP_CONTAINS(LOWER(abbreviation), r'\\brr\\b')\n    )\n),\n\n-- Pull RR chart events that fall within first 24 hours of the icu stay\nrr_events_first24 AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM\n    icu_females f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.subject_id = f.subject_id\n    AND ce.stay_id = f.stay_id\n  JOIN\n    rr_itemids r\n    ON ce.itemid = r.itemid\n  WHERE\n    ce.valuenum IS NOT NULL\n    AND ce.charttime >= f.intime\n    AND ce.charttime <= TIMESTAMP_ADD(f.intime, INTERVAL 24 HOUR)\n),\n\n-- Compute max RR per ICU stay in the first 24 hours\nmax_rr_per_stay AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.anchor_age,\n    MAX(e.valuenum) AS max_rr_first24\n  FROM\n    icu_females f\n  LEFT JOIN\n    rr_events_first24 e\n  USING(subject_id, hadm_id, stay_id)\n  GROUP BY\n    f.subject_id, f.hadm_id, f.stay_id, f.intime, f.anchor_age\n)\n\n-- Final: show stays for 43-year-old female(s) (within the 38-48 cohort) and their max RR in first 24h\nSELECT\n  subject_id,\n  hadm_id,\n  stay_id,\n  anchor_age,\n  intime,\n  max_rr_first24\nFROM\n  max_rr_per_stay\nWHERE\n  anchor_age = 43\nORDER BY\n  subject_id,\n  stay_id;",
+  "execution_success": true,
+  "row_count": 360,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 360,
+      "error": null
+    }
+  ]
+}

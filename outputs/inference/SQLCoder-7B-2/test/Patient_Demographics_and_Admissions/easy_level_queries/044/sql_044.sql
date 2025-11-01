@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY p.dod) AS q25 FROM patients p JOIN admissions a ON p.subject_id = a.subject_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM a.admittime) = 2017 AND p.anchor_year BETWEEN 73 AND 83;

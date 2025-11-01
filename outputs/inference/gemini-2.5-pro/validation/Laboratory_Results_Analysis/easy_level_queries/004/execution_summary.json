@@ -1,0 +1,22 @@
+{
+  "query": "For my 76-year-old female hospitalized with sepsis, what is the median platelet count (average over first 24 hours) among similar patients?",
+  "final_sql": "WITH SepsisAdmissions AS (\n    -- First, identify all hospital admissions (hadm_id) with a sepsis diagnosis.\n    -- This is done by searching for 'sepsis' in the long title of the diagnosis codes.\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` USING (icd_code, icd_version)\n    WHERE LOWER(long_title) LIKE '%sepsis%'\n),\n\nPatientCohort AS (\n    -- Next, define the specific cohort of \"similar patients\":\n    -- females, aged 71-81, who have a sepsis-related admission.\n    SELECT\n        p.subject_id,\n        a.hadm_id,\n        a.admittime\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a ON p.subject_id = a.subject_id\n    -- Join with our sepsis admissions to filter for the correct diagnosis\n    JOIN SepsisAdmissions AS s ON a.hadm_id = s.hadm_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 71 AND 81 -- A 10-year window around the specified age of 76\n),\n\nFirst24hAvgPlatelets AS (\n    -- For each patient in the cohort, calculate their average platelet count\n    -- using only measurements from the first 24 hours of their hospital stay.\n    SELECT\n        cohort.hadm_id,\n        AVG(le.valuenum) AS avg_platelet_count\n    FROM PatientCohort AS cohort\n    -- Join with lab events to get platelet measurements\n    JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le ON cohort.hadm_id = le.hadm_id\n    WHERE\n        -- Filter for Platelet Count (itemid 51265)\n        le.itemid = 51265\n        -- Ensure the measurement has a valid numeric value\n        AND le.valuenum IS NOT NULL\n        -- Filter for measurements taken within the first 24 hours of admission\n        AND le.charttime BETWEEN cohort.admittime AND DATETIME_ADD(cohort.admittime, INTERVAL 24 HOUR)\n    GROUP BY\n        cohort.hadm_id\n)\n\n-- Finally, calculate the median of the per-patient average platelet counts.\nSELECT\n    -- Using APPROX_QUANTILES to find the median (the 2nd quantile)\n    -- is a standard and efficient method in BigQuery.\n    APPROX_QUANTILES(avg_platelet_count, 2)[OFFSET(1)] AS median_platelet_count_k_ul\nFROM First24hAvgPlatelets;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]\n\nLocation: US\nJob ID: e625d397-320d-466b-95d1-7f2c5fecb1c6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

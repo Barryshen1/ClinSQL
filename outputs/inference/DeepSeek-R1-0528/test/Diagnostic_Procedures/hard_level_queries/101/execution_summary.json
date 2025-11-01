@@ -1,0 +1,22 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,  -- Added missing column\n    i.los,\n    adm.hospital_expire_flag,\n    -- Flag for COPD exacerbation (J441)\n    MAX(CASE WHEN diag.icd_code = 'J441' AND diag.icd_version = 10 THEN 1 ELSE 0 END) AS copd_ex_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON i.hadm_id = adm.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON i.hadm_id = diag.hadm_id\n    AND diag.icd_code = 'J441'\n    AND diag.icd_version = 10\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 88 AND 98\n  GROUP BY p.subject_id, p.anchor_age, i.hadm_id, i.stay_id, i.intime, i.los, adm.hospital_expire_flag\n),\ncases_with_procedures AS (\n  SELECT \n    c.stay_id,\n    COUNT(DISTINCT pe.itemid) AS num_procedures\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.stay_id = pe.stay_id\n    AND pe.starttime >= c.intime\n    AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  WHERE c.copd_ex_flag = 1\n  GROUP BY c.stay_id\n)\n\n-- Final Output\nSELECT \n  (SELECT \n    APPROX_QUANTILES(num_procedures, 100)[OFFSET(75)] \n   FROM cases_with_procedures\n  ) AS percentile_75_procedures,\n  -- Mean ICU LOS (per stay) and Mortality (per admission) for COPD cohort\n  (SELECT AVG(los) FROM cohort WHERE copd_ex_flag = 1) AS mean_los_copd,\n  (SELECT AVG(hospital_expire_flag) FROM cohort WHERE copd_ex_flag = 1) AS mortality_rate_copd,\n  -- Same for control cohort\n  (SELECT AVG(los) FROM cohort WHERE copd_ex_flag = 0) AS mean_los_control,\n  (SELECT AVG(hospital_expire_flag) FROM cohort WHERE copd_ex_flag = 0) AS mortality_rate_control;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside c at [32:27]; reason: invalidQuery, location: query, message: Name intime not found inside c at [32:27]\n\nLocation: US\nJob ID: 21f7c4c9-9ce3-4454-beca-8578efb3e017\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

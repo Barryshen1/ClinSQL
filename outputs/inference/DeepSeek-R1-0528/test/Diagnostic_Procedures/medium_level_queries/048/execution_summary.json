@@ -1,0 +1,16 @@
+{
+  "query": "I have a 95-year-old man with heart failure. Among men 90\u2013100 with HF, what are admission counts and mean MRI/CT per admission for LOS 1\u20133 vs 4\u20137, stratified primary vs secondary?",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n),\nhf_diag AS (\n  SELECT \n    hadm_id, \n    seq_num\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '428%') OR\n    (icd_version = 10 AND icd_code LIKE 'I50%')\n),\nhf_admissions AS (\n  SELECT \n    hadm_id,\n    MIN(seq_num) AS min_seq\n  FROM hf_diag\n  GROUP BY hadm_id\n),\nhf_types AS (\n  SELECT \n    hadm_id,\n    CASE \n      WHEN min_seq = 1 THEN 'Primary'\n      ELSE 'Secondary'\n    END AS hf_type\n  FROM hf_admissions\n),\nmri_ct_events AS (\n  -- ICD procedures (MRI/CT)\n  SELECT \n    p.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d \n    ON p.icd_code = d.icd_code \n    AND p.icd_version = d.icd_version\n  WHERE \n    REGEXP_CONTAINS(d.long_title, r'(?i)MRI|CT')\n\n  UNION ALL\n\n  -- HCPCS procedures (MRI/CT)\n  SELECT \n    h.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh \n    ON h.hcpcs_cd = dh.code\n  WHERE \n    REGEXP_CONTAINS(dh.long_description, r'(?i)MRI|CT') OR\n    REGEXP_CONTAINS(dh.short_description, r'(?i)MRI|CT')\n),\nmri_ct_counts AS (\n  SELECT \n    hadm_id, \n    COUNT(*) AS mri_ct_count\n  FROM mri_ct_events\n  GROUP BY hadm_id\n),\nbase AS (\n  SELECT \n    pa.hadm_id,\n    pa.age_admission,\n    ht.hf_type,\n    DATE_DIFF(pa.dischtime, pa.admittime, DAY) AS los_days,\n    COALESCE(mc.mri_ct_count, 0) AS mri_ct_count\n  FROM patient_admissions pa\n  INNER JOIN hf_types ht \n    ON pa.hadm_id = ht.hadm_id\n  LEFT JOIN mri_ct_counts mc \n    ON pa.hadm_id = mc.hadm_id\n  WHERE \n    pa.age_admission BETWEEN 90 AND 100\n),\nlos_groups AS (\n  SELECT \n    hadm_id,\n    hf_type,\n    mri_ct_count,\n    CASE \n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n    END AS los_group\n  FROM base\n  WHERE los_days BETWEEN 1 AND 7\n)\nSELECT \n  hf_type,\n  los_group,\n  COUNT(hadm_id) AS admission_count,\n  AVG(mri_ct_count) AS mean_mri_ct_per_admission\nFROM los_groups\nGROUP BY hf_type, los_group\nORDER BY hf_type, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 77\u2011yo male with heart failure: among males 72\u201382 with HF, compare ICU vs non\u2011ICU by LOS (\u22643, 4\u20136, 7\u201310, >10 days); report in\u2011hospital mortality, median LOS, average comorbidity count.",
+  "final_sql": "WITH hf_icd_codes AS (\n  -- Get all ICD codes for heart failure (ICD-9: 428.x, ICD-10: I50.x)\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^428'))\n     OR (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^I50'))\n),\nhf_admissions AS (\n  -- Admissions for males aged 72-82 with HF diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN hf_icd_codes hf\n    ON d.icd_code = hf.icd_code AND d.icd_version = hf.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 72 AND 82\n),\ncomorbidity_counts AS (\n  -- Count distinct diagnoses per admission\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT icd_code) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nicu_flags AS (\n  -- Flag admissions with ICU stay\n  SELECT DISTINCT hadm_id, 1 AS icu_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nhf_admissions_full AS (\n  -- Merge all info\n  SELECT\n    hfa.subject_id,\n    hfa.hadm_id,\n    hfa.admittime,\n    hfa.dischtime,\n    hfa.hospital_expire_flag,\n    hfa.anchor_age,\n    hfa.gender,\n    IFNULL(cf.comorbidity_count, 0) AS comorbidity_count,\n    IFNULL(icu.icu_flag, 0) AS icu_flag,\n    -- LOS in days (fractional)\n    SAFE_DIVIDE(TIMESTAMP_DIFF(hfa.dischtime, hfa.admittime, SECOND), 86400) AS los_days\n  FROM hf_admissions hfa\n  LEFT JOIN comorbidity_counts cf\n    ON hfa.hadm_id = cf.hadm_id\n  LEFT JOIN icu_flags icu\n    ON hfa.hadm_id = icu.hadm_id\n),\nbinned_admissions AS (\n  -- Bin LOS\n  SELECT\n    *,\n    CASE\n      WHEN los_days <= 3 THEN '\u22643'\n      WHEN los_days > 3 AND los_days <= 6 THEN '4\u20136'\n      WHEN los_days > 6 AND los_days <= 10 THEN '7\u201310'\n      WHEN los_days > 10 THEN '>10'\n      ELSE 'Unknown'\n    END AS los_bin\n  FROM hf_admissions_full\n  WHERE los_days IS NOT NULL\n)\nSELECT\n  CASE WHEN icu_flag = 1 THEN 'ICU' ELSE 'Non-ICU' END AS group_type,\n  los_bin,\n  COUNT(*) AS admission_count,\n  SAFE_DIVIDE(SUM(CAST(hospital_expire_flag AS INT64)), COUNT(*)) AS in_hospital_mortality_rate,\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los_days,\n  AVG(comorbidity_count) AS avg_comorbidity_count\nFROM binned_admissions\nWHERE los_bin != 'Unknown'\nGROUP BY group_type, los_bin\nORDER BY group_type, \n  CASE los_bin\n    WHEN '\u22643' THEN 1\n    WHEN '4\u20136' THEN 2\n    WHEN '7\u201310' THEN 3\n    WHEN '>10' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "As an 84-year-old man, among male patients aged 79\u201389 admitted with suspected ACS, what are counts, percentages, and mean, median, and IQR of the initial Troponin T by category (normal/borderline/elevated)?",
+  "final_sql": "WITH ACS_admissions AS (\n  SELECT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 79 AND 89\n    AND (\n      LOWER(dd.long_title) LIKE '%acute myocardial infarction%' OR\n      LOWER(dd.long_title) LIKE '%unstable angina%' OR\n      LOWER(dd.long_title) LIKE '%acute coronary syndrome%' OR\n      LOWER(dd.long_title) LIKE '%myocardial infarction%'\n    )\n),\n\ninitial_troponin AS (\n  SELECT le.hadm_id,\n         le.charttime,\n         le.valuenum,\n         le.valueuom\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n    ON le.itemid = dli.itemid\n  WHERE (\n         LOWER(dli.label) LIKE '%troponin%' AND\n         LOWER(dli.label) LIKE '%t%'\n        )\n    AND le.hadm_id IN (SELECT hadm_id FROM ACS_admissions)\n),\n\ninitial_troponin_per_admission AS (\n  SELECT hadm_id, valuenum\n  FROM (\n    SELECT hadm_id, valuenum,\n           ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n    FROM initial_troponin\n  )\n  WHERE rn = 1 AND valuenum IS NOT NULL\n),\n\ntroponin_cat AS (\n  SELECT hadm_id,\n         valuenum,\n         CASE\n           WHEN valuenum <= 0.04 THEN 'normal'\n           WHEN valuenum > 0.04 AND valuenum <= 0.39 THEN 'borderline'\n           WHEN valuenum > 0.39 THEN 'elevated'\n           ELSE NULL\n         END AS category\n  FROM initial_troponin_per_admission\n  WHERE valuenum IS NOT NULL\n),\n\n-- total number of admissions contributing to the analysis\ntotal_adms AS (\n  SELECT COUNT(DISTINCT hadm_id) AS total\n  FROM troponin_cat\n),\n\n-- basic category statistics: counts, percentages, mean\ncat_stats AS (\n  SELECT c.category,\n         COUNT(*) AS count,\n         ROUND(COUNT(*) * 100.0 / MAX(ta.total), 1) AS percent,\n         AVG(c.valuenum) AS mean_troponin\n  FROM troponin_cat c\n  CROSS JOIN total_adms ta\n  GROUP BY c.category\n),\n\n-- quartiles per category to derive median and IQR\nquartiles AS (\n  SELECT category,\n         APPROX_QUANTILES(valuenum, 4) AS quantiles\n  FROM troponin_cat\n  GROUP BY category\n)\n\nSELECT s.category,\n       s.count,\n       s.percent,\n       s.mean_troponin,\n       (q.quantiles)[OFFSET(2)] AS median_troponin,\n       (q.quantiles)[OFFSET(1)] AS q1_troponin,\n       (q.quantiles)[OFFSET(3)] AS q3_troponin,\n       ( (q.quantiles)[OFFSET(3)] - (q.quantiles)[OFFSET(1)] ) AS iqr_troponin\nFROM cat_stats s\nJOIN quartiles q\n  ON s.category = q.category\nORDER BY s.category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references ta.total which is neither grouped nor aggregated at [70:35]; reason: invalidQuery, location: query, message: SELECT list expression references ta.total which is neither grouped nor aggregated at [70:35]\n\nLocation: US\nJob ID: 5b7ea599-7c24-4285-92e4-caaf91fc1f50\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

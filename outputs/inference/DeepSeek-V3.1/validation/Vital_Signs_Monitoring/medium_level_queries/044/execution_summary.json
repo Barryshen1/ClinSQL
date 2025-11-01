@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m assessing an 86-year-old man: among male ICU patients aged 81\u201391, what percentile is a per-stay average systolic BP of 150 mmHg over the first 48 hours?",
+  "final_sql": "WITH patient_stays AS (\n  SELECT \n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    DATETIME_ADD(ie.intime, INTERVAL 48 HOUR) AS end_time_48hr,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 81 AND 91\n),\n\nsbp_measurements AS (\n  SELECT \n    ps.stay_id,\n    AVG(ce.valuenum) AS avg_sbp\n  FROM patient_stays ps\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ps.stay_id = ce.stay_id\n  WHERE ce.itemid = 220179  -- Systolic blood pressure\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n    AND ce.valuenum < 300  -- Reasonable range filter\n    AND ce.charttime >= ps.intime\n    AND ce.charttime < ps.end_time_48hr\n  GROUP BY ps.stay_id\n  HAVING COUNT(ce.valuenum) >= 1  -- At least one measurement\n),\n\npercentiles AS (\n  SELECT \n    APPROX_QUANTILES(avg_sbp, 100) AS pct\n  FROM sbp_measurements\n)\n\nSELECT \n  (SELECT pct[OFFSET(50)] FROM percentiles) AS median_sbp,\n  (SELECT MIN(offset) \n   FROM percentiles, UNNEST(pct) AS percentile_value WITH OFFSET offset\n   WHERE percentile_value >= 150\n  ) AS percentile_rank\nFROM percentiles\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"percentiles\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: percentiles, message: Table \"percentiles\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: 274c2339-d635-4035-a28a-4f345633dab4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE_CONT at [34:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE_CONT at [34:3]\n\nLocation: US\nJob ID: a6bcb853-5296-43b1-89e8-9a085c5dfa2c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

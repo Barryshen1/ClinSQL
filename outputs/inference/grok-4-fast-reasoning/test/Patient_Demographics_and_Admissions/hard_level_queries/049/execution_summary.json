@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 66\u2011year\u2011old woman. Among female Medicare patients 61\u201371 admitted from SNF with a principal diagnosis of acute kidney injury, what's the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >6 days?",
+  "final_sql": "WITH index_adms AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    p.anchor_age,\n    p.anchor_year,\n    CAST(p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year AS INT64) AS age_at_admit\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id AND d.seq_num = 1\n  WHERE \n    p.gender = 'F'\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'SNF'\n    AND a.hospital_expire_flag = 0\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('5845', '5846', '5848', '5849'))\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n    )\n    AND CAST(p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year AS INT64) BETWEEN 61 AND 71\n),\nindex_with_readmit AS (\n  SELECT \n    *,\n    EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` ra\n      WHERE \n        ra.subject_id = ia.subject_id\n        AND ra.hadm_id != ia.hadm_id\n        AND ra.admittime > ia.dischtime\n        AND ra.admittime < TIMESTAMP_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) AS has_readmission\n  FROM index_adms ia\n)\nSELECT \n  COUNT(*) AS total_index_admissions,\n  COUNTIF(has_readmission) AS num_readmitted,\n  ROUND(SAFE_DIVIDE(COUNTIF(has_readmission) * 100.0, COUNT(*)), 2) AS readmission_rate_pct,\n  (SELECT APPROX_QUANTILES(los, 101)[OFFSET(50)] FROM index_with_readmit WHERE has_readmission = TRUE) AS median_los_readmitted_days,\n  (SELECT APPROX_QUANTILES(los, 101)[OFFSET(50)] FROM index_with_readmit WHERE has_readmission = FALSE) AS median_los_non_readmitted_days,\n  ROUND(SAFE_DIVIDE(COUNTIF(los > 6) * 100.0, COUNT(*)), 2) AS pct_index_los_gt6_days\nFROM index_with_readmit;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:8]\n\nLocation: US\nJob ID: f46705bf-3cff-4f0a-8cd1-8a349c814428\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: e3039066-8558-49db-bfc3-87958a8e7307\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

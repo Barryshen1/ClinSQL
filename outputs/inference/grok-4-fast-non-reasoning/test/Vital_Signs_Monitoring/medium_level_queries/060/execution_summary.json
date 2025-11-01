@@ -1,0 +1,28 @@
+{
+  "query": "Concerned about my 75-year-old female ICU patient: among female ICU patients aged 70\u201380, based on maximum SBP in first 24h, report percent by SBP category (<130;130\u2013139;140\u2013159;\u2265160) and stroke rate.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT stay_id, subject_id, hadm_id, intime\n  FROM (\n    SELECT stay_id, subject_id, hadm_id, intime,\n           ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  )\n  WHERE rn = 1\n),\neligible_patients AS (\n  SELECT f.stay_id, f.subject_id, f.hadm_id, f.intime\n  FROM first_icu_stays f\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON f.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n),\nmax_sbp AS (\n  SELECT \n    e.stay_id,\n    e.subject_id,\n    e.hadm_id,\n    MAX(ce.valuenum) AS max_sbp\n  FROM eligible_patients e\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON e.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime BETWEEN e.intime AND TIMESTAMP_ADD(e.intime, INTERVAL 24 HOUR)\n    AND di.label = 'Arterial systolic blood pressure'\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n  GROUP BY e.stay_id, e.subject_id, e.hadm_id\n  HAVING max_sbp IS NOT NULL  -- Exclude stays with no valid SBP\n),\nstroke_cohort AS (\n  SELECT \n    m.*,\n    CASE \n      WHEN m.max_sbp < 130 THEN '<130'\n      WHEN m.max_sbp BETWEEN 130 AND 139 THEN '130-139'\n      WHEN m.max_sbp BETWEEN 140 AND 159 THEN '140-159'\n      ELSE '>=160'\n    END AS sbp_category,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n          ON di.icd_code = dd.icd_code\n         AND di.icd_version = dd.icd_version\n        WHERE di.subject_id = m.subject_id\n          AND di.hadm_id = m.hadm_id\n          AND di.icd_version = CAST('10' AS INT64)\n          AND di.icd_code LIKE 'I6[0-4]%'  -- I60-I64: specific stroke codes (hemorrhagic/ischemic)\n      ) THEN 1 ELSE 0 \n    END AS has_stroke\n  FROM max_sbp m\n),\ntotal_stats AS (\n  SELECT \n    COUNT(*) AS total_patients,\n    SUM(has_stroke) AS total_strokes\n  FROM stroke_cohort\n)\nSELECT \n  sc.sbp_category,\n  COUNT(*) AS patient_count,\n  ROUND(COUNT(*) * 100.0 / ts.total_patients, 1) AS percent_of_cohort,\n  SUM(sc.has_stroke) AS stroke_count,\n  ROUND(SUM(sc.has_stroke) * 100.0 / COUNT(*), 1) AS stroke_rate_in_category_pct\nFROM stroke_cohort sc\nCROSS JOIN total_stats ts\nGROUP BY sc.sbp_category, ts.total_patients\nORDER BY \n  CASE sc.sbp_category\n    WHEN '<130' THEN 1\n    WHEN '130-139' THEN 2\n    WHEN '140-159' THEN 3\n    ELSE 4\n  END\n;\n-- Overall stroke rate: (total_strokes * 100.0 / total_patients) from total_stats (computed separately if needed);",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in WHERE clause at [4:9]; reason: invalidQuery, location: query, message: Analytic function not allowed in WHERE clause at [4:9]\n\nLocation: US\nJob ID: 53da1f2b-e9e7-4845-8801-a91e9928adfd\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [55:15]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [55:15]\n\nLocation: US\nJob ID: 8e5b3c51-0837-483c-890d-01214b06ba70\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

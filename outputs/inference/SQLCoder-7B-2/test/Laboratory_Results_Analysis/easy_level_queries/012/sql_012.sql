@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY value) AS seventy_five_percentile FROM labevents WHERE subject_id = 100001 AND hadm_id = 100001 AND itemid = 100001 AND charttime >= 2017-01-01 AND charttime < 2017-12-31 AND value IS NOT NULL;

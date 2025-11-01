@@ -1,0 +1,22 @@
+{
+  "query": "For a 49-year-old woman with TIA: among female patients 44\u201354, what are p25, p50, p75 of diagnostic imaging per admission by LOS (1\u20134 vs 5\u20137 days) and ICU use?",
+  "final_sql": "WITH pop AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    p.anchor_age,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n        WHERE i.hadm_id = a.hadm_id\n      ) THEN 1 ELSE 0\n    END AS icu_use\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON dd.icd_code = di.icd_code AND dd.icd_version = di.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    -- TIA filter (ICD-9: 435.x, ICD-10: G45.x)\n    AND REGEXP_CONTAINS(LOWER(dd.long_title), r'transient cerebral ischemic attack')\n    AND a.dischtime IS NOT NULL\n),\nimaging_per_adm AS (\n  SELECT\n    p.hadm_id,\n    p.icu_use,\n    SUM(\n      CASE\n        WHEN pe.starttime BETWEEN p.admittime AND p.dischtime\n             AND (\n                   LOWER(di.category) LIKE '%imaging%'\n                   OR LOWER(di.label) LIKE '%imaging%'\n                   OR LOWER(di.label) LIKE '%radiology%'\n                  )\n        THEN 1\n        ELSE 0\n      END\n    ) AS imaging_count\n  FROM pop p\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON pe.hadm_id = p.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON di.itemid = pe.itemid\n  GROUP BY p.hadm_id, p.icu_use\n),\nadmissions_with_counts AS (\n  SELECT\n    p.hadm_id,\n    p.icu_use,\n    p.admittime,\n    p.dischtime,\n    TIMESTAMP_DIFF(p.dischtime, p.admittime, DAY) AS los_days,\n    COALESCE(ip.imaging_count, 0) AS imaging_count\n  FROM pop p\n  LEFT JOIN imaging_per_adm ip\n    ON ip.hadm_id = p.hadm_id\n),\ngrouped AS (\n  SELECT\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7'\n    END AS los_group,\n    icu_use,\n    imaging_count\n  FROM admissions_with_counts\n  WHERE los_days BETWEEN 1 AND 7\n)\nSELECT\n  los_group,\n  icu_use,\n  quantiles[OFFSET(1)] AS p25,\n  quantiles[OFFSET(2)] AS p50,\n  quantiles[OFFSET(3)] AS p75\nFROM (\n  SELECT\n    los_group,\n    icu_use,\n    APPROX_QUANTILES(imaging_count, 4) AS quantiles\n  FROM grouped\n  GROUP BY los_group, icu_use\n) AS q\nORDER BY los_group, icu_use;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column quantiles which is neither grouped nor aggregated at [78:3]; reason: invalidQuery, location: query, message: SELECT list expression references column quantiles which is neither grouped nor aggregated at [78:3]\n\nLocation: US\nJob ID: a686ffe5-fb95-4eb0-8b26-7c19719fbf9d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

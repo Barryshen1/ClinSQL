@@ -1,0 +1,23 @@
+{
+  "query": "For a 93\u2011year\u2011old male ICU patient on RRT: among male ICU patients aged 88\u201398, what percentile is an instability score of 85 in the first 72 hours, and what are ICU LOS and hospital mortality for the most unstable quartile?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    icu.stay_id,\n    icu.hadm_id,\n    icu.intime,\n    icu.los AS icu_los,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    adm.hospital_expire_flag,\n    -- Calculate age at ICU admission\n    p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year) BETWEEN 88 AND 98\n),\ninstability_scores AS (\n  SELECT\n    c.stay_id,\n    c.hadm_id,\n    c.icu_los,\n    c.hospital_expire_flag,\n    SUM(CASE WHEN di.lownormalvalue IS NOT NULL AND di.highnormalvalue IS NOT NULL \n              AND (ce.valuenum < di.lownormalvalue OR ce.valuenum > di.highnormalvalue)\n             THEN 1 ELSE 0 END) AS instability_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n    AND ce.charttime <= c.intime + INTERVAL '72' HOUR\n    AND ce.valuenum IS NOT NULL\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  GROUP BY c.stay_id, c.hadm_id, c.icu_los, c.hospital_expire_flag\n),\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY instability_score DESC) AS instability_quartile\n  FROM instability_scores\n)\nSELECT\n  -- Percentile of 85\n  COUNTIF(instability_score <= 85) * 100.0 / COUNT(*) AS percentile_85,\n  -- ICU LOS for most unstable quartile (quartile 1)\n  AVG(CASE WHEN instability_quartile = 1 THEN icu_los END) AS avg_icu_los_top_quartile,\n  -- Hospital mortality for most unstable quartile\n  AVG(CASE WHEN instability_quartile = 1 THEN hospital_expire_flag END) AS mortality_top_quartile\nFROM quartiles;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword BETWEEN at [1:23]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword BETWEEN at [1:23]\n\nLocation: US\nJob ID: 45d05f91-1bab-467f-9039-e1288fef5c4f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

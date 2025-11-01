@@ -1,0 +1,16 @@
+{
+  "query": "For my 61-year-old male ICU patient: among male ICU patients aged 56\u201366, categorize per-stay mean arterial pressure (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report patient counts and stroke rates.",
+  "final_sql": "WITH patient_icu AS (\n    SELECT \n        p.subject_id,\n        p.anchor_age,\n        ie.stay_id,\n        ie.hadm_id,\n        ie.first_careunit,\n        ie.intime,\n        ie.outtime\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie\n        ON p.subject_id = ie.subject_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 56 AND 66\n),\n\nmap_per_stay AS (\n    SELECT \n        pi.stay_id,\n        AVG(ce.valuenum) AS avg_map\n    FROM patient_icu pi\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON pi.stay_id = ce.stay_id\n    WHERE ce.itemid = 220181  -- MAP itemid\n        AND ce.valuenum IS NOT NULL\n    GROUP BY pi.stay_id\n),\n\nmap_categories AS (\n    SELECT \n        stay_id,\n        avg_map,\n        CASE \n            WHEN avg_map < 65 THEN '<65'\n            WHEN avg_map BETWEEN 65 AND 74 THEN '65-74'\n            WHEN avg_map BETWEEN 75 AND 84 THEN '75-84'\n            WHEN avg_map >= 85 THEN '>=85'\n            ELSE 'Other'\n        END AS map_category\n    FROM map_per_stay\n),\n\nstroke_diagnoses AS (\n    SELECT \n        hadm_id,\n        MAX(CASE \n            WHEN (d.icd_version = 10 AND d.icd_code LIKE 'I63%') \n                OR (d.icd_version = 9 AND (d.icd_code LIKE '433%1' OR d.icd_code LIKE '434%1' OR d.icd_code = '436'))\n            THEN 1 \n            ELSE 0 \n        END) AS has_stroke\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    GROUP BY hadm_id\n)\n\nSELECT \n    mc.map_category,\n    COUNT(mc.stay_id) AS stay_count,\n    SUM(sd.has_stroke) AS stroke_count,\n    ROUND(100.0 * SUM(sd.has_stroke) / COUNT(mc.stay_id), 2) AS stroke_rate_percent\nFROM map_categories mc\nINNER JOIN patient_icu pi\n    ON mc.stay_id = pi.stay_id\nLEFT JOIN stroke_diagnoses sd\n    ON pi.hadm_id = sd.hadm_id\nGROUP BY mc.map_category\nORDER BY \n    CASE mc.map_category\n        WHEN '<65' THEN 1\n        WHEN '65-74' THEN 2\n        WHEN '75-84' THEN 3\n        WHEN '>=85' THEN 4\n        ELSE 5\n    END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

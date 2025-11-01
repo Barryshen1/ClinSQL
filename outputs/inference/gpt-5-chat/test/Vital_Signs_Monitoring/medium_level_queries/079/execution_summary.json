@@ -1,0 +1,22 @@
+{
+  "query": "For a 45-year-old male in ICU: among male ICU patients 40\u201350, report percent in per-stay mean SBP categories (<140; 140\u2013159; \u2265160 mmHg) during first 48 h and MI rate per category.",
+  "final_sql": "WITH male_40_50 AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 40 AND 50\n),\nsbp_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE 'systolic blood pressure%'\n    AND LOWER(unitname) = 'mmhg'\n),\nsbp_48h AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    AVG(ce.valuenum) AS mean_sbp\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN male_40_50 p\n    ON icu.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON icu.stay_id = ce.stay_id\n  JOIN sbp_itemids sbp\n    ON ce.itemid = sbp.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.charttime >= icu.intime\n    AND ce.charttime < DATETIME_ADD(icu.intime, INTERVAL 48 HOUR)\n  GROUP BY icu.subject_id, icu.hadm_id, icu.stay_id\n),\nsbp_cats AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    mean_sbp,\n    CASE\n      WHEN mean_sbp < 140 THEN '<140'\n      WHEN mean_sbp BETWEEN 140 AND 159 THEN '140-159'\n      ELSE '>=160'\n    END AS sbp_cat\n  FROM sbp_48h\n),\nmi_flags AS (\n  SELECT DISTINCT\n    d.hadm_id,\n    1 AS mi_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE (d.icd_version = 9 AND d.icd_code LIKE '410%')\n     OR (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n)\nSELECT\n  sbp_cat,\n  COUNT(*) AS n_stays,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct_of_stays,\n  ROUND(SUM(CASE WHEN mf.mi_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS mi_rate_pct\nFROM sbp_cats sc\nLEFT JOIN mi_flags mf\n  ON sc.hadm_id = mf.hadm_id\nGROUP BY sbp_cat\nORDER BY sbp_cat;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name icd_code is ambiguous at [51:32]; reason: invalidQuery, location: query, message: Column name icd_code is ambiguous at [51:32]\n\nLocation: US\nJob ID: 98e51ed8-5be3-4744-a5a6-37baefd8829a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

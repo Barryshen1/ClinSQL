@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH diabetic_hf_admissions AS (\n  -- Step 1 & 2: male patients age 53-63 with both diabetes and heart failure\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      ON a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 53 AND 63\n    -- Diabetes ICD-10 E10.x or E11.x, Heart failure I50.x\n    AND (\n      d.icd_code LIKE 'E10%' \n      OR d.icd_code LIKE 'E11%'\n      OR d.icd_code LIKE 'I50%'\n    )\n  GROUP BY\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  HAVING\n    -- must have at least one diabetes and one heart failure diagnosis\n    COUNT(DISTINCT CASE WHEN d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' THEN d.icd_code END) >= 1\n    AND COUNT(DISTINCT CASE WHEN d.icd_code LIKE 'I50%' THEN d.icd_code END) >= 1\n),\n\nglp1_events AS (\n  -- Step 3: find GLP-1 RA prescription events\n  SELECT\n    hadm_id,\n    MIN(starttime) AS first_tide_start,\n    ARRAY_AGG(starttime) AS all_starts\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    LOWER(drug) LIKE '%tide%'  -- exenatide, liraglutide, etc.\n    AND LOWER(route) LIKE '%subcutaneous%'  -- injectable\n  GROUP BY\n    hadm_id\n),\n\nflags AS (\n  -- Step 4: flag early vs late initiation\n  SELECT\n    d.subject_id,\n    d.hadm_id,\n    d.admittime,\n    d.dischtime,\n    CASE\n      WHEN ge.first_tide_start IS NOT NULL\n       AND DATETIME_DIFF(ge.first_tide_start, d.admittime, HOUR) <= 24\n      THEN 1 ELSE 0\n    END AS early_flag,\n    CASE\n      WHEN ge.all_starts IS NOT NULL\n       AND EXISTS (\n         SELECT 1\n         FROM UNNEST(ge.all_starts) AS st\n         WHERE DATETIME_DIFF(d.dischtime, st, HOUR) <= 12\n       )\n      THEN 1 ELSE 0\n    END AS late_flag\n  FROM\n    diabetic_hf_admissions AS d\n    LEFT JOIN glp1_events AS ge\n      ON d.hadm_id = ge.hadm_id\n)\n\n-- Step 5: aggregate percentages\nSELECT\n  COUNT(*) AS total_admissions,\n  ROUND(100.0 * SUM(early_flag) / COUNT(*), 1) AS pct_initiated_within_first_24h,\n  ROUND(100.0 * SUM(late_flag)  / COUNT(*), 1) AS pct_initiated_final_12h\nFROM\n  flags;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

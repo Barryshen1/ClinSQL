@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72\u2011yo man. Among men 67\u201377 with heart failure, what are p25/p50/p75 numbers of imaging studies per admission, by LOS 1\u20134 vs 5\u20137 days and primary vs secondary HF?",
+  "final_sql": "WITH\n-- Get male patients aged 67-77\neligible_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 67 AND 77\n),\n\n-- Get HF admissions with LOS categorization\nhf_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    -- Calculate LOS in days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- Categorize LOS\n    CASE\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 5 AND 7 THEN '5-7 days'\n      ELSE NULL\n    END AS los_category,\n    -- Get HF diagnosis info\n    d.seq_num,\n    d.icd_code,\n    -- Determine if HF is primary (seq_num = 1) or secondary\n    CASE\n      WHEN d.seq_num = 1 THEN 'Primary HF'\n      ELSE 'Secondary HF'\n    END AS hf_type\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    eligible_patients p ON a.subject_id = p.subject_id\n  WHERE\n    -- ICD-10 codes for heart failure (I50.*)\n    (d.icd_code LIKE 'I50%' OR d.icd_code LIKE 'I50.%')\n    AND d.icd_version = 10\n    AND a.hospital_expire_flag = 0  -- Exclude patients who died in hospital\n),\n\n-- Count imaging studies per admission\nimaging_counts AS (\n  SELECT\n    h.hadm_id,\n    h.los_category,\n    h.hf_type,\n    COUNT(DISTINCT hc.hcpcs_cd) AS imaging_study_count\n  FROM\n    hf_admissions h\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents` hc\n    ON h.hadm_id = hc.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh\n    ON hc.hcpcs_cd = dh.code\n  WHERE\n    -- Filter for imaging studies (Radiology category) with explicit cast\n    CAST(dh.category AS STRING) = 'Radiology'\n  GROUP BY\n    h.hadm_id, h.los_category, h.hf_type\n)\n\n-- Calculate percentiles by LOS category and HF type\nSELECT\n  los_category,\n  hf_type,\n  APPROX_QUANTILES(imaging_study_count, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(imaging_study_count, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(imaging_study_count, 4)[OFFSET(3)] AS p75\nFROM\n  imaging_counts\nGROUP BY\n  los_category, hf_type\nORDER BY\n  los_category, hf_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [67:5]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [67:5]\n\nLocation: US\nJob ID: 2872bbd4-8a69-4973-abb6-ea6c4eb365bb\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

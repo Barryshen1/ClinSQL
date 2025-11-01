@@ -1,0 +1,23 @@
+{
+  "query": "For a 56\u2011year\u2011old man: among men 51\u201361 with STEMI vs NSTEMI, show in\u2011hospital mortality (%) and N by LOS (1\u20132,3\u20135,6\u20139,\u226510 days) and comorbidity groups (0\u20131,2,\u22653) with CKD and diabetes prevalence.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.admittime, DATE(p.anchor_year - p.anchor_age, 1, 1), YEAR) AS age_at_admission,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND TIMESTAMP_DIFF(a.admittime, DATE(p.anchor_year - p.anchor_age, 1, 1), YEAR) BETWEEN 51 AND 61\n    AND a.dischtime IS NOT NULL\n),\nprimary_diagnosis AS (\n  SELECT\n    d.hadm_id,\n    di.long_title,\n    CASE \n      WHEN di.long_title LIKE '%transmural%' OR di.long_title LIKE '%STEMI%' THEN 'STEMI'\n      WHEN di.long_title LIKE '%without ST segment elevation%' OR di.long_title LIKE '%NSTEMI%' THEN 'NSTEMI'\n      ELSE 'Other'\n    END AS mi_type\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di \n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE \n    d.seq_num = 1\n    AND d.icd_version = 10\n),\ncomorbidities AS (\n  SELECT\n    d.hadm_id,\n    MAX(CASE WHEN d.icd_code IN ('E10','E11','E12','E13','E14') THEN 1 ELSE 0 END) AS has_diabetes,\n    MAX(CASE WHEN d.icd_code LIKE 'N18%' OR d.icd_code LIKE 'N19%' OR d.icd_code LIKE 'N25%' THEN 1 ELSE 0 END) AS has_ckd,\n    SUM(CASE WHEN d.icd_code IN ('E10','E11','E12','E13','E14') THEN 1 ELSE 0 END) +\n    SUM(CASE WHEN d.icd_code LIKE 'N18%' OR d.icd_code LIKE 'N19%' OR d.icd_code LIKE 'N25%' THEN 1 ELSE 0 END) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE d.icd_version = 10\n  GROUP BY d.hadm_id\n),\nmi_admissions AS (\n  SELECT\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.hospital_expire_flag,\n    b.age_at_admission,\n    b.los_days,\n    p.mi_type,\n    COALESCE(c.has_diabetes, 0) AS has_diabetes,\n    COALESCE(c.has_ckd, 0) AS has_ckd,\n    COALESCE(c.comorbidity_count, 0) AS comorbidity_count\n  FROM base_admissions b\n  LEFT JOIN primary_diagnosis p \n    ON b.hadm_id = p.hadm_id\n  LEFT JOIN comorbidities c \n    ON b.hadm_id = c.hadm_id\n  WHERE \n    p.mi_type IN ('STEMI', 'NSTEMI')\n),\nwith_prevalence AS (\n  SELECT\n    *,\n    AVG(has_diabetes) OVER (PARTITION BY mi_type) AS diabetes_prevalence,\n    AVG(has_ckd) OVER (PARTITION BY mi_type) AS ckd_prevalence\n  FROM mi_admissions\n),\ngrouped_data AS (\n  SELECT\n    mi_type,\n    CASE \n      WHEN los_days BETWEEN 1 AND 2 THEN '1-2'\n      WHEN los_days BETWEEN 3 AND 5 THEN '3-5'\n      WHEN los_days BETWEEN 6 AND 9 THEN '6-9'\n      WHEN los_days >= 10 THEN '10+'\n      ELSE 'Unknown'\n    END AS los_group,\n    CASE \n      WHEN comorbidity_count <= 1 THEN '0-1'\n      WHEN comorbidity_count = 2 THEN '2'\n      WHEN comorbidity_count >= 3 THEN '>=3'\n      ELSE 'Unknown'\n    END AS comorbidity_group,\n    COUNT(*) AS N,\n    SUM(hospital_expire_flag) * 100.0 / COUNT(*) AS mortality_rate,\n    MAX(diabetes_prevalence) AS diabetes_prevalence,\n    MAX(ckd_prevalence) AS ckd_prevalence\n  FROM with_prevalence\n  GROUP BY mi_type, los_group, comorbidity_group\n)\nSELECT * FROM grouped_data\nORDER BY mi_type, los_group, comorbidity_group;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"vs\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"vs\" at [1:12]\n\nLocation: US\nJob ID: 6d7f73e9-8178-4a5e-ac2a-b60ad0fa7e1a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

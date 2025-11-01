@@ -1,0 +1,28 @@
+{
+  "query": "For a 74-year-old man with AMI: among men 69\u201379 without shock or respiratory failure, what's in-hospital mortality by LOS (1\u20133, 4\u20137, \u22658 days)? Provide mortality %, median LOS, discharge destinations.",
+  "final_sql": "WITH ami_patients AS (\n    SELECT DISTINCT\n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.hospital_expire_flag,\n        adm.discharge_location,\n        DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n        CASE \n            WHEN DATE_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3'\n            WHEN DATE_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7'\n            WHEN DATE_DIFF(adm.dischtime, adm.admittime, DAY) >= 8 THEN '>=8'\n            ELSE 'Other'\n        END AS los_group\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n    WHERE pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 69 AND 79\n        AND d.long_title LIKE 'Acute myocardial infarction%'\n    -- Exclude shock (R57.x)\n    AND adm.hadm_id NOT IN (\n        SELECT DISTINCT hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n        WHERE icd_code LIKE 'R57%'\n    )\n    -- Exclude respiratory failure (J96.0, J96.2, J96.9)\n    AND adm.hadm_id NOT IN (\n        SELECT DISTINCT hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n        WHERE icd_code IN ('J960', 'J962', 'J969')\n    )\n),\n\nmedian_los AS (\n  SELECT\n    los_group,\n    APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los\n  FROM ami_patients\n  GROUP BY los_group\n)\n\nSELECT \n    a.los_group,\n    COUNT(*) AS num_patients,\n    ROUND(AVG(a.hospital_expire_flag) * 100, 2) AS mortality_percent,\n    m.median_los,\n    a.discharge_location,\n    COUNT(a.discharge_location) AS count_destination\nFROM ami_patients a\nLEFT JOIN median_los m\n  ON a.los_group = m.los_group\nGROUP BY a.los_group, a.discharge_location, m.median_los\nORDER BY a.los_group, count_destination DESC;",
+  "execution_success": true,
+  "row_count": 25,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [44:21]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [44:21]\n\nLocation: US\nJob ID: ee9b7263-48b9-4f79-aaf8-0614b8e74ebf\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f5c68b51-b595-44db-8a0d-f43f66ceeef4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 25,
+      "error": null
+    }
+  ]
+}

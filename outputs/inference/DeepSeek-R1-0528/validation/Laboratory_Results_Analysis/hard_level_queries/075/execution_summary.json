@@ -1,0 +1,22 @@
+{
+  "query": "As a consultant for a 47\u2011year\u2011old man, among male inpatients aged 42\u201352 with DVT, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u226595th percentile report mortality, mean LOS, and compare critical lab rates to all inpatients.",
+  "final_sql": "WITH\n  -- Step 1: Define cohort (male, age 42-52, DVT diagnosis) using EXISTS to avoid duplicates\n  cohort AS (\n    SELECT\n      p.subject_id,\n      a.hadm_id,\n      a.admittime,\n      a.dischtime,\n      a.hospital_expire_flag,\n      p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_admit\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n    WHERE\n      p.gender = 'M'\n      AND EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        WHERE\n          di.hadm_id = a.hadm_id\n          AND (di.icd_code LIKE '453%' OR di.icd_code LIKE 'I82%')  -- DVT codes\n      )\n  ),\n  filtered_cohort AS (\n    SELECT *\n    FROM cohort\n    WHERE age_admit BETWEEN 42 AND 52\n  ),\n  -- Step 2: Lab instability score (abnormal labs in first 72 hours)\n  lab_score AS (\n    SELECT\n      c.hadm_id,\n      COUNT(l.labevent_id) AS lab_instability_score\n    FROM\n      filtered_cohort c\n    LEFT JOIN\n      `physionet-data.mimiciv_3_1_hosp.labevents` l\n      ON c.hadm_id = l.hadm_id\n      AND l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n      AND l.flag IS NOT NULL  -- Abnormal labs only\n    GROUP BY c.hadm_id\n  ),\n  -- Step 3: 95th percentile of the score\n  percentile AS (\n    SELECT\n      APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(95)] AS p95\n    FROM lab_score\n  ),\n  -- Step 4: High-score group (\u226595th percentile)\n  high_score_group AS (\n    SELECT\n      ls.hadm_id,\n      ls.lab_instability_score\n    FROM\n      lab_score ls\n    CROSS JOIN percentile p\n    WHERE ls.lab_instability_score >= p.p95\n  ),\n  -- Step 5a: Critical labs for entire stay (high-score group)\n  high_score_critical AS (\n    SELECT\n      h.hadm_id,\n      c.hospital_expire_flag,\n      DATE_DIFF(c.dischtime, c.admittime, DAY) AS los_days,\n      COUNT(l.labevent_id) AS total_critical_labs\n    FROM\n      high_score_group h\n    JOIN\n      filtered_cohort c\n      ON h.hadm_id = c.hadm_id\n    LEFT JOIN\n      `physionet-data.mimiciv_3_1_hosp.labevents` l\n      ON h.hadm_id = l.hadm_id\n      AND l.charttime BETWEEN c.admittime AND c.dischtime\n      AND l.flag IS NOT NULL\n    GROUP BY h.hadm_id, c.hospital_expire_flag, los_days\n  ),\n  -- Step 5b: Critical labs for all inpatients\n  all_inpatients_critical AS (\n    SELECT\n      a.hadm_id,\n      COUNT(l.labevent_id) AS total_critical_labs\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    LEFT JOIN\n      `physionet-data.mimiciv_3_1_hosp.labevents` l\n      ON a.hadm_id = l.hadm_id\n      AND l.charttime BETWEEN a.admittime AND a.dischtime\n      AND l.flag IS NOT NULL\n    GROUP BY a.hadm_id\n  )\n-- Step 6: Final output (high-score group vs. all inpatients)\nSELECT\n  'High-Score Group' AS cohort_group,\n  COUNT(hadm_id) AS num_patients,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_rate_percent,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(AVG(total_critical_labs), 2) AS mean_critical_labs\nFROM high_score_critical\nUNION ALL\nSELECT\n  'All Inpatients' AS cohort_group,\n  COUNT(hadm_id) AS num_patients,\n  NULL AS mortality_rate_percent,  -- Not required for all inpatients\n  NULL AS mean_los_days,           -- Not required for all inpatients\n  ROUND(AVG(total_critical_labs), 2) AS mean_critical_labs\nFROM all_inpatients_critical;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"di\" at [22:7]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"di\" at [22:7]\n\nLocation: US\nJob ID: b9397c9b-2d58-4d9b-befb-9653a646fe66\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

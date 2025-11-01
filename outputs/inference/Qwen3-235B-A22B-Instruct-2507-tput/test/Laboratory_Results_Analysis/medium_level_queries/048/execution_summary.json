@@ -1,0 +1,16 @@
+{
+  "query": "For a 60-year-old woman: among female patients aged 55\u201365 admitted with AMI whose first hs\u2011TnT >0.01 ng/mL, report patient and admission counts and hs\u2011TnT mean, median, and IQR.",
+  "final_sql": "WITH ami_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (\n    (icd_version = 10 AND SUBSTR(icd_code, 1, 3) IN ('I21', 'I22'))\n    OR (icd_version = 9 AND SUBSTR(icd_code, 1, 3) = '410')\n  )\n),\nami_admissions AS (\n  SELECT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  INNER JOIN ami_codes ac\n    ON di.icd_code = ac.icd_code AND di.icd_version = di.icd_version\n),\nhs_tnt_item AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t high sensitivity%'\n),\nfirst_tnt AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.subject_id, le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN hs_tnt_item hti ON le.itemid = hti.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND le.valuenum > 0\n),\nfirst_tnt_filtered AS (\n  SELECT ft.subject_id, ft.hadm_id, ft.valuenum\n  FROM first_tnt ft\n  WHERE ft.rn = 1\n),\npatient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    -- Calculate age at admission\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 55 AND 65\n),\nqualified_patients AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    ft.valuenum AS first_tnt_value\n  FROM patient_admissions pa\n  INNER JOIN ami_admissions aa\n    ON pa.subject_id = aa.subject_id AND pa.hadm_id = aa.hadm_id\n  INNER JOIN first_tnt_filtered ft\n    ON pa.subject_id = ft.subject_id AND pa.hadm_id = ft.hadm_id\n  WHERE ft.valuenum > 0.01\n)\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(*) AS admission_count,\n  AVG(first_tnt_value) AS mean_first_tnt,\n  APPROX_QUANTILES(first_tnt_value, 100)[OFFSET(50)] AS median_first_tnt,\n  APPROX_QUANTILES(first_tnt_value, 100)[OFFSET(25)] AS q1_first_tnt,\n  APPROX_QUANTILES(first_tnt_value, 100)[OFFSET(75)] AS q3_first_tnt\nFROM qualified_patients;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

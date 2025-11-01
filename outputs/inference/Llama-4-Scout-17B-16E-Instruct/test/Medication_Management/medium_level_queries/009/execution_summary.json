@@ -1,0 +1,28 @@
+{
+  "query": "For my 73\u2011year\u2011old male: among males 68\u201378 with diabetes plus acute HF, give insulin vs oral agent initiation rates (%) in first 24h vs final 24h and absolute percentage\u2011point differences.",
+  "final_sql": "WITH \n-- Filter patients of interest\npatients_of_interest AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    p.anchor_age, \n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.anchor_age BETWEEN 68 AND 78\n    AND p.gender = 'M'\n    AND a.hadm_id IN (\n      SELECT \n        di.hadm_id\n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN \n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d \n          ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE \n        d.long_title IN ('Diabetes mellitus', 'Acute heart failure')\n    )\n),\n\n-- Identify insulin and oral agent prescriptions\ninsulin_prescriptions AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    starttime\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE \n    drug_type = 'Insulin'\n),\n\noral_agent_prescriptions AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    starttime\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE \n    drug_type NOT IN ('Insulin')  -- Assuming all other drug types are oral agents\n),\n\n-- Calculate time windows\nfirst_24h AS (\n  SELECT \n    hadm_id, \n    MIN(admittime) AS admission_time\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions`\n  GROUP BY \n    hadm_id\n),\n\nlast_24h AS (\n  SELECT \n    hadm_id, \n    MAX(dischtime) AS discharge_time\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions`\n  GROUP BY \n    hadm_id\n)\n\n-- Calculate initiation rates\nSELECT \n  'Insulin First 24h' AS category,\n  SAFE_DIVIDE(\n    COUNT(DISTINCT CASE WHEN i.starttime BETWEEN f.admission_time AND TIMESTAMP_ADD(f.admission_time, INTERVAL 1 DAY) THEN i.hadm_id END), \n    COUNT(DISTINCT poi.hadm_id)\n  ) * 100 AS initiation_rate\nFROM \n  patients_of_interest poi\n  JOIN first_24h f ON poi.hadm_id = f.hadm_id\n  LEFT JOIN insulin_prescriptions i ON poi.hadm_id = i.hadm_id\n\nUNION ALL\n\nSELECT \n  'Oral Agent First 24h',\n  SAFE_DIVIDE(\n    COUNT(DISTINCT CASE WHEN o.starttime BETWEEN f.admission_time AND TIMESTAMP_ADD(f.admission_time, INTERVAL 1 DAY) THEN o.hadm_id END), \n    COUNT(DISTINCT poi.hadm_id)\n  ) * 100\nFROM \n  patients_of_interest poi\n  JOIN first_24h f ON poi.hadm_id = f.hadm_id\n  LEFT JOIN oral_agent_prescriptions o ON poi.hadm_id = o.hadm_id\n\nUNION ALL\n\nSELECT \n  'Insulin Last 24h',\n  SAFE_DIVIDE(\n    COUNT(DISTINCT CASE WHEN i.starttime BETWEEN TIMESTAMP_SUB(l.discharge_time, INTERVAL 1 DAY) AND l.discharge_time THEN i.hadm_id END), \n    COUNT(DISTINCT poi.hadm_id)\n  ) * 100\nFROM \n  patients_of_interest poi\n  JOIN last_24h l ON poi.hadm_id = l.hadm_id\n  LEFT JOIN insulin_prescriptions i ON poi.hadm_id = i.hadm_id\n\nUNION ALL\n\nSELECT \n  'Oral Agent Last 24h',\n  SAFE_DIVIDE(\n    COUNT(DISTINCT CASE WHEN o.starttime BETWEEN TIMESTAMP_SUB(l.discharge_time, INTERVAL 1 DAY) AND l.discharge_time THEN o.hadm_id END), \n    COUNT(DISTINCT poi.hadm_id)\n  ) * 100\nFROM \n  patients_of_interest poi\n  JOIN last_24h l ON poi.hadm_id = l.hadm_id\n  LEFT JOIN oral_agent_prescriptions o ON poi.hadm_id = o.hadm_id;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: diagnoses_icd at [24:14]; reason: invalidQuery, location: query, message: Unrecognized name: diagnoses_icd at [24:14]\n\nLocation: US\nJob ID: abe0c5e7-1b72-488d-a68f-c84fc97011d3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/b3883376-0aae-4a28-9922-1d3bd1f8a80f?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: b3883376-0aae-4a28-9922-1d3bd1f8a80f\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

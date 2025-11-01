@@ -1,0 +1,28 @@
+{
+  "query": "For my 68-year-old male inpatient with acute pancreatitis, among male inpatients aged 63\u201373 with AP, what is the 90th percentile of the 72\u2011h lab\u2011instability score? For patients \u2265P90, report mortality, mean LOS, and per\u2011lab critical rates versus general inpatients.",
+  "final_sql": "WITH target_cohort AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p ON a.subject_id = p.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON a.hadm_id = d.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses did ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 63 AND 73\n    AND (\n      did.long_title LIKE '%acute pancreatitis%'\n      OR d.icd_code IN ('577.0', 'K85.0', 'K85.1', 'K85.2', 'K85.3', 'K85.4', 'K85.5', 'K85.6', 'K85.8', 'K85.9')\n    )\n),\n\nlab_instability AS (\n  SELECT\n    tc.subject_id,\n    tc.hadm_id,\n    COUNT(CASE WHEN le.flag IS NOT NULL AND le.flag != 'N' THEN 1 END) AS lab_instability_score,\n    COUNT(*) AS total_labs_72h\n  FROM target_cohort tc\n  JOIN physionet-data.mimiciv_3_1_hosp.labevents le ON tc.hadm_id = le.hadm_id\n  WHERE le.charttime >= tc.admittime\n    AND le.charttime <= DATETIME_ADD(tc.admittime, INTERVAL 72 HOUR)\n  GROUP BY tc.subject_id, tc.hadm_id\n),\n\np90_score AS (\n  SELECT DISTINCT PERCENTILE_CONT(lab_instability_score, 0.9) OVER() AS p90_lab_instability\n  FROM lab_instability\n  LIMIT 1\n),\n\nhigh_risk_patients AS (\n  SELECT\n    li.subject_id,\n    li.hadm_id,\n    li.lab_instability_score,\n    li.total_labs_72h,\n    tc.hospital_expire_flag,\n    DATETIME_DIFF(tc.dischtime, tc.admittime, HOUR) / 24.0 AS los_days\n  FROM lab_instability li\n  JOIN target_cohort tc ON li.subject_id = tc.subject_id AND li.hadm_id = tc.hadm_id\n  CROSS JOIN p90_score\n  WHERE li.lab_instability_score >= p90_score.p90_lab_instability\n),\n\ngeneral_inpatients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    COUNT(CASE WHEN le.flag IS NOT NULL AND le.flag != 'N' THEN 1 END) AS lab_instability_score,\n    COUNT(*) AS total_labs_72h,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.labevents le ON a.hadm_id = le.hadm_id\n  WHERE le.charttime >= a.admittime\n    AND le.charttime <= DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n  GROUP BY a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n)\n\nSELECT\n  (SELECT AVG(CAST(hospital_expire_flag AS FLOAT64)) FROM high_risk_patients) AS mortality_rate_high_risk,\n  (SELECT AVG(los_days) FROM high_risk_patients) AS mean_los_days_high_risk,\n  (SELECT AVG(CAST(lab_instability_score AS FLOAT64) / total_labs_72h) FROM high_risk_patients WHERE total_labs_72h > 0) AS per_lab_critical_rate_high_risk,\n  (SELECT AVG(CAST(hospital_expire_flag AS FLOAT64)) FROM general_inpatients) AS mortality_rate_general,\n  (SELECT AVG(los_days) FROM general_inpatients) AS mean_los_days_general,\n  (SELECT AVG(CAST(lab_instability_score AS FLOAT64) / total_labs_72h) FROM general_inpatients WHERE total_labs_72h > 0) AS per_lab_critical_rate_general;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pancreatitis\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pancreatitis\" at [1:12]\n\nLocation: US\nJob ID: 02ee923e-da52-489d-8944-ec7e9fde9d77\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: b50f5864-7e3b-408c-9f34-118b40c98ca2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

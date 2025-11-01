@@ -1,0 +1,16 @@
+{
+  "query": "I have a 63-year-old male in ICU; among male ICU patients, what's the IQR of peak arterial blood gas pH?",
+  "final_sql": "WITH male_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE LOWER(p.gender) = 'm'\n    AND p.anchor_age >= 18\n),\n\n-- 2) Identify arterial blood gas pH measurements in ICU, with robust label filtering\nabg_ph AS (\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` isty\n    ON ce.subject_id = isty.subject_id\n   AND ce.hadm_id = isty.hadm_id\n   AND ce.stay_id = isty.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%ph%'\n    AND (\n          LOWER(di.label) LIKE '%arterial%'    -- arterial ABG\n          OR LOWER(di.label) LIKE '%blood gas%'  -- generic ABG entries\n          OR LOWER(di.label) LIKE '%abg%'          -- ABG-specific labels\n        )\n    -- Ensure the measurement occurred during the ICU stay\n    AND ce.charttime BETWEEN isty.intime AND isty.outtime\n),\n\n-- 3) Per-visit (stay) maximum ABG pH\nper_visit_max AS (\n  SELECT\n    iv.subject_id,\n    iv.hadm_id,\n    iv.stay_id,\n    MAX(iv.valuenum) AS pH\n  FROM abg_ph iv\n  GROUP BY iv.subject_id, iv.hadm_id, iv.stay_id\n),\n\n-- 4) Per-patient peak ABG pH (max across all ICU stays for the patient)\nper_patient_peak AS (\n  SELECT pv.subject_id, MAX(pH) AS peak_pH\n  FROM per_visit_max pv\n  JOIN male_patients mp\n    ON pv.subject_id = mp.subject_id\n  GROUP BY pv.subject_id\n)\n\n-- 5) Compute IQR of the per-patient peak ABG pH\nSELECT\n  q25 AS pH_q1,\n  q75 AS pH_q3,\n  SAFE_DIVIDE(q75 - q25, 1) AS iqr_pH\nFROM (\n  SELECT\n    quantiles[OFFSET(24)] AS q25,  -- 25th percentile\n    quantiles[OFFSET(74)] AS q75   -- 75th percentile\n  FROM (\n    SELECT APPROX_QUANTILES(peak_pH, 100) AS quantiles\n    FROM per_patient_peak\n  )\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

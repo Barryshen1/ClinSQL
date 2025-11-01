@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating a 56-year-old woman. Among hospitalized women with COPD, what's the 75th percentile of average serum creatinine in first 24h?",
+  "final_sql": "WITH copd_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code\n    AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age = 56\n    AND (\n      LOWER(dicd.long_title) LIKE '%chronic obstructive%'\n      OR LOWER(dicd.long_title) LIKE '%copd%'\n      OR LOWER(dicd.long_title) LIKE '%emphysema%'\n    )\n),\n\ncreatinine_events AS (\n  SELECT\n    c.hadm_id,\n    -- normalize to mg/dL when reported in umol/L (divide by 88.4); otherwise keep reported numeric value\n    CASE\n      WHEN le.valuenum IS NULL THEN NULL\n      WHEN LOWER(COALESCE(le.valueuom, '')) LIKE '%umol%' THEN le.valuenum / 88.4\n      ELSE le.valuenum\n    END AS creat_mg_dl\n  FROM copd_admissions c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.hadm_id = le.hadm_id\n    AND c.subject_id = le.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` li\n    ON le.itemid = li.itemid\n  WHERE LOWER(li.label) LIKE '%creatinine%'\n    AND le.valuenum IS NOT NULL\n    -- restrict to first 24 hours after hospital admission\n    AND le.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR)\n),\n\navg_by_admission AS (\n  SELECT\n    hadm_id,\n    AVG(creat_mg_dl) AS avg_creatinine\n  FROM creatinine_events\n  GROUP BY hadm_id\n)\n\nSELECT\n  (APPROX_QUANTILES(avg_creatinine, 4))[OFFSET(3)] AS creatinine_75th_percentile_mg_per_dL,\n  COUNT(*) AS n_admissions_with_creatinine\nFROM avg_by_admission;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

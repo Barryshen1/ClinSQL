@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83\u2011year\u2011old female inpatient post\u2011cardiac arrest. For females 78\u201388 years, stratified by tertiles of a 7\u2011day medication complexity score (unique drugs + 2\u00d7 high\u2011risk drugs + routes), report counts, score ranges, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH\n-- Define high-risk drugs (example list - should be expanded based on clinical guidelines)\nhigh_risk_drugs AS (\n  SELECT DISTINCT drug\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE drug IN (\n    'WARFARIN', 'HEPARIN', 'INSULIN', 'DIGOXIN', 'AMIODARONE',\n    'PHENYTOIN', 'THEOPHYLLINE', 'LITHIUM', 'METHOTREXATE', 'CARBAMAZEPINE'\n  )\n),\n\n-- Get female patients aged 78-88\neligible_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 78 AND 88\n),\n\n-- Get all medications within first 7 days of admission\nmedications_7days AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    e.admittime,\n    p.drug,\n    p.route,\n    CASE WHEN h.drug IS NOT NULL THEN 1 ELSE 0 END AS is_high_risk\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN eligible_patients e ON p.subject_id = e.subject_id AND p.hadm_id = e.hadm_id\n  LEFT JOIN high_risk_drugs h ON p.drug = h.drug\n  WHERE p.starttime BETWEEN e.admittime AND TIMESTAMP_ADD(e.admittime, INTERVAL 7 DAY)\n\n  UNION ALL\n\n  SELECT\n    ph.subject_id,\n    ph.hadm_id,\n    e.admittime,\n    ph.medication AS drug,\n    ph.route,\n    CASE WHEN h.drug IS NOT NULL THEN 1 ELSE 0 END AS is_high_risk\n  FROM `physionet-data.mimiciv_3_1_hosp.pharmacy` ph\n  JOIN eligible_patients e ON ph.subject_id = e.subject_id AND ph.hadm_id = e.hadm_id\n  LEFT JOIN high_risk_drugs h ON ph.medication = h.drug\n  WHERE ph.starttime BETWEEN e.admittime AND TIMESTAMP_ADD(e.admittime, INTERVAL 7 DAY)\n),\n\n-- Calculate medication complexity score for each patient\nmedication_scores AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    COUNT(DISTINCT drug) AS unique_drugs,\n    SUM(is_high_risk) AS high_risk_drugs,\n    COUNT(DISTINCT route) AS unique_routes,\n    COUNT(DISTINCT drug) + 2 * SUM(is_high_risk) + COUNT(DISTINCT route) AS complexity_score\n  FROM medications_7days\n  GROUP BY subject_id, hadm_id\n),\n\n-- Calculate tertiles\ntertiles AS (\n  SELECT\n    complexity_score,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM medication_scores\n),\n\n-- Get readmission information\nreadmissions AS (\n  SELECT\n    a1.subject_id,\n    a1.hadm_id,\n    CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2 ON\n    a1.subject_id = a2.subject_id AND\n    a2.admittime BETWEEN a1.dischtime AND TIMESTAMP_ADD(a1.dischtime, INTERVAL 30 DAY)\n  WHERE a1.subject_id IN (SELECT subject_id FROM eligible_patients)\n)\n\n-- Final result\nSELECT\n  t.tertile,\n  COUNT(DISTINCT m.subject_id) AS patient_count,\n  MIN(m.complexity_score) AS min_score,\n  MAX(m.complexity_score) AS max_score,\n  ROUND(AVG(e.los_days), 1) AS avg_los_days,\n  ROUND(100 * SUM(CASE WHEN e.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(DISTINCT m.subject_id), 1) AS mortality_pct,\n  ROUND(100 * SUM(r.readmitted_30d) / COUNT(DISTINCT m.subject_id), 1) AS readmission_30d_pct\nFROM medication_scores m\nJOIN tertiles t ON m.complexity_score = t.complexity_score\nJOIN eligible_patients e ON m.subject_id = e.subject_id AND m.hadm_id = e.hadm_id\nJOIN readmissions r ON m.subject_id = r.subject_id AND m.hadm_id = r.hadm_id\nGROUP BY t.tertile\nORDER BY t.tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name admittime not found inside p at [34:7]; reason: invalidQuery, location: query, message: Name admittime not found inside p at [34:7]\n\nLocation: US\nJob ID: 5cdc6e00-247e-4c43-be61-03138304478d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

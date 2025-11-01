@@ -1,0 +1,22 @@
+{
+  "query": "For a 45\u2011year\u2011old man with AMI (no shock or respiratory failure), among males 40\u201350 report in\u2011hospital mortality (%) and median LOS by LOS \u22645 vs >5 and day\u20111 ICU status.",
+  "final_sql": "WITH ami_admissions AS (\n  -- Get admissions for males age 40-50 with AMI, excluding shock/resp failure\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE\n        d.hadm_id = a.hadm_id\n        AND (\n          -- ICD-10 AMI: I21*, I22*; ICD-9 AMI: 410*\n          (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'))\n          OR\n          (d.icd_version = 9 AND d.icd_code LIKE '410%')\n        )\n    )\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n      WHERE\n        d2.hadm_id = a.hadm_id\n        AND (\n          -- ICD-10 shock: R57*; ICD-9 shock: 785.5*\n          (d2.icd_version = 10 AND d2.icd_code LIKE 'R57%')\n          OR\n          (d2.icd_version = 9 AND d2.icd_code LIKE '7855%')\n          -- ICD-10 resp failure: J96*; ICD-9 resp failure: 518.81, 518.84\n          OR\n          (d2.icd_version = 10 AND d2.icd_code LIKE 'J96%')\n          OR\n          (d2.icd_version = 9 AND (d2.icd_code = '51881' OR d2.icd_code = '51884'))\n        )\n    )\n),\nlos_calc AS (\n  -- Calculate LOS in days\n  SELECT\n    *,\n    SAFE_CAST(TIMESTAMP_DIFF(dischtime, admittime, HOUR)/24.0 AS FLOAT64) AS los_days\n  FROM ami_admissions\n),\nicu_day1 AS (\n  -- For each admission, flag if ICU stay overlaps with first 24h\n  SELECT\n    l.hadm_id,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n        WHERE\n          icu.hadm_id = l.hadm_id\n          AND icu.intime < TIMESTAMP_ADD(l.admittime, INTERVAL 1 DAY)\n          AND icu.outtime > l.admittime\n      ) THEN 1\n      ELSE 0\n    END AS icu_day1\n  FROM los_calc l\n),\nfinal AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.los_days,\n    l.hospital_expire_flag,\n    CASE WHEN l.los_days <= 5 THEN '<=5' ELSE '>5' END AS los_group,\n    i.icu_day1\n  FROM los_calc l\n  JOIN icu_day1 i ON l.hadm_id = i.hadm_id\n)\nSELECT\n  los_group,\n  icu_day1,\n  COUNT(*) AS n_admissions,\n  ROUND(100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS mortality_percent,\n  ROUND(APPROX_QUANTILES(los_days, 2)[OFFSET(1)], 2) AS median_los\nFROM final\nGROUP BY los_group, icu_day1\nORDER BY los_group, icu_day1;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [88:9]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [88:9]\n\nLocation: US\nJob ID: 74c0881e-1853-4f20-93df-83f137ad682d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For a 55-year-old male: among male patients 50\u201360 admitted with chest pain or AMI whose initial hs\u2011TnT > ULN (0.014 ng/mL), report patient and admission counts, mean, median, IQR.",
+  "final_sql": "WITH\n  patients_cohort AS (\n    -- Step 1: Select male patients aged 50-60\n    SELECT\n      subject_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE\n      gender = 'M'\n      AND anchor_age BETWEEN 50 AND 60\n  ),\n  admissions_with_dx AS (\n    -- Step 2: Find admissions for the patient cohort with a diagnosis of Chest Pain or AMI\n    SELECT DISTINCT\n      adm.subject_id,\n      adm.hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN patients_cohort AS p\n      ON adm.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n      ON adm.hadm_id = dx.hadm_id\n    WHERE\n      (dx.icd_version = 9 AND (dx.icd_code LIKE '410%' OR dx.icd_code LIKE '786.5%'))\n      OR (dx.icd_version = 10 AND (dx.icd_code LIKE 'I21%' OR dx.icd_code LIKE 'I22%' OR dx.icd_code LIKE 'R07%'))\n  ),\n  first_troponin AS (\n    -- Step 3: Identify the first hs-TnT (itemid 52598) for each admission\n    SELECT\n      hadm_id,\n      valuenum,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.labevents`\n    WHERE\n      itemid = 52598 -- Troponin T, High Sensitivity\n      AND valuenum IS NOT NULL\n  ),\n  final_cohort AS (\n    -- Step 4: Join the cohorts and filter for initial hs-TnT > 0.014 ng/mL\n    SELECT\n      adx.subject_id,\n      adx.hadm_id,\n      ft.valuenum AS initial_tnt\n    FROM\n      admissions_with_dx AS adx\n    INNER JOIN first_troponin AS ft\n      ON adx.hadm_id = ft.hadm_id\n    WHERE\n      ft.rn = 1 -- Only the first measurement\n      AND ft.valuenum > 0.014 -- Value > ULN\n  )\n-- Step 5: Calculate final statistics from the cohort\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(DISTINCT hadm_id) AS admission_count,\n  AVG(initial_tnt) AS mean_initial_tnt,\n  APPROX_QUANTILES(initial_tnt, 100) [OFFSET(50)] AS median_initial_tnt,\n  (\n    APPROX_QUANTILES(initial_tnt, 100) [OFFSET(75)] - APPROX_QUANTILES(initial_tnt, 100) [OFFSET(25)]\n  ) AS iqr_initial_tnt\nFROM\n  final_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

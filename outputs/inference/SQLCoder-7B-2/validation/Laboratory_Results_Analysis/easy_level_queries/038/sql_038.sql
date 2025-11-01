@@ -1,0 +1,1 @@
+SELECT MIN(l.value) AS min_hemoglobin FROM labevents l JOIN patients p ON l.subject_id = p.subject_id JOIN admissions a ON l.subject_id = a.subject_id WHERE p.gender = 'M' AND l.itemid = 31817 AND a.admittime >= CURRENT_DATE - INTERVAL '24 hours' AND p.anchor_age >= 50 AND l.value IS NOT NULL;

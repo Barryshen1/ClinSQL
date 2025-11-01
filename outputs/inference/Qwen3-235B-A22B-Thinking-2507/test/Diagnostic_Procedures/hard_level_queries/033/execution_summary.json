@@ -1,0 +1,17 @@
+{
+  "query": "42-year-old male with pneumonia: among male ICU patients aged 37\u201347 in their first ICU stay, stratify distinct procedures in the first 48 hours into quintiles and report mean procedure count, mean ICU LOS (days), and hospital mortality by quintile.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT \n    stay.*,\n    ROW_NUMBER() OVER (PARTITION BY stay.subject_id ORDER BY stay.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` stay\n),\nfiltered_icu AS (\n  SELECT \n    stay.subject_id,\n    stay.hadm_id,\n    stay.stay_id,\n    stay.intime,\n    stay.los,\n    p.anchor_age + (EXTRACT(YEAR FROM stay.intime) - p.anchor_year) AS age_at_icu\n  FROM first_icu_stays stay\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON stay.subject_id = p.subject_id\n  WHERE stay.rn = 1\n    AND p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM stay.intime) - p.anchor_year) BETWEEN 37 AND 47\n),\nwith_pneumonia AS (\n  SELECT \n    f.*\n  FROM filtered_icu f\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE d.hadm_id = f.hadm_id\n      AND (\n        (d.icd_version = 9 AND d.icd_code >= '480' AND d.icd_code < '487')\n        OR \n        (d.icd_version = 10 AND d.icd_code LIKE 'J1[2-8]%')\n      )\n  )\n),\nprocedures_count AS (\n  SELECT \n    w.*,\n    a.hospital_expire_flag,\n    COUNT(DISTINCT p.itemid) AS proc_count\n  FROM with_pneumonia w\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON w.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON w.stay_id = p.stay_id\n    AND p.starttime >= w.intime\n    AND p.starttime <= w.intime + INTERVAL 48 HOUR\n  GROUP BY w.subject_id, w.hadm_id, w.stay_id, w.intime, w.los, w.age_at_icu, a.hospital_expire_flag\n),\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY proc_count) AS quintile\n  FROM procedures_count\n)\nSELECT \n  quintile,\n  AVG(proc_count) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) AS hospital_mortality_rate\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

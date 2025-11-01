@@ -1,0 +1,28 @@
+{
+  "query": "For an 81-year-old male, among male patients aged 76\u201386 admitted with AMI, what's the distribution of first Troponin I (\u22640.04 normal; 0.04\u20130.40 borderline; \u22650.40 elevated)? Provide counts, percentages, mean, median, IQR.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age IS NOT NULL\n    AND p.anchor_year IS NOT NULL\n    AND a.admittime IS NOT NULL\n),\nami_admissions AS (\n  SELECT DISTINCT pa.subject_id, pa.hadm_id, pa.admittime\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE pa.age_at_admit BETWEEN 76 AND 86\n    AND (\n      (di.icd_version = 9 AND di.icd_code LIKE '410%')\n      OR (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%' OR di.icd_code LIKE 'I23%'))\n    )\n),\ntrop_i_lab AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_labitems\n  WHERE LOWER(label) = 'troponin i'\n),\nfirst_trop_i AS (\n  SELECT\n    le.hadm_id,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN trop_i_lab t ON le.itemid = t.itemid\n  INNER JOIN ami_admissions am ON le.hadm_id = am.hadm_id\n  WHERE le.valuenum IS NOT NULL\n    AND le.charttime >= am.admittime\n),\nfirst_trop_i_filtered AS (\n  SELECT valuenum\n  FROM first_trop_i\n  WHERE rn = 1\n),\ncategorized AS (\n  SELECT\n    valuenum,\n    CASE\n      WHEN valuenum <= 0.04 THEN 'Normal'\n      WHEN valuenum > 0.04 AND valuenum < 0.40 THEN 'Borderline'\n      WHEN valuenum >= 0.40 THEN 'Elevated'\n      ELSE 'Unknown'\n    END AS category\n  FROM first_trop_i_filtered\n),\nsummary_stats AS (\n  SELECT\n    category,\n    COUNT(*) AS count\n  FROM categorized\n  GROUP BY category\n),\ntotal_count AS (\n  SELECT SUM(count) AS total FROM summary_stats\n),\npercentages AS (\n  SELECT\n    s.category,\n    s.count,\n    ROUND(s.count * 100.0 / t.total, 2) AS percentage\n  FROM summary_stats s\n  CROSS JOIN total_count t\n),\noverall_stats AS (\n  SELECT\n    ROUND(AVG(valuenum) OVER (), 3) AS mean_trop_i,\n    ROUND(PERCENTILE_CONT(valuenum, 0.5) OVER (), 3) AS median_trop_i,\n    ROUND(PERCENTILE_CONT(valuenum, 0.25) OVER (), 3) AS q1,\n    ROUND(PERCENTILE_CONT(valuenum, 0.75) OVER (), 3) AS q3\n  FROM first_trop_i_filtered\n  LIMIT 1\n)\nSELECT\n  p.category,\n  p.count,\n  p.percentage,\n  o.mean_trop_i,\n  o.median_trop_i,\n  o.q1 AS iqr_q1,\n  o.q3 AS iqr_q3,\n  CONCAT(o.q1, ' - ', o.q3) AS iqr_range\nFROM percentages p\nCROSS JOIN overall_stats o\nORDER BY p.category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column valuenum which is neither grouped nor aggregated at [83:27]; reason: invalidQuery, location: query, message: SELECT list expression references column valuenum which is neither grouped nor aggregated at [83:27]\n\nLocation: US\nJob ID: 23671c1c-c358-46ea-9f5c-1b1a45ca9782\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column valuenum which is neither grouped nor aggregated at [83:27]; reason: invalidQuery, location: query, message: SELECT list expression references column valuenum which is neither grouped nor aggregated at [83:27]\n\nLocation: US\nJob ID: e9bd36d1-e9a3-473a-8ed7-1604f8131f08\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

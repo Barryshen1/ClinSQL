@@ -1,0 +1,22 @@
+{
+  "query": "What is in-hospital mortality (%) among men 75\u201385 with sepsis (excluding septic shock), stratified by LOS (\u22645 vs >5 days) and presence vs absence of CKD, diabetes, AFib, hypertension?",
+  "final_sql": "WITH sepsis_hadm AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%sepsis%'\n    AND LOWER(dd.long_title) NOT LIKE '%septic shock%'\n),\n\n-- 2) Base cohort: male, age 75-85, LOS computable, within sepsis_hadm\nbase AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE WHEN a.deathtime IS NOT NULL THEN 1 ELSE 0 END AS death_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN sepsis_hadm AS s\n    ON a.hadm_id = s.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 75 AND 85\n    AND a.dischtime IS NOT NULL\n),\n\n-- 3) Comorbidity flags per hadm_id derived from long_title keywords\ncomorb AS (\n  SELECT\n    hadm_id,\n    MAX(CASE\n          WHEN LOWER(dd.long_title) LIKE '%chronic kidney disease%'\n               OR LOWER(dd.long_title) LIKE '%kidney disease%'\n               OR LOWER(dd.long_title) LIKE '%renal failure%'\n          THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%diabetes mellitus%' THEN 1 ELSE 0 END) AS has_diabetes,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%atrial fibrillation%'\n             OR LOWER(dd.long_title) LIKE '%atrial flutter%' THEN 1 ELSE 0 END) AS has_afib,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%hypertension%' THEN 1 ELSE 0 END) AS has_htn\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  GROUP BY hadm_id\n)\n\n-- 4) Final aggregation: mortality by LOS group and presence/absence for each comorbidity\nSELECT\n  LOS_group,\n  comorb,\n  presence,\n  AVG(CAST(death_flag AS FLOAT64)) AS mortality_rate\nFROM (\n  SELECT\n    CASE WHEN b.los_days <= 5 THEN '<=5' ELSE '>5' END AS LOS_group,\n    b.death_flag,\n    comp_tmp.comorb,\n    comp_tmp.presence\n  FROM base AS b\n  LEFT JOIN comorb AS c\n    ON b.hadm_id = c.hadm_id\n  CROSS JOIN UNNEST([\n    STRUCT('CKD' AS comorb, COALESCE(c.has_ckd, 0) AS presence),\n    STRUCT('Diabetes' AS comorb, COALESCE(c.has_diabetes, 0) AS presence),\n    STRUCT('AFib' AS comorb, COALESCE(c.has_afib, 0) AS presence),\n    STRUCT('Hypertension' AS comorb, COALESCE(c.has_htn, 0) AS presence)\n  ]) AS comp_tmp\n) AS t\nGROUP BY LOS_group, comorb, presence\nORDER BY LOS_group, comorb, presence;",
+  "execution_success": true,
+  "row_count": 16,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:13]\n\nLocation: US\nJob ID: bec21b21-bd60-4522-832e-7a4b2c12c6ba\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 16,
+      "error": null
+    }
+  ]
+}

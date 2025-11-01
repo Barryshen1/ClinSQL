@@ -1,0 +1,22 @@
+{
+  "query": "For a 65-year-old man: among male ICU patients aged 60\u201370 with intracranial hemorrhage (first ICU stay), what is the 75th percentile of procedure burden in the first 72h? Report mean ICU LOS (days) and hospital mortality versus general ICU population.",
+  "final_sql": "WITH ranked_first_icustays AS (\n  -- Identify the first ICU stay per subject\n  SELECT i.subject_id, i.hadm_id, i.stay_id, i.intime, i.outtime, i.los\n  FROM (\n    SELECT *,\n           ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) AS i\n  WHERE i.rn = 1\n),\n\nich_cohort AS (\n  -- Filter to male patients aged 60-70 with intracranial hemorrhage in the first ICU stay\n  SELECT fi.subject_id, fi.hadm_id, fi.stay_id, fi.intime, fi.los\n  FROM ranked_first_icustays fi\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = fi.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dicd\n    ON dicd.hadm_id = fi.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n    ON ddi.icd_code = dicd.icd_code\n   AND ddi.icd_version = dicd.icd_version\n  WHERE LOWER(ddi.long_title) LIKE '%intracranial hemorrhage%'\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 60 AND 70\n),\n\nburden_72h AS (\n  -- Compute procedure burden in the first 72 hours for each subject's first ICU stay\n  SELECT ic.subject_id,\n         ic.stay_id,\n         ic.intime,\n         (\n           SELECT COUNT(*) \n           FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n           WHERE pe.stay_id = ic.stay_id\n             AND pe.starttime >= ic.intime\n             AND pe.starttime < TIMESTAMP_ADD(ic.intime, INTERVAL 72 HOUR)\n         ) AS burden_72h_num\n  FROM ich_cohort ic\n),\n\np75_burden AS (\n  -- 75th percentile of the 72h burden across the subset\n  SELECT\n    APPROX_QUANTILES(burden_72h_num, 100)[OFFSET(75)] AS p75_burden_72h\n  FROM burden_72h\n),\n\nsubset_los AS (\n  -- Mean ICU LOS for the subset (in days)\n  SELECT AVG(los) / 24 AS subset_mean_los_days\n  FROM ich_cohort\n),\n\nsubset_mortality AS (\n  -- Hospital mortality for the subset\n  SELECT AVG(CASE WHEN a.hospital_expire_flag = 1 THEN 1.0 ELSE 0.0 END) AS subset_hosp_mortality\n  FROM ich_cohort ic\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.hadm_id = ic.hadm_id\n),\n\ngeneral_metrics AS (\n  -- General ICU population metrics\n  SELECT AVG(i.los) / 24 AS general_mean_los_days,\n         AVG(CASE WHEN a.hospital_expire_flag = 1 THEN 1.0 ELSE 0.0 END) AS general_hosp_mortality\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.hadm_id = i.hadm_id\n)\n\nSELECT\n  p75_burden.p75_burden_72h AS p75_burden_72h,\n  subset_los.subset_mean_los_days,\n  subset_mortality.subset_hosp_mortality,\n  general_metrics.general_mean_los_days,\n  general_metrics.general_hosp_mortality\nFROM p75_burden\nCROSS JOIN subset_los\nCROSS JOIN subset_mortality\nCROSS JOIN general_metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<subject_id INT64, stay_id INT64, intime DATETIME, ...> does not at [45:27]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<subject_id INT64, stay_id INT64, intime DATETIME, ...> does not at [45:27]\n\nLocation: US\nJob ID: 37e36d26-084d-4d51-9e10-db3c5a2674c3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

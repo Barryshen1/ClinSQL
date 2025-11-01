@@ -1,0 +1,28 @@
+{
+  "query": "Patient: 45-year-old woman. Among female inpatients aged 40\u201350 with neutropenic fever, stratify admissions by medication complexity score (first 48 hours) into quartiles and report per quartile: patient count, mean/min/max score, mean LOS, mortality %, and 30-day readmission %.",
+  "final_sql": "WITH\n-- Get female patients aged 40-50\nfemale_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 40 AND 50\n),\n\n-- Get admissions for these patients\npatient_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN female_patients p ON a.subject_id = p.subject_id\n),\n\n-- Identify admissions with neutropenic fever\nneutropenic_fever_admissions AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.admittime,\n    pa.dischtime,\n    pa.los_hours,\n    pa.hospital_expire_flag\n  FROM patient_admissions pa\n  WHERE EXISTS (\n    -- Fever condition (temperature > 38\u00b0C)\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n    WHERE ce.hadm_id = pa.hadm_id\n      AND di.label LIKE '%Temperature%'\n      AND ce.valuenum > 38\n      AND ce.charttime BETWEEN pa.admittime AND pa.dischtime\n  )\n  AND EXISTS (\n    -- Neutropenia condition (ANC < 500)\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli ON le.itemid = dli.itemid\n    WHERE le.hadm_id = pa.hadm_id\n      AND (dli.label LIKE '%Neutrophil%' OR dli.label LIKE '%ANC%')\n      AND le.valuenum < 500\n      AND le.charttime BETWEEN pa.admittime AND pa.dischtime\n  )\n),\n\n-- Calculate medication complexity score (count of unique medications in first 48 hours)\nmedication_complexity AS (\n  SELECT\n    nfa.hadm_id,\n    COUNT(DISTINCT p.drug) AS complexity_score\n  FROM neutropenic_fever_admissions nfa\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON nfa.hadm_id = p.hadm_id\n    AND p.starttime BETWEEN nfa.admittime AND TIMESTAMP_ADD(nfa.admittime, INTERVAL 48 HOUR)\n  GROUP BY nfa.hadm_id\n),\n\n-- Add quartile information\nadmissions_with_quartiles AS (\n  SELECT\n    nfa.*,\n    mc.complexity_score,\n    NTILE(4) OVER (ORDER BY mc.complexity_score) AS quartile\n  FROM neutropenic_fever_admissions nfa\n  JOIN medication_complexity mc ON nfa.hadm_id = mc.hadm_id\n),\n\n-- Calculate 30-day readmission flag\nreadmissions AS (\n  SELECT\n    a1.hadm_id AS original_hadm_id,\n    a1.subject_id AS subject_id,\n    MAX(CASE WHEN a2.admittime BETWEEN a1.dischtime AND TIMESTAMP_ADD(a1.dischtime, INTERVAL 30 DAY) THEN 1 ELSE 0 END) AS has_30day_readmission\n  FROM patient_admissions a1\n  LEFT JOIN patient_admissions a2\n    ON a1.subject_id = a2.subject_id\n    AND a1.hadm_id != a2.hadm_id\n    AND a2.admittime BETWEEN a1.dischtime AND TIMESTAMP_ADD(a1.dischtime, INTERVAL 30 DAY)\n  GROUP BY a1.hadm_id, a1.subject_id\n)\n\n-- Final aggregation by quartile\nSELECT\n  quartile,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  AVG(complexity_score) AS mean_complexity_score,\n  MIN(complexity_score) AS min_complexity_score,\n  MAX(complexity_score) AS max_complexity_score,\n  AVG(los_hours/24) AS mean_los_days,\n  ROUND(100 * AVG(hospital_expire_flag), 1) AS mortality_percentage,\n  ROUND(100 * AVG(has_30day_readmission), 1) AS readmission_30day_percentage\nFROM admissions_with_quartiles aq\nLEFT JOIN readmissions r ON aq.hadm_id = r.original_hadm_id\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Column name subject_id is ambiguous at [94:18]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [94:18]\n\nLocation: US\nJob ID: 33c451c0-67d8-42e6-a7db-00c3e8de2027\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [94:18]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [94:18]\n\nLocation: US\nJob ID: a7570a16-dd65-433b-a6bd-d010d52e35bb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [94:18]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [94:18]\n\nLocation: US\nJob ID: c3ec982a-93bd-41e8-a7dc-8ed71afe3d6d\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [94:18]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [94:18]\n\nLocation: US\nJob ID: 33c451c0-67d8-42e6-a7db-00c3e8de2027\n"
+    }
+  ]
+}

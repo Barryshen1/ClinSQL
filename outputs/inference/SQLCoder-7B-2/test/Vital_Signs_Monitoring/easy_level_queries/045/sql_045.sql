@@ -1,0 +1,1 @@
+SELECT stddev(o.value) AS standard_deviation FROM omr o JOIN patients p ON o.subject_id = p.subject_id JOIN icustays i ON o.subject_id = i.subject_id WHERE p.gender = 'M' AND p.anchor_age = 56 AND i.first_careunit = 'ICU' AND p.anchor_year BETWEEN 51 AND 61;

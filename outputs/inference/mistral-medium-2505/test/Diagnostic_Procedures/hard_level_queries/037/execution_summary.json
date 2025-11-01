@@ -1,0 +1,28 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH\n-- Define sepsis ICD codes (common sepsis codes)\nsepsis_icd_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%sepsis%'\n     OR icd_code IN ('995.91', '995.92', 'A41.9', 'A40', 'A41.0', 'A41.1', 'A41.2', 'A41.3', 'A41.4', 'A41.5', 'A41.8', 'A41.9')\n),\n\n-- Get female patients aged 53-63\nfemale_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 53 AND 63\n),\n\n-- Get ICU stays with sepsis\nicu_sepsis_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    TIMESTAMP_DIFF(s.outtime, s.intime, HOUR) AS icu_los_hours,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON s.hadm_id = a.hadm_id\n  JOIN female_patients fp\n    ON s.subject_id = fp.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON s.hadm_id = d.hadm_id\n  JOIN sepsis_icd_codes sc\n    ON d.icd_code = sc.icd_code\n),\n\n-- Get ICU stays without sepsis (age-matched)\nicu_non_sepsis_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    TIMESTAMP_DIFF(s.outtime, s.intime, HOUR) AS icu_los_hours,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON s.hadm_id = a.hadm_id\n  JOIN female_patients fp\n    ON s.subject_id = fp.subject_id\n  WHERE s.subject_id NOT IN (\n    SELECT subject_id FROM icu_sepsis_stays\n  )\n),\n\n-- Count procedures in first 24 hours for sepsis patients\nsepsis_procedures AS (\n  SELECT\n    p.stay_id,\n    COUNT(DISTINCT p.itemid) AS procedure_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` p\n  JOIN icu_sepsis_stays s\n    ON p.stay_id = s.stay_id\n  WHERE TIMESTAMP_DIFF(p.starttime, s.intime, HOUR) <= 24\n  GROUP BY p.stay_id\n),\n\n-- Count procedures in first 24 hours for non-sepsis patients\nnon_sepsis_procedures AS (\n  SELECT\n    p.stay_id,\n    COUNT(DISTINCT p.itemid) AS procedure_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` p\n  JOIN icu_non_sepsis_stays s\n    ON p.stay_id = s.stay_id\n  WHERE TIMESTAMP_DIFF(p.starttime, s.intime, HOUR) <= 24\n  GROUP BY p.stay_id\n),\n\n-- Aggregate results for sepsis patients\nsepsis_agg AS (\n  SELECT\n    PERCENTILE_CONT(procedure_count, 0.75) AS percentile_75,\n    PERCENTILE_CONT(procedure_count, 0.90) AS percentile_90,\n    AVG(icu_los_hours) AS avg_icu_los,\n    AVG(CAST(hospital_expire_flag AS INT64)) AS mortality_rate\n  FROM icu_sepsis_stays s\n  JOIN sepsis_procedures p\n    ON s.stay_id = p.stay_id\n),\n\n-- Aggregate results for non-sepsis patients\nnon_sepsis_agg AS (\n  SELECT\n    PERCENTILE_CONT(procedure_count, 0.75) AS percentile_75,\n    PERCENTILE_CONT(procedure_count, 0.90) AS percentile_90,\n    AVG(icu_los_hours) AS avg_icu_los,\n    AVG(CAST(hospital_expire_flag AS INT64)) AS mortality_rate\n  FROM icu_non_sepsis_stays s\n  JOIN non_sepsis_procedures p\n    ON s.stay_id = p.stay_id\n)\n\n-- Final comparison\nSELECT\n  'Sepsis Patients' AS group_name,\n  percentile_75,\n  percentile_90,\n  avg_icu_los,\n  mortality_rate\nFROM sepsis_agg\n\nUNION ALL\n\nSELECT\n  'Non-Sepsis Patients (Age-Matched)' AS group_name,\n  percentile_75,\n  percentile_90,\n  avg_icu_los,\n  mortality_rate\nFROM non_sepsis_agg\nORDER BY group_name;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 21d3b166-5cec-4983-a34a-069ee8e36cdb\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside p at [67:26]; reason: invalidQuery, location: query, message: Name charttime not found inside p at [67:26]\n\nLocation: US\nJob ID: 60fd4b05-1ffe-4a7f-9138-8a8ea2664492\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column procedure_count which is neither grouped nor aggregated at [86:21]; reason: invalidQuery, location: query, message: SELECT list expression references column procedure_count which is neither grouped nor aggregated at [86:21]\n\nLocation: US\nJob ID: 680b01be-a6de-456d-af62-fd5b68221b9a\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 21d3b166-5cec-4983-a34a-069ee8e36cdb\n"
+    }
+  ]
+}

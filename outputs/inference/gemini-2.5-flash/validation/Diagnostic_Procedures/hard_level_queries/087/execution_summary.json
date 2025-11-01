@@ -1,0 +1,28 @@
+{
+  "query": "For a 61-year-old woman with intracranial hemorrhage: among female ICU patients aged 56\u201366 with ICH, what is the 95th percentile of diagnostic intensity during the first 72 hours? Compare ICU length of stay and in-hospital mortality to the ICU population.",
+  "final_sql": "WITH ich_admissions AS (\n    SELECT\n        DISTINCT ha.subject_id,\n        ha.hadm_id,\n        ha.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` ha\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` hp\n        ON ha.subject_id = hp.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON ha.hadm_id = di.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` icu_check -- Join to ensure the admission had an ICU stay\n        ON ha.hadm_id = icu_check.hadm_id\n    WHERE\n        hp.gender = 'F'\n        AND hp.anchor_age BETWEEN 56 AND 66\n        AND di.icd_version = 10 -- MIMIC-IV primarily uses ICD-10 for recent data.\n        AND (di.icd_code LIKE 'I60%' OR di.icd_code LIKE 'I61%' OR di.icd_code LIKE 'I62%')\n),\n-- CTE 2: Calculate diagnostic intensity (count of distinct lab itemids)\n-- for the first 72 hours of *each and every* ICU stay in the database.\nicu_stay_lab_intensity AS (\n    SELECT\n        icu.stay_id,\n        COUNT(DISTINCT le.itemid) AS diagnostic_intensity_72hr\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` icu\n    LEFT JOIN -- Use LEFT JOIN to include all ICU stays, even if they have no unique labs in 72h\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON icu.subject_id = le.subject_id\n        AND icu.hadm_id = le.hadm_id\n        AND le.charttime BETWEEN icu.intime AND DATETIME_ADD(icu.intime, INTERVAL 72 HOUR)\n    GROUP BY\n        icu.stay_id\n),\n-- CTE 3: Prepare comprehensive data for the ICH cohort's ICU stays.\n-- This includes LOS, mortality, and the calculated diagnostic intensity.\nich_cohort_data AS (\n    SELECT\n        ia.subject_id,\n        ia.hadm_id,\n        ia.hospital_expire_flag,\n        icu.stay_id,\n        icu.los AS icu_los_days,\n        COALESCE(isi.diagnostic_intensity_72hr, 0) AS diagnostic_intensity_72hr\n    FROM\n        ich_admissions ia\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON ia.hadm_id = icu.hadm_id\n    LEFT JOIN\n        icu_stay_lab_intensity isi\n        ON icu.stay_id = isi.stay_id\n),\n-- CTE 4: Prepare comprehensive data for the Overall ICU population.\n-- This includes LOS, mortality, and the calculated diagnostic intensity for every ICU stay.\noverall_icu_data AS (\n    SELECT\n        icu.subject_id,\n        icu.hadm_id,\n        adm.hospital_expire_flag,\n        icu.stay_id,\n        icu.los AS icu_los_days,\n        COALESCE(isi.diagnostic_intensity_72hr, 0) AS diagnostic_intensity_72hr\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` icu\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON icu.hadm_id = adm.hadm_id\n    LEFT JOIN\n        icu_stay_lab_intensity isi\n        ON icu.stay_id = isi.stay_id\n),\n-- New CTE: Calculate the 95th percentile of diagnostic intensity for the ICH Cohort\nich_cohort_pctl AS (\n    SELECT\n        APPROX_QUANTILES(diagnostic_intensity_72hr, 100)[OFFSET(95)] AS p95_diagnostic_intensity_72hr\n    FROM\n        ich_cohort_data\n),\n-- New CTE: Calculate the 95th percentile of diagnostic intensity for the Overall ICU Population\noverall_icu_pctl AS (\n    SELECT\n        APPROX_QUANTILES(diagnostic_intensity_72hr, 100)[OFFSET(95)] AS p95_diagnostic_intensity_72hr\n    FROM\n        overall_icu_data\n)\n-- Final aggregation to calculate the requested statistics for the ICH Cohort.\nSELECT\n    'ICH Cohort (Female, 56-66, ICH)' AS cohort_name,\n    (SELECT p95_diagnostic_intensity_72hr FROM ich_cohort_pctl) AS p95_diagnostic_intensity_72hr,\n    AVG(icu_los_days) * 24 AS avg_icu_los_hours,\n    (COUNT(DISTINCT CASE WHEN hospital_expire_flag = 1 THEN hadm_id END) * 100.0 / COUNT(DISTINCT hadm_id)) AS in_hospital_mortality_rate_percent\nFROM\n    ich_cohort_data\n\nUNION ALL\n\n-- Final aggregation to calculate the requested statistics for the Overall ICU Population.\nSELECT\n    'Overall ICU Population' AS cohort_name,\n    (SELECT p95_diagnostic_intensity_72hr FROM overall_icu_pctl) AS p95_diagnostic_intensity_72hr,\n    AVG(icu_los_days) * 24 AS avg_icu_los_hours,\n    (COUNT(DISTINCT CASE WHEN hospital_expire_flag = 1 THEN hadm_id END) * 100.0 / COUNT(DISTINCT hadm_id)) AS in_hospital_mortality_rate_percent\nFROM\n    overall_icu_data\n\nORDER BY\n    cohort_name;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 57a4886d-e113-4b2a-8f91-3402e071ab48\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 7879daed-cf02-4f94-8fa3-5bb731fc0b6a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For a 61-year-old female ICU patient: among female ICU stays aged 56\u201366, categorize per-stay mean MAP over first 48 hours (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report count, mean, median, IQR.",
+  "final_sql": "WITH map_itemids AS (\n  -- Identify likely MAP itemids from d_items (ICU module)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE (\n    LOWER(label) LIKE '%mean arterial%' \n    OR LOWER(label) LIKE '%mean arterial pressure%' \n    OR LOWER(label) LIKE '%map%'\n    OR LOWER(IFNULL(abbreviation, '')) LIKE '%map%'\n  )\n),\nper_stay_map AS (\n  -- Compute per-stay mean MAP during the first 48 hours of the ICU stay\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    AVG(c.valuenum) AS mean_map\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON i.subject_id = c.subject_id\n    AND i.hadm_id = c.hadm_id\n    AND i.stay_id = c.stay_id\n  JOIN map_itemids m\n    ON c.itemid = m.itemid\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 56 AND 66\n    AND c.valuenum IS NOT NULL\n    AND c.charttime >= i.intime\n    AND c.charttime <= TIMESTAMP_ADD(i.intime, INTERVAL 48 HOUR)\n  GROUP BY i.subject_id, i.hadm_id, i.stay_id\n  HAVING COUNT(1) >= 1\n),\ncategorized AS (\n  SELECT\n    stay_id,\n    mean_map,\n    CASE\n      WHEN mean_map < 65 THEN '<65'\n      WHEN mean_map >= 65 AND mean_map < 75 THEN '65-74'\n      WHEN mean_map >= 75 AND mean_map < 85 THEN '75-84'\n      ELSE '>=85'\n    END AS map_category\n  FROM per_stay_map\n)\nSELECT\n  map_category AS category,\n  COUNT(*) AS stay_count,\n  ROUND(AVG(mean_map), 2) AS mean_of_mean_map,\n  -- APPROX_QUANTILES(mean_map, 4) returns [min, Q1, Q2(median), Q3, max]\n  APPROX_QUANTILES(mean_map, 4)[OFFSET(2)] AS median_of_mean_map,\n  (APPROX_QUANTILES(mean_map, 4)[OFFSET(3)] - APPROX_QUANTILES(mean_map, 4)[OFFSET(1)]) AS iqr_of_mean_map\nFROM categorized\nGROUP BY map_category\nORDER BY\n  -- order categories logically\n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65-74' THEN 2\n    WHEN '75-84' THEN 3\n    WHEN '>=85' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

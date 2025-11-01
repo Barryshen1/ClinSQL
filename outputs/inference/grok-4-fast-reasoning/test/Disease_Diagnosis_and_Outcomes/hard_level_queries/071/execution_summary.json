@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old female inpatient. Among females aged 68\u201378 with AMI and an ICU stay, what is the median risk score (IQR) and 90\u2011day mortality? Compare major complication rate and survivor LOS to age\u2011matched general inpatients and give the risk percentile.",
+  "final_sql": "WITH patients_female_age AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age BETWEEN 68 AND 78\n),\nadmissions_base AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN patients_female_age pfa ON a.subject_id = pfa.subject_id\n),\nami_hadm AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE seq_num = 1\n    AND (icd_code LIKE '410%' OR icd_code LIKE 'I21%')\n),\nicu_hadm AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\ndrg_data AS (\n  SELECT subject_id, hadm_id, \n         ANY_VALUE(drg_mortality) AS risk_score,\n         ANY_VALUE(drg_severity) AS drg_severity  -- Proxy if needed; assume 1 per hadm\n  FROM `physionet-data.mimiciv_3_1_hosp.drgcodes`\n  WHERE drg_type = 'MS-DRG'\n  GROUP BY subject_id, hadm_id  -- Handle multiples; one row per hadm\n),\nami_icu_cohort AS (\n  SELECT ab.*, dd.risk_score, p.dod,\n         CASE WHEN p.dod IS NOT NULL \n                   AND p.dod >= DATE(ab.admittime) \n                   AND p.dod <= DATE(TIMESTAMP_ADD(ab.admittime, INTERVAL 90 DAY)) \n              THEN 1 ELSE 0 END AS mort90_flag,\n         CASE WHEN ab.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS complication_flag  -- In-hospital death as proxy\n  FROM admissions_base ab\n  INNER JOIN ami_hadm ah ON ab.hadm_id = ah.hadm_id\n  INNER JOIN icu_hadm ih ON ab.hadm_id = ih.hadm_id\n  INNER JOIN drg_data dd ON ab.hadm_id = dd.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON ab.subject_id = p.subject_id\n),\ngeneral_cohort AS (\n  SELECT ab.*, dd.risk_score,\n         CASE WHEN ab.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS complication_flag\n  FROM admissions_base ab\n  INNER JOIN drg_data dd ON ab.hadm_id = dd.hadm_id  -- All age/gender inpatients with DRG\n),\ncohort_stats AS (\n  SELECT\n    'AMI_ICU_Cohort' AS cohort_type,\n    APPROX_QUANTILES(risk_score, 100)[SAFE_OFFSET(50)] AS median_risk_score,\n    APPROX_QUANTILES(risk_score, 100)[SAFE_OFFSET(25)] AS iqr_low,\n    APPROX_QUANTILES(risk_score, 100)[SAFE_OFFSET(75)] AS iqr_high,\n    AVG(mort90_flag) AS mortality_90d_rate,\n    AVG(complication_flag) AS major_complication_rate,\n    APPROX_QUANTILES(CASE WHEN hospital_expire_flag = 0 THEN los_days END, 100)[SAFE_OFFSET(50)] AS median_los_survivors\n  FROM ami_icu_cohort\n  UNION ALL\n  SELECT\n    'General_Inpatients' AS cohort_type,\n    APPROX_QUANTILES(risk_score, 100)[SAFE_OFFSET(50)] AS median_risk_score,\n    APPROX_QUANTILES(risk_score, 100)[SAFE_OFFSET(25)] AS iqr_low,\n    APPROX_QUANTILES(risk_score, 100)[SAFE_OFFSET(75)] AS iqr_high,\n    NULL AS mortality_90d_rate,  -- Not requested for general\n    AVG(complication_flag) AS major_complication_rate,\n    APPROX_QUANTILES(CASE WHEN hospital_expire_flag = 0 THEN los_days END, 100)[SAFE_OFFSET(50)] AS median_los_survivors\n  FROM general_cohort\n)\nSELECT\n  cs.*,\n  -- Risk percentile: cohort median's rank in general (patient proxy)\n  (SELECT COUNTIF(gc.risk_score <= cs.median_risk_score) * 100.0 / NULLIF(COUNT(*), 0)\n   FROM general_cohort gc) AS patient_risk_percentile_general\nFROM cohort_stats cs;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 16e9cdc0-c1a9-41dd-81e8-d978d63704fb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 579359ca-2b3a-432e-a3c1-66d0dde6d64d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

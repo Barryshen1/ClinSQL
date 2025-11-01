@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY (p.stoptime - p.starttime)) AS percentile_25 FROM prescriptions p JOIN patients pt ON p.subject_id = pt.subject_id JOIN admissions a ON p.hadm_id = a.hadm_id WHERE pt.gender = 'M' AND pt.anchor_age = 81 AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2019 AND 2020 AND (p.drug_type = 'IV' OR p.drug = 'nitrate');

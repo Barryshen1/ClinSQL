@@ -1,0 +1,22 @@
+{
+  "query": "I have a 75-year-old female inpatient with pulmonary embolism. For female inpatients aged 70\u201380 with PE, stratify into risk-score quintiles and report per quintile: 90\u2011day mortality, general 70\u201380 female 90\u2011day mortality (comparison), AKI and ARDS rates, and median survivor LOS",
+  "final_sql": "WITH\n-- Step 1: Identify all female inpatients aged 70-80 at the time of admission.\nage_cohort AS (\n  SELECT\n    pat.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    pat.dod,\n    adm.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON pat.subject_id = adm.subject_id\n  WHERE\n    pat.gender = 'F'\n    -- Calculate age at admission to accurately filter the cohort\n    AND DATETIME_DIFF(adm.admittime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR) + pat.anchor_age BETWEEN 70 AND 80\n),\n\n-- Step 2: For each admission, flag key diagnoses and calculate a risk score.\ndiagnoses_by_hadm AS (\n  SELECT\n    hadm_id,\n    -- Flag for Pulmonary Embolism (PE) using ICD-9 and ICD-10 codes\n    MAX(CASE WHEN icd_code LIKE 'I26%' OR icd_code LIKE '4151%' THEN 1 ELSE 0 END) AS is_pe,\n    -- Flag for Acute Kidney Injury (AKI)\n    MAX(CASE WHEN icd_code LIKE 'N17%' OR icd_code LIKE '584%' THEN 1 ELSE 0 END) AS has_aki,\n    -- Flag for Acute Respiratory Distress Syndrome (ARDS)\n    MAX(CASE WHEN icd_code = 'J80' OR icd_code = '51882' THEN 1 ELSE 0 END) AS has_ards,\n    -- Define risk score as the count of unique diagnoses for the admission\n    COUNT(DISTINCT icd_code) AS risk_score\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY\n    hadm_id\n),\n\n-- Step 3: Combine age cohort with diagnosis features. This forms the base for both the PE group and the comparison group.\nfull_cohort_features AS (\n  SELECT\n    ac.subject_id,\n    ac.hadm_id,\n    ac.admittime,\n    ac.dischtime,\n    ac.dod,\n    ac.hospital_expire_flag,\n    diag.is_pe,\n    diag.has_aki,\n    diag.has_ards,\n    diag.risk_score\n  FROM\n    age_cohort AS ac\n  INNER JOIN\n    diagnoses_by_hadm AS diag\n    ON ac.hadm_id = diag.hadm_id\n),\n\n-- Step 4: Calculate the comparison 90-day mortality for the general 70-80 female inpatient population.\ncomparison_mortality AS (\n  SELECT\n    AVG(CASE WHEN dod IS NOT NULL AND DATETIME_DIFF(dod, admittime, DAY) <= 90 THEN 1.0 ELSE 0.0 END) AS general_90d_mortality\n  FROM\n    full_cohort_features\n),\n\n-- Step 5: Filter for the PE cohort, calculate derived metrics, and assign risk quintiles.\npe_cohort_quintiles AS (\n  SELECT\n    hadm_id,\n    hospital_expire_flag,\n    has_aki,\n    has_ards,\n    (dod IS NOT NULL AND DATETIME_DIFF(dod, admittime, DAY) <= 90) AS died_within_90_days,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM\n    full_cohort_features\n  WHERE\n    is_pe = 1\n)\n\n-- Step 6: Final aggregation to report metrics per quintile.\nSELECT\n  pq.risk_quintile,\n  COUNT(pq.hadm_id) AS num_patients,\n  -- FIX: Use a CASE statement to convert the boolean `died_within_90_days` to a number (1.0/0.0) for averaging.\n  AVG(CASE WHEN pq.died_within_90_days THEN 1.0 ELSE 0.0 END) AS quintile_90d_mortality,\n  cm.general_90d_mortality,\n  -- REFINEMENT: Remove redundant CAST as `has_aki` and `has_ards` are already 0/1 integers.\n  AVG(pq.has_aki) AS aki_rate,\n  AVG(pq.has_ards) AS ards_rate,\n  APPROX_QUANTILES(\n    IF(pq.hospital_expire_flag = 0, pq.los_days, NULL), 100\n  )[OFFSET(50)] AS median_survivor_los_days\nFROM\n  pe_cohort_quintiles AS pq,\n  comparison_mortality AS cm -- Cross-join to add the single comparison value to each row\nGROUP BY\n  pq.risk_quintile,\n  cm.general_90d_mortality\nORDER BY\n  pq.risk_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [88:12]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [88:12]\n\nLocation: US\nJob ID: fe2b126c-dbd6-45b5-b137-84e93284cd08\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "My 78-year-old female with multi\u2011trauma: among females 73\u201383, what are mean, min, and max ultrasounds per admission (including echocardiography) for 1\u20133 vs 4\u20137 day stays, stratified by ED vs elective?",
+  "final_sql": "WITH admissions_filtered AS (\n    SELECT \n        a.hadm_id,\n        a.admission_type,\n        -- Compute age at admission\n        p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n        -- Compute LOS in days (fractional)\n        TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n        -- Filter age: 73 to 83 inclusive\n        AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 73 AND 83\n        -- Filter admission type to only 'EMERGENCY' and 'ELECTIVE'\n        AND a.admission_type IN ('EMERGENCY', 'ELECTIVE')\n        -- Filter for LOS in the required ranges\n        AND (\n            (TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) BETWEEN 1 AND 3)\n            OR \n            (TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) BETWEEN 4 AND 7)\n        )\n),\n-- Identify ultrasound procedures\nultrasound_procs AS (\n    SELECT \n        h.hadm_id,\n        h.hcpcs_cd\n    FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n        ON h.hcpcs_cd = d.code\n    WHERE LOWER(d.long_description) LIKE '%ultrasound%'\n        OR LOWER(d.long_description) LIKE '%echo%'\n),\n-- For each admission, count the number of ultrasound procedures\nadmission_ultrasound_count AS (\n    SELECT \n        a.hadm_id,\n        COUNT(u.hcpcs_cd) AS ultrasound_count\n    FROM admissions_filtered a\n    LEFT JOIN ultrasound_procs u\n        ON a.hadm_id = u.hadm_id\n    GROUP BY a.hadm_id\n),\n-- Prepare final data with grouping variables\nfinal_data AS (\n    SELECT \n        a.hadm_id,\n        a.admission_type,\n        a.los_days,\n        u.ultrasound_count,\n        -- Define LOS group\n        CASE \n            WHEN a.los_days BETWEEN 1 AND 3 THEN '1-3'\n            WHEN a.los_days BETWEEN 4 AND 7 THEN '4-7'\n        END AS los_group,\n        -- Define admission type group\n        CASE \n            WHEN a.admission_type = 'EMERGENCY' THEN 'ED'\n            WHEN a.admission_type = 'ELECTIVE' THEN 'Elective'\n        END AS admission_type_group\n    FROM admissions_filtered a\n    LEFT JOIN admission_ultrasound_count u\n        ON a.hadm_id = u.hadm_id\n)\n-- Calculate statistics\nSELECT \n    los_group,\n    admission_type_group,\n    AVG(ultrasound_count) AS mean_ultrasounds,\n    MIN(ultrasound_count) AS min_ultrasounds,\n    MAX(ultrasound_count) AS max_ultrasounds\nFROM final_data\nGROUP BY los_group, admission_type_group\nORDER BY los_group, admission_type_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Illegal input character \"\\342\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Illegal input character \"\\342\" at [1:11]\n\nLocation: US\nJob ID: 087b1cd3-7eaf-45f2-b52f-94880f828da2\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

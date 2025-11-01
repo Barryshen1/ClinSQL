@@ -1,0 +1,22 @@
+{
+  "query": "For a 61-year-old female ICU patient: among female ICU stays aged 56\u201366, categorize per-stay mean MAP over first 48 hours (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report count, mean, median, IQR.",
+  "final_sql": "WITH PatientCohort AS (\n    SELECT\n        p.subject_id,\n        ad.hadm_id,\n        icu.stay_id,\n        icu.intime,\n        -- Calculate age at admission to the hospital\n        p.anchor_age + (EXTRACT(YEAR FROM ad.admittime) - p.anchor_year) AS age_at_admission\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON p.subject_id = ad.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON ad.hadm_id = icu.hadm_id\n    WHERE\n        p.gender = 'F'\n        AND (p.anchor_age + (EXTRACT(YEAR FROM ad.admittime) - p.anchor_year)) BETWEEN 56 AND 66\n),\nRawMAP AS (\n    SELECT\n        pc.stay_id,\n        ce.valuenum AS map_value,\n        ce.charttime\n    FROM\n        PatientCohort pc\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON pc.stay_id = ce.stay_id\n    WHERE\n        ce.itemid = 220052 -- itemid for Arterial Blood Pressure mean\n        AND ce.valuenum IS NOT NULL AND ce.valuenum > 0 -- Ensure valid numeric MAP values\n        AND ce.charttime BETWEEN pc.intime AND DATETIME_ADD(pc.intime, INTERVAL 48 HOUR)\n),\nStayMeanMAP AS (\n    SELECT\n        stay_id,\n        AVG(map_value) AS mean_map_per_stay\n    FROM\n        RawMAP\n    GROUP BY\n        stay_id\n),\n-- New CTE to categorize each stay's mean MAP\nCategorizedMAP AS (\n    SELECT\n        stay_id,\n        mean_map_per_stay,\n        CASE\n            WHEN mean_map_per_stay < 65 THEN '<65 mmHg'\n            WHEN mean_map_per_stay >= 65 AND mean_map_per_stay < 75 THEN '65-74 mmHg'\n            WHEN mean_map_per_stay >= 75 AND mean_map_per_stay < 85 THEN '75-84 mmHg'\n            WHEN mean_map_per_stay >= 85 THEN '>=85 mmHg'\n            ELSE 'Unknown' -- Should not be reached with valuenum > 0 filter\n        END AS map_category\n    FROM\n        StayMeanMAP\n)\n-- Final aggregation to get count, mean, median, IQR per category\nSELECT\n    map_category,\n    COUNT(stay_id) AS stay_count,\n    AVG(mean_map_per_stay) AS mean_map,\n    APPROX_QUANTILES(mean_map_per_stay, 100)[OFFSET(50)] AS median_map, -- Median (50th percentile)\n    (APPROX_QUANTILES(mean_map_per_stay, 100)[OFFSET(75)] - APPROX_QUANTILES(mean_map_per_stay, 100)[OFFSET(25)]) AS iqr_map -- Interquartile Range (Q3 - Q1)\nFROM\n    CategorizedMAP\nGROUP BY\n    map_category\nORDER BY\n    CASE map_category\n        WHEN '<65 mmHg' THEN 1\n        WHEN '65-74 mmHg' THEN 2\n        WHEN '75-84 mmHg' THEN 3\n        WHEN '>=85 mmHg' THEN 4\n        ELSE 99\n    END ASC;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [56:5]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [56:5]\n\nLocation: US\nJob ID: 4996dc7c-74da-4d24-8e68-7db0f622213a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

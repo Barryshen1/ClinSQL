@@ -1,0 +1,22 @@
+{
+  "query": "For a 42-year-old man with heart failure, among male inpatients aged 37\u201347 within the first 72 hours what is the maximum laboratory instability score (unique critically abnormal lab types)? Compare critical-event rate to general inpatients, and report LOS and mortality.",
+  "final_sql": "WITH base AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    -- age at admission using anchor_age/year\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 37 AND 47\n),\nsubgroup AS (\n  SELECT\n    b.subject_id,\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.deathtime,\n    b.hospital_expire_flag,\n    b.age_at_admit,\n    (TIMESTAMP_DIFF(b.dischtime, b.admittime, SECOND) / 3600.0) AS los_hours\n  FROM base AS b\n),\nlab_instab AS (\n  SELECT\n    s.hadm_id,\n    COUNT(DISTINCT l.itemid) AS lab_instability_score\n  FROM subgroup s\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n    ON l.subject_id = s.subject_id\n   AND l.hadm_id = s.hadm_id\n  WHERE l.charttime >= s.admittime\n    AND l.charttime <= TIMESTAMP_ADD(s.admittime, INTERVAL 72 HOUR)\n    AND l.valuenum IS NOT NULL\n    AND (\n      (l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower)\n      OR (l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper)\n      OR LOWER(IFNULL(l.flag, '')) IN ('h','high','critical')\n      OR LOWER(IFNULL(l.flag, '')) IN ('l','low')\n    )\n  GROUP BY s.hadm_id\n),\ninstab_all AS (\n  SELECT s.hadm_id,\n         COALESCE(li.lab_instability_score, 0) AS lab_instability_score\n  FROM subgroup s\n  LEFT JOIN lab_instab li ON s.hadm_id = li.hadm_id\n),\nmetrics AS (\n  SELECT\n    -- maximum instability score in subgroup\n    (SELECT COALESCE(MAX(lab_instability_score), 0) FROM instab_all) AS max_lab_instability_score_subgroup,\n    -- average LOS for subgroup\n    (SELECT AVG(los_hours) FROM subgroup) AS los_subgroup,\n    -- deaths and admissions in subgroup\n    (SELECT SUM(CASE WHEN (deathtime IS NOT NULL OR hospital_expire_flag = 1) THEN 1 ELSE 0 END)\n     FROM subgroup) AS deaths_subgroup,\n    (SELECT COUNT(*) FROM subgroup) AS admissions_subgroup,\n    -- general inpatients LOS\n    (SELECT AVG(TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 3600.0)\n     FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n     WHERE dischtime IS NOT NULL) AS los_general,\n    -- general deaths\n    (SELECT SUM(CASE WHEN (deathtime IS NOT NULL OR hospital_expire_flag = 1) THEN 1 ELSE 0 END)\n     FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n     WHERE dischtime IS NOT NULL) AS deaths_general,\n    -- general admissions\n    (SELECT COUNT(*) FROM `physionet-data.mimiciv_3_1_hosp.admissions` WHERE dischtime IS NOT NULL) AS admissions_general\n)\nSELECT\n  max_lab_instability_score_subgroup,\n  (deaths_subgroup * 1.0) / admissions_subgroup AS critical_event_rate_subgroup,\n  (deaths_general * 1.0) / admissions_general AS critical_event_rate_general,\n  los_subgroup,\n  (deaths_subgroup * 1.0) / admissions_subgroup AS mortality_subgroup,\n  los_general,\n  (deaths_general * 1.0) / admissions_general AS mortality_general\nFROM metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name dismtime not found inside b at [22:7]; reason: invalidQuery, location: query, message: Name dismtime not found inside b at [22:7]\n\nLocation: US\nJob ID: 3881b1bf-12b5-4646-ba70-ceeb797e7364\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

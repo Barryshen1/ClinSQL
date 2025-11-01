@@ -1,0 +1,16 @@
+{
+  "query": "For a 50-year-old male ICU patient with ARF: among male ICU patients 45\u201355, what is the 95th\u2011percentile composite instability score in the first 48 h? For the top quartile, compare hypotension (MAP<65), tachycardia, ICU LOS, and mortality to age\u2011matched cohort.",
+  "final_sql": "WITH patients_cohort AS (\n  SELECT p.subject_id, p.anchor_age, ie.hadm_id, ie.stay_id, ie.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie ON p.subject_id = ie.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 45 AND 55\n),\narf_patients AS (\n  SELECT DISTINCT le.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` di ON le.itemid = di.itemid\n  WHERE di.label = 'Creatinine' AND le.valuenum > 2\n),\nvital_signs AS (\n  SELECT ce.subject_id, ce.stay_id, ce.charttime, ce.itemid, ce.valuenum, di.label\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  JOIN patients_cohort pc ON ce.subject_id = pc.subject_id AND ce.stay_id = pc.stay_id\n  WHERE di.label IN ('Heart Rate', 'Mean Arterial Pressure') AND ce.charttime <= TIMESTAMP_ADD(pc.intime, INTERVAL 48 HOUR)\n),\ninstability_score AS (\n  SELECT vs.subject_id, vs.stay_id,\n         SUM(CASE WHEN vs.label = 'Heart Rate' AND vs.valuenum > 100 THEN 1 ELSE 0 END) +\n         SUM(CASE WHEN vs.label = 'Mean Arterial Pressure' AND vs.valuenum < 65 THEN 1 ELSE 0 END) AS score\n  FROM vital_signs vs\n  GROUP BY vs.subject_id, vs.stay_id\n),\npercentile_95 AS (\n  SELECT APPROX_QUANTILES(score, 100)[OFFSET(95)] AS threshold\n  FROM instability_score\n),\ntop_quartile AS (\n  SELECT subject_id, stay_id\n  FROM instability_score\n  WHERE score >= (SELECT threshold FROM percentile_95)\n)\nSELECT \n  AVG(CASE WHEN vs.valuenum < 65 THEN 1 ELSE 0 END) AS hypotension_rate,\n  AVG(CASE WHEN vs.valuenum > 100 THEN 1 ELSE 0 END) AS tachycardia_rate,\n  AVG(TIMESTAMP_DIFF(ie.outtime, ie.intime, HOUR)) AS icu_los,\n  AVG(CASE WHEN p.dod IS NOT NULL AND TIMESTAMP_DIFF(p.dod, ie.intime, HOUR) <= TIMESTAMP_DIFF(ie.outtime, ie.intime, HOUR) THEN 1 ELSE 0 END) AS mortality_rate\nFROM top_quartile tq\nJOIN `physionet-data.mimiciv_3_1_icu.icustays` ie ON tq.stay_id = ie.stay_id\nJOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON ie.subject_id = p.subject_id\nLEFT JOIN vital_signs vs ON tq.stay_id = vs.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

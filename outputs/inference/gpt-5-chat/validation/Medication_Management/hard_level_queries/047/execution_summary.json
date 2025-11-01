@@ -1,0 +1,16 @@
+{
+  "query": "I have a 53-year-old female inpatient. Among female inpatients 48\u201358, compare hemorrhagic stroke vs age\u2011matched controls: first 48\u2011hour medication complexity distribution, outcomes (LOS, mortality) for patients with \u22652 serotonergic drugs versus <2, and LOS/mortality for top complexity quartile.",
+  "final_sql": "WITH female_inpatients AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR)/24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n),\nstroke_flags AS (\n  SELECT\n    hadm_id,\n    MAX(CASE\n      WHEN (icd_version = 9 AND icd_code IN ('430','431'))\n        OR (icd_version = 10 AND (icd_code LIKE 'I60%' OR icd_code LIKE 'I61%'))\n      THEN 1 ELSE 0 END) AS is_hemorrhagic_stroke\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nmeds_48h AS (\n  SELECT\n    e.hadm_id,\n    LOWER(e.medication) AS medname\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` e\n  JOIN female_inpatients f\n    ON e.hadm_id = f.hadm_id\n  WHERE e.charttime BETWEEN f.admittime AND TIMESTAMP_ADD(f.admittime, INTERVAL 48 HOUR)\n),\ncomplexity AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT medname) AS complexity_score,\n    COUNT(DISTINCT CASE WHEN medname LIKE '%sertraline%'\n          OR medname LIKE '%fluoxetine%'\n          OR medname LIKE '%citalopram%'\n          OR medname LIKE '%paroxetine%'\n          OR medname LIKE '%venlafaxine%'\n          OR medname LIKE '%duloxetine%'\n          OR medname LIKE '%buspirone%'\n          OR medname LIKE '%trazodone%'\n          OR medname LIKE '%linezolid%'\n          OR medname LIKE '%sumatriptan%'\n        THEN medname END) AS serotonergic_count\n  FROM meds_48h\n  GROUP BY hadm_id\n),\ncombined AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    s.is_hemorrhagic_stroke,\n    c.complexity_score,\n    c.serotonergic_count,\n    f.los_days,\n    f.hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY c.complexity_score DESC) AS complexity_quartile\n  FROM female_inpatients f\n  LEFT JOIN stroke_flags s\n    ON f.hadm_id = s.hadm_id\n  LEFT JOIN complexity c\n    ON f.hadm_id = c.hadm_id\n)\nSELECT\n  CASE WHEN is_hemorrhagic_stroke = 1 THEN 'Hemorrhagic Stroke' ELSE 'Control' END AS cohort,\n  CASE WHEN serotonergic_count >= 2 THEN '>=2 serotonergic' ELSE '<2 serotonergic' END AS serotonergic_group,\n  COUNT(*) AS admissions,\n  AVG(los_days) AS avg_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM combined\nGROUP BY cohort, serotonergic_group\nUNION ALL\nSELECT\n  'All' AS cohort,\n  CASE WHEN complexity_quartile = 1 THEN 'Top quartile complexity' ELSE 'Other quartiles' END AS serotonergic_group,\n  COUNT(*) AS admissions,\n  AVG(los_days) AS avg_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM combined\nGROUP BY serotonergic_group;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

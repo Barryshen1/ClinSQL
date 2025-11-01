@@ -1,0 +1,22 @@
+{
+  "query": "I have a 56\u2011year\u2011old female on invasive mechanical ventilation. Among female ICU patients aged 51\u201361, what percentile is an instability score of 80 in the first 48 hours? Also report ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON adm.hadm_id = icu.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON pat.subject_id = icu.subject_id\n  WHERE LOWER(pat.gender) = 'f'\n    AND pat.anchor_age BETWEEN 51 AND 61\n),\ninstability_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%instability%'\n),\ninstability_scores AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    MAX(ce.valuenum) AS instability_value\n  FROM cohort AS c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ce.subject_id = c.subject_id\n   AND ce.hadm_id = c.hadm_id\n   AND ce.stay_id = c.stay_id\n  JOIN instability_items AS ii ON ce.itemid = ii.itemid\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime < TIMESTAMP_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.stay_id\n),\npercentile_80 AS (\n  SELECT\n    100.0 * SUM(CASE WHEN instability_value <= 80 THEN 1 ELSE 0 END) / COUNT(*) AS percentile_80\n  FROM instability_scores\n),\ndecile_top AS (\n  SELECT AVG(ic.los) AS avg_icu_los_hours,\n         SAFE_DIVIDE(SUM(CASE WHEN adm.hospital_expire_flag = 1 OR adm.deathtime IS NOT NULL THEN 1 ELSE 0 END), COUNT(*)) AS mortality_rate\n  FROM (\n    SELECT s.subject_id, s.hadm_id, s.stay_id, s.instability_value,\n           NTILE(10) OVER (ORDER BY s.instability_value DESC) AS decile\n    FROM instability_scores s\n    WHERE s.instability_value IS NOT NULL\n  ) AS d\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n    ON ic.subject_id = d.subject_id\n   AND ic.hadm_id = d.hadm_id\n   AND ic.stay_id = d.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON adm.hadm_id = ic.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON pat.subject_id = ic.subject_id\n  WHERE d.decile = 1\n)\nSELECT\n  percentile_80.percentile_80 AS percentile_80,\n  decile_top.avg_icu_los_hours,\n  decile_top.mortality_rate\nFROM percentile_80\nCROSS JOIN decile_top;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:19]\n\nLocation: US\nJob ID: f9332dee-0214-4618-9ec6-b6def5718b06\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

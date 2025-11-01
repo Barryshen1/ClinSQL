@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag,\n    i.intime,\n    i.outtime,\n    i.los\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  JOIN (\n    -- first ICU stay per admission\n    SELECT ic.subject_id, ic.hadm_id, ic.stay_id, ic.intime, ic.outtime, ic.los\n    FROM physionet-data.mimiciv_3_1_icu.icustays ic\n    JOIN (\n      SELECT hadm_id, MIN(intime) AS first_intime\n      FROM physionet-data.mimiciv_3_1_icu.icustays\n      GROUP BY hadm_id\n    ) first_ic\n      ON ic.hadm_id = first_ic.hadm_id AND ic.intime = first_ic.first_intime\n  ) i\n    ON a.hadm_id = i.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND a.hadm_id IN (\n      SELECT di.hadm_id\n      FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n      JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n        ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n      WHERE LOWER(dd.long_title) LIKE '%pulmonary embolism%'\n    )\n),\nproc_counts AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    COUNT(pe.itemid) AS procedure_count\n  FROM cohort c\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON c.stay_id = pe.stay_id\n    AND pe.starttime >= c.intime\n    AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.stay_id\n),\ncohort_with_counts AS (\n  SELECT\n    c.*,\n    pc.procedure_count\n  FROM cohort c\n  JOIN proc_counts pc\n    ON c.stay_id = pc.stay_id\n),\nquartiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    los,\n    procedure_count,\n    hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY procedure_count) AS proc_quartile\n  FROM cohort_with_counts\n)\nSELECT\n  proc_quartile AS quartile,\n  COUNT(*) AS N,\n  ROUND(AVG(procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(los), 2) AS mean_icu_los_days,\n  ROUND(100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS hospital_mortality_percent\nFROM quartiles\nGROUP BY proc_quartile\nORDER BY proc_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

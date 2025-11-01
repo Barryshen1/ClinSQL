@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old man. In male inpatients aged 74\u201384 with AKI, what are the cohort\u2019s median risk score (IQR) and 30\u2011day mortality? Compare ARDS rate and survivor LOS to general male inpatients 74\u201384 and give the risk percentile.",
+  "final_sql": "WITH \n-- Define AKI cohort\naki_cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 74 AND 84\n    AND a.hadm_id IN (\n      SELECT \n        hadm_id\n      FROM \n        `physionet-data.mimiciv_3_1_hosp.labevents`\n      WHERE \n        itemid = 220050\n        AND valuenum > 1.5  -- Example AKI criteria\n    )\n),\n\n-- Calculate 30-day mortality\nmortality AS (\n  SELECT \n    hadm_id,\n    CASE \n      WHEN hospital_expire_flag = 1 OR deathtime IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS died,\n    dischtime,\n    deathtime\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions`\n),\n\n-- Calculate SOFA score components\nsofa_components AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    itemid,\n    valuenum,\n    charttime\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents`\n  WHERE \n    itemid IN (220050, 220179, 220052, 220053, 220054, 220055)  -- Example itemids for SOFA score\n),\n\n-- Calculate median SOFA score\nsofa_score AS (\n  SELECT \n    hadm_id,\n    APPROX_QUANTILES(valuenum, 100)[OFFSET(50)] AS median_sofa_score,\n    APPROX_QUANTILES(valuenum, 100)[OFFSET(25)] AS sofa_score_q1,\n    APPROX_QUANTILES(valuenum, 100)[OFFSET(75)] AS sofa_score_q3\n  FROM \n    sofa_components\n),\n\n-- General male inpatients aged 74\u201384\ngeneral_cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 74 AND 84\n)\n\n-- Final query\nSELECT \n  COUNT(DISTINCT ac.hadm_id) AS aki_patients,\n  APPROX_QUANTILES(ss.median_sofa_score, 100)[OFFSET(50)] AS median_sofa_score,\n  APPROX_QUANTILES(ss.median_sofa_score, 100)[OFFSET(25)] AS sofa_score_q1,\n  APPROX_QUANTILES(ss.median_sofa_score, 100)[OFFSET(75)] AS sofa_score_q3,\n  SUM(m.died) / COUNT(DISTINCT ac.hadm_id) AS thirty_day_mortality,\n  AVG(ac.dischtime - ac.admittime) AS survivor_los\nFROM \n  aki_cohort ac\nJOIN \n  mortality m ON ac.hadm_id = m.hadm_id\nJOIN \n  sofa_score ss ON ac.hadm_id = ss.hadm_id\nWHERE \n  m.died = 0  -- Survivors\n;\n\n-- For comparison with general male inpatients\nSELECT \n  COUNT(DISTINCT gc.hadm_id) AS general_patients,\n  SUM(m.died) / COUNT(DISTINCT gc.hadm_id) AS thirty_day_mortality_general,\n  AVG(gc.dischtime - gc.admittime) AS survivor_los_general\nFROM \n  general_cohort gc\nJOIN \n  mortality m ON gc.hadm_id = m.hadm_id\nWHERE \n  m.died = 0  -- Survivors\n;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/cfa8202e-7ed9-4380-b5c0-e78da81aadb9?maxResults=0&location=US&prettyPrint=false: Query error: SELECT list expression references column hadm_id which is neither grouped nor aggregated at [62:5]\n\nLocation: US\nJob ID: cfa8202e-7ed9-4380-b5c0-e78da81aadb9\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [51:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [51:26]\n\nLocation: US\nJob ID: 7fa81efc-0348-4d1a-8d82-63e4ba40e6be\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: FLOAT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [63:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: FLOAT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [63:5]\n\nLocation: US\nJob ID: ea80f392-0c10-4aeb-8417-baac41c90d4a\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/cfa8202e-7ed9-4380-b5c0-e78da81aadb9?maxResults=0&location=US&prettyPrint=false: Query error: SELECT list expression references column hadm_id which is neither grouped nor aggregated at [62:5]\n\nLocation: US\nJob ID: cfa8202e-7ed9-4380-b5c0-e78da81aadb9\n"
+    }
+  ]
+}

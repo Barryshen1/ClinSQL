@@ -1,0 +1,16 @@
+{
+  "query": "87-year-old male: among male patients 82\u201392 with postoperative complications, by ICU vs non\u2011ICU, LOS \u22645 vs >5 and comorbidity bins (0\u20131/2/\u22653), report N, in-hospital mortality (%) and average comorbidity count.",
+  "final_sql": "WITH postop_admissions AS (\n  -- Identify admissions with postoperative complications\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    -- Postoperative complication ICD codes\n    (\n      (d.icd_version = 9 AND d.icd_code BETWEEN 'E8940' AND 'E8949')\n      OR\n      (d.icd_version = 10 AND (\n        (d.icd_code BETWEEN 'Y830' AND 'Y838') OR\n        (d.icd_code BETWEEN 'Y840' AND 'Y848')\n      ))\n    )\n),\n\neligible_patients AS (\n  -- Filter patients by age and gender\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    a.los_days\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    postop_admissions a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 82 AND 92\n),\n\ncomorbidity_counts AS (\n  -- Count comorbidities (diagnoses with seq_num > 1)\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT icd_code) AS comorbidity_count\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd\n  WHERE\n    seq_num > 1\n  GROUP BY\n    hadm_id\n),\n\nadmission_features AS (\n  SELECT\n    ep.*,\n    COALESCE(cc.comorbidity_count, 0) AS comorbidity_count,\n    CASE\n      WHEN i.hadm_id IS NOT NULL THEN 'ICU'\n      ELSE 'Non-ICU'\n    END AS icu_status,\n    CASE\n      WHEN ep.los_days <= 5 THEN '\u22645'\n      ELSE '>5'\n    END AS los_category,\n    CASE\n      WHEN COALESCE(cc.comorbidity_count, 0) BETWEEN 0 AND 1 THEN '0\u20131'\n      WHEN COALESCE(cc.comorbidity_count, 0) = 2 THEN '2'\n      ELSE '\u22653'\n    END AS comorbidity_bin\n  FROM\n    eligible_patients ep\n  LEFT JOIN\n    comorbidity_counts cc\n    ON ep.hadm_id = cc.hadm_id\n  LEFT JOIN\n    physionet-data.mimiciv_3_1_icu.icustays i\n    ON ep.hadm_id = i.hadm_id\n)\n\nSELECT\n  icu_status,\n  los_category,\n  comorbidity_bin,\n  COUNT(*) AS N,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS in_hospital_mortality_percent,\n  ROUND(AVG(comorbidity_count), 2) AS avg_comorbidity_count\nFROM\n  admission_features\nGROUP BY\n  icu_status,\n  los_category,\n  comorbidity_bin\nORDER BY\n  icu_status,\n  los_category,\n  comorbidity_bin;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

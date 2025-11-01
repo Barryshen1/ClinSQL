@@ -1,0 +1,22 @@
+{
+  "query": "I have a 56\u2011year\u2011old male in the ICU. Among male ICU patients aged 51\u201361, categorize first\u201148\u2011hour per\u2011stay average SpO2 (<90, 90\u201392, 93\u201395, >95) and report patient counts and AKI rates.",
+  "final_sql": "WITH \n  -- Identify male patients aged 51-61\n  eligible_patients AS (\n    SELECT \n      p.subject_id,\n      p.anchor_age\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    WHERE \n      p.gender = 'M' \n      AND p.anchor_age BETWEEN 51 AND 61\n  ),\n  \n  -- Calculate first 48-hour average SpO2 for each ICU stay\n  spo2_values AS (\n    SELECT \n      ic.stay_id,\n      ic.intime,\n      c.valuenum AS spo2_value\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays` ic\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.chartevents` c \n        ON ic.subject_id = c.subject_id \n        AND ic.hadm_id = c.hadm_id \n        AND ic.stay_id = c.stay_id\n    WHERE \n      c.itemid = 220050 \n      AND c.charttime BETWEEN ic.intime AND TIMESTAMP_ADD(ic.intime, INTERVAL 48 HOUR)\n  ),\n  \n  -- Average SpO2 per stay\n  avg_spo2_per_stay AS (\n    SELECT \n      stay_id,\n      AVG(spo2_value) AS avg_spo2\n    FROM \n      spo2_values\n    GROUP BY \n      stay_id\n  ),\n  \n  -- Categorize average SpO2\n  categorized_spo2 AS (\n    SELECT \n      stay_id,\n      avg_spo2,\n      CASE \n        WHEN avg_spo2 < 90 THEN '<90'\n        WHEN avg_spo2 BETWEEN 90 AND 92 THEN '90-92'\n        WHEN avg_spo2 BETWEEN 93 AND 95 THEN '93-95'\n        ELSE '>95'\n      END AS spo2_category\n    FROM \n      avg_spo2_per_stay\n  ),\n  \n  -- Identify AKI events (example based on creatinine itemid = 220052)\n  aki_events AS (\n    SELECT \n      ic.stay_id,\n      COUNT(*) AS aki_count\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays` ic\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.chartevents` c \n        ON ic.subject_id = c.subject_id \n        AND ic.hadm_id = c.hadm_id \n        AND ic.stay_id = c.stay_id\n    WHERE \n      c.itemid = 220052 \n      AND c.valuenum > 1.5  -- Example threshold for AKI\n    GROUP BY \n      ic.stay_id\n  )\n\n-- Final query\nSELECT \n  cs.spo2_category,\n  COUNT(DISTINCT cs.stay_id) AS patient_count,\n  COALESCE(SUM(aki.aki_count), 0) AS aki_count,\n  SAFE_DIVIDE(COALESCE(SUM(aki.aki_count), 0), COUNT(DISTINCT cs.stay_id)) AS aki_rate\nFROM \n  categorized_spo2 cs\nLEFT JOIN \n  aki_events aki ON cs.stay_id = aki.stay_id\nGROUP BY \n  cs.spo2_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references aki.aki_count which is neither grouped nor aggregated at [81:12]; reason: invalidQuery, location: query, message: SELECT list expression references aki.aki_count which is neither grouped nor aggregated at [81:12]\n\nLocation: US\nJob ID: 6bfd36fc-b6a8-4638-ad24-65a56fdc3a83\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

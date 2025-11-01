@@ -1,0 +1,16 @@
+{
+  "query": "For a 40-year-old man, among male patients aged 35\u201345 admitted with chest pain or AMI, what are counts of first high-sensitivity troponin T categorized as normal, borderline, or myocardial injury?",
+  "final_sql": "WITH dx_adms AS (\n  -- Admissions for male patients age 35-45 with a diagnosis mentioning chest pain or myocardial infarction\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.edregtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 35 AND 45\n    AND (\n      LOWER(dd.long_title) LIKE '%chest pain%'\n      OR LOWER(dd.long_title) LIKE '%acute myocardial%'\n      OR LOWER(dd.long_title) LIKE '%myocardial infarction%'\n    )\n),\n\ntroponin_items AS (\n  -- Identify high-sensitivity Troponin T itemids by label (label must indicate Troponin T and high-sensitivity)\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n    AND (LOWER(label) LIKE '%hs%' OR LOWER(label) LIKE '%high%')\n),\n\nfirst_hs_tn AS (\n  -- For each admission, pick the earliest hs-TnT measurement (within ED/admission window)\n  SELECT\n    le.hadm_id,\n    le.subject_id,\n    COALESCE(le.charttime, le.storetime) AS charttime,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY COALESCE(le.charttime, le.storetime) ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN dx_adms a\n    ON le.hadm_id = a.hadm_id\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n    -- include lab draws from ED registration (if present) or admission time through discharge\n    AND COALESCE(le.charttime, le.storetime) BETWEEN COALESCE(a.edregtime, a.admittime) AND a.dischtime\n)\n\nSELECT\n  CASE\n    WHEN valuenum < 14 THEN 'normal (<14 ng/L)'\n    WHEN valuenum < 52 THEN 'borderline (14\u201352 ng/L)'\n    ELSE 'myocardial injury (>=52 ng/L)'\n  END AS category,\n  COUNT(*) AS admissions_count\nFROM first_hs_tn\nWHERE rn = 1\nGROUP BY category\nORDER BY\n  CASE\n    WHEN category LIKE 'normal%' THEN 1\n    WHEN category LIKE 'borderline%' THEN 2\n    ELSE 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

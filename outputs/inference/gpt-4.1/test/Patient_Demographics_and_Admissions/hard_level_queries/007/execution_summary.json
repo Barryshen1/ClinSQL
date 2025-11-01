@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating an 88-year-old man. Among male Medicare patients aged 83\u201393 admitted via the ED with a principal diagnosis of TIA, what are the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >10 days?",
+  "final_sql": "WITH tia_icd_codes AS (\n  -- Get all ICD codes for TIA (ICD-9: 435.*, ICD-10: G45.*)\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND icd_code LIKE '435%')\n     OR (icd_version = 10 AND icd_code LIKE 'G45%')\n),\nindex_admissions AS (\n  -- Select index admissions meeting all criteria\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    adm.insurance,\n    adm.admission_location,\n    pat.anchor_age,\n    pat.gender,\n    diag.icd_code,\n    diag.icd_version,\n    TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN tia_icd_codes ticd\n    ON diag.icd_code = ticd.icd_code AND diag.icd_version = ticd.icd_version\n  WHERE\n    diag.seq_num = 1\n    AND pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 83 AND 93\n    AND LOWER(adm.insurance) LIKE '%medicare%'\n    AND LOWER(adm.admission_location) LIKE '%emergency%'\n    AND adm.dischtime IS NOT NULL\n    AND adm.hospital_expire_flag = 0\n),\nreadmissions AS (\n  -- For each index admission, find if a readmission occurred within 30 days\n  SELECT\n    idx.subject_id,\n    idx.hadm_id AS index_hadm_id,\n    idx.admittime AS index_admittime,\n    idx.dischtime AS index_dischtime,\n    MIN(next.admittime) AS next_admittime,\n    MIN(next.hadm_id) AS next_hadm_id,\n    CASE\n      WHEN MIN(next.admittime) IS NOT NULL\n           AND TIMESTAMP_DIFF(MIN(next.admittime), idx.dischtime, DAY) BETWEEN 0 AND 30\n        THEN 1\n      ELSE 0\n    END AS readmitted_within_30d,\n    idx.los\n  FROM index_admissions idx\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` next\n    ON idx.subject_id = next.subject_id\n    AND next.admittime > idx.dischtime\n    AND next.hadm_id != idx.hadm_id\n    AND next.admittime <= TIMESTAMP_ADD(idx.dischtime, INTERVAL 30 DAY)\n  GROUP BY idx.subject_id, idx.hadm_id, idx.admittime, idx.dischtime, idx.los\n),\nsummary AS (\n  SELECT\n    COUNT(*) AS n_index_admissions,\n    SUM(readmitted_within_30d) AS n_readmitted,\n    SAFE_DIVIDE(SUM(readmitted_within_30d), COUNT(*)) AS readmission_rate,\n    SAFE_DIVIDE(SUM(CASE WHEN los > 10 THEN 1 ELSE 0 END), COUNT(*)) AS pct_los_gt_10d\n  FROM readmissions\n),\nmedian_los_readmitted AS (\n  SELECT\n    APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_los_readmitted\n  FROM readmissions\n  WHERE readmitted_within_30d = 1\n),\nmedian_los_not_readmitted AS (\n  SELECT\n    APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_los_not_readmitted\n  FROM readmissions\n  WHERE readmitted_within_30d = 0\n)\nSELECT\n  s.readmission_rate,\n  mr.median_los_readmitted,\n  mn.median_los_not_readmitted,\n  s.pct_los_gt_10d\nFROM summary s\nCROSS JOIN median_los_readmitted mr\nCROSS JOIN median_los_not_readmitted mn\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \"(\" at [68:48]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \"(\" at [68:48]\n\nLocation: US\nJob ID: 632a5a82-9721-4866-89b6-97a748ca013b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

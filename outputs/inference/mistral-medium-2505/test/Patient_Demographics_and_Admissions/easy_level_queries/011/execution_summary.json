@@ -1,0 +1,16 @@
+{
+  "query": "My 81-year-old man is on dual antiplatelet therapy. Among men 76\u201386 on DAPT, average ICU LOS (days) for first admission?",
+  "final_sql": "WITH\n-- Get male patients aged 76-86\neligible_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 76 AND 86\n),\n\n-- Get first admission per patient\nfirst_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS admission_rank\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE\n    subject_id IN (SELECT subject_id FROM eligible_patients)\n),\nfirst_admissions_filtered AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime\n  FROM\n    first_admissions\n  WHERE\n    admission_rank = 1\n),\n\n-- Identify DAPT medications (aspirin + P2Y12 inhibitor)\ndapt_medications AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    drug\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    LOWER(drug) LIKE '%aspirin%'\n    OR LOWER(drug) LIKE '%clopidogrel%'\n    OR LOWER(drug) LIKE '%ticagrelor%'\n    OR LOWER(drug) LIKE '%prasugrel%'\n),\n\n-- Patients on DAPT (both aspirin and P2Y12 inhibitor)\ndapt_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    first_admissions_filtered a\n  JOIN\n    dapt_medications d1 ON a.subject_id = d1.subject_id AND a.hadm_id = d1.hadm_id\n  JOIN\n    dapt_medications d2 ON a.subject_id = d2.subject_id AND a.hadm_id = d2.hadm_id\n  WHERE\n    LOWER(d1.drug) LIKE '%aspirin%'\n    AND (\n      LOWER(d2.drug) LIKE '%clopidogrel%'\n      OR LOWER(d2.drug) LIKE '%ticagrelor%'\n      OR LOWER(d2.drug) LIKE '%prasugrel%'\n    )\n    AND d1.drug <> d2.drug\n),\n\n-- Get ICU stays for DAPT patients\nicu_stays AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    TIMESTAMP_DIFF(i.outtime, i.intime, DAY) AS icu_los_days\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN\n    dapt_patients d ON i.subject_id = d.subject_id AND i.hadm_id = d.hadm_id\n)\n\n-- Calculate average ICU LOS\nSELECT\n  AVG(icu_los_days) AS avg_icu_los_days\nFROM\n  icu_stays;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

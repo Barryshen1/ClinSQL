@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 95\u2011year\u2011old male ICU patient with sepsis. Among male ICU patients age 90\u2013100 with sepsis, what is the SD of diagnostic utilization in the first 24h? Also report p75, p95, in\u2011hospital mortality %, average LOS, and admissions versus overall ICU.",
+  "final_sql": "WITH sepsis_admissions AS (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE (\n        (icd_version = 10 AND icd_code LIKE 'A40%') OR -- Streptococcus sepsis, and other specific bacterial sepsis\n        (icd_version = 10 AND icd_code LIKE 'A41%') OR -- Other sepsis (e.g., A41.9 Unspecified sepsis)\n        (icd_version = 10 AND icd_code LIKE 'R652%')   -- Severe sepsis / septic shock (e.g., R65.20, R65.21)\n    )\n),\n-- CTE to define the patient cohort based on age, gender, ICU stay, and sepsis diagnosis\ncohort_icustays AS (\n    SELECT\n        pat.subject_id,\n        adm.hadm_id,\n        icu.stay_id,\n        icu.intime,\n        icu.outtime,\n        adm.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` pat\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON pat.subject_id = adm.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON adm.hadm_id = icu.hadm_id\n    INNER JOIN sepsis_admissions sa\n        ON adm.hadm_id = sa.hadm_id\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 90 AND 100\n),\n-- CTE to count distinct diagnostic events (lab and microbiology) within the first 24 hours for each ICU stay\ndiagnostic_events_24h_per_stay AS (\n    SELECT\n        cs.stay_id,\n        -- Count distinct lab events (identified by labevent_id) within the 24h window\n        COUNT(DISTINCT le.labevent_id) AS num_lab_events,\n        -- Count distinct microbiology events (identified by microevent_id) within the 24h window\n        COUNT(DISTINCT me.microevent_id) AS num_micro_events\n    FROM cohort_icustays cs\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON cs.subject_id = le.subject_id\n        AND cs.hadm_id = le.hadm_id\n        AND le.charttime >= cs.intime\n        AND le.charttime <= DATETIME_ADD(cs.intime, INTERVAL 24 HOUR)\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.microbiologyevents` me\n        ON cs.subject_id = me.subject_id\n        AND cs.hadm_id = me.hadm_id\n        AND me.charttime >= cs.intime\n        AND me.charttime <= DATETIME_ADD(cs.intime, INTERVAL 24 HOUR)\n    GROUP BY cs.stay_id\n),\n-- CTE to combine the cohort information with the calculated 24h diagnostic utilization\ntotal_diagnostic_utilization_per_stay AS (\n    SELECT\n        cs.subject_id,\n        cs.hadm_id,\n        cs.stay_id,\n        cs.intime,\n        cs.outtime,\n        cs.hospital_expire_flag,\n        -- Sum of distinct lab and micro events for overall diagnostic utilization\n        COALESCE(de.num_lab_events, 0) + COALESCE(de.num_micro_events, 0) AS diagnostic_utilization_24h\n    FROM cohort_icustays cs\n    LEFT JOIN diagnostic_events_24h_per_stay de\n        ON cs.stay_id = de.stay_id\n)\n-- Final aggregation to calculate all requested metrics\nSELECT\n    COUNT(DISTINCT tdu.hadm_id) AS Admissions,\n    COUNT(DISTINCT tdu.stay_id) AS ICUMeetsCriteria,\n    ROUND(AVG(CAST(tdu.hospital_expire_flag AS BIGNUMERIC)) * 100, 2) AS InHospitalMortalityPercent,\n    ROUND(AVG(DATETIME_DIFF(tdu.outtime, tdu.intime, HOUR) / 24.0), 2) AS AverageICULOSDays,\n    ROUND(STDDEV(tdu.diagnostic_utilization_24h), 2) AS SDOfDiagnosticUtilization24h,\n    -- Corrected PERCENTILE_CONT syntax for BigQuery by adding OVER()\n    ROUND(PERCENTILE_CONT(tdu.diagnostic_utilization_24h, 0.75) OVER(), 2) AS P75OfDiagnosticUtilization24h,\n    ROUND(PERCENTILE_CONT(tdu.diagnostic_utilization_24h, 0.95) OVER(), 2) AS P95OfDiagnosticUtilization24h\nFROM total_diagnostic_utilization_per_stay tdu;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references tdu.diagnostic_utilization_24h which is neither grouped nor aggregated at [74:27]; reason: invalidQuery, location: query, message: SELECT list expression references tdu.diagnostic_utilization_24h which is neither grouped nor aggregated at [74:27]\n\nLocation: US\nJob ID: 021ae10a-6359-416f-aae9-f8fdb0fc1b4a\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [73:33]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [73:33]\n\nLocation: US\nJob ID: 9eda29e7-5193-4947-b693-89090bf8a782\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: c698df55-722c-488b-a0fe-0672c641c8d1\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references tdu.diagnostic_utilization_24h which is neither grouped nor aggregated at [74:27]; reason: invalidQuery, location: query, message: SELECT list expression references tdu.diagnostic_utilization_24h which is neither grouped nor aggregated at [74:27]\n\nLocation: US\nJob ID: 021ae10a-6359-416f-aae9-f8fdb0fc1b4a\n"
+    }
+  ]
+}

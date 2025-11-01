@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83\u2011year\u2011old female inpatient post\u2011cardiac arrest. For females 78\u201388 years, stratified by tertiles of a 7\u2011day medication complexity score (unique drugs + 2\u00d7 high\u2011risk drugs + routes), report counts, score ranges, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id, \n        a.hadm_id, \n        a.admittime, \n        a.dischtime, \n        a.hospital_expire_flag,\n        DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n        p.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n    WHERE \n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 78 AND 88\n        AND di.icd_code LIKE 'I46%'  -- Cardiac arrest ICD-10 codes\n        AND di.icd_version = 10\n),\nmeds AS (\n    SELECT \n        c.subject_id,\n        c.hadm_id,\n        COUNT(DISTINCT pr.drug) AS unique_drugs,\n        COUNT(DISTINCT CASE \n            WHEN LOWER(pr.drug) LIKE '%warfarin%' OR\n                 LOWER(pr.drug) LIKE '%heparin%' OR\n                 LOWER(pr.drug) LIKE '%enoxaparin%' OR\n                 LOWER(pr.drug) LIKE '%dabigatran%' OR\n                 LOWER(pr.drug) LIKE '%rivaroxaban%' OR\n                 LOWER(pr.drug) LIKE '%apixaban%' OR\n                 LOWER(pr.drug) LIKE '%insulin%' OR\n                 LOWER(pr.drug) LIKE '%morphine%' OR\n                 LOWER(pr.drug) LIKE '%fentanyl%' OR\n                 LOWER(pr.drug) LIKE '%oxycodone%' OR\n                 LOWER(pr.drug) LIKE '%hydromorphone%' OR\n                 LOWER(pr.drug) LIKE '%methadone%' OR\n                 LOWER(pr.drug) LIKE '%midazolam%' OR\n                 LOWER(pr.drug) LIKE '%lorazepam%' OR\n                 LOWER(pr.drug) LIKE '%diazepam%' OR\n                 LOWER(pr.drug) LIKE '%propofol%'\n            THEN pr.drug \n        END) AS high_risk_drugs,\n        COUNT(DISTINCT pr.route) AS routes\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        ON c.subject_id = pr.subject_id AND c.hadm_id = pr.hadm_id\n    WHERE \n        pr.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n    GROUP BY c.subject_id, c.hadm_id\n),\nscores AS (\n    SELECT \n        c.*,\n        COALESCE(m.unique_drugs, 0) + 2 * COALESCE(m.high_risk_drugs, 0) + COALESCE(m.routes, 0) AS complexity_score\n    FROM cohort c\n    LEFT JOIN meds m\n        ON c.subject_id = m.subject_id AND c.hadm_id = m.hadm_id\n),\ntertiles AS (\n    SELECT \n        *,\n        NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n    FROM scores\n),\nreadmissions AS (\n    SELECT \n        t1.hadm_id,\n        t1.dischtime,\n        MIN(t2.admittime) AS readmit_time\n    FROM tertiles t1\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` t2\n        ON t1.subject_id = t2.subject_id\n        AND t2.admittime > t1.dischtime\n    GROUP BY t1.hadm_id, t1.dischtime\n    HAVING DATETIME_DIFF(MIN(t2.admittime), t1.dischtime, DAY) <= 30\n)\nSELECT \n    tertile,\n    COUNT(*) AS count,\n    MIN(complexity_score) AS min_score,\n    MAX(complexity_score) AS max_score,\n    ROUND(AVG(los), 2) AS mean_los,\n    ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_percent,\n    ROUND(100.0 * COUNT(r.hadm_id) / COUNT(*), 2) AS readmission_30d_percent\nFROM tertiles t\nLEFT JOIN readmissions r\n    ON t.hadm_id = r.hadm_id\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 HAVING clause expression references t1.dischtime which is neither grouped nor aggregated at [77:45]; reason: invalidQuery, location: query, message: HAVING clause expression references t1.dischtime which is neither grouped nor aggregated at [77:45]\n\nLocation: US\nJob ID: afaee838-b8b9-4221-a0d2-8eaa92378cd4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

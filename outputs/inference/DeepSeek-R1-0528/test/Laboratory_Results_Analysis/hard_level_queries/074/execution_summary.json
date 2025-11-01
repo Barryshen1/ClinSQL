@@ -1,0 +1,16 @@
+{
+  "query": "For a 42-year-old man with heart failure, among male inpatients aged 37\u201347 within the first 72 hours what is the maximum laboratory instability score (unique critically abnormal lab types)? Compare critical-event rate to general inpatients, and report LOS and mortality.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.hospital_expire_flag,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 37 AND 47\n),\nhf_admissions AS (\n  SELECT \n    hadm_id,\n    MAX(CASE \n          WHEN (icd_version = 9 AND icd_code LIKE '428%') \n             OR (icd_version = 10 AND icd_code LIKE 'I50%') \n          THEN 1 ELSE 0 \n        END) AS heart_failure\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nlab_abnormal AS (\n  SELECT \n    le.hadm_id,\n    COUNT(DISTINCT le.itemid) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN base_admissions ba \n    ON le.hadm_id = ba.hadm_id\n  WHERE \n    le.charttime BETWEEN ba.admittime AND DATETIME_ADD(ba.admittime, INTERVAL 72 HOUR)\n    AND le.flag = 'critically abnormal'\n  GROUP BY le.hadm_id\n),\ncombined_table AS (\n  SELECT \n    ba.*,\n    COALESCE(hf.heart_failure, 0) AS heart_failure,\n    COALESCE(la.lab_instability_score, 0) AS lab_instability_score,\n    DATETIME_DIFF(ba.dischtime, ba.admittime, DAY) AS los_days\n  FROM base_admissions ba\n  LEFT JOIN hf_admissions hf\n    ON ba.hadm_id = hf.hadm_id\n  LEFT JOIN lab_abnormal la\n    ON ba.hadm_id = la.hadm_id\n)\nSELECT \n  'Heart Failure' AS cohort,\n  MAX(lab_instability_score) AS max_lab_instability_score,\n  AVG(lab_instability_score) AS critical_event_rate,\n  AVG(los_days) AS avg_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_rate_percent\nFROM combined_table\nWHERE heart_failure = 1\nUNION ALL\nSELECT \n  'General Inpatients' AS cohort,\n  MAX(lab_instability_score) AS max_lab_instability_score,\n  AVG(lab_instability_score) AS critical_event_rate,\n  AVG(los_days) AS avg_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_rate_percent\nFROM combined_table;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

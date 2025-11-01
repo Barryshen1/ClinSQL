@@ -1,0 +1,22 @@
+{
+  "query": "For my 80-year-old female ICU patient: among female ICU stays aged 75\u201385, what percentile is a first\u201148\u2011hour per\u2011stay mean systolic BP of 140 mmHg in this cohort?",
+  "final_sql": "WITH cohort AS (\n    SELECT\n        p.subject_id,\n        p.gender,\n        p.anchor_age,\n        ie.hadm_id,\n        ie.stay_id,\n        ie.intime,\n        ie.outtime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` ie\n        ON p.subject_id = ie.subject_id\n    WHERE\n        p.gender = 'F' -- Filter for female patients\n        AND p.anchor_age BETWEEN 75 AND 85 -- Filter for age between 75 and 85\n),\nsbp_readings AS (\n    SELECT\n        c.stay_id,\n        ce.charttime,\n        ce.valuenum AS sbp_value\n    FROM\n        cohort c\n    JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON c.stay_id = ce.stay_id\n    WHERE\n        -- Refined itemids for Systolic Blood Pressure for MIMIC-IV\n        ce.itemid IN (220050, 220179)\n        AND ce.valuenum IS NOT NULL -- Ensure numeric value exists\n        AND ce.valuenum > 0 AND ce.valuenum < 300 -- Filter for reasonable SBP values\n        -- Filter for readings within the first 48 hours of ICU stay\n        AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n),\nmean_48hr_sbp_per_stay AS (\n    SELECT\n        stay_id,\n        AVG(sbp_value) AS mean_48hr_sbp\n    FROM\n        sbp_readings\n    GROUP BY\n        stay_id\n    -- Removed 'HAVING AVG(sbp_value) IS NOT NULL' as it's redundant;\n    -- valuenum is already checked for NOT NULL in sbp_readings CTE.\n),\nranked_stays AS (\n    SELECT\n        stay_id,\n        mean_48hr_sbp,\n        -- Calculate the percentile rank (0 to 1) for each mean SBP value\n        PERCENT_RANK() OVER (ORDER BY mean_48hr_sbp ASC) AS percentile_rank_val\n    FROM\n        mean_48hr_sbp_per_stay\n)\n-- Select the maximum percentile rank for mean SBP values <= 140 mmHg,\n-- then multiply by 100 to get a 0-100 percentile.\nSELECT\n    MAX(percentile_rank_val) * 100 AS `percentile_of_140_mmHg`\nFROM\n    ranked_stays\nWHERE\n    mean_48hr_sbp <= 140;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [58:5]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [58:5]\n\nLocation: US\nJob ID: 852140aa-c53a-4c2a-b73b-aa522446034e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

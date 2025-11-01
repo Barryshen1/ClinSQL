@@ -1,0 +1,1 @@
+COALESCE(t.tachycardia_count, 0) AS tachycardia_b;

@@ -1,0 +1,16 @@
+{
+  "query": "Regarding my 50-year-old male inpatient: among male inpatients 45\u201355 with T2DM and heart failure, report % started on GLP\u20111 within 72h, % on GLP\u20111 in last 48h, and net change.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND a.hospital_expire_flag = 0\n    AND a.dischtime IS NOT NULL\n),\n\ndiabetes AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    (di.icd_version = 9 AND di.icd_code LIKE '250.%')\n    OR (di.icd_version = 10 AND di.icd_code LIKE 'E11%')\n),\n\nheart_failure AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    (di.icd_version = 9 AND di.icd_code LIKE '428%')\n    OR (di.icd_version = 10 AND di.icd_code LIKE 'I50%')\n),\n\ntarget_patients AS (\n  SELECT\n    c.*\n  FROM\n    cohort c\n  JOIN\n    diabetes d ON c.hadm_id = d.hadm_id\n  JOIN\n    heart_failure hf ON c.hadm_id = hf.hadm_id\n),\n\nglp1_meds AS (\n  SELECT DISTINCT\n    drug\n  FROM\n    physionet-data.mimiciv_3_1_hosp.prescriptions\n  WHERE\n    LOWER(drug) IN (\n      'liraglutide', 'exenatide', 'dulaglutide', 'semaglutide',\n      'saxenda', 'byetta', 'trulicity', 'ozempic'\n    )\n),\n\nglp1_prescriptions AS (\n  SELECT\n    tp.hadm_id,\n    MIN(pr.starttime) AS first_glp1_start,\n    MAX(COALESCE(pr.stoptime, tp.dischtime)) AS last_glp1_stop\n  FROM\n    target_patients tp\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.prescriptions pr\n    ON tp.hadm_id = pr.hadm_id\n  JOIN\n    glp1_meds g\n    ON LOWER(pr.drug) = LOWER(g.drug)\n  WHERE\n    pr.starttime IS NOT NULL\n  GROUP BY\n    tp.hadm_id\n),\n\nanalysis_flags AS (\n  SELECT\n    tp.hadm_id,\n    CASE\n      WHEN gp.first_glp1_start IS NOT NULL\n        AND DATETIME_DIFF(gp.first_glp1_start, tp.admittime, HOUR) <= 72\n      THEN 1\n      ELSE 0\n    END AS started_glp1_within_72h,\n    CASE\n      WHEN gp.last_glp1_stop IS NOT NULL\n        AND DATETIME_DIFF(tp.dischtime, gp.last_glp1_stop, HOUR) <= 48\n      THEN 1\n      ELSE 0\n    END AS on_glp1_in_last_48h\n  FROM\n    target_patients tp\n  LEFT JOIN\n    glp1_prescriptions gp\n    ON tp.hadm_id = gp.hadm_id\n)\n\nSELECT\n  COUNT(*) AS total_patients,\n  AVG(started_glp1_within_72h) * 100 AS pct_started_within_72h,\n  AVG(on_glp1_in_last_48h) * 100 AS pct_on_in_last_48h,\n  (AVG(started_glp1_within_72h) - AVG(on_glp1_in_last_48h)) * 100 AS net_change\nFROM\n  analysis_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

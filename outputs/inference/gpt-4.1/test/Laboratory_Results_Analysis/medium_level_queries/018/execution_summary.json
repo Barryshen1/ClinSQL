@@ -1,0 +1,16 @@
+{
+  "query": "I have a 95\u2011year\u2011old man. Among male patients aged 90\u2013100 admitted with ACS, what are counts, percentages, and mean length of stay for index Troponin T categorized as normal/borderline/elevated?",
+  "final_sql": "WITH male_90_100 AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 90 AND 100\n),\nacs_admissions AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN male_90_100 p ON adm.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx ON adm.hadm_id = dx.hadm_id\n  WHERE (\n    -- ICD-9 ACS codes\n    (dx.icd_version = 9 AND LEFT(dx.icd_code,3) IN ('410','411','412','413','414'))\n    OR\n    -- ICD-10 ACS codes\n    (dx.icd_version = 10 AND LEFT(dx.icd_code,3) IN ('I20','I21','I22','I23','I24','I25'))\n  )\n),\ntroponin_t_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\nindex_troponin AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    MIN(le.charttime) AS index_charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_t_items tti ON le.itemid = tti.itemid\n  GROUP BY le.subject_id, le.hadm_id\n),\ntroponin_values AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_t_items tti ON le.itemid = tti.itemid\n),\nacs_with_troponin AS (\n  SELECT\n    aa.subject_id,\n    aa.hadm_id,\n    aa.admittime,\n    aa.dischtime,\n    tv.valuenum AS troponin_t_value\n  FROM acs_admissions aa\n  JOIN index_troponin it ON aa.subject_id = it.subject_id AND aa.hadm_id = it.hadm_id\n  JOIN troponin_values tv\n    ON it.subject_id = tv.subject_id\n    AND it.hadm_id = tv.hadm_id\n    AND it.index_charttime = tv.charttime\n  WHERE tv.valuenum IS NOT NULL\n),\ncategorized AS (\n  SELECT\n    *,\n    CASE\n      WHEN troponin_t_value <= 0.01 THEN 'Normal'\n      WHEN troponin_t_value > 0.01 AND troponin_t_value <= 0.03 THEN 'Borderline'\n      WHEN troponin_t_value > 0.03 THEN 'Elevated'\n      ELSE 'Unknown'\n    END AS troponin_category,\n    SAFE_CAST(DATETIME_DIFF(dischtime, admittime, DAY) AS FLOAT64) AS los_days\n  FROM acs_with_troponin\n)\nSELECT\n  troponin_category,\n  COUNT(*) AS admission_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(los_days), 2) AS mean_los_days\nFROM categorized\nWHERE troponin_category IN ('Normal','Borderline','Elevated')\nGROUP BY troponin_category\nORDER BY troponin_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT MIN(pc.seq_num) AS min_procedures FROM patients p JOIN procedures_icd pi ON p.subject_id = pi.subject_id JOIN d_icd_procedures dcp ON pi.icd_code = dcp.icd_code WHERE p.gender = 'F' AND EXTRACT(YEAR FROM p.dob) = 1969 AND EXTRACT(YEAR FROM p.anchor_year) BETWEEN 2014 AND 2015 AND dcp.long_title ILIKE '%cardiac%catheterization%';

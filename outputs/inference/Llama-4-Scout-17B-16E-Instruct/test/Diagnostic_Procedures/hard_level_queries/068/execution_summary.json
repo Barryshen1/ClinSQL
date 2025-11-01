@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 82\u2011year\u2011old man. Among male ICU patients aged 77\u201387 admitted with asthma exacerbation, stratify first 72\u2011hour ICU procedure burden into quartiles and report each quartile\u2019s mean procedure count, mean hospital LOS (days), and hospital mortality.",
+  "final_sql": "WITH \n  -- Identify asthma exacerbation ICD codes\n  asthma_exacerbation AS (\n    SELECT \n      icd_code\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n    WHERE \n      long_title LIKE '%Asthma exacerbation%'\n  ),\n\n  -- Filter patients and admissions\n  eligible_patients AS (\n    SELECT \n      a.subject_id, \n      a.hadm_id, \n      p.anchor_age, \n      a.admittime,\n      a.dischtime,\n      a.hospital_expire_flag\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON \n      a.subject_id = p.subject_id\n    WHERE \n      p.gender = 'M' \n      AND p.anchor_age BETWEEN 77 AND 87\n  ),\n\n  -- Identify admissions with asthma exacerbation\n  asthma_admissions AS (\n    SELECT \n      ea.subject_id, \n      ea.hadm_id\n    FROM \n      eligible_patients ea\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON \n      ea.hadm_id = di.hadm_id\n    JOIN \n      asthma_exacerbation ae\n    ON \n      di.icd_code = ae.icd_code\n  ),\n\n  -- ICU stays for eligible patients\n  icu_stays AS (\n    SELECT \n      isubject.hadm_id, \n      isubject.stay_id, \n      isubject.intime\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays` isubject\n    JOIN \n      asthma_admissions aa\n    ON \n      isubject.hadm_id = aa.hadm_id\n  ),\n\n  -- Procedures within the first 72 hours of ICU stay\n  procedures_72hrs AS (\n    SELECT \n      stay.hadm_id, \n      COUNT(pe.stay_id) AS procedure_count\n    FROM \n      icu_stays stay\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON \n      stay.stay_id = pe.stay_id\n      AND pe.starttime BETWEEN stay.intime AND TIMESTAMP_ADD(stay.intime, INTERVAL 72 HOUR)\n    GROUP BY \n      stay.hadm_id\n  ),\n\n  -- Assign patients to quartiles\n  patient_quartiles AS (\n    SELECT \n      hadm_id, \n      procedure_count,\n      NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n    FROM \n      procedures_72hrs\n  ),\n\n  -- Hospital LOS and mortality for each quartile\n  los_mortality AS (\n    SELECT \n      pq.quartile,\n      AVG(TIMESTAMP_DIFF(ea.dischtime, ea.admittime, DAY)) AS mean_hospital_los,\n      SUM(CASE WHEN ea.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(ea.hadm_id) AS hospital_mortality,\n      AVG(pq.procedure_count) AS mean_procedure_count\n    FROM \n      patient_quartiles pq\n    JOIN \n      eligible_patients ea\n    ON \n      pq.hadm_id = ea.hadm_id\n    GROUP BY \n      pq.quartile\n  )\n\nSELECT \n  quartile,\n  mean_hospital_los,\n  hospital_mortality,\n  mean_procedure_count\nFROM \n  los_mortality\nORDER BY \n  quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [80:29]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [80:29]\n\nLocation: US\nJob ID: 98b8a508-d29f-4afd-abab-bfc1b1ec771e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT MAX(value) AS max_respiratory_rate FROM omr JOIN patients p ON omr.subject_id = p.subject_id JOIN icustays i ON omr.subject_id = i.subject_id WHERE p.gender = 1 AND p.anchor_year = 1970 AND p.anchor_year_group = 57 AND i.stay_id IN (SELECT stay_id FROM icustays WHERE intime >= '2015-01-01' AND intime < '2015-04-01') AND itemid = 170275007;

@@ -1,0 +1,28 @@
+{
+  "query": "89-year-old male ICU patient with ischemic stroke: among male ICU patients aged 84\u201394 with ischemic stroke, what percentile is a first 72 hours vital-sign instability score of 80? Also report ICU LOS and mortality for the top instability quartile.",
+  "final_sql": "WITH stroke_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    p.anchor_age,\n    p.gender,\n    a.hospital_expire_flag,\n    i.los AS icu_los,\n    i.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 84 AND 94\n    AND (\n      (d.icd_version = 9 AND (\n         (d.icd_code LIKE '433%' AND RIGHT(d.icd_code,1)='1')\n         OR (d.icd_code LIKE '434%' AND RIGHT(d.icd_code,1)='1')\n         OR d.icd_code = '436'\n      ))\n      OR (d.icd_version = 10 AND (\n         d.icd_code LIKE 'I63%' OR d.icd_code = 'I64'\n      ))\n    )\n),\nvitals_first72 AS (\n  SELECT\n    sc.subject_id,\n    sc.hadm_id,\n    sc.stay_id,\n    ce.charttime,\n    ce.itemid,\n    ce.valuenum\n  FROM stroke_cohort sc\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON sc.stay_id = ce.stay_id\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN sc.intime AND TIMESTAMP_ADD(sc.intime, INTERVAL 72 HOUR)\n    AND ce.itemid IN (\n      220045, -- Heart Rate\n      220179, -- Non Invasive BP systolic\n      220180, -- Non Invasive BP diastolic\n      220181, -- Non Invasive BP mean\n      220210, -- Resp Rate\n      220277, -- SPO2\n      223761  -- Temperature C\n    )\n),\ninstability_scores AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    AVG(ABS(valuenum)) * 1.0 AS instability_score\n  FROM vitals_first72\n  GROUP BY subject_id, hadm_id, stay_id\n),\ncohort_with_scores AS (\n  SELECT\n    sc.*,\n    s.instability_score\n  FROM stroke_cohort sc\n  JOIN instability_scores s\n    ON sc.stay_id = s.stay_id\n),\npercentile_info AS (\n  SELECT\n    100 * SUM(CASE WHEN instability_score <= 80 THEN 1 ELSE 0 END) / COUNT(*) AS percentile_of_80,\n    PERCENTILE_CONT(instability_score, 0.75) AS q3_threshold\n  FROM cohort_with_scores\n),\ntop_quartile_stats AS (\n  SELECT\n    AVG(icu_los) AS avg_icu_los,\n    100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate\n  FROM cohort_with_scores c\n  CROSS JOIN percentile_info pi\n  WHERE c.instability_score >= pi.q3_threshold\n)\nSELECT\n  pi.percentile_of_80,\n  tqs.avg_icu_los,\n  tqs.mortality_rate\nFROM percentile_info pi\nCROSS JOIN top_quartile_stats tqs;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6724b3da-d1ee-4ad5-8917-14786ecd7894\n",
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column instability_score which is neither grouped nor aggregated at [77:21]; reason: invalidQuery, location: query, message: SELECT list expression references column instability_score which is neither grouped nor aggregated at [77:21]\n\nLocation: US\nJob ID: cbbc0965-9c2b-4a59-887d-b9473942d254\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column instability_score which is neither grouped nor aggregated at [74:21]; reason: invalidQuery, location: query, message: SELECT list expression references column instability_score which is neither grouped nor aggregated at [74:21]\n\nLocation: US\nJob ID: 0847743c-e209-4907-a72c-918f21aa0482\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6724b3da-d1ee-4ad5-8917-14786ecd7894\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 79\u2011year\u2011old woman inpatient with intracranial hemorrhage. Among women 74\u201384 with ICH, stratify initial 72\u2011hour lab instability (distinct abnormal labs) into quintiles; report mortality and mean LOS by quintile and compare critical lab rates to age\u2011matched controls.",
+  "final_sql": "WITH\n-- 1. Identify ICH diagnosis codes (ICD9 + ICD10)\nich_dx AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND (icd_code LIKE '431%' OR icd_code LIKE '432%'))\n     OR (icd_version = 10 AND (icd_code LIKE 'I61%' OR icd_code LIKE 'I62%'))\n),\n-- 2. Admissions with ICH for target age/gender\ncohort_ich AS (\n  SELECT adm.subject_id, adm.hadm_id, pat.anchor_age, pat.gender,\n         adm.admittime, adm.dischtime, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.subject_id = dx.subject_id\n   AND adm.hadm_id = dx.hadm_id\n  JOIN ich_dx dcode\n    ON dx.icd_code = dcode.icd_code\n   AND dx.icd_version = dcode.icd_version\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 74 AND 84\n),\n-- 3. Controls: same age/gender, but no ICH dx\ncohort_ctrl AS (\n  SELECT adm.subject_id, adm.hadm_id, pat.anchor_age, pat.gender,\n         adm.admittime, adm.dischtime, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 74 AND 84\n    AND adm.hadm_id NOT IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n      JOIN ich_dx dcode\n        ON dx.icd_code = dcode.icd_code\n       AND dx.icd_version = dcode.icd_version\n    )\n),\n-- 4. Lab instability in first 72h \u2014 distinct abnormal labs\nlab_instability AS (\n  SELECT coh.ctype, coh.subject_id, coh.hadm_id, COUNT(DISTINCT le.itemid) AS abnormal_lab_types\n  FROM (\n    SELECT 'ICH' AS ctype, subject_id, hadm_id, anchor_age, gender, admittime, dischtime, hospital_expire_flag\n    FROM cohort_ich\n    UNION ALL\n    SELECT 'CTRL' AS ctype, subject_id, hadm_id, anchor_age, gender, admittime, dischtime, hospital_expire_flag\n    FROM cohort_ctrl\n  ) coh\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON coh.subject_id = le.subject_id\n   AND coh.hadm_id = le.hadm_id\n  WHERE le.charttime BETWEEN coh.admittime AND TIMESTAMP_ADD(coh.admittime, INTERVAL 72 HOUR)\n    AND le.flag IS NOT NULL\n    AND LOWER(le.flag) LIKE '%abnormal%'\n  GROUP BY coh.ctype, coh.subject_id, coh.hadm_id\n),\n-- 5. Quintiles for ICH group\nich_quintiles AS (\n  SELECT li.*, \n         NTILE(5) OVER (ORDER BY abnormal_lab_types) AS quintile\n  FROM lab_instability li\n  WHERE li.ctype = 'ICH'\n),\n-- 6. Establish quintile cutoffs from ICH\nich_quintile_bounds AS (\n  SELECT quintile,\n         MIN(abnormal_lab_types) AS min_abn,\n         MAX(abnormal_lab_types) AS max_abn\n  FROM ich_quintiles\n  GROUP BY quintile\n),\n-- 7. Assign controls into quintiles based on ICH cutoffs\nctrl_with_quintiles AS (\n  SELECT li.*,\n         b.quintile\n  FROM lab_instability li\n  JOIN ich_quintile_bounds b\n    ON li.abnormal_lab_types BETWEEN b.min_abn AND b.max_abn\n  WHERE li.ctype = 'CTRL'\n),\n-- 8. Prepare LOS and mortality for all with quintiles\nich_w_outcomes AS (\n  SELECT iq.quintile,\n         ci.hospital_expire_flag,\n         TIMESTAMP_DIFF(ci.dischtime, ci.admittime, DAY) AS los\n  FROM ich_quintiles iq\n  JOIN cohort_ich ci\n    ON iq.subject_id = ci.subject_id\n   AND iq.hadm_id = ci.hadm_id\n),\nctrl_w_outcomes AS (\n  SELECT cq.quintile,\n         cc.hospital_expire_flag,\n         TIMESTAMP_DIFF(cc.dischtime, cc.admittime, DAY) AS los\n  FROM ctrl_with_quintiles cq\n  JOIN cohort_ctrl cc\n    ON cq.subject_id = cc.subject_id\n   AND cq.hadm_id = cc.hadm_id\n),\n-- 9. Aggregate results\nsummary_ich AS (\n  SELECT quintile,\n         COUNT(*) AS n,\n         AVG(CAST(hospital_expire_flag AS FLOAT64))*100 AS mortality_rate_pct,\n         AVG(los) AS mean_los\n  FROM ich_w_outcomes\n  GROUP BY quintile\n),\nsummary_ctrl AS (\n  SELECT quintile,\n         COUNT(*) AS n,\n         AVG(CAST(hospital_expire_flag AS FLOAT64))*100 AS mortality_rate_pct,\n         AVG(los) AS mean_los\n  FROM ctrl_w_outcomes\n  GROUP BY quintile\n)\n-- Final output: summaries side by side\nSELECT 'ICH' AS cohort, * FROM summary_ich\nUNION ALL\nSELECT 'CTRL' AS cohort, * FROM summary_ctrl\nORDER BY cohort, quintile;",
+  "execution_success": true,
+  "row_count": 10,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [44:17]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [44:17]\n\nLocation: US\nJob ID: eefa2fef-0019-4632-8610-1b00b359d997\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [44:17]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [44:17]\n\nLocation: US\nJob ID: ac0be919-0733-4cf3-9b0d-0d3e73444d7a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 10,
+      "error": null
+    }
+  ]
+}

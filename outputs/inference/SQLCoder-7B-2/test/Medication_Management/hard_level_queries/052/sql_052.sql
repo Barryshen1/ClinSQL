@@ -1,0 +1,1 @@
+SELECT om.subject_id, om.is_affected, om.percentile_rank, om.max_los, om.max_mortality, (SELECT num_emars FROM emar_counts WHERE emar_id = om.subject_id) AS num_emars FROM om ORDER BY num_emars DESC NULLS LAST;

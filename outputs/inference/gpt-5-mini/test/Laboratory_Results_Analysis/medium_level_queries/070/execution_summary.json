@@ -1,0 +1,22 @@
+{
+  "query": "I have a 95-year-old man admitted with chest pain. Among male patients aged 90\u2013100 with chest pain and an initially elevated Troponin I, report p25, p50, p75 and range.",
+  "final_sql": "WITH troponin_items AS (\n  -- find lab itemids that represent Troponin I\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin i%'\n),\n\nfirst_troponin_per_admission AS (\n  -- select the earliest Troponin I measurement per hospital admission\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum,\n    le.valueuom,\n    le.charttime,\n    le.storetime,\n    le.ref_range_upper,\n    LOWER(COALESCE(le.flag, '')) AS flag\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items d ON le.itemid = d.itemid\n  WHERE le.valuenum IS NOT NULL\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime, le.storetime) = 1\n),\n\neligible_admissions AS (\n  -- filter to male patients age 90-100, admissions with chest pain diagnosis,\n  -- and where the initial troponin is \"elevated\"\n  SELECT\n    ft.hadm_id,\n    ft.subject_id,\n    ft.valuenum,\n    ft.valueuom,\n    ft.charttime,\n    ft.ref_range_upper,\n    ft.flag\n  FROM first_troponin_per_admission ft\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ft.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 90 AND 100\n    -- admission has any diagnosis whose description mentions \"chest pain\"\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON di.icd_code = dd.icd_code\n       AND di.icd_version = dd.icd_version\n      WHERE di.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%chest pain%'\n    )\n    -- initial troponin considered elevated if numeric > ref_range_upper (when available)\n    -- or the lab flag suggests high/abnormal\n    AND (\n      (ft.ref_range_upper IS NOT NULL AND ft.valuenum > ft.ref_range_upper)\n      OR REGEXP_CONTAINS(ft.flag, r'(h|hh|high|abnormal|a)')\n    )\n)\n\nSELECT\n  quartiles[OFFSET(1)] AS p25,\n  quartiles[OFFSET(2)] AS p50,\n  quartiles[OFFSET(3)] AS p75,\n  quartiles[OFFSET(0)] AS min_value,\n  quartiles[OFFSET(4)] AS max_value,\n  -- compute the count separately as a scalar subquery to avoid mixing aggregates with non-aggregates\n  (SELECT COUNT(1) FROM eligible_admissions) AS n_admissions_included\nFROM (\n  SELECT APPROX_QUANTILES(valuenum, 4) AS quartiles\n  FROM eligible_admissions\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column quartiles which is neither grouped nor aggregated at [63:3]; reason: invalidQuery, location: query, message: SELECT list expression references column quartiles which is neither grouped nor aggregated at [63:3]\n\nLocation: US\nJob ID: d5c2495e-c1e3-4dfe-aaf7-516a6868f7e7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

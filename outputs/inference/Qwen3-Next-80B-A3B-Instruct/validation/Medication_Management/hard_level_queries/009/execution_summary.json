@@ -1,0 +1,28 @@
+{
+  "query": "I have an 89\u2011year\u2011old female inpatient with AKI. Among female admissions aged 84\u201394 with AKI, stratified into quintiles by medication complexity score over the entire admission, report per quintile: LOS, inpatient mortality %, 30\u2011day readmission %, and anticoagulant\u2013opioid coadministration counts.",
+  "final_sql": "WITH aki_patients AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 84 AND 94\n    AND LOWER(d_icd.long_title) LIKE '%acute kidney injury%'\n    AND LOWER(d_icd.long_title) LIKE '%kidney%'\n),\n\nmed_complexity AS (\n  SELECT hadm_id, COUNT(DISTINCT drug) AS med_complexity_score\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE hadm_id IN (SELECT hadm_id FROM aki_patients)\n  GROUP BY hadm_id\n),\n\nreadmission_30d AS (\n  SELECT a1.hadm_id,\n         CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmit_30d_flag\n  FROM aki_patients a1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND DATE_DIFF(a2.admittime, a1.dischtime, DAY) <= 30\n),\n\nanticoag_opioid AS (\n  SELECT p.hadm_id,\n         MAX(CASE WHEN LOWER(p.drug) IN (\n           'warfarin', 'heparin', 'enoxaparin', 'dabigatran', 'rivaroxaban', 'apixaban', 'edoxaban',\n           'clopidogrel', 'aspirin', 'ticagrelor', 'prasugrel'\n         ) THEN 1 ELSE 0 END) AS has_anticoagulant,\n         MAX(CASE WHEN LOWER(p.drug) IN (\n           'morphine', 'oxycodone', 'hydromorphone', 'fentanyl', 'codeine', 'hydrocodone', 'methadone', 'tramadol'\n         ) THEN 1 ELSE 0 END) AS has_opioid\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  WHERE p.hadm_id IN (SELECT hadm_id FROM aki_patients)\n  GROUP BY p.hadm_id\n),\n\nfinal_data AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    mc.med_complexity_score,\n    COALESCE(r.readmit_30d_flag, 0) AS readmit_30d_flag,\n    COALESCE(ao.has_anticoagulant, 0) AS has_anticoagulant,\n    COALESCE(ao.has_opioid, 0) AS has_opioid,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM aki_patients a\n  JOIN med_complexity mc ON a.hadm_id = mc.hadm_id\n  LEFT JOIN readmission_30d r ON a.hadm_id = r.hadm_id\n  LEFT JOIN anticoag_opioid ao ON a.hadm_id = ao.hadm_id\n),\n\nquintile_data AS (\n  SELECT *,\n         NTILE(5) OVER (ORDER BY med_complexity_score) AS quintile\n  FROM final_data\n)\n\nSELECT\n  quintile,\n  AVG(los) AS avg_los,\n  AVG(hospital_expire_flag) * 100 AS inpatient_mortality_pct,\n  AVG(readmit_30d_flag) * 100 AS readmission_30d_pct,\n  SUM(has_anticoagulant * has_opioid) AS anticoagulant_opioid_coadmin_count\nFROM quintile_data\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"med_complexity_score\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"med_complexity_score\" at [1:1]\n\nLocation: US\nJob ID: 7d55966a-86ec-4e5e-b6fc-d99ec4891e97\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column quintile contains an analytic function, which is not allowed in GROUP BY at [68:10]; reason: invalidQuery, location: query, message: Column quintile contains an analytic function, which is not allowed in GROUP BY at [68:10]\n\nLocation: US\nJob ID: 57bf35ce-9fbc-4eac-8bc0-ae5af224b960\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

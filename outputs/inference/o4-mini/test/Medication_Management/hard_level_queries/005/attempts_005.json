@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH hepatic_adm AS (\n  -- 1. Filter admissions of M patients age 43-53 with hepatic failure\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND EXISTS (\n      -- has a hepatic failure diagnosis\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n        ON d.icd_code = dicd.icd_code\n        AND d.icd_version = dicd.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND LOWER(dicd.long_title) LIKE '%hepatic failure%'\n    )\n),\nmed_complexity AS (\n  -- 2. Compute medication complexity over first 72h\n  SELECT\n    ha.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM\n    hepatic_adm AS ha\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n    ON pr.hadm_id = ha.hadm_id\n     AND pr.starttime BETWEEN ha.admittime\n                         AND TIMESTAMP_ADD(ha.admittime, INTERVAL 72 HOUR)\n  GROUP BY\n    ha.hadm_id\n),\nreadmit_flags AS (\n  -- 3. Compute 30-day readmission flag per admission\n  SELECT\n    ha.*,\n    mc.complexity_score,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n        WHERE a2.subject_id = ha.subject_id\n          AND a2.admittime > ha.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(ha.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmit30d_flag\n  FROM\n    hepatic_adm AS ha\n  LEFT JOIN\n    med_complexity AS mc\n    ON ha.hadm_id = mc.hadm_id\n),\nquintiled AS (\n  -- 4. Assign quintiles by complexity_score\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY complexity_score) AS quintile\n  FROM\n    readmit_flags\n)\n-- 5. Aggregate per quintile\nSELECT\n  quintile,\n  COUNT(1) AS n_admissions,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  ROUND(AVG(complexity_score), 2) AS mean_score,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(100 * AVG(hospital_expire_flag), 1) AS pct_in_hosp_mortality,\n  ROUND(100 * AVG(readmit30d_flag), 1) AS pct_30d_readmit\nFROM\n  quintiled\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+      "success": true,
+      "error": null,
+      "row_count": 5
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 5
+}

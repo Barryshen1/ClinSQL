@@ -1,0 +1,22 @@
+{
+  "query": "For my 69\u2011year\u2011old man inpatient with diabetes and acute HF, among men aged 64\u201374 report initiation percentages by antidiabetic class (insulin, metformin, sulfonylureas, DPP\u20114, SGLT2, GLP\u20111, TZDs) first 12h vs final 48h.",
+  "final_sql": "WITH\n-- Define our patient cohort: men 64-74 with diabetes and acute HF\npatient_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d1 ON a.hadm_id = d1.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2 ON a.hadm_id = d2.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND a.admission_type = 'INPATIENT'\n    -- Diabetes ICD-10 codes (E11.x, E13.x)\n    AND (d1.icd_code LIKE 'E11%' OR d1.icd_code LIKE 'E13%')\n    -- Acute HF ICD-10 codes\n    AND (d2.icd_code IN ('I50.1', 'I50.2', 'I50.3', 'I50.4', 'I50.9'))\n    AND d1.subject_id = d2.subject_id\n),\n\n-- Define medication classes with their identifying patterns\nmedication_classes AS (\n  SELECT 'Insulin' AS class, 'insulin' AS pattern UNION ALL\n  SELECT 'Metformin', 'metformin' UNION ALL\n  SELECT 'Sulfonylureas', 'sulfonylurea' UNION ALL\n  SELECT 'DPP-4', 'dpp-4' UNION ALL\n  SELECT 'SGLT2', 'sglt2' UNION ALL\n  SELECT 'GLP-1', 'glp-1' UNION ALL\n  SELECT 'TZDs', 'thiazolidinedione'\n),\n\n-- Get all prescriptions for our cohort\ncohort_prescriptions AS (\n  SELECT\n    pc.subject_id,\n    pc.hadm_id,\n    pc.admittime,\n    pc.dischtime,\n    pr.starttime,\n    pr.drug,\n    pr.drug_type,\n    pr.ndc,\n    pr.route\n  FROM patient_cohort pc\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON pc.hadm_id = pr.hadm_id\n  WHERE pr.starttime IS NOT NULL\n),\n\n-- Identify first initiation of each medication class\nfirst_initiations AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    m.class,\n    MIN(TIMESTAMP_DIFF(c.starttime, c.admittime, HOUR)) AS hours_after_admission\n  FROM cohort_prescriptions c\n  CROSS JOIN medication_classes m\n  WHERE LOWER(c.drug) LIKE '%' || m.pattern || '%'\n     OR LOWER(c.drug_type) LIKE '%' || m.pattern || '%'\n     OR LOWER(c.ndc) LIKE '%' || m.pattern || '%'\n  GROUP BY c.subject_id, c.hadm_id, c.admittime, c.dischtime, m.class\n),\n\n-- Calculate time windows for each admission\ntime_windows AS (\n  SELECT\n    hadm_id,\n    admittime,\n    dischtime,\n    TIMESTAMP_ADD(admittime, INTERVAL 12 HOUR) AS first_12h_end,\n    TIMESTAMP_SUB(dischtime, INTERVAL 48 HOUR) AS final_48h_start\n  FROM patient_cohort\n),\n\n-- Classify initiations into time windows\nclassified_initiations AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.class,\n    CASE\n      WHEN f.hours_after_admission <= 12 THEN 'First 12h'\n      WHEN f.hours_after_admission >= TIMESTAMP_DIFF(t.final_48h_start, t.admittime, HOUR) THEN 'Final 48h'\n      ELSE 'Other'\n    END AS time_window\n  FROM first_initiations f\n  JOIN time_windows t ON f.hadm_id = t.hadm_id\n  WHERE f.hours_after_admission <= TIMESTAMP_DIFF(t.dischtime, t.admittime, HOUR)\n),\n\n-- Count initiations by class and time window\ninitiation_counts AS (\n  SELECT\n    class,\n    time_window,\n    COUNT(DISTINCT subject_id) AS patient_count\n  FROM classified_initiations\n  WHERE time_window IN ('First 12h', 'Final 48h')\n  GROUP BY class, time_window\n),\n\n-- Get total number of patients in cohort\ntotal_patients AS (\n  SELECT COUNT(DISTINCT subject_id) AS total\n  FROM patient_cohort\n)\n\n-- Calculate percentages\nSELECT\n  i.class,\n  i.time_window,\n  i.patient_count,\n  ROUND(i.patient_count * 100.0 / t.total, 1) AS percentage\nFROM initiation_counts i\nCROSS JOIN total_patients t\nORDER BY i.class, i.time_window;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside p at [4:35]; reason: invalidQuery, location: query, message: Name hadm_id not found inside p at [4:35]\n\nLocation: US\nJob ID: 6c66ea10-151c-47e9-928e-f519a659cfb8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

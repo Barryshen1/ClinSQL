@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 48\u2011year\u2011old woman. Among female patients aged 43\u201353 admitted with suspected ACS, what are counts, percentages, and average hospital LOS for initial Troponin T: Normal, Borderline, Elevated?",
+  "final_sql": "WITH\n  -- CTE 1: Identify eligible admissions: female patients aged 43-53 with suspected ACS diagnoses\n  suspected_acs_admissions AS (\n    SELECT DISTINCT\n      adm.subject_id,\n      adm.hadm_id,\n      adm.admittime,\n      adm.dischtime\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON adm.subject_id = p.subject_id\n    WHERE\n      p.gender = 'F'\n      AND p.anchor_age BETWEEN 43 AND 53\n      AND EXISTS (\n        SELECT\n          1\n        FROM\n          `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n        WHERE\n          di.hadm_id = adm.hadm_id\n          AND (\n            -- ICD-9 codes for Acute MI (410) and other ischemic heart disease/unstable angina (411)\n            (di.icd_version = 9 AND (di.icd_code LIKE '410%' OR di.icd_code LIKE '411%'))\n            -- ICD-10 codes for Acute MI (I21) and Unstable angina (I200)\n            OR (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code = 'I200'))\n          )\n      )\n  ),\n  -- CTE 2: Get the initial Troponin T measurement for each relevant admission\n  initial_troponin_t AS (\n    SELECT\n      le.subject_id,\n      le.hadm_id,\n      le.valuenum AS initial_troponin_t_value,\n      le.charttime\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    WHERE\n      le.itemid = 50980 -- itemid for 'Troponin T' in MIMIC-IV\n      AND le.valuenum IS NOT NULL\n      AND le.valuenum >= 0 -- Filter out potentially erroneous negative values\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) = 1\n  ),\n  -- CTE 3: Combine admission data with initial Troponin T and categorize it\n  categorized_admissions AS (\n    SELECT\n      ac.subject_id,\n      ac.hadm_id,\n      DATETIME_DIFF(ac.dischtime, ac.admittime, DAY) AS los_hospital,\n      CASE\n        WHEN it.initial_troponin_t_value < 0.01 THEN 'Normal'\n        WHEN it.initial_troponin_t_value >= 0.01 AND it.initial_troponin_t_value < 0.03 THEN 'Borderline'\n        WHEN it.initial_troponin_t_value >= 0.03 THEN 'Elevated'\n        ELSE 'Unknown' -- Should ideally not be reached given previous filters\n      END AS troponin_category\n    FROM\n      suspected_acs_admissions AS ac\n    INNER JOIN\n      initial_troponin_t AS it\n      ON ac.subject_id = it.subject_id AND ac.hadm_id = it.hadm_id\n    WHERE\n      it.initial_troponin_t_value IS NOT NULL -- Ensure only admissions with a valid initial Troponin T are included\n  )\n-- Final aggregation to calculate counts, percentages, and average hospital LOS\nSELECT\n  ca.troponin_category,\n  COUNT(ca.hadm_id) AS count_admissions, -- Counting admissions, not distinct patients\n  ROUND(COUNT(ca.hadm_id) * 100.0 / SUM(COUNT(ca.hadm_id)) OVER (), 2) AS percentage_of_admissions,\n  ROUND(AVG(ca.los_hospital), 2) AS average_hospital_los_days\nFROM\n  categorized_admissions AS ca\nWHERE\n  ca.troponin_category != 'Unknown' -- Exclude any cases not falling into defined categories\nGROUP BY\n  ca.troponin_category\nORDER BY\n  CASE ca.troponin_category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Elevated' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"ACS\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"ACS\" at [1:16]\n\nLocation: US\nJob ID: ef396034-357c-4bce-b4e5-49675162eb4a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

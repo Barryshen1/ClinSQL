@@ -1,0 +1,28 @@
+{
+  "query": "For a 53\u2011year\u2011old male with pneumonia: among male inpatients 48\u201358, using meds in the first 24 hours, report medication complexity distribution (mean, p25/p50/p75) and compare overall LOS and mortality for serotonergic\u2011interaction risk versus ICU patients; report top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH pneumonia_adult_males AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.los AS icu_los,\n    a.hospital_expire_flag,\n    i.intime AS icu_intime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  ON\n    a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND (\n      dd.icd_code LIKE 'J18%' OR\n      dd.icd_code = '486'\n    )\n),\n\nmeds_first_24hr AS (\n  SELECT\n    iv.stay_id,\n    COUNT(DISTINCT iv.itemid) AS med_count\n  FROM\n    `physionet-data.mimiciv_3_1_icu.inputevents` iv\n  JOIN\n    pneumonia_adult_males p\n  ON\n    iv.stay_id = p.stay_id\n  WHERE\n    DATETIME_DIFF(iv.starttime, p.icu_intime, HOUR) BETWEEN 0 AND 24\n  GROUP BY\n    iv.stay_id\n),\n\npatients_with_meds AS (\n  SELECT\n    p.*,\n    COALESCE(m.med_count, 0) AS med_count\n  FROM\n    pneumonia_adult_males p\n  LEFT JOIN\n    meds_first_24hr m\n  ON\n    p.stay_id = m.stay_id\n  WHERE\n    m.med_count > 0\n),\n\nserotonergic_drugs AS (\n  SELECT DISTINCT\n    e.subject_id,\n    e.hadm_id,\n    e.emar_id,\n    e.medication\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.emar` e\n  WHERE\n    REGEXP_CONTAINS(UPPER(e.medication), r'SERTRALINE|FLUOXETINE|PAROXETINE|CITALOPRAM|ESCITALOPRAM|VENLAFAXINE|DESVENLAFAXINE|DULOXETINE|BUPROPION|TRAZODONE|MAOI|LINEZOLID|TRAMADOL|MEPERIDINE|FENTANYL')\n),\n\nserotonergic_patients AS (\n  SELECT DISTINCT\n    p.stay_id\n  FROM\n    patients_with_meds p\n  JOIN\n    serotonergic_drugs s\n  ON\n    p.hadm_id = s.hadm_id\n),\n\npatients_labeled AS (\n  SELECT\n    p.*,\n    CASE WHEN s.stay_id IS NOT NULL THEN 1 ELSE 0 END AS serotonergic_risk\n  FROM\n    patients_with_meds p\n  LEFT JOIN\n    serotonergic_patients s\n  ON\n    p.stay_id = s.stay_id\n),\n\nquartiles AS (\n  SELECT\n    APPROX_QUANTILES(icu_los, 4) AS los_quartiles,\n    APPROX_QUANTILES(med_count, 4) AS med_quartiles\n  FROM\n    patients_labeled\n),\n\npatients_with_quartiles AS (\n  SELECT\n    p.*,\n    q.los_quartiles[ORDINAL(4)] AS los_q3,\n    q.med_quartiles[ORDINAL(4)] AS med_q3\n  FROM\n    patients_labeled p\n  CROSS JOIN\n    quartiles q\n),\n\nfinal_stats AS (\n  SELECT\n    serotonergic_risk,\n    AVG(med_count) AS mean_med_count,\n    APPROX_QUANTILES(med_count, 4)[ORDINAL(2)] AS p25_med_count,\n    APPROX_QUANTILES(med_count, 4)[ORDINAL(3)] AS p50_med_count,\n    APPROX_QUANTILES(med_count, 4)[ORDINAL(4)] AS p75_med_count,\n    AVG(icu_los) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    COUNT(*) AS patient_count,\n    COUNTIF(icu_los >= los_q3) AS top_quartile_los_count,\n    COUNTIF(hospital_expire_flag = 1) AS mortality_count,\n    COUNTIF(hospital_expire_flag = 1 AND icu_los >= los_q3) AS top_quartile_mortality_count\n  FROM\n    patients_with_quartiles\n  GROUP BY\n    serotonergic_risk\n)\n\nSELECT\n  serotonergic_risk,\n  mean_med_count,\n  p25_med_count,\n  p50_med_count,\n  p75_med_count,\n  mean_los,\n  mortality_rate,\n  patient_count,\n  top_quartile_los_count,\n  mortality_count,\n  top_quartile_mortality_count\nFROM\n  final_stats\nORDER BY\n  serotonergic_risk;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: charttime; Did you mean starttime? at [44:19]; reason: invalidQuery, location: query, message: Unrecognized name: charttime; Did you mean starttime? at [44:19]\n\nLocation: US\nJob ID: c043c0ca-75fe-4d0a-9c9a-6989e25eb286\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: inputevents at [44:96]; reason: invalidQuery, location: query, message: Unrecognized name: inputevents at [44:96]\n\nLocation: US\nJob ID: ce56d3c6-59ac-4791-984b-6dfe24bc857e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

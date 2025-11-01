@@ -1,0 +1,22 @@
+{
+  "query": "54\u2011year\u2011old male inpatient: among male inpatients aged 49\u201359 with ischemic stroke, what is the 75th percentile of the 72\u2011hour lab instability score? For the high\u2011instability stroke group report LOS, mortality, and compare critical lab rates to age\u2011matched controls.",
+  "final_sql": "WITH \n-- Step 1: Identify male inpatients aged 49-59 with ischemic stroke\ncohort AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND dicd.long_title LIKE '%Ischemic stroke%'\n),\n\n-- Step 2: Calculate the 72-hour lab instability score\nlab_instability AS (\n  SELECT c.subject_id, c.hadm_id,\n         COUNT(DISTINCT CASE WHEN le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper THEN le.itemid END) AS lab_instability_score\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON c.hadm_id = icu.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le ON icu.hadm_id = le.hadm_id\n  WHERE DATETIME_DIFF(le.charttime, icu.intime, HOUR) BETWEEN 0 AND 72\n    AND le.valuenum IS NOT NULL  -- Ensure valuenum is not null to avoid incorrect comparisons\n  GROUP BY c.subject_id, c.hadm_id\n),\n\n-- Step 3: Determine the 75th percentile of the lab instability score\npercentile_lab_instability AS (\n  SELECT APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(75)] AS percentile_75th\n  FROM lab_instability\n),\n\n-- Step 4: Identify high-instability group and calculate LOS, mortality\nhigh_instability_group AS (\n  SELECT li.subject_id, li.hadm_id, li.lab_instability_score,\n         icu.los, a.hospital_expire_flag AS mortality\n  FROM lab_instability li\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON li.hadm_id = icu.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON li.hadm_id = a.hadm_id\n  WHERE li.lab_instability_score >= (SELECT percentile_75th FROM percentile_lab_instability)\n),\n\n-- Step 5: Compare critical lab rates to age-matched controls\nage_matched_controls AS (\n  SELECT p.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.anchor_age BETWEEN 49 AND 59\n    AND p.gender = 'M'\n    AND a.hadm_id NOT IN (SELECT hadm_id FROM cohort)\n)\n\n-- Final analysis\nSELECT \n  'High Instability' AS group_name,\n  AVG(hig.los) AS avg_los,\n  SUM(hig.mortality) / COUNT(hig.subject_id) AS mortality_rate\nFROM high_instability_group hig\nUNION ALL\nSELECT \n  'Age-Matched Controls' AS group_name,\n  AVG(icu.los) AS avg_los,\n  SUM(a.hospital_expire_flag) / COUNT(amc.subject_id) AS mortality_rate\nFROM age_matched_controls amc\nINNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON amc.hadm_id = icu.hadm_id\nINNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON amc.hadm_id = a.hadm_id;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dle at [17:53]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dle at [17:53]\n\nLocation: US\nJob ID: 44666da3-7976-410b-99e7-8f85efa16858\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

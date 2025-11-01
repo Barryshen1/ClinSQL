@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY value) - percentile_cont(0.25) within GROUP (ORDER BY value)) AS interquartile_range FROM labevents WHERE subject_id IN (SELECT subject_id FROM patients WHERE gender = 'M' AND age >= 49 AND age <= 59 AND imc_status IN ('step-down', 'imc'));

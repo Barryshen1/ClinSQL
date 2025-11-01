@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 48\u2011year\u2011old woman. Among female patients aged 43\u201353 admitted with suspected ACS, what are counts, percentages, and average hospital LOS for initial Troponin T: Normal, Borderline, Elevated?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    -- Compute age at admission\n    pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    -- Filter for ACS diagnosis\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE diag.subject_id = adm.subject_id\n        AND diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code LIKE '410%') OR\n          (diag.icd_version = 9 AND diag.icd_code LIKE '411%') OR\n          (diag.icd_version = 9 AND diag.icd_code LIKE '413%') OR\n          (diag.icd_version = 10 AND (\n            diag.icd_code LIKE 'I21%' OR \n            diag.icd_code LIKE 'I22%' OR \n            diag.icd_code = 'I20.0' OR \n            diag.icd_code = 'I24.9'\n          ))\n        )\n    )\n),\nfiltered_cohort AS (\n  SELECT *\n  FROM cohort\n  WHERE age_at_admission BETWEEN 43 AND 53\n),\nfirst_troponin AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum,\n    le.ref_range_upper,\n    ROW_NUMBER() OVER (\n      PARTITION BY le.subject_id, le.hadm_id\n      ORDER BY le.charttime\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  WHERE le.itemid = 51003  -- Troponin T\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n),\ncategorized AS (\n  SELECT\n    fc.subject_id,\n    fc.hadm_id,\n    fc.admittime,\n    fc.dischtime,\n    ft.valuenum,\n    ft.ref_range_upper,\n    CASE\n      WHEN ft.valuenum <= ft.ref_range_upper THEN 'Normal'\n      WHEN ft.valuenum <= ft.ref_range_upper * 1.5 THEN 'Borderline'\n      ELSE 'Elevated'\n    END AS troponin_category\n  FROM filtered_cohort fc\n  INNER JOIN first_troponin ft\n    ON fc.subject_id = ft.subject_id\n    AND fc.hadm_id = ft.hadm_id\n    AND ft.rn = 1  -- First Troponin T result\n)\nSELECT\n  troponin_category,\n  COUNT(hadm_id) AS count_admissions,\n  ROUND(COUNT(hadm_id) * 100.0 / (SELECT COUNT(hadm_id) FROM categorized), 2) AS percentage,\n  ROUND(AVG(DATETIME_DIFF(dischtime, admittime, DAY)), 2) AS avg_los_days\nFROM categorized\nGROUP BY troponin_category\nORDER BY troponin_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

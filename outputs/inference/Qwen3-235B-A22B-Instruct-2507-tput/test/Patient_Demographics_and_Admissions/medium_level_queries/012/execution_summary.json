@@ -1,0 +1,28 @@
+{
+  "query": "I have an 80-year-old male patient. Among male admissions age 75\u201385, report for discharged home, to facility, and in\u2011hospital death: proportion with LOS\u22657 days and percentile rank of 7\u2011day LOS.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.discharge_location,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit,\n    -- Compute LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND a.dischtime IS NOT NULL\n    AND a.admittime <= a.dischtime  -- valid admission\n),\naged_cohort AS (\n  SELECT *\n  FROM patient_admissions\n  WHERE age_at_admit >= 75\n    AND age_at_admit <= 85\n),\ncategorized AS (\n  SELECT\n    hadm_id,\n    los_days,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN LOWER(discharge_location) = 'home' THEN 'Discharged home'\n      WHEN LOWER(discharge_location) IN (\n        'short term hospital', 'skilled nursing facility', 'nursing home',\n        'intermediate care', 'federal health care facility', 'psychiatric hospital',\n        'rehabilitation facility'\n      ) THEN 'Discharged to facility'\n      ELSE 'Other'\n    END AS discharge_group\n  FROM aged_cohort\n  WHERE discharge_location IS NOT NULL\n),\nsummary_stats AS (\n  SELECT\n    discharge_group,\n    -- Proportion with LOS >= 7 days\n    AVG(CASE WHEN los_days >= 7 THEN 1.0 ELSE 0.0 END) AS prop_los_ge7,\n    -- Count statistics for percentile rank of 7-day LOS\n    COUNT(*) AS n,\n    SUM(CASE WHEN los_days < 7 THEN 1 ELSE 0 END) AS count_less_than_7,\n    SUM(CASE WHEN los_days = 7 THEN 1 ELSE 0 END) AS count_equal_7\n  FROM categorized\n  GROUP BY discharge_group\n)\nSELECT\n  discharge_group,\n  ROUND(prop_los_ge7, 3) AS proportion_los_ge7_days,\n  ROUND(\n    (count_less_than_7 + 0.5 * count_equal_7) / n * 100, \n    1\n  ) AS percentile_rank_of_7_days\nFROM summary_stats\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \";\" at [31:13]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \";\" at [31:13]\n\nLocation: US\nJob ID: 6061bbd3-625a-4cb6-a486-2781e801363f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: SAFE_PERCENTILE_CONT; Did you mean percentile_cont? at [52:5]; reason: invalidQuery, location: query, message: Function not found: SAFE_PERCENTILE_CONT; Did you mean percentile_cont? at [52:5]\n\nLocation: US\nJob ID: 13fe7d9f-0be7-4ed8-93a8-05f5e992c325\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

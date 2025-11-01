@@ -1,0 +1,16 @@
+{
+  "query": "For my 53-year-old female ICU patient, among ICU stays aged 48\u201358, report percent distribution of per\u2011stay average HR in first 48h (<60; 60\u201399; 100\u2013119; \u2265120) and AKI rate by category.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    icu.subject_id = p.subject_id\n  WHERE\n    p.anchor_age BETWEEN 48 AND 58\n    AND p.gender = 'F'\n),\n\nhr_first48 AS (\n  SELECT\n    c.stay_id,\n    AVG(ce.valuenum) AS avg_hr\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  ON\n    c.stay_id = ce.stay_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di\n  ON\n    ce.itemid = di.itemid\n  WHERE\n    LOWER(di.label) LIKE '%heart rate%'\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    c.stay_id\n),\n\nhr_category AS (\n  SELECT\n    stay_id,\n    avg_hr,\n    CASE\n      WHEN avg_hr < 60 THEN '<60'\n      WHEN avg_hr >= 60 AND avg_hr <= 99 THEN '60\u201399'\n      WHEN avg_hr >= 100 AND avg_hr <= 119 THEN '100\u2013119'\n      WHEN avg_hr >= 120 THEN '\u2265120'\n    END AS hr_bin\n  FROM\n    hr_first48\n),\n\naki_flag AS (\n  SELECT DISTINCT\n    c.stay_id,\n    1 AS aki\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n  ON\n    c.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n  ON\n    dx.icd_code = d.icd_code\n    AND dx.icd_version = d.icd_version\n  WHERE\n    (dx.icd_version = 9 AND dx.icd_code LIKE '584%')\n    OR\n    (dx.icd_version = 10 AND dx.icd_code LIKE 'N17%')\n),\n\nstay_with_flags AS (\n  SELECT\n    h.stay_id,\n    h.hr_bin,\n    COALESCE(a.akI, 0) AS aki\n  FROM\n    hr_category h\n  LEFT JOIN\n    aki_flag a\n  ON\n    h.stay_id = a.stay_id\n),\n\nsummary AS (\n  SELECT\n    hr_bin,\n    COUNT(*) AS n_stays,\n    SUM(aki) AS n_aki\n  FROM\n    stay_with_flags\n  GROUP BY\n    hr_bin\n)\n\nSELECT\n  hr_bin,\n  ROUND(100.0 * n_stays / SUM(n_stays) OVER (), 2) AS percent_distribution,\n  ROUND(100.0 * n_aki / n_stays, 2) AS aki_rate_percent\nFROM\n  summary\nORDER BY\n  CASE hr_bin\n    WHEN '<60' THEN 1\n    WHEN '60\u201399' THEN 2\n    WHEN '100\u2013119' THEN 3\n    WHEN '\u2265120' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

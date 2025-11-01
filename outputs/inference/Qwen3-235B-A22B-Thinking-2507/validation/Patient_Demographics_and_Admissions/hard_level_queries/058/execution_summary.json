@@ -1,0 +1,23 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH lower_gi_bleeding AS (\n  SELECT \n    di.hadm_id,\n    di.icd_code,\n    di.icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  WHERE di.seq_num = 1  -- principal diagnosis\n    AND (\n      (di.icd_version = 9 AND di.icd_code IN ('569.84', '569.85', '569.86', '569.87', '569.89'))\n      OR \n      (di.icd_version = 10 AND di.icd_code IN (\n        'K5521', 'K5522', \n        'K5700', 'K5701', 'K5702', 'K5703', \n        'K5710', 'K5711', 'K5712', 'K5713', \n        'K5720', 'K5721', 'K5722', 'K5723', \n        'K5730', 'K5731', 'K5732', 'K5733', \n        'K5740', 'K5741', 'K5742', 'K5743', \n        'K5750', 'K5751', 'K5752', 'K5753', \n        'K5780', 'K5781', 'K5782', 'K5783', \n        'K5790', 'K5791', 'K5792', 'K5793', \n        'K620', 'K625', 'K626', 'K635'\n      ))\n    )\n),\ntarget_population AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    -- Calculate LOS in days (fractional)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60.0) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  INNER JOIN lower_gi_bleeding lgb \n    ON a.hadm_id = lgb.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND a.insurance = 'Medicare'\n    AND a.admission_location IN ('EMERGENCY ROOM ADMIT', 'TRANSFER FROM HOSPITAL EMERGENCY ROOM')\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 50 AND 60\n),\nreadmission_status AS (\n  SELECT \n    tp.*,\n    LEAD(tp.admittime) OVER (PARTITION BY tp.subject_id ORDER BY tp.admittime) AS next_admittime,\n    CASE \n      WHEN LEAD(tp.admittime) OVER (PARTITION BY tp.subject_id ORDER BY tp.admittime) \n        BETWEEN tp.dischtime AND DATETIME_ADD(tp.dischtime, INTERVAL 30 DAY) \n        THEN 1 \n      ELSE 0 \n    END AS readmitted_30d\n  FROM target_population tp\n)\nSELECT \n  -- 30-day readmission rate\n  SUM(readmitted_30d) / COUNT(*) AS readmission_rate,\n  -- Median LOS for readmitted patients\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted,\n  -- Median LOS for non-readmitted patients\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los_days END, 100)[OFFSET(50)] AS median_los_not_readmitted,\n  -- Percent with LOS > 6 days (overall)\n  SUM(CASE WHEN los_days > 6 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS percent_los_gt_6_days\nFROM readmission_status;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"lower\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"lower\" at [1:16]\n\nLocation: US\nJob ID: ba42f56d-b4ee-42d8-bf54-cf1e8b30c16c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND (\n         (d.icd_version = 9 AND d.icd_code LIKE '4151%')\n         OR (d.icd_version = 10 AND d.icd_code LIKE 'I26%')\n        )\n),\nmed_counts AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT e.medication) AS med_count,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar` e\n    ON c.subject_id = e.subject_id\n    AND c.hadm_id = e.hadm_id\n    AND e.charttime >= c.admittime\n    AND e.charttime < DATETIME_ADD(c.admittime, INTERVAL 24 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag\n),\nwith_tertile AS (\n  SELECT\n    m.*,\n    NTILE(3) OVER (ORDER BY med_count) AS tertile\n  FROM med_counts m\n),\ntertile_ranges AS (\n  SELECT\n    tertile,\n    MIN(med_count) AS min_med_count,\n    MAX(med_count) AS max_med_count\n  FROM with_tertile\n  GROUP BY tertile\n),\nreadmission_flags AS (\n  SELECT\n    w.subject_id,\n    w.hadm_id,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = w.subject_id\n          AND a2.admittime > w.dischtime\n          AND a2.admittime <= DATETIME_ADD(w.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 ELSE 0\n    END AS readmit_30d\n  FROM with_tertile w\n)\nSELECT\n  w.tertile,\n  r.min_med_count,\n  r.max_med_count,\n  COUNT(*) AS admissions,\n  ROUND(AVG(TIMESTAMP_DIFF(w.dischtime, w.admittime, HOUR) / 24.0), 2) AS avg_los_days,\n  ROUND(100 * AVG(w.hospital_expire_flag), 1) AS mortality_pct,\n  ROUND(100 * AVG(f.readmit_30d), 1) AS readmit_30d_pct\nFROM with_tertile w\nJOIN tertile_ranges r\n  ON w.tertile = r.tertile\nJOIN readmission_flags f\n  ON w.subject_id = f.subject_id AND w.hadm_id = f.hadm_id\nGROUP BY w.tertile, r.min_med_count, r.max_med_count\nORDER BY w.tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: t at [68:3]; reason: invalidQuery, location: query, message: Unrecognized name: t at [68:3]\n\nLocation: US\nJob ID: 5ceff861-4bba-4db6-8be6-de5a61994ef2\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

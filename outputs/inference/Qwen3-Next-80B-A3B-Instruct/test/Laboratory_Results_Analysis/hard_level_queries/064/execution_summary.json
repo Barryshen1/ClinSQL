@@ -1,0 +1,28 @@
+{
+  "query": "I have a 70\u2011year\u2011old female with acute pancreatitis. Among female inpatients 65\u201375 with acute pancreatitis, stratify first\u201148\u2011hour lab instability scores into quintiles and report count, mean instability, mean LOS, mortality per quintile, and % with critical labs versus age\u2011matched inpatients.",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND LOWER(did.long_title) LIKE '%acute pancreatitis%'\n),\n\nkey_labs AS (\n  SELECT itemid, label\n  FROM physionet-data.mimiciv_3_1_hosp.d_labitems\n  WHERE LOWER(label) IN (\n    'amylase', 'lipase', 'creatinine', 'bun', 'wbc', 'glucose', \n    'calcium', 'alt', 'ast', 'bilirubin'\n  )\n),\n\nreference_ranges AS (\n  SELECT 'amylase' AS label, 23 AS ref_range_lower, 100 AS ref_range_upper UNION ALL\n  SELECT 'lipase', 10, 140 UNION ALL\n  SELECT 'creatinine', 0.6, 1.2 UNION ALL\n  SELECT 'bun', 7, 20 UNION ALL\n  SELECT 'wbc', 4.0, 11.0 UNION ALL\n  SELECT 'glucose', 70, 100 UNION ALL\n  SELECT 'calcium', 8.5, 10.5 UNION ALL\n  SELECT 'alt', 7, 56 UNION ALL\n  SELECT 'ast', 10, 40 UNION ALL\n  SELECT 'bilirubin', 0.1, 1.2\n),\n\nfirst_48h_labs AS (\n  SELECT\n    ep.subject_id,\n    ep.hadm_id,\n    le.itemid,\n    le.charttime,\n    le.valuenum,\n    le.valueuom,\n    rr.ref_range_lower,\n    rr.ref_range_upper\n  FROM eligible_patients ep\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.labevents le\n    ON ep.subject_id = le.subject_id AND ep.hadm_id = le.hadm_id\n  INNER JOIN key_labs kl\n    ON le.itemid = kl.itemid\n  INNER JOIN reference_ranges rr\n    ON kl.label = rr.label\n  WHERE le.charttime >= ep.admittime\n    AND le.charttime <= TIMESTAMP_ADD(ep.admittime, INTERVAL 48 HOUR)\n    AND le.valuenum IS NOT NULL\n),\n\nlab_consecutive_diffs AS (\n  SELECT\n    subject_id,\n    itemid,\n    charttime,\n    valuenum,\n    ROW_NUMBER() OVER (PARTITION BY subject_id, itemid ORDER BY charttime) AS rn\n  FROM first_48h_labs\n),\n\nlab_differences AS (\n  SELECT\n    l1.subject_id,\n    ABS(l1.valuenum - l2.valuenum) AS diff\n  FROM lab_consecutive_diffs l1\n  INNER JOIN lab_consecutive_diffs l2\n    ON l1.subject_id = l2.subject_id\n    AND l1.itemid = l2.itemid\n    AND l2.rn = l1.rn - 1\n),\n\ninstability_scores AS (\n  SELECT\n    subject_id,\n    AVG(diff) AS instability_score\n  FROM lab_differences\n  GROUP BY subject_id\n),\n\ncritical_labs AS (\n  SELECT DISTINCT\n    subject_id,\n    1 AS has_critical_lab\n  FROM first_48h_labs\n  WHERE (valuenum < ref_range_lower OR valuenum > ref_range_upper)\n    AND ref_range_lower IS NOT NULL\n    AND ref_range_upper IS NOT NULL\n),\n\npatient_summary AS (\n  SELECT\n    es.subject_id,\n    COALESCE(es.instability_score, 0.0) AS instability_score,\n    COALESCE(cl.has_critical_lab, 0) AS has_critical_lab,\n    EXTRACT(EPOCH FROM (ep.dischtime - ep.admittime)) / 3600 / 24 AS los_days,\n    ep.hospital_expire_flag\n  FROM instability_scores es\n  INNER JOIN eligible_patients ep\n    ON es.subject_id = ep.subject_id\n  LEFT JOIN critical_labs cl\n    ON es.subject_id = cl.subject_id\n)\n\nSELECT\n  NTILE(5) OVER (ORDER BY instability_score) AS quintile,\n  COUNT(*) AS count,\n  AVG(instability_score) AS mean_instability,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  AVG(has_critical_lab) AS pct_critical_labs\nFROM patient_summary\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 EXTRACT does not support arguments of type: INTERVAL at [110:25]; reason: invalidQuery, location: query, message: EXTRACT does not support arguments of type: INTERVAL at [110:25]\n\nLocation: US\nJob ID: 64ca64a4-89c2-4364-aa3e-cbe1c9650de2\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"female\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"female\" at [1:16]\n\nLocation: US\nJob ID: 23f5792c-4f32-4b2e-a4a6-664fcf98e651\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dl at [39:8]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dl at [39:8]\n\nLocation: US\nJob ID: 9a2f3926-3059-4add-8387-e58aa191f95b\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXTRACT does not support arguments of type: INTERVAL at [110:25]; reason: invalidQuery, location: query, message: EXTRACT does not support arguments of type: INTERVAL at [110:25]\n\nLocation: US\nJob ID: 64ca64a4-89c2-4364-aa3e-cbe1c9650de2\n"
+    }
+  ]
+}

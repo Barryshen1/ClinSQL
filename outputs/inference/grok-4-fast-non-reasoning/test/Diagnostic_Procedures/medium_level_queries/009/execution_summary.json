@@ -1,0 +1,28 @@
+{
+  "query": "For a 49-year-old woman with TIA: among female patients 44\u201354, what are p25, p50, p75 of diagnostic imaging per admission by LOS (1\u20134 vs 5\u20137 days) and ICU use?",
+  "final_sql": "WITH patient_cohort AS (\n  -- Base cohort: female, 44-54, with principal TIA diagnosis\n  SELECT DISTINCT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 AS los_days\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND d.seq_num = 1\n    AND d.icd_version = '10'\n    AND d.icd_code = 'G45.9'\n    AND p.dod IS NULL  -- Exclude deceased without admissions\n    AND DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 BETWEEN 1 AND 7\n),\n\nicu_flag AS (\n  -- Add ICU use flag per admission\n  SELECT \n    pc.*,\n    CASE WHEN icu.stay_id IS NOT NULL THEN 1 ELSE 0 END AS icu_used\n  FROM \n    patient_cohort pc\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON pc.hadm_id = icu.hadm_id\n),\n\nimaging_per_adm AS (\n  -- Count distinct diagnostic imaging HCPCS per admission\n  SELECT \n    pc.hadm_id,\n    COUNT(DISTINCT h.hcpcs_cd) AS imaging_count\n  FROM \n    patient_cohort pc\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n    ON pc.hadm_id = h.hadm_id\n  WHERE \n    h.hcpcs_cd IN (\n      '70450', '70460', '70470',  -- CT Head\n      '70540', '70541', '70542', '70543', '70544', '70545', '70546', '70547', '70548', '70549', '70551', '70552', '70553',  -- MRI Head/Neck\n      '93880',  -- Carotid US\n      '93306', '93307', '93308', '93350'  -- Echo\n    )\n  GROUP BY \n    pc.hadm_id\n),\n\nstratified_imaging AS (\n  -- Combine with LOS/ICU groups, default to 0 imaging if none\n  SELECT \n    if.los_days,\n    CASE \n      WHEN if.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN if.los_days BETWEEN 5 AND 7 THEN '5-7 days'\n    END AS los_group,\n    if.icu_used,\n    COALESCE(ia.imaging_count, 0) AS imaging_count\n  FROM \n    icu_flag if\n  LEFT JOIN \n    imaging_per_adm ia\n    ON if.hadm_id = ia.hadm_id\n  WHERE \n    CASE \n      WHEN if.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN if.los_days BETWEEN 5 AND 7 THEN '5-7 days'\n    END IS NOT NULL\n)\n\n-- Compute percentiles by group\nSELECT DISTINCT\n  los_group,\n  icu_used,\n  PERCENTILE_CONT(imaging_count, 0.25) OVER (PARTITION BY los_group, icu_used) AS p25,\n  PERCENTILE_CONT(imaging_count, 0.50) OVER (PARTITION BY los_group, icu_used) AS p50,\n  PERCENTILE_CONT(imaging_count, 0.75) OVER (PARTITION BY los_group, icu_used) AS p75\nFROM \n  stratified_imaging\nORDER BY \n  los_group, icu_used;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \"(\" but got \".\" at [65:7]; reason: invalidQuery, location: query, message: Syntax error: Expected \"(\" but got \".\" at [65:7]\n\nLocation: US\nJob ID: cc2e300e-68de-411d-a676-96cb99c50e00\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \"(\" but got \".\" at [44:7]; reason: invalidQuery, location: query, message: Syntax error: Expected \"(\" but got \".\" at [44:7]\n\nLocation: US\nJob ID: 711537e8-ca27-4e17-964e-d43e0a297833\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \"(\" but got \".\" at [44:7]; reason: invalidQuery, location: query, message: Syntax error: Expected \"(\" but got \".\" at [44:7]\n\nLocation: US\nJob ID: 1427c0f2-119a-41b6-aef7-07ed2bc3c7ed\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \"(\" but got \".\" at [65:7]; reason: invalidQuery, location: query, message: Syntax error: Expected \"(\" but got \".\" at [65:7]\n\nLocation: US\nJob ID: cc2e300e-68de-411d-a676-96cb99c50e00\n"
+    }
+  ]
+}

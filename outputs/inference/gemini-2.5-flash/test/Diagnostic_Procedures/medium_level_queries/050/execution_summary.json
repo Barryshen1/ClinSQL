@@ -1,0 +1,22 @@
+{
+  "query": "For my 95\u2011year\u2011old male with TIA, among male patients aged 90\u2013100 what were the mean, min, and max diagnostic imaging procedures per admission for 1\u20133 day versus 4\u20137 day stays?",
+  "final_sql": "WITH TIA_Admissions_Cohort AS (\n    -- Defines the cohort of TIA admissions for male patients aged 90+\n    SELECT DISTINCT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.subject_id = diag.subject_id\n        AND adm.hadm_id = diag.hadm_id\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age = 91 -- Represents patients >= 90 years old in MIMIC-IV\n        AND (\n            (diag.icd_version = 9 AND diag.icd_code LIKE '435%') -- ICD-9 codes for Transient Ischemic Attack\n            OR\n            (diag.icd_version = 10 AND diag.icd_code LIKE 'G45%') -- ICD-10 codes for Transient Ischemic Attack\n        )\n),\nImaging_Procedures_Per_Admission AS (\n    -- Counts diagnostic imaging procedures for each admission in the TIA cohort\n    SELECT\n        tac.subject_id,\n        tac.hadm_id,\n        COUNT(proc.icd_code) AS num_imaging_procedures\n    FROM\n        TIA_Admissions_Cohort tac -- Reference the CTE defined above\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n        ON tac.subject_id = proc.subject_id\n        AND tac.hadm_id = proc.hadm_id\n    WHERE\n        (\n            (proc.icd_version = 9 AND (proc.icd_code LIKE '87%' OR proc.icd_code LIKE '88%')) -- ICD-9 codes for Diagnostic Radiology (87) and Other Diagnostic Imaging (88)\n            OR\n            (proc.icd_version = 10 AND proc.icd_code LIKE 'B%') -- ICD-10-PCS codes for Imaging section\n        )\n    GROUP BY\n        tac.subject_id, tac.hadm_id\n)\n-- Final aggregation to calculate mean, min, max based on stay duration\nSELECT\n    CASE\n        WHEN DATE_DIFF(tac.dischtime, tac.admittime, DAY) >= 1 AND DATE_DIFF(tac.dischtime, tac.admittime, DAY) <= 3 THEN '1-3 day stay'\n        WHEN DATE_DIFF(tac.dischtime, tac.admittime, DAY) >= 4 AND DATE_DIFF(tac.dischtime, tac.admittime, DAY) <= 7 THEN '4-7 day stay'\n    END AS stay_duration_category,\n    AVG(COALESCE(ippa.num_imaging_procedures, 0)) AS mean_imaging_procedures_per_admission,\n    MIN(COALESCE(ippa.num_imaging_procedures, 0)) AS min_imaging_procedures_per_admission,\n    MAX(COALESCE(ippa.num_imaging_procedures, 0)) AS max_imaging_procedures_per_admission\nFROM\n    TIA_Admissions_Cohort tac\nLEFT JOIN\n    Imaging_Procedures_Per_Admission ippa\n    ON tac.subject_id = ippa.subject_id\n    AND tac.hadm_id = ippa.hadm_id\nWHERE\n    -- Filter for stays between 1 and 7 days (inclusive for both ends)\n    DATE_DIFF(tac.dischtime, tac.admittime, DAY) >= 1\n    AND DATE_DIFF(tac.dischtime, tac.admittime, DAY) <= 7\nGROUP BY\n    stay_duration_category\nORDER BY\n    stay_duration_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"TIA_Admissions\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: TIA_Admissions, message: Table \"TIA_Admissions\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: 70d2f5e1-375d-4fd4-9c51-0628c452e12c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

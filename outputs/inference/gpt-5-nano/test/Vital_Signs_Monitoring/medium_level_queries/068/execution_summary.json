@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46-year-old female in ICU. Among female ICU patients aged 41\u201351, what are patient counts and stroke rates for each per-measurement MAP category: <65, 65\u201374, 75\u201384, \u226585 mmHg?",
+  "final_sql": "WITH MAP_MEAS AS (\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    CASE\n      WHEN ce.valuenum < 65 THEN '<65'\n      WHEN ce.valuenum < 75 THEN '65-74'\n      WHEN ce.valuenum < 85 THEN '75-84'\n      ELSE '>=85'\n    END AS map_category\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` cs\n    ON cs.subject_id = ce.subject_id\n   AND cs.hadm_id = ce.hadm_id\n   AND cs.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON di.itemid = ce.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = ce.subject_id\n  WHERE ce.charttime >= cs.intime\n    AND ce.charttime <= cs.outtime\n    AND ce.valuenum IS NOT NULL\n    AND (LOWER(di.label) LIKE '%mean arterial pressure%' OR LOWER(di.label) LIKE '%map%')\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 41 AND 51\n),\n-- Part 2: stroke definitions based on ICD codes (stroke in any ICD version)\nSTROKE_PAT AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%stroke%'\n),\n-- Map MAP measurements to known stroke-admission pairs (for stroke rate calculation)\nMAP_STROKE AS (\n  SELECT\n    m.map_category,\n    m.subject_id,\n    m.hadm_id,\n    sp.subject_id AS stroke_subject\n  FROM MAP_MEAS m\n  LEFT JOIN STROKE_PAT sp\n    ON m.subject_id = sp.subject_id\n   AND m.hadm_id = sp.hadm_id\n)\n-- Part 3: aggregate per MAP category: patient counts and stroke rates\nSELECT\n  map_category,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  SAFE_DIVIDE(COUNT(DISTINCT stroke_subject), COUNT(DISTINCT subject_id)) * 100 AS stroke_rate_percent\nFROM MAP_STROKE\nGROUP BY map_category\nORDER BY map_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

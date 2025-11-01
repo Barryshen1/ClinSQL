@@ -1,0 +1,16 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH patients_admissions AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_adm\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n),\ntrauma_admissions AS (\n  SELECT \n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND SAFE_CAST(SUBSTR(icd_code, 1, 3) AS INT64) BETWEEN 800 AND 959)\n    OR (icd_version = 10 AND (icd_code LIKE 'S%' OR icd_code LIKE 'T%'))\n  GROUP BY hadm_id\n  HAVING COUNT(DISTINCT icd_code) >= 2\n),\ncohort AS (\n  SELECT \n    pa.subject_id, \n    pa.hadm_id, \n    pa.admittime, \n    pa.dischtime,\n    pa.hospital_expire_flag,\n    pa.age_adm\n  FROM patients_admissions pa\n  INNER JOIN trauma_admissions ta\n    ON pa.hadm_id = ta.hadm_id\n  WHERE pa.age_adm BETWEEN 45 AND 55\n),\nmeds AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS med_complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.hadm_id = pr.hadm_id\n    AND pr.starttime <= DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n    AND (pr.stoptime >= c.admittime OR pr.stoptime IS NULL)\n  GROUP BY c.hadm_id\n),\nwith_tertile AS (\n  SELECT \n    c.*,\n    m.med_complexity_score,\n    NTILE(3) OVER (ORDER BY m.med_complexity_score) AS tertile\n  FROM cohort c\n  INNER JOIN meds m\n    ON c.hadm_id = m.hadm_id\n),\nreadmission_flags AS (\n  SELECT \n    wt.hadm_id,\n    CASE \n      WHEN wt.hospital_expire_flag = 1 THEN NULL\n      WHEN MIN(a.admittime) IS NOT NULL THEN 1\n      ELSE 0 \n    END AS readmission_flag\n  FROM with_tertile wt\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON wt.subject_id = a.subject_id\n    AND a.admittime > wt.dischtime\n    AND a.admittime <= DATETIME_ADD(wt.dischtime, INTERVAL 30 DAY)\n  GROUP BY wt.hadm_id, wt.hospital_expire_flag\n),\nfinal_data AS (\n  SELECT \n    wt.*,\n    rf.readmission_flag,\n    DATETIME_DIFF(wt.dischtime, wt.admittime, DAY) AS los_days\n  FROM with_tertile wt\n  LEFT JOIN readmission_flags rf\n    ON wt.hadm_id = rf.hadm_id\n)\nSELECT \n  tertile,\n  COUNT(hadm_id) AS admissions,\n  AVG(med_complexity_score) AS mean_score,\n  MIN(med_complexity_score) AS min_score,\n  MAX(med_complexity_score) AS max_score,\n  AVG(los_days) AS mean_los,\n  100.0 * AVG(hospital_expire_flag) AS mortality_pct,\n  100.0 * AVG(IF(hospital_expire_flag = 0, readmission_flag, NULL)) AS readmission_pct\nFROM final_data\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

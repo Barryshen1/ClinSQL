@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY COUNT(DISTINCT p.procedure_id)) AS percentile FROM physionet-data.mimiciv_3_1_hosp.procedures_icd p JOIN physionet-data.mimiciv_3_1_hosp.patients pt ON p.subject_id = pt.subject_id WHERE pt.gender = 'M' AND pt.anchor_age = 46 AND pt.anchor_year BETWEEN 41 AND 51 AND p.icd_code IN ('E0700001', 'E0700002');

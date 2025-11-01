@@ -1,0 +1,23 @@
+{
+  "query": "For my 76\u2011year\u2011old female (age 71\u201381) with complications of care, compare ICU vs non\u2011ICU: report in\u2011hospital mortality by LOS quartile (Q1\u2013Q4), absolute/relative vs Q1, and % mechanical ventilation, vasopressors, RRT.",
+  "final_sql": "WITH patients_admissions AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 71 AND 81\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\nlos_quartiles AS (\n  SELECT \n    APPROX_QUANTILES(los_days, 4) AS quartiles\n  FROM patients_admissions\n),\nexpanded_quartiles AS (\n  SELECT \n    quartiles[OFFSET(0)] AS q0,\n    quartiles[OFFSET(1)] AS q1,\n    quartiles[OFFSET(2)] AS q2,\n    quartiles[OFFSET(3)] AS q3,\n    quartiles[OFFSET(4)] AS q4\n  FROM los_quartiles\n),\ncohort_with_quartiles AS (\n  SELECT \n    pa.*,\n    CASE \n      WHEN pa.los_days <= e.q1 THEN 1\n      WHEN pa.los_days <= e.q2 THEN 2\n      WHEN pa.los_days <= e.q3 THEN 3\n      ELSE 4\n    END AS los_quartile\n  FROM patients_admissions pa, expanded_quartiles e\n),\nicu_flags AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nmech_vent_flags AS (\n  SELECT DISTINCT hadm_id \n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd`\n  WHERE icd_code IN ('96.7','96.70','96.71','96.72','96.73','96.74','96.75','96.76','96.77','96.78','96.79')\n    AND icd_version = 9\n),\nrrt_flags AS (\n  SELECT DISTINCT hadm_id \n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd`\n  WHERE icd_code IN ('39.95','39.94','39.93','54.99')\n    AND icd_version = 9\n),\nvasopressor_flags AS (\n  SELECT DISTINCT hadm_id \n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE drug LIKE '%norepinephrine%' OR \n        drug LIKE '%epinephrine%' OR \n        drug LIKE '%dopamine%' OR \n        drug LIKE '%vasopressin%' OR \n        drug LIKE '%phenylephrine%' OR \n        drug LIKE '%dobutamine%' OR \n        drug LIKE '%isoproterenol%' OR \n        drug LIKE '%angiotensin%' OR \n        drug LIKE '%metaraminol%' OR \n        drug LIKE '%midodrine%' OR \n        drug LIKE '%tyramine%' OR \n        drug LIKE '%oxytocin%'\n),\ncombined AS (\n  SELECT \n    c.*,\n    CASE WHEN i.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS icu,\n    CASE WHEN mv.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS mech_vent_flag,\n    CASE WHEN vp.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS vasopressor_flag,\n    CASE WHEN rr.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS rrt_flag\n  FROM cohort_with_quartiles c\n  LEFT JOIN icu_flags i ON c.hadm_id = i.hadm_id\n  LEFT JOIN mech_vent_flags mv ON c.hadm_id = mv.hadm_id\n  LEFT JOIN vasopressor_flags vp ON c.hadm_id = vp.hadm_id\n  LEFT JOIN rrt_flags rr ON c.hadm_id = rr.hadm_id\n),\naggregated AS (\n  SELECT \n    icu,\n    los_quartile,\n    COUNT(*) AS num_admissions,\n    SUM(hospital_expire_flag) AS num_deaths,\n    SUM(mech_vent_flag) AS num_mech_vent,\n    SUM(vasopressor_flag) AS num_vasopressors,\n    SUM(rrt_flag) AS num_rrt\n  FROM combined\n  GROUP BY icu, los_quartile\n),\nq1_mortality AS (\n  SELECT \n    icu,\n    num_deaths * 1.0 / num_admissions AS q1_mort\n  FROM aggregated\n  WHERE los_quartile = 1\n)\nSELECT \n  a.icu,\n  a.los_quartile,\n  a.num_admissions,\n  a.num_deaths,\n  a.num_deaths * 1.0 / a.num_admissions AS abs_mortality,\n  CASE \n    WHEN a.los_quartile = 1 THEN 0.0\n    ELSE (a.num_deaths * 1.0 / a.num_admissions - q1.q1_mort) / q1.q1_mort \n  END AS rel_mortality,\n  a.num_mech_vent * 1.0 / a.num_admissions AS pct_mech_vent,\n  a.num_vasopressors * 1.0 / a.num_admissions AS pct_vasopressors,\n  a.num_rrt * 1.0 / a.num_admissions AS pct_rrt\nFROM aggregated a\nLEFT JOIN q1_mortality q1 ON a.icu = q1.icu\nORDER BY a.icu, a.los_quartile;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword BETWEEN at [1:17]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword BETWEEN at [1:17]\n\nLocation: US\nJob ID: c0b3866b-6f5d-4d4e-bef9-84e7df9ba91a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

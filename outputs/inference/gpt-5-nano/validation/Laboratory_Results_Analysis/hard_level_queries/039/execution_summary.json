@@ -1,0 +1,22 @@
+{
+  "query": "I have a 65\u2011year\u2011old man admitted with primary pneumonia. In male inpatients aged 60\u201370 with primary pneumonia, what is the 75th percentile of the 72\u2011hour laboratory instability score? Also compare mean critical\u2011event frequency to all inpatients and report cohort LOS and mortality.",
+  "final_sql": "with cohort_subjects as (\n  -- 65-year-old man inpatients with primary pneumonia, age 60-70, male\n  select distinct a.subject_id\n  from `physionet-data.mimiciv_3_1_hosp.admissions` as a\n  join `physionet-data.mimiciv_3_1_hosp.patients` as p\n    on p.subject_id = a.subject_id\n  join `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` as di\n    on di.subject_id = a.subject_id and di.hadm_id = a.hadm_id\n  join `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` as dd\n    on dd.icd_code = di.icd_code and dd.icd_version = di.icd_version\n  where p.gender = 'M'\n    and p.anchor_age between 60 and 70\n    and di.seq_num = 1\n    and LOWER(dd.long_title) LIKE '%pneumonia%'\n),\ncohort_hads as (\n  select a.hadm_id\n  from `physionet-data.mimiciv_3_1_hosp.admissions` a\n  join cohort_subjects c on c.subject_id = a.subject_id\n),\n-- Part 2: 72-hour laboratory instability score per hadm_id\nlab_range_stats as (\n  select le.hadm_id,\n         le.itemid,\n         max(le.valuenum) as maxv,\n         min(le.valuenum) as minv,\n         count(*) as cnt\n  from `physionet-data.mimiciv_3_1_hosp.labevents` le\n  join `physionet-data.mimiciv_3_1_hosp.admissions` a\n    on le.hadm_id = a.hadm_id\n  where le.charttime between a.admittime and TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n    and le.valuenum is not null\n  group by le.hadm_id, le.itemid\n),\nlab_instability_by_hadm as (\n  select hadm_id,\n         sum(case when cnt >= 2 then (maxv - minv) else 0 end) as instability72h\n  from lab_range_stats\n  group by hadm_id\n),\ncohort_instability as (\n  select h.hadm_id,\n         coalesce(li.instability72h, 0) as instability72h\n  from cohort_hads h\n  left join lab_instability_by_hadm li on li.hadm_id = h.hadm_id\n),\nicu_counts_subject as (\n  select s.subject_id, count(i.stay_id) as icu_stays\n  from cohort_subjects s\n  left join `physionet-data.mimiciv_3_1_icu.icustays` i\n    on i.subject_id = s.subject_id\n  group by s.subject_id\n),\nicu_counts_all_subjects as (\n  select s.subject_id, count(i.stay_id) as icu_stays\n  from (select distinct subject_id from `physionet-data.mimiciv_3_1_hosp.admissions`) s\n  left join `physionet-data.mimiciv_3_1_icu.icustays` i\n    on i.subject_id = s.subject_id\n  group by s.subject_id\n),\nmean_icu_cohort as (\n  select avg(icu_stays) as mean_icu_cohort\n  from icu_counts_subject\n),\nmean_icu_all as (\n  select avg(icu_stays) as mean_icu_all\n  from icu_counts_all_subjects\n),\ncohort_los as (\n  select avg(timestamp_diff(a.dischtime, a.admittime, second) / 3600.0) as mean_los_hours\n  from `physionet-data.mimiciv_3_1_hosp.admissions` a\n  join cohort_hads ch on a.hadm_id = ch.hadm_id\n),\ncohort_mortality as (\n  select avg(case when a.hospital_expire_flag = 1 then 1.0 else 0.0 end) as mortality_rate\n  from `physionet-data.mimiciv_3_1_hosp.admissions` a\n  join cohort_hads ch on a.hadm_id = ch.hadm_id\n),\np75_instability as (\n  select (approx_quantiles(instability72h, 4))[offset(3)] as p75_instability72h\n  from cohort_instability\n)\nselect\n  p75_instability.p75_instability72h as p75_instability72h_72h_lab,\n  mean_icu_cohort.mean_icu_cohort,\n  mean_icu_all.mean_icu_all,\n  cohort_los.mean_los_hours,\n  cohort_mortality.mortality_rate\nfrom p75_instability\ncross join mean_icu_cohort\ncross join mean_icu_all\ncross join cohort_los\ncross join cohort_mortality;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pneumonia\" at [1:14]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pneumonia\" at [1:14]\n\nLocation: US\nJob ID: d87ef800-4f46-4119-a72f-bc88d6697f98\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

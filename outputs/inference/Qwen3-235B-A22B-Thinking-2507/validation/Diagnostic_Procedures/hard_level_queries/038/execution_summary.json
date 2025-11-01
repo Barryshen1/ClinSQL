@@ -1,0 +1,16 @@
+{
+  "query": "For a 65-year-old man: among male ICU patients aged 60–70 with intracranial hemorrhage (first ICU stay), what is the 75th percentile of procedure burden in the first 72h? Report mean ICU LOS (days) and hospital mortality versus general ICU population.",
+  "final_sql": "WITH \ntarget_stays AS (\n  SELECT \n    p.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(i.outtime, i.intime, HOUR) / 24.0 AS icu_los\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN (\n    SELECT \n      subject_id, \n      hadm_id, \n      stay_id, \n      intime, \n      outtime,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu`.icustays\n  ) i ON p.subject_id = i.subject_id AND i.rn = 1\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a \n    ON i.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 60 AND 70\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code IN ('430','431','432'))\n          OR (d.icd_version = 10 AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%'))\n        )\n    )\n),\ntarget_procedure_burden AS (\n  SELECT \n    ts.stay_id,\n    COUNT(pe.stay_id) AS procedure_count\n  FROM target_stays ts\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pe\n    ON ts.stay_id = pe.stay_id\n    AND pe.starttime >= ts.intime\n    AND pe.starttime <= TIMESTAMP_ADD(ts.intime, INTERVAL 72 HOUR)\n  GROUP BY ts.stay_id\n),\ngeneral_stays AS (\n  SELECT \n    i.stay_id,\n    i.intime,\n    i.outtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(i.outtime, i.intime, HOUR) / 24.0 AS icu_los\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a \n    ON i.hadm_id = a.hadm_id\n)\nSELECT \n  (SELECT APPROX_QUANTILES(procedure_count, 100)[OFFSET(75)] \n   FROM target_procedure_burden) AS target_procedure_burden_75th,\n  (SELECT AVG(icu_los) FROM target_stays) AS target_mean_icu_los,\n  (SELECT AVG(hospital_expire_flag) FROM target_stays) AS target_hospital_mortality,\n  (SELECT AVG(icu_los) FROM general_stays) AS general_mean_icu_los,\n  (SELECT AVG(hospital_expire_flag) FROM general_stays) AS general_hospital_mortality;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "qwen3-235b-a22b-thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

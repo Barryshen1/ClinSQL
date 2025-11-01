@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH ami_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    a.admission_type,\n    p.anchor_age,\n    p.gender,\n    -- Compute LOS in days\n    DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    -- Require at least one AMI diagnosis\n    JOIN (\n      SELECT DISTINCT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE\n        (icd_version = 9 AND icd_code LIKE '410%')\n        OR (icd_version = 10 AND icd_code LIKE 'I21%')\n    ) ami_dx\n      ON a.hadm_id = ami_dx.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 66 AND 76\n    -- Exclude any shock or respiratory failure diagnosis in this admission\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n      WHERE dx.hadm_id = a.hadm_id\n        AND (\n          (dx.icd_version = 9 AND (\n             dx.icd_code LIKE '7855%'       -- shock\n             OR dx.icd_code IN ('518.81','518.82','518.84')  -- resp failure\n          ))\n          OR (dx.icd_version = 10 AND (\n             dx.icd_code LIKE 'R57%'        -- shock\n             OR dx.icd_code LIKE 'J96%'     -- resp failure\n          ))\n        )\n    )\n),\n\nanalysis_prep AS (\n  SELECT\n    *,\n    -- LOS bucket\n    CASE\n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n      WHEN los_days >= 8         THEN '8+'\n      ELSE '0'                    -- edge if same-day discharge\n    END AS los_bucket,\n    -- Urgency bucket\n    CASE\n      WHEN admission_type = 'EMERGENCY' THEN 'Emergent'\n      ELSE 'Non-Emergent'\n    END AS urgency\n  FROM ami_cohort\n),\n\nagg AS (\n  SELECT\n    los_bucket,\n    urgency,\n    COUNT(*) AS n_patients,\n    SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS n_deaths,\n    -- median time-to-death in days among those who died\n    APPROX_QUANTILES(\n      TIMESTAMP_DIFF(deathtime, admittime, DAY),\n      2\n    )[OFFSET(1)] AS median_t2d_days\n  FROM analysis_prep\n  GROUP BY los_bucket, urgency\n)\n\nSELECT\n  los_bucket,\n  urgency,\n  n_patients,\n  n_deaths,\n  ROUND(100.0 * n_deaths / n_patients, 1) AS mortality_pct,\n  median_t2d_days\nFROM agg\nORDER BY\n  los_bucket,\n  urgency;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

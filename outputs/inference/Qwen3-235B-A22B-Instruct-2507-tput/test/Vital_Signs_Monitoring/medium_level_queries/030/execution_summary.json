@@ -1,0 +1,16 @@
+{
+  "query": "For my 86\u2011year\u2011old female ICU patient: among female ICU patients 81\u201391, classify per\u2011stay mean temperature in first 24h (<36.0, 36.0\u201337.9, \u226538.0\u00b0C) and report N, mean, median, IQR, and MI rate (%).",
+  "final_sql": "WITH temperature_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu`.d_items\n  WHERE LOWER(label) LIKE '%temperature%'\n    AND LOWER(unitname) = 'celsius'\n),\nfirst_24h_temps AS (\n  SELECT \n    ce.stay_id,\n    AVG(ce.valuenum) AS mean_temp_24h\n  FROM `physionet-data.mimiciv_3_1_icu`.chartevents ce\n  INNER JOIN temperature_items ti ON ce.itemid = ti.itemid\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays icu ON ce.stay_id = icu.stay_id\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.valuenum BETWEEN 30.0 AND 43.0\n    AND ce.charttime >= icu.intime\n    AND ce.charttime < DATETIME_ADD(icu.intime, INTERVAL 24 HOUR)\n  GROUP BY ce.stay_id\n),\nmi_diagnoses AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (d.icd_code LIKE 'I21%' AND di.icd_version = 10)\n     OR (d.icd_code IN ('410') AND di.icd_version = 9) -- ICD-9 for MI\n),\npatient_stays AS (\n  SELECT \n    icu.stay_id,\n    icu.hadm_id,\n    p.anchor_age,\n    p.gender,\n    f.mean_temp_24h,\n    CASE \n      WHEN f.mean_temp_24h < 36.0 THEN '<36.0'\n      WHEN f.mean_temp_24h >= 36.0 AND f.mean_temp_24h < 38.0 THEN '36.0-37.9'\n      ELSE '>=38.0'\n    END AS temp_category\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.patients p ON icu.subject_id = p.subject_id\n  INNER JOIN first_24h_temps f ON icu.stay_id = f.stay_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 81 AND 91\n),\nstay_with_mi AS (\n  SELECT \n    ps.*,\n    CASE WHEN mi.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS had_mi\n  FROM patient_stays ps\n  LEFT JOIN mi_diagnoses mi ON ps.hadm_id = mi.hadm_id\n),\nsummary_stats AS (\n  SELECT\n    temp_category,\n    COUNT(*) AS N,\n    AVG(mean_temp_24h) AS mean_temp,\n    APPROX_QUANTILES(mean_temp_24h, 1000)[OFFSET(500)] AS median_temp,\n    APPROX_QUANTILES(mean_temp_24h, 1000)[OFFSET(750)] - APPROX_QUANTILES(mean_temp_24h, 1000)[OFFSET(250)] AS iqr_temp,\n    SUM(had_mi) AS mi_count\n  FROM stay_with_mi\n  GROUP BY temp_category\n)\nSELECT\n  temp_category,\n  N,\n  ROUND(mean_temp, 2) AS mean,\n  ROUND(median_temp, 2) AS median,\n  ROUND(iqr_temp, 2) AS iqr,\n  ROUND(100.0 * mi_count / N, 2) AS mi_rate_percent\nFROM summary_stats\nORDER BY temp_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

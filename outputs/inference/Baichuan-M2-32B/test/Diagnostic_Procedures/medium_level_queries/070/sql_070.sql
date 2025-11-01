@@ -1,0 +1,1 @@
+COUNT(DISTINCT h.hcpcs_cd) AS radiography_ct_count  -- or COUNT(*)? We want count of events, so COUNT(*) but per admission. But we are grouping by hadm_id, so we can count the events.;

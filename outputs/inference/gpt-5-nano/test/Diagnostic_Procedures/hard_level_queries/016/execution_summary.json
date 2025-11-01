@@ -1,0 +1,22 @@
+{
+  "query": "I have a 93-year-old man. Among male patients aged 88\u201398 on their first ICU stay with pneumonia, stratify first 72-hour diagnostic procedure counts into quintiles and report average procedure count, average ICU LOS (days), and in-hospital mortality% per quintile.",
+  "final_sql": "WITH\n  -- 1) First ICU stay per patient within the male 88-98 age band\n  base_first_icu AS (\n    SELECT i.subject_id,\n           i.hadm_id,\n           i.stay_id,\n           i.intime\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON p.subject_id = i.subject_id\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 88 AND 98\n  ),\n  first_icu AS (\n    SELECT subject_id, hadm_id, stay_id, intime\n    FROM (\n      SELECT fi.*,\n             ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n      FROM base_first_icu fi\n    ) t\n    WHERE rn = 1\n  ),\n\n  -- 2) Eligible: first ICU stay's admission has pneumonia\n  eligible AS (\n    SELECT f.subject_id, f.hadm_id, f.stay_id, f.intime\n    FROM first_icu f\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON d.subject_id = f.subject_id AND d.hadm_id = f.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n      ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n    WHERE REGEXP_CONTAINS(LOWER(di.long_title), r'pneumonia')\n  ),\n\n  -- 3) Diagnostic procedure counts within 72 hours of ICU intime\n  diag_counts AS (\n    SELECT e.subject_id,\n           e.hadm_id,\n           e.stay_id,\n           e.intime,\n           SUM(CASE WHEN di.itemid IS NOT NULL\n                    AND (REGEXP_CONTAINS(LOWER(di.category), r'diagnostic')\n                         OR REGEXP_CONTAINS(LOWER(di.label), r'diagnostic'))\n                     THEN 1 ELSE 0 END) AS diag_proc_count,\n           i.los AS icu_los_hours,\n           a.hospital_expire_flag,\n           a.deathtime\n    FROM eligible e\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n      ON pe.stay_id = e.stay_id\n     AND pe.starttime >= e.intime\n     AND pe.starttime < TIMESTAMP_ADD(e.intime, INTERVAL 72 HOUR)\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n      ON di.itemid = pe.itemid\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS i\n      ON i.stay_id = e.stay_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n      ON a.hadm_id = e.hadm_id\n    GROUP BY e.subject_id, e.hadm_id, e.stay_id, e.intime, i.los, a.hospital_expire_flag, a.deathtime\n  ),\n\n  -- 4) Prepare data with quintile computation\n  counts_with_quintile AS (\n    SELECT NTILE(5) OVER (ORDER BY diag_proc_count) AS quintile,\n           diag_proc_count,\n           icu_los_hours,\n           hospital_expire_flag,\n           deathtime\n    FROM diag_counts\n  )\n\nSELECT\n  quintile,\n  AVG(diag_proc_count) AS avg_diag_proc_count,\n  AVG(icu_los_hours / 24.0) AS avg_icu_los_days,\n  100.0 * AVG(CASE\n                WHEN hospital_expire_flag = 1 OR deathtime IS NOT NULL THEN 1.0\n                ELSE 0.0\n              END) AS mortality_percent\nFROM counts_with_quintile\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [55:13]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [55:13]\n\nLocation: US\nJob ID: 32aa0c72-0372-4337-83a8-6ed1b2b40ca6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

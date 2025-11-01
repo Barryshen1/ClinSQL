@@ -1,0 +1,22 @@
+{
+  "query": "For my 73\u2011year\u2011old male: among males 68\u201378 with diabetes plus acute HF, give insulin vs oral agent initiation rates (%) in first 24h vs final 24h and absolute percentage\u2011point differences.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, p.gender, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  -- Link to label for ICD filtering\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dx\n    ON d.icd_code = dx.icd_code AND d.icd_version = dx.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n),\ncohort_with_conditions AS (\n  SELECT c.subject_id, c.hadm_id\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON c.subject_id = di.subject_id AND c.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  GROUP BY c.subject_id, c.hadm_id\n  HAVING COUNTIF(\n            (di.icd_version = 9 AND di.icd_code LIKE '250%')\n         OR (di.icd_version = 10 AND di.icd_code LIKE 'E1%')\n       ) > 0\n     AND COUNTIF(\n            (di.icd_version = 9 AND di.icd_code IN ('42821','42823','42833','42843'))\n         OR (di.icd_version = 10 AND di.icd_code IN ('I5021','I5023','I5033','I5043'))\n       ) > 0\n),\nadmission_times AS (\n  SELECT cw.subject_id, cw.hadm_id, a.admittime, a.dischtime\n  FROM cohort_with_conditions cw\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON cw.subject_id = a.subject_id AND cw.hadm_id = a.hadm_id\n),\ndrug_initiations AS (\n  SELECT DISTINCT\n    adm.hadm_id,\n    CASE\n      WHEN UPPER(pr.drug) LIKE '%INSULIN%' THEN 'Insulin'\n      WHEN UPPER(pr.drug) LIKE '%METFORMIN%'\n        OR UPPER(pr.drug) LIKE '%GLIPIZIDE%'\n        OR UPPER(pr.drug) LIKE '%GLYBURIDE%'\n        OR UPPER(pr.drug) LIKE '%PIOGLITAZONE%'\n        OR UPPER(pr.drug) LIKE '%SITAGLIPTIN%'\n        OR UPPER(pr.drug) LIKE '%LINAGLIPTIN%'\n        OR UPPER(pr.drug) LIKE '%DAPAGLIFLOZIN%'\n        OR UPPER(pr.drug) LIKE '%CANAGLIFLOZIN%'\n        OR UPPER(pr.drug) LIKE '%EMPAGLIFLOZIN%' THEN 'Oral agent'\n      ELSE NULL\n    END AS drug_class,\n    CASE\n      WHEN pr.starttime BETWEEN adm.admittime AND adm.admittime + INTERVAL 24 HOUR\n        THEN 'First 24h'\n      WHEN pr.starttime BETWEEN adm.dischtime - INTERVAL 24 HOUR AND adm.dischtime\n        THEN 'Final 24h'\n      ELSE NULL\n    END AS time_window\n  FROM admission_times adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON adm.subject_id = pr.subject_id AND adm.hadm_id = pr.hadm_id\n  WHERE pr.starttime IS NOT NULL\n),\ncounts AS (\n  SELECT\n    drug_class,\n    time_window,\n    COUNT(DISTINCT hadm_id) AS n_admissions\n  FROM drug_initiations\n  WHERE drug_class IS NOT NULL AND time_window IS NOT NULL\n  GROUP BY drug_class, time_window\n),\ntotal AS (\n  SELECT COUNT(DISTINCT hadm_id) AS total_admissions\n  FROM admission_times\n)\nSELECT \n  c.drug_class,\n  c.time_window,\n  ROUND(100.0 * c.n_admissions / t.total_admissions, 2) AS initiation_rate_pct,\n  CASE\n    WHEN c.time_window = 'Final 24h' THEN\n      ROUND(100.0 * c.n_admissions / t.total_admissions, 2)\n      - (\n        SELECT ROUND(100.0 * cf.n_admissions / t.total_admissions, 2)\n        FROM counts cf\n        WHERE cf.drug_class = c.drug_class AND cf.time_window = 'First 24h'\n      )\n    ELSE NULL\n  END AS abs_pct_point_diff_vs_first\nFROM counts c\nCROSS JOIN total t\nORDER BY drug_class, time_window;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword AT at [39:5]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AT at [39:5]\n\nLocation: US\nJob ID: 14b5ca3d-75f0-4e71-ae68-7b913ed77c73\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating an 85\u2011year\u2011old female inpatient with hepatic failure. Among female inpatients aged 80\u201390 with hepatic failure, calculate a 7\u2011day medication complexity score, stratify cohort into tertiles, and report LOS, in\u2011hospital mortality and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH hepatic_dx AS (\n  -- identify admissions with hepatic / liver failure diagnoses\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE (\n      LOWER(COALESCE(dicd.long_title, '')) LIKE '%hepatic%'\n      OR LOWER(COALESCE(dicd.long_title, '')) LIKE '%liver failure%'\n    )\n),\n\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN hepatic_dx h\n    ON a.hadm_id = h.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 80 AND 90\n),\n\nmeds_7d AS (\n  -- medication identities (coalesced) prescribed/active in first 7 days of admission\n  SELECT\n    pr.hadm_id,\n    LOWER(TRIM(COALESCE(pr.drug, pr.formulary_drug_cd, pr.ndc))) AS med_id\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  JOIN cohort c\n    ON pr.hadm_id = c.hadm_id\n  WHERE\n    pr.starttime IS NOT NULL\n    -- overlap with [admittime, admittime + 7 days]\n    AND pr.starttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n    AND (pr.stoptime IS NULL OR pr.stoptime >= c.admittime)\n    AND LOWER(COALESCE(pr.drug, pr.formulary_drug_cd, pr.ndc)) <> ''\n),\n\nmed_complexity AS (\n  -- count distinct meds per admission in the first 7 days\n  SELECT\n    c.hadm_id,\n    c.subject_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    c.anchor_age,\n    COALESCE(m.med_count, 0) AS med_complexity_score\n  FROM cohort c\n  LEFT JOIN (\n    SELECT hadm_id, COUNT(DISTINCT med_id) AS med_count\n    FROM meds_7d\n    GROUP BY hadm_id\n  ) m\n  ON c.hadm_id = m.hadm_id\n),\n\nwith_tertile AS (\n  -- assign tertiles across admissions by med_complexity_score\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY med_complexity_score, hadm_id) AS tertile\n  FROM med_complexity\n),\n\nreadmit_flag AS (\n  -- compute 30-day readmission flag per index admission\n  SELECT\n    w.*,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = w.subject_id\n        AND a2.hadm_id <> w.hadm_id\n        AND a2.admittime > w.dischtime\n        AND a2.admittime <= TIMESTAMP_ADD(w.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmit30\n  FROM with_tertile w\n)\n\n-- Final aggregation by tertile\nSELECT\n  tertile,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(med_complexity_score), 2) AS avg_med_complexity_score,\n  ROUND(AVG(TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0), 2) AS mean_los_days,\n  ROUND(100.0 * SUM(CAST(hospital_expire_flag AS INT64)) / COUNT(*), 2) AS in_hospital_mortality_pct,\n  ROUND(100.0 * SUM(CAST(readmit30 AS INT64)) / COUNT(*), 2) AS readmit30_pct\nFROM readmit_flag\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:14]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:14]\n\nLocation: US\nJob ID: 2e210b73-4168-43a4-9512-a4fbb172aeef\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

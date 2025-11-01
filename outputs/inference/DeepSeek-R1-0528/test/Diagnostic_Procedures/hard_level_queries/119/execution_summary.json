@@ -1,0 +1,16 @@
+{
+  "query": "For a 47\u2011year\u2011old man: among male ICU patients aged 42\u201352 with AMI, what is the 90th percentile of diagnostic intensity (distinct procedures in first 72 ICU hours), and how do mean hospital LOS and in\u2011hospital mortality compare to age\u2011matched males?",
+  "final_sql": "WITH base_admissions AS (\n  SELECT \n    p.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    EXTRACT(YEAR FROM adm.admittime) - p.anchor_year + p.anchor_age AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm \n    ON p.subject_id = adm.subject_id\n  WHERE EXISTS (\n    SELECT 1 \n    FROM `physionet-data.mimiciv_3_1_icu.icustays` icu \n    WHERE adm.hadm_id = icu.hadm_id\n  )\n),\nbase_with_ami_flag AS (\n  SELECT \n    base.*,\n    CASE WHEN diag.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS is_ami\n  FROM base_admissions base\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      (icd_version = 9 AND icd_code LIKE '410%') OR\n      (icd_version = 10 AND (icd_code LIKE 'I21%' OR icd_code LIKE 'I22%'))\n  ) diag \n    ON base.hadm_id = diag.hadm_id\n  WHERE \n    base.age_at_admission BETWEEN 42 AND 52\n    AND (SELECT gender FROM `physionet-data.mimiciv_3_1_hosp.patients` p WHERE p.subject_id = base.subject_id) = 'M'\n),\nami_icu_stays AS (\n  SELECT \n    icu.stay_id,\n    icu.intime\n  FROM base_with_ami_flag base\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu \n    ON base.hadm_id = icu.hadm_id\n  WHERE base.is_ami = 1\n),\nprocedures_in_window AS (\n  SELECT \n    ami.stay_id,\n    proc.itemid\n  FROM ami_icu_stays ami\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` proc \n    ON ami.stay_id = proc.stay_id\n  WHERE \n    proc.starttime BETWEEN ami.intime AND \n    DATETIME_ADD(ami.intime, INTERVAL 72 HOUR)\n),\nprocedure_count_per_stay AS (\n  SELECT \n    stay_id,\n    COUNT(DISTINCT itemid) AS num_procedures\n  FROM procedures_in_window\n  GROUP BY stay_id\n),\ndi_90 AS (\n  SELECT \n    APPROX_QUANTILES(num_procedures, 100)[OFFSET(90)] AS di_90_percentile\n  FROM procedure_count_per_stay\n),\nmetrics AS (\n  SELECT \n    AVG(CASE WHEN is_ami = 1 THEN DATETIME_DIFF(dischtime, admittime, DAY) ELSE NULL END) AS mean_los_ami,\n    AVG(CASE WHEN is_ami = 0 THEN DATETIME_DIFF(dischtime, admittime, DAY) ELSE NULL END) AS mean_los_control,\n    AVG(CASE WHEN is_ami = 1 THEN hospital_expire_flag ELSE NULL END) AS mortality_ami,\n    AVG(CASE WHEN is_ami = 0 THEN hospital_expire_flag ELSE NULL END) AS mortality_control\n  FROM base_with_ami_flag\n)\nSELECT \n  di_90_percentile,\n  mean_los_ami,\n  mean_los_control,\n  mortality_ami,\n  mortality_control\nFROM di_90, metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "Among male patients aged 49\u201359 with primary heart failure (patient is 54), for LOS 1\u20134 vs 5\u20137 days stratified by ICU use, what are admission counts and mean CT/MRI per admission?",
+  "final_sql": "WITH\n  -- Step 1: identify admissions meeting the cohort (male, age 49-59, primary HF)\n  heart_admissions AS (\n    SELECT\n      a.hadm_id,\n      a.subject_id,\n      TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS hosp_los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON di.subject_id = a.subject_id\n     AND di.hadm_id = a.hadm_id\n    WHERE\n      (p.gender = 'M' OR p.gender = 'Male')\n      -- approximate age at admission\n      AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 49 AND 59\n      -- primary HF\n      AND di.seq_num = 1\n      AND di.icd_code LIKE '428.%'\n      AND di.icd_version = 9\n      AND a.admittime IS NOT NULL\n      AND a.dischtime IS NOT NULL\n  ),\n\n  -- Step 2: ICU usage flag per admission (1 if any ICU stay, else 0)\n  icu_flags AS (\n    SELECT hadm_id\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    GROUP BY hadm_id\n  ),\n  icu_flags_all AS (\n    SELECT h.hadm_id,\n           CASE WHEN i.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS icu_use\n    FROM heart_admissions h\n    LEFT JOIN icu_flags i ON h.hadm_id = i.hadm_id\n  ),\n\n  -- Step 3: count CT/MRI imaging events per admission (ICU data)\n  imaging_counts AS (\n    SELECT hadm_id,\n           COUNT(*) AS imaging_ct_mri_events\n    FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n      ON ce.itemid = di.itemid\n    WHERE (di.label LIKE '%CT%' OR di.label LIKE '%MRI%')\n      AND ce.charttime IS NOT NULL\n    GROUP BY hadm_id\n  ),\n\n  -- Step 4: assemble per-admission results with LOS groups and ICU flag\n  final AS (\n    SELECT\n      h.hadm_id,\n      h.subject_id,\n      h.hosp_los_days,\n      CASE\n        WHEN h.hosp_los_days BETWEEN 1 AND 4 THEN '1-4'\n        WHEN h.hosp_los_days BETWEEN 5 AND 7 THEN '5-7'\n        ELSE NULL\n      END AS los_group,\n      u.icu_use,\n      COALESCE(ic.imaging_ct_mri_events, 0) AS imaging_ct_mri_events\n    FROM heart_admissions h\n    JOIN icu_flags_all u ON h.hadm_id = u.hadm_id\n    LEFT JOIN imaging_counts ic ON h.hadm_id = ic.hadm_id\n    WHERE CASE\n            WHEN h.hosp_los_days BETWEEN 1 AND 4 THEN '1-4'\n            WHEN h.hosp_los_days BETWEEN 5 AND 7 THEN '5-7'\n            ELSE NULL\n          END IS NOT NULL\n  )\n\nSELECT\n  los_group,\n  icu_use,\n  COUNT(*) AS admission_count,\n  AVG(imaging_ct_mri_events) AS mean_ct_mri_per_admission\nFROM final\nGROUP BY los_group, icu_use\nORDER BY los_group, icu_use;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have an 88\u2011year\u2011old man with chest pain/AMI and initial troponin T above the 99th percentile. Among male patients aged 83\u201393, provide N, mean age, mean LOS, and troponin summary.",
+  "final_sql": "WITH eligible_base AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_adm\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE (LOWER(p.gender) = 'male' OR p.gender = 'M')\n    AND p.anchor_age IS NOT NULL\n    AND p.anchor_year IS NOT NULL\n),\neligible_ami AS (\n  SELECT DISTINCT eb.hadm_id\n  FROM eligible_base AS eb\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON eb.hadm_id = di.hadm_id\n   AND eb.subject_id = di.subject_id\n  WHERE (di.icd_version = 9 AND di.icd_code LIKE '410%')\n     OR (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%'))\n),\ninitial_troponin_all AS (\n  SELECT le.hadm_id, le.valuenum AS troponin_value\n  FROM (\n    SELECT hadm_id, MIN(charttime) AS first_charttime\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n      ON le.itemid = dli.itemid\n    WHERE LOWER(dli.label) LIKE '%troponin%t%'\n    GROUP BY hadm_id\n  ) AS t\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.hadm_id = t.hadm_id AND le.charttime = t.first_charttime\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n    ON le.itemid = dli.itemid\n  WHERE LOWER(dli.label) LIKE '%troponin%t%'\n),\ninitial_troponin_eligible AS (\n  SELECT itt.hadm_id, itt.troponin_value\n  FROM initial_troponin_all AS itt\n  JOIN eligible_ami AS ea ON itt.hadm_id = ea.hadm_id\n),\nfinal_cohort AS (\n  SELECT ea.hadm_id,\n         a.admittime,\n         a.dischtime,\n         (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_adm\n  FROM eligible_ami AS ea\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON ea.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE ea.hadm_id IN (SELECT hadm_id FROM initial_troponin_eligible)\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 83 AND 93\n),\ntroponin_stats AS (\n  SELECT\n    quantiles[OFFSET(25)] AS troponin_q1,\n    quantiles[OFFSET(50)] AS troponin_median,\n    quantiles[OFFSET(75)] AS troponin_q3\n  FROM (\n     SELECT APPROX_QUANTILES(it.troponin_value, 100) AS quantiles\n     FROM initial_troponin_eligible AS it\n  ) AS q\n)\n\nSELECT\n  COUNT(DISTINCT fc.hadm_id) AS N,\n  AVG(fc.age_at_adm) AS mean_age_at_adm,\n  AVG(TIMESTAMP_DIFF(fc.dischtime, fc.admittime, SECOND) / 86400.0) AS mean_los_days,\n  AVG(it.troponin_value) AS mean_initial_troponin,\n  MIN(it.troponin_value) AS min_initial_troponin,\n  MAX(it.troponin_value) AS max_initial_troponin,\n  MAX(ts.troponin_q1) AS troponin_q1,\n  MAX(ts.troponin_median) AS troponin_median,\n  MAX(ts.troponin_q3) AS troponin_q3\nFROM final_cohort fc\nJOIN initial_troponin_eligible AS it ON fc.hadm_id = it.hadm_id\nCROSS JOIN troponin_stats ts;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \"(\" at [86:67]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \"(\" at [86:67]\n\nLocation: US\nJob ID: c57dc41f-bce0-4e88-aa00-5568a97cdb34\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references ts.troponin_q1 which is neither grouped nor aggregated at [76:3]; reason: invalidQuery, location: query, message: SELECT list expression references ts.troponin_q1 which is neither grouped nor aggregated at [76:3]\n\nLocation: US\nJob ID: 2bb55469-385c-4b0c-a789-8eed16886d32\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

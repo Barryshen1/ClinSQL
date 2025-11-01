@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 78\u2011year\u2011old male with pneumonia and high comorbidity. In male patients 73\u201383 with pneumonia and top\u2011quartile comorbidity, what is his composite risk percentile? Provide cohort in\u2011hospital mortality %, major complication %, and median survival days.",
+  "final_sql": "WITH pneumonia_dx AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE ( (icd_version = 9 AND (\n              icd_code BETWEEN '480' AND '486' OR icd_code = '4870'))\n       OR (icd_version = 10 AND (\n              icd_code LIKE 'J12%' OR icd_code LIKE 'J13%' OR icd_code LIKE 'J14%' OR\n              icd_code LIKE 'J15%' OR icd_code LIKE 'J16%' OR icd_code LIKE 'J17%' OR\n              icd_code LIKE 'J18%'))\n        )\n),\ncharlson_flags AS (\n  SELECT\n    di.subject_id,\n    di.hadm_id,\n    MAX(CASE WHEN ( (icd_version=9 AND icd_code BETWEEN '4280' AND '4289')\n                 OR (icd_version=10 AND icd_code LIKE 'I50%') )\n         THEN 1 ELSE 0 END) AS CHF,\n    MAX(CASE WHEN ( (icd_version=9 AND icd_code BETWEEN '5850' AND '5856')\n                 OR (icd_version=10 AND icd_code LIKE 'N18%') )\n         THEN 2 ELSE 0 END) AS Renal,\n    MAX(CASE WHEN ( (icd_version=9 AND (icd_code BETWEEN '2500' AND '2509'))\n                 OR (icd_version=10 AND icd_code LIKE 'E10%' OR icd_code LIKE 'E11%') )\n         THEN 1 ELSE 0 END) AS Diabetes,\n    MAX(CASE WHEN ( (icd_version=9 AND icd_code BETWEEN '4100' AND '4109')\n                 OR (icd_version=10 AND icd_code LIKE 'I21%') )\n         THEN 1 ELSE 0 END) AS MI\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  GROUP BY di.subject_id, di.hadm_id\n),\ncharlson_scores AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    CHF + Renal + Diabetes + MI AS cci\n  FROM charlson_flags\n),\ncci_quartiles AS (\n  SELECT\n    APPROX_QUANTILES(cci, 4)[OFFSET(3)] AS q3\n  FROM charlson_scores\n),\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year AS age_at_adm,\n    p.gender,\n    a.admittime,\n    COALESCE(p.dod, a.dischtime) AS endtime,\n    cs.cci\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN pneumonia_dx pdx\n    ON a.hadm_id = pdx.hadm_id\n  JOIN charlson_scores cs\n    ON a.hadm_id = cs.hadm_id\n  CROSS JOIN cci_quartiles qt\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 73 AND 83\n    AND cs.cci >= qt.q3\n),\ncomplications AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE ( (icd_version=9 AND (\n            icd_code BETWEEN '5845' AND '5849'\n         OR icd_code BETWEEN '99591' AND '99592'\n         OR icd_code BETWEEN '4100' AND '4109'\n         OR icd_code BETWEEN '434' AND '436'\n         ))\n       OR (icd_version=10 AND (\n            icd_code LIKE 'N17%'\n         OR icd_code LIKE 'A41%'\n         OR icd_code LIKE 'I21%'\n         OR icd_code LIKE 'I63%' OR icd_code LIKE 'I64%'\n         ))\n        )\n),\ncohort_with_flags AS (\n  SELECT\n    c.*,\n    CASE WHEN comp.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS major_complication,\n    DATE_DIFF(c.endtime, c.admittime, DAY) AS survival_days\n  FROM cohort c\n  LEFT JOIN complications comp\n    ON c.hadm_id = comp.hadm_id\n),\nsummary AS (\n  SELECT\n    100 * AVG(hospital_expire_flag) AS mortality_pct,\n    100 * AVG(major_complication) AS complication_pct,\n    APPROX_QUANTILES(survival_days, 2)[OFFSET(1)] AS median_survival_days\n  FROM cohort_with_flags\n),\nrisk_percentiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    PERCENT_RANK() OVER (ORDER BY hospital_expire_flag DESC, major_complication DESC, cci DESC) AS risk_percentile\n  FROM cohort_with_flags\n)\nSELECT\n  s.mortality_pct,\n  s.complication_pct,\n  s.median_survival_days,\n  rp.subject_id,\n  rp.hadm_id,\n  rp.risk_percentile\nFROM summary s\nCROSS JOIN risk_percentiles rp\nORDER BY rp.risk_percentile DESC;",
+  "execution_success": true,
+  "row_count": 2430,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column cci which is neither grouped nor aggregated at [41:5]; reason: invalidQuery, location: query, message: SELECT list expression references column cci which is neither grouped nor aggregated at [41:5]\n\nLocation: US\nJob ID: 9dcfd5f1-a845-4bd2-8de3-cd56a31c1eda\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 INNER JOIN must have an immediately following ON or USING clause at [115:1]; reason: invalidQuery, location: query, message: INNER JOIN must have an immediately following ON or USING clause at [115:1]\n\nLocation: US\nJob ID: 3d5e898d-1a57-4440-95df-58a958101777\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2430,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For my 67\u2011year\u2011old female with lower GI bleed, among females 62\u201372 what is mean number of non\u2011invasive diagnostics (imaging, ECG/EEG/PFT) per admission by LOS (1\u20133 vs 4\u20137 days) and ICU status?",
+  "final_sql": "WITH cohort_base AS (\n  -- Base cohort with LOS calculation\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) + 1 AS los_days,\n    CASE \n      WHEN DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) + 1 BETWEEN 1 AND 3 THEN '1-3 days'\n      WHEN DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) + 1 BETWEEN 4 AND 7 THEN '4-7 days'\n      ELSE NULL \n    END AS los_category\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 62 AND 72\n    AND a.hospital_expire_flag = 0\n    AND a.admission_type IN ('ELECTIVE', 'OBSERVATION')\n),\n\ncohort AS (\n  -- Define ICU status after los_category is available\n  SELECT \n    cb.*,\n    EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n      WHERE icu.subject_id = cb.subject_id \n        AND icu.hadm_id = cb.hadm_id\n    ) AS has_icu\n  FROM \n    cohort_base cb\n  WHERE \n    cb.los_category IS NOT NULL  -- Ensure only relevant LOS\n),\n\n-- Non-invasive diagnostics from ICU procedureevents\nicu_procedures AS (\n  SELECT DISTINCT\n    pe.subject_id,\n    pe.hadm_id,\n    pe.itemid AS proc_code\n  FROM \n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON pe.itemid = di.itemid\n  INNER JOIN \n    cohort c\n    ON pe.subject_id = c.subject_id AND pe.hadm_id = c.hadm_id\n  WHERE \n    di.category = 'Imaging'\n    OR di.label LIKE '%ECG%' OR di.label LIKE '%EKG%' \n    OR di.label LIKE '%EEG%' OR di.label LIKE '%PFT%' OR di.label LIKE '%SPIROMETRY%'\n    AND pe.starttime >= c.admittime\n    AND pe.starttime <= c.dischtime\n),\n\n-- Non-invasive diagnostics from hospital procedures_icd\nhosp_procedures AS (\n  SELECT DISTINCT\n    pi.subject_id,\n    pi.hadm_id,\n    pi.icd_code AS proc_code\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dip\n    ON pi.icd_code = dip.icd_code AND pi.icd_version = dip.icd_version\n  INNER JOIN \n    cohort c\n    ON pi.subject_id = c.subject_id AND pi.hadm_id = c.hadm_id\n  WHERE \n    (dip.long_title LIKE '%X-RAY%' OR dip.long_title LIKE '%CT SCAN%' OR dip.long_title LIKE '%MRI%' \n     OR dip.long_title LIKE '%ULTRASOUND%' OR dip.long_title LIKE '%ELECTROCARDIOGRAM%' \n     OR dip.long_title LIKE '%ECG%' OR dip.long_title LIKE '%EEG%' \n     OR dip.long_title LIKE '%PULMONARY FUNCTION%' OR dip.long_title LIKE '%PFT%')\n    AND pi.chartdate >= DATE(c.admittime)\n    AND pi.chartdate <= DATE(c.dischtime)\n),\n\n-- Combine and count unique diagnostics per admission\ndiagnostic_counts AS (\n  SELECT \n    c.hadm_id,\n    c.los_category,\n    c.has_icu,\n    COUNT(DISTINCT ip.proc_code) + COUNT(DISTINCT hp.proc_code) AS non_invasive_count\n  FROM \n    cohort c\n  LEFT JOIN \n    icu_procedures ip\n    ON c.subject_id = ip.subject_id AND c.hadm_id = ip.hadm_id\n  LEFT JOIN \n    hosp_procedures hp\n    ON c.subject_id = hp.subject_id AND c.hadm_id = hp.hadm_id\n  GROUP BY \n    c.hadm_id, c.los_category, c.has_icu\n)\n\nSELECT \n  los_category,\n  has_icu,\n  COUNT(*) AS num_admissions,\n  ROUND(AVG(non_invasive_count), 2) AS mean_non_invasive_per_admission\nFROM \n  diagnostic_counts\nWHERE \n  los_category IS NOT NULL\nGROUP BY \n  los_category, has_icu\nORDER BY \n  los_category, has_icu;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_category at [28:9]; reason: invalidQuery, location: query, message: Unrecognized name: los_category at [28:9]\n\nLocation: US\nJob ID: 021817e3-1592-436c-994c-3e26bfe99f76\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los_category not found inside cb at [42:76]; reason: invalidQuery, location: query, message: Name los_category not found inside cb at [42:76]\n\nLocation: US\nJob ID: fa95fe7e-7a62-4aa5-93e7-82022ec5007d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

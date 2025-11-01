@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON icu.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n),\nsbp_items AS (\n  SELECT\n    itemid\n  FROM\n    `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    LOWER(label) LIKE '%systolic%'\n),\nmax_sbp AS (\n  SELECT\n    c.stay_id,\n    MAX(ce.valuenum) AS max_sbp\n  FROM\n    cohort AS c\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON c.stay_id = ce.stay_id\n  JOIN\n    sbp_items AS si\n    ON ce.itemid = si.itemid\n  WHERE\n    ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN c.intime \n                         AND TIMESTAMP_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY\n    c.stay_id\n),\nstroke_hadm AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%stroke%'\n),\ncombined AS (\n  SELECT\n    m.stay_id,\n    m.max_sbp,\n    CASE\n      WHEN m.max_sbp < 130 THEN '<130'\n      WHEN m.max_sbp BETWEEN 130 AND 139 THEN '130-139'\n      WHEN m.max_sbp BETWEEN 140 AND 159 THEN '140-159'\n      ELSE '>=160'\n    END AS sbp_category,\n    CASE\n      WHEN sh.hadm_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS stroke_flag\n  FROM\n    max_sbp AS m\n  JOIN\n    cohort AS c\n    ON m.stay_id = c.stay_id\n  LEFT JOIN\n    stroke_hadm AS sh\n    ON c.hadm_id = sh.hadm_id\n),\nagg AS (\n  SELECT\n    sbp_category,\n    COUNT(*) AS n_in_category,\n    SUM(stroke_flag) AS n_stroke_in_category\n  FROM\n    combined\n  GROUP BY\n    sbp_category\n),\ntot AS (\n  SELECT\n    COUNT(*) AS total_cohort\n  FROM\n    combined\n)\nSELECT\n  a.sbp_category,\n  a.n_in_category,\n  ROUND( a.n_in_category / t.total_cohort * 100, 1 ) AS pct_of_cohort,\n  a.n_stroke_in_category,\n  ROUND( a.n_stroke_in_category / a.n_in_category * 100, 1 ) AS stroke_rate\nFROM\n  agg AS a\nCROSS JOIN\n  tot AS t\nORDER BY\n  -- maintain the desired SBP order\n  CASE\n    WHEN sbp_category = '<130' THEN 1\n    WHEN sbp_category = '130-139' THEN 2\n    WHEN sbp_category = '140-159' THEN 3\n    WHEN sbp_category = '>=160' THEN 4\n  END;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

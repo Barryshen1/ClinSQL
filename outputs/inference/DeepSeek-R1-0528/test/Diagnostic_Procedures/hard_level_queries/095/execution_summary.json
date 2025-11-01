@@ -1,0 +1,28 @@
+{
+  "query": "For an 84-year-old man: among male ICU patients aged 79\u201389 with pulmonary embolism, what is the 75th percentile of diagnostic utilization score in first 24h, and how do their ICU LOS and in\u2011hospital mortality compare to the general ICU population?",
+  "final_sql": "WITH pe_cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.hospital_expire_flag,\n    icu.stay_id,\n    icu.los,\n    -- Calculate diagnostic score: distinct lab + micro tests in first 24h\n    COUNT(DISTINCT lab.itemid) + COUNT(DISTINCT micro.test_itemid) AS diagnostic_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN (\n    SELECT * \n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) = 1\n  ) icu\n    ON adm.hadm_id = icu.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` lab\n    ON adm.hadm_id = lab.hadm_id\n    AND adm.subject_id = lab.subject_id\n    AND lab.charttime >= icu.intime\n    AND lab.charttime < DATETIME_ADD(icu.intime, INTERVAL 24 HOUR)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.microbiologyevents` micro\n    ON adm.hadm_id = micro.hadm_id\n    AND adm.subject_id = micro.subject_id\n    AND micro.charttime >= icu.intime\n    AND micro.charttime < DATETIME_ADD(icu.intime, INTERVAL 24 HOUR)\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) BETWEEN 79 AND 89\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code IN ('4151', '41511', '41519'))\n      OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I26%')\n    )\n  GROUP BY adm.subject_id, adm.hadm_id, adm.hospital_expire_flag, icu.stay_id, icu.los\n),\ngeneral_pop AS (\n  SELECT\n    adm.hospital_expire_flag,\n    icu.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY icu.hadm_id ORDER BY icu.intime) = 1\n),\npe_agg AS (\n  SELECT\n    APPROX_QUANTILES(diagnostic_score, 100)[OFFSET(75)] AS diag_75,\n    PERCENTILE_CONT(los, 0.5) AS median_los_pe,\n    AVG(hospital_expire_flag) AS mortality_pe\n  FROM pe_cohort\n),\ngen_agg AS (\n  SELECT\n    PERCENTILE_CONT(los, 0.5) AS median_los_gen,\n    AVG(hospital_expire_flag) AS mortality_gen\n  FROM general_pop\n)\nSELECT\n  'diagnostic_utilization_score_75th_percentile' AS metric,\n  diag_75 AS pe_cohort_value,\n  NULL AS general_population_value\nFROM pe_agg\nUNION ALL\nSELECT\n  'icu_los_median' AS metric,\n  median_los_pe,\n  median_los_gen\nFROM pe_agg, gen_agg\nUNION ALL\nSELECT\n  'in_hospital_mortality_rate' AS metric,\n  mortality_pe,\n  mortality_gen\nFROM pe_agg, gen_agg;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: becf758b-2b31-4360-89c7-86c04586ce9c\n",
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got keyword GROUP at [34:3]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got keyword GROUP at [34:3]\n\nLocation: US\nJob ID: 3e26d7a8-7547-4eef-a2d6-faaf5d1ddce0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got keyword GROUP at [38:3]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got keyword GROUP at [38:3]\n\nLocation: US\nJob ID: dbba4667-1e64-4c5a-ace2-22c6fab206f2\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: becf758b-2b31-4360-89c7-86c04586ce9c\n"
+    }
+  ]
+}

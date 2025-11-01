@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.9) within GROUP (ORDER BY num_procedures) AS procedures_percentile, percentile_cont(0.9) within GROUP (ORDER BY num_diagnoses) AS diagnoses_percentile, male_icu.los AS icu_length_of_stay, male_icu.dod AS in_hospital_death_rate FROM male_icu JOIN male_hosp ON male_icu.subject_id = male_hosp.subject_id;

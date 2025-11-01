@@ -1,0 +1,1 @@
+SELECT percent_rank() OVER (ORDER BY AVG(omr.value)) AS percentile_rank FROM omr JOIN icustays ON omr.subject_id = icustays.subject_id JOIN patients ON icustays.subject_id = patients.subject_id WHERE patients.gender = 'F' AND patients.anchor_age >= 80 AND patients.anchor_age <= 90 AND omr.result_name = 'Heart Rate' AND CAST(omr.value AS integer) = 110 GROUP BY icustays.stay_id;

@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 94\u2011year\u2011old man admitted with hemorrhagic stroke. Among male inpatients aged 89\u201399 with hemorrhagic stroke, stratified into quintiles by medication complexity (unique drugs in first 7 hospital days), report LOS, inpatient mortality, and 30\u2011day readmission per quintile.",
+  "final_sql": "WITH hemorrhagic_stroke_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 89 AND 99\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('430', '431', '432'))\n      OR\n      (d.icd_version = 10 AND d.icd_code IN ('I60', 'I61', 'I62'))\n    )\n),\n\nmedication_complexity AS (\n  SELECT\n    hsp.subject_id,\n    hsp.hadm_id,\n    COUNT(DISTINCT pr.drug) AS unique_drugs_first_7_days\n  FROM hemorrhagic_stroke_patients hsp\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.prescriptions pr\n    ON hsp.hadm_id = pr.hadm_id\n    AND pr.starttime >= hsp.admittime\n    AND pr.starttime < TIMESTAMP_ADD(hsp.admittime, INTERVAL 7 DAY)\n  GROUP BY hsp.subject_id, hsp.hadm_id\n),\n\nquintiles AS (\n  SELECT\n    hsp.*,\n    mc.unique_drugs_first_7_days,\n    NTILE(5) OVER (ORDER BY mc.unique_drugs_first_7_days) AS medication_quintile\n  FROM hemorrhagic_stroke_patients hsp\n  LEFT JOIN medication_complexity mc\n    ON hsp.subject_id = mc.subject_id AND hsp.hadm_id = mc.hadm_id\n),\n\nreadmission_flag AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    dischtime,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n  FROM physionet-data.mimiciv_3_1_hosp.admissions\n  WHERE subject_id IN (SELECT subject_id FROM hemorrhagic_stroke_patients)\n),\n\nfinal_data AS (\n  SELECT\n    q.*,\n    TIMESTAMP_DIFF(q.dischtime, q.admittime, DAY) AS los,\n    CASE\n      WHEN ra.next_admittime IS NOT NULL\n        AND TIMESTAMP_DIFF(ra.next_admittime, q.dischtime, DAY) <= 30\n      THEN 1\n      ELSE 0\n    END AS thirty_day_readmission\n  FROM quintiles q\n  LEFT JOIN readmission_flag ra\n    ON q.subject_id = ra.subject_id AND q.hadm_id = ra.hadm_id\n)\n\nSELECT\n  medication_quintile,\n  AVG(los) AS avg_los,\n  AVG(hospital_expire_flag) AS inpatient_mortality_rate,\n  AVG(thirty_day_readmission) AS thirty_day_readmission_rate\nFROM final_data\nGROUP BY medication_quintile\nORDER BY medication_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 55-year-old female inpatient: among women aged 50\u201360 with type 2 diabetes and heart failure admitted \u226572 hours, what were first 12\u2011hour GLP\u20111 initiation, final 72\u2011hour prevalence, and net percentage\u2011point change?",
+  "final_sql": "WITH target_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 50 AND 60\n),\n\ntarget_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN target_patients tp ON a.subject_id = tp.subject_id\n  WHERE DATETIME_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\n\nt2dm_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_code LIKE 'E11%'\n    AND icd_version = 10\n),\n\nhf_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_code LIKE 'I50%'\n    AND icd_version = 10\n),\n\nqualifying_admissions AS (\n  SELECT ta.*\n  FROM target_admissions ta\n  JOIN t2dm_admissions t2dm ON ta.hadm_id = t2dm.hadm_id\n  JOIN hf_admissions hf ON ta.hadm_id = hf.hadm_id\n),\n\nglp1_medications AS (\n  SELECT *\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE LOWER(drug) IN (\n    'liraglutide', 'exenatide', 'dulaglutide', 'semaglutide',\n    'lixisenatide', 'albiglutide'\n  )\n),\n\nadmission_glp1_flags AS (\n  SELECT\n    qa.hadm_id,\n    MIN(glp.starttime) AS first_glp1_start,\n    MAX(glp.stoptime) AS last_glp1_stop,\n    -- First 12-hour initiation\n    LOGICAL_OR(\n      glp.starttime BETWEEN qa.admittime AND DATETIME_ADD(qa.admittime, INTERVAL 12 HOUR)\n    ) AS initiated_first_12hr,\n    -- Final 72-hour use\n    LOGICAL_OR(\n      glp.starttime <= qa.dischtime\n      AND COALESCE(glp.stoptime, qa.dischtime) >= DATETIME_SUB(qa.dischtime, INTERVAL 72 HOUR)\n    ) AS used_last_72hr\n  FROM qualifying_admissions qa\n  LEFT JOIN glp1_medications glp USING (hadm_id)\n  GROUP BY qa.hadm_id\n)\n\nSELECT\n  COUNT(*) AS total_admissions,\n  SUM(IF(initiated_first_12hr, 1, 0)) AS initiated_first_12hr_count,\n  SUM(IF(used_last_72hr, 1, 0)) AS used_last_72hr_count,\n  ROUND(\n    100 * SUM(IF(initiated_first_12hr, 1, 0)) / COUNT(*),\n    2\n  ) AS first_12hr_initiation_pct,\n  ROUND(\n    100 * SUM(IF(used_last_72hr, 1, 0)) / COUNT(*),\n    2\n  ) AS final_72hr_prevalence_pct,\n  ROUND(\n    100 * (\n      SUM(IF(used_last_72hr, 1, 0)) - SUM(IF(initiated_first_12hr, 1, 0))\n    ) / COUNT(*),\n    2\n  ) AS net_pct_point_change\nFROM admission_glp1_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: BOOL_OR at [56:5]; reason: invalidQuery, location: query, message: Function not found: BOOL_OR at [56:5]\n\nLocation: US\nJob ID: 0713b375-033d-4287-bb81-01f8f694cae6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

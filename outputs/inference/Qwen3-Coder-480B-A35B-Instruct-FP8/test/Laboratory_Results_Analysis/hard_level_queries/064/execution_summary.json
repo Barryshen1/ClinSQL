@@ -1,0 +1,22 @@
+{
+  "query": "I have a 70\u2011year\u2011old female with acute pancreatitis. Among female inpatients 65\u201375 with acute pancreatitis, stratify first\u201148\u2011hour lab instability scores into quintiles and report count, mean instability, mean LOS, mortality per quintile, and % with critical labs versus age\u2011matched inpatients.",
+  "final_sql": "WITH cohort_pancreatitis AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    a.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_icu.icustays icu\n    ON a.hadm_id = icu.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND (\n      (d.icd_version = 10 AND d.icd_code LIKE 'K85%')\n      OR\n      (d.icd_version = 9 AND d.icd_code = '5770')\n    )\n),\n\nlab_scores AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    STDDEV(l.valuenum) AS instability_score\n  FROM\n    cohort_pancreatitis c\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.labevents l\n    ON c.hadm_id = l.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_labitems d\n    ON l.itemid = d.itemid\n  WHERE\n    l.valuenum IS NOT NULL\n    AND l.charttime >= c.intime\n    AND l.charttime <= DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n    AND LOWER(d.label) IN (\n      'wbc', 'hematocrit', 'platelets',\n      'sodium', 'potassium', 'chloride', 'bun', 'creatinine', 'glucose',\n      'ast', 'alt', 'bilirubin', 'albumin', 'calcium',\n      'lactate'\n    )\n  GROUP BY\n    c.subject_id, c.hadm_id, c.stay_id\n),\n\nquintiles AS (\n  SELECT\n    ls.subject_id,\n    ls.hadm_id,\n    ls.stay_id,\n    cp.intime,\n    cp.los,\n    cp.hospital_expire_flag,\n    ls.instability_score,\n    NTILE(5) OVER (ORDER BY ls.instability_score) AS score_quintile\n  FROM\n    lab_scores ls\n  JOIN\n    cohort_pancreatitis cp\n    ON ls.stay_id = cp.stay_id\n),\n\nquintile_stats AS (\n  SELECT\n    score_quintile,\n    COUNT(*) AS patient_count,\n    AVG(instability_score) AS mean_instability,\n    AVG(los) AS mean_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(CASE WHEN EXISTS (\n      SELECT 1\n      FROM physionet-data.mimiciv_3_1_hosp.labevents l2\n      WHERE l2.hadm_id = q.hadm_id\n        AND l2.flag = 'abnormal'\n        AND l2.charttime >= DATETIME_SUB(q.intime, INTERVAL 0 HOUR)\n        AND l2.charttime <= DATETIME_ADD(q.intime, INTERVAL 48 HOUR)\n    ) THEN 1 ELSE 0 END) AS pct_critical_labs\n  FROM\n    quintiles q\n  GROUP BY\n    score_quintile\n),\n\nage_matched_controls AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n),\n\ncontrol_critical_pct AS (\n  SELECT\n    AVG(CASE WHEN l.flag = 'abnormal' THEN 1 ELSE 0 END) AS pct_critical_labs_control\n  FROM\n    age_matched_controls c\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.labevents l\n    ON c.hadm_id = l.hadm_id\n  WHERE\n    l.charttime IS NOT NULL\n)\n\nSELECT\n  q.*,\n  c.pct_critical_labs_control\nFROM\n  quintile_stats q\nCROSS JOIN\n  control_critical_pct c\nORDER BY\n  score_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside q at [82:44]; reason: invalidQuery, location: query, message: Name intime not found inside q at [82:44]\n\nLocation: US\nJob ID: 23907407-ac20-473a-860e-e6c2105876df\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "Female patient, 57: among female patients aged 52\u201362 with ischemic versus hemorrhagic stroke, report in\u2011hospital mortality (%), median LOS (<8 vs \u22658 days) and CKD/diabetes prevalence by comorbidity tertile",
+  "final_sql": "WITH\n-- Define age at admission\npatient_age AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n),\n\n-- Identify stroke types\nstroke_diagnoses AS (\n  SELECT\n    d.subject_id,\n    d.hadm_id,\n    CASE\n      WHEN d.icd_code LIKE 'I63%' THEN 'Ischemic'\n      WHEN d.icd_code LIKE 'I61%' THEN 'Hemorrhagic'\n      ELSE NULL\n    END AS stroke_type\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n  ON\n    d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I63%'\n),\n\n-- Identify CKD and diabetes comorbidities\ncomorbidities AS (\n  SELECT\n    d.subject_id,\n    d.hadm_id,\n    MAX(CASE WHEN d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E13%' THEN 1 ELSE 0 END) AS has_diabetes,\n    MAX(CASE WHEN d.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS has_ckd\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n  ON\n    d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  GROUP BY\n    d.subject_id, d.hadm_id\n),\n\n-- Count comorbidities (excluding stroke) for tertiles\ncomorbidity_counts AS (\n  SELECT\n    d.subject_id,\n    d.hadm_id,\n    COUNT(DISTINCT d.icd_code) AS comorbidity_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n  ON\n    d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    d.icd_code NOT LIKE 'I61%' AND d.icd_code NOT LIKE 'I63%'\n  GROUP BY\n    d.subject_id, d.hadm_id\n),\n\n-- Calculate tertiles\ncomorbidity_tertile AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    comorbidity_count,\n    NTILE(3) OVER (ORDER BY comorbidity_count) AS tertile\n  FROM\n    comorbidity_counts\n),\n\n-- Combine all data\npatient_data AS (\n  SELECT\n    p.subject_id,\n    pa.hadm_id,\n    p.gender,\n    pa.age,\n    sd.stroke_type,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    c.has_diabetes,\n    c.has_ckd,\n    ct.tertile\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    patient_age pa ON p.subject_id = pa.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON pa.subject_id = a.subject_id AND pa.hadm_id = a.hadm_id\n  JOIN\n    stroke_diagnoses sd ON a.subject_id = sd.subject_id AND a.hadm_id = sd.hadm_id\n  JOIN\n    comorbidities c ON a.subject_id = c.subject_id AND a.hadm_id = c.hadm_id\n  JOIN\n    comorbidity_tertile ct ON a.subject_id = ct.subject_id AND a.hadm_id = ct.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND pa.age BETWEEN 52 AND 62\n)\n\n-- Final aggregation\nSELECT\n  stroke_type,\n  tertile,\n  COUNT(*) AS patient_count,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 2) AS in_hospital_mortality_pct,\n  ROUND(AVG(CASE WHEN los_days < 8 THEN 1 ELSE 0 END) * 100, 2) AS los_less_than_8_pct,\n  ROUND(AVG(CASE WHEN los_days >= 8 THEN 1 ELSE 0 END) * 100, 2) AS los_8_or_more_pct,\n  ROUND(AVG(has_diabetes) * 100, 2) AS diabetes_prevalence_pct,\n  ROUND(AVG(has_ckd) * 100, 2) AS ckd_prevalence_pct\nFROM\n  patient_data\nGROUP BY\n  stroke_type, tertile\nORDER BY\n  stroke_type, tertile;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside p at [86:7]; reason: invalidQuery, location: query, message: Name hadm_id not found inside p at [86:7]\n\nLocation: US\nJob ID: 71cd0e10-8cf3-4fc5-8241-755531697b42\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

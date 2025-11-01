@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 84-year-old woman. Among women 79\u201389 with community\u2011acquired or aspiration pneumonia, report in\u2011hospital mortality by LOS (\u22647 vs >7) and day\u20111 ICU, plus mech vent, vasopressor, and RRT prevalence.",
+  "final_sql": "WITH pneumonia_admissions AS (\n  -- Select admissions for women aged 79-89 with pneumonia diagnosis, community-acquired\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender,\n    a.admission_location\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 79 AND 89\n    AND LOWER(a.admission_location) NOT IN (\n      'skilled nursing facility', 'rehab', 'nursing home', 'long term care hospital', 'intermediate care facility'\n    )\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE\n        (\n          -- ICD-10 pneumonia: J13-J18, J69\n          (d.icd_version = 10 AND (\n            REGEXP_CONTAINS(d.icd_code, '^J1[3-8]') OR d.icd_code LIKE 'J69%'\n          ))\n          -- ICD-9 pneumonia: 480-486, 507\n          OR (d.icd_version = 9 AND (\n            REGEXP_CONTAINS(d.icd_code, '^48[0-6]') OR d.icd_code LIKE '507%'\n          ))\n        )\n    )\n),\nfirst_icu_stays AS (\n  -- Get first ICU stay per admission\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime AS icu_intime,\n    i.outtime AS icu_outtime\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      MIN(intime) AS first_icu_intime\n    FROM physionet-data.mimiciv_3_1_icu.icustays\n    GROUP BY subject_id, hadm_id\n  ) first\n  JOIN physionet-data.mimiciv_3_1_icu.icustays i\n    ON first.subject_id = i.subject_id\n    AND first.hadm_id = i.hadm_id\n    AND first.first_icu_intime = i.intime\n),\nadmissions_with_icu AS (\n  -- Merge pneumonia admissions with first ICU stay\n  SELECT\n    pa.*,\n    fi.stay_id,\n    fi.icu_intime,\n    fi.icu_outtime,\n    DATETIME_DIFF(pa.dischtime, pa.admittime, DAY) AS los_days,\n    CASE WHEN DATETIME_DIFF(fi.icu_intime, pa.admittime, HOUR) <= 24 THEN 1 ELSE 0 END AS day1_icu\n  FROM pneumonia_admissions pa\n  LEFT JOIN first_icu_stays fi\n    ON pa.subject_id = fi.subject_id AND pa.hadm_id = fi.hadm_id\n),\ninterventions AS (\n  -- For each ICU stay, check for mech vent, vasopressor, RRT\n  SELECT\n    awi.subject_id,\n    awi.hadm_id,\n    awi.stay_id,\n    -- Mechanical ventilation: chartevents/procedureevents itemids\n    MAX(CASE WHEN ce.itemid IN (225792, 220339, 224685, 223848, 220862, 224688) THEN 1 ELSE 0 END) AS mech_vent,\n    -- Vasopressors: inputevents itemids\n    MAX(CASE WHEN ie.itemid IN (221906, 221289, 221662, 221653, 221749, 221986) THEN 1 ELSE 0 END) AS vasopressor,\n    -- RRT: procedureevents itemids\n    MAX(CASE WHEN pe.itemid IN (227558, 227560, 227561, 227562, 227565, 227566, 227567, 227568) THEN 1 ELSE 0 END) AS rrt\n  FROM admissions_with_icu awi\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.chartevents ce\n    ON awi.subject_id = ce.subject_id AND awi.hadm_id = ce.hadm_id AND awi.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN awi.icu_intime AND awi.icu_outtime\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.inputevents ie\n    ON awi.subject_id = ie.subject_id AND awi.hadm_id = ie.hadm_id AND awi.stay_id = ie.stay_id\n    AND ie.starttime BETWEEN awi.icu_intime AND awi.icu_outtime\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON awi.subject_id = pe.subject_id AND awi.hadm_id = pe.hadm_id AND awi.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN awi.icu_intime AND awi.icu_outtime\n  GROUP BY awi.subject_id, awi.hadm_id, awi.stay_id\n),\nfinal AS (\n  -- Merge interventions with admissions\n  SELECT\n    awi.subject_id,\n    awi.hadm_id,\n    awi.anchor_age,\n    awi.gender,\n    awi.los_days,\n    CASE WHEN awi.los_days <= 7 THEN '<=7' ELSE '>7' END AS los_group,\n    awi.day1_icu,\n    awi.hospital_expire_flag,\n    COALESCE(i.mech_vent, 0) AS mech_vent,\n    COALESCE(i.vasopressor, 0) AS vasopressor,\n    COALESCE(i.rrt, 0) AS rrt\n  FROM admissions_with_icu awi\n  LEFT JOIN interventions i\n    ON awi.subject_id = i.subject_id AND awi.hadm_id = i.hadm_id AND awi.stay_id = i.stay_id\n  WHERE awi.stay_id IS NOT NULL -- Only admissions with ICU stay\n)\nSELECT\n  los_group,\n  day1_icu,\n  COUNT(*) AS n_admissions,\n  ROUND(SUM(hospital_expire_flag) / COUNT(*), 3) AS mortality_rate,\n  ROUND(SUM(mech_vent) / COUNT(*), 3) AS mech_vent_rate,\n  ROUND(SUM(vasopressor) / COUNT(*), 3) AS vasopressor_rate,\n  ROUND(SUM(rrt) / COUNT(*), 3) AS rrt_rate\nFROM final\nGROUP BY los_group, day1_icu\nORDER BY los_group, day1_icu;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "",
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": ""
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": ""
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": ""
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 49-year-old man; among male heart-failure hospitalizations, what's the 75th percentile of nadir hemoglobin during the stay?",
+  "final_sql": "WITH hf_adm AS (\n  -- admissions that have any heart-failure diagnosis (ICD long_title contains 'heart failure'\n  -- or common ICD prefixes for HF in case long_title misses variations)\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%heart failure%'\n     OR di.icd_code LIKE 'I50%'   -- ICD-10 heart failure codes\n     OR di.icd_code LIKE '428%'   -- ICD-9 heart failure codes\n),\n\ncohort_adm AS (\n  -- male, 49-year-old patients with a heart-failure admission\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, p.gender, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN hf_adm h\n    ON a.hadm_id = h.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age = 49\n),\n\nhb_items AS (\n  -- lab itemids that look like hemoglobin measurements\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%hemoglobin%'\n),\n\nhb_vals AS (\n  -- hemoglobin numeric measurements during the hospital stay for cohort admissions\n  SELECT\n    c.hadm_id,\n    le.valuenum,\n    le.valueuom,\n    le.charttime\n  FROM cohort_adm c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = c.hadm_id\n  JOIN hb_items hi\n    ON le.itemid = hi.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND le.charttime BETWEEN c.admittime AND c.dischtime\n),\n\nnadir_per_adm AS (\n  -- nadir (minimum) hemoglobin per admission\n  SELECT hadm_id, MIN(valuenum) AS nadir_hb\n  FROM hb_vals\n  GROUP BY hadm_id\n)\n\n-- 75th percentile of the admission-level nadir hemoglobin (approximate)\nSELECT\n  COUNT(*) AS n_admissions_with_hb,\n  APPROX_QUANTILES(nadir_hb, 100)[OFFSET(75)] AS pct75_nadir_hb\nFROM nadir_per_adm;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

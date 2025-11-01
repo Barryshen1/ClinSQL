@@ -1,0 +1,1 @@
+SELECT percent_rank() OVER (ORDER BY (SELECT AVG(value) FROM labevents WHERE itemid = 101 AND subject_id = 757071 AND charttime BETWEEN 0 AND 24)) AS percentile_rank FROM labevents WHERE itemid = 101 AND subject_id = 757071 AND charttime BETWEEN 0 AND 24;

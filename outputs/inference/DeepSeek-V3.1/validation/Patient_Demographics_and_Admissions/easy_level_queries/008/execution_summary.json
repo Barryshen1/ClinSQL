@@ -1,0 +1,16 @@
+{
+  "query": "For my 57-year-old male, among men aged 52\u201362 undergoing their first PCI, what is the average 30-day readmission rate?",
+  "final_sql": "WITH pci_codes AS (\n  -- ICD-9 codes for PCI\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE icd_version = 9 AND icd_code LIKE '36.0%'\n  UNION DISTINCT\n  -- ICD-10 codes for PCI\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE icd_version = 10 AND icd_code LIKE '027%'\n),\ncohort AS (\n  -- Patients: male, age 52-62\n  SELECT p.subject_id, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 52 AND 62\n),\nfirst_pci AS (\n  -- First PCI per patient\n  SELECT \n    cohort.subject_id,\n    proc.hadm_id,\n    proc.chartdate as pci_date,\n    adm.admittime,\n    adm.dischtime,\n    adm.deathtime,\n    ROW_NUMBER() OVER (PARTITION BY cohort.subject_id ORDER BY proc.chartdate) as rn\n  FROM cohort\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n    ON cohort.subject_id = proc.subject_id\n  INNER JOIN pci_codes\n    ON proc.icd_code = pci_codes.icd_code \n    AND proc.icd_version = pci_codes.icd_version\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON proc.hadm_id = adm.hadm_id\n  WHERE adm.deathtime IS NULL  -- exclude if died during index admission\n)\n-- Index admissions with first PCI\n, index_adm AS (\n  SELECT subject_id, hadm_id, admittime, dischtime\n  FROM first_pci\n  WHERE rn = 1\n)\n-- Find readmissions within 30 days\n, readmissions AS (\n  SELECT \n    ia.subject_id,\n    ia.hadm_id as index_hadm,\n    ia.dischtime as index_discharge,\n    next_adm.hadm_id as readmit_hadm,\n    next_adm.admittime as readmit_time,\n    DATE_DIFF(next_adm.admittime, ia.dischtime, DAY) as days_to_readmit\n  FROM index_adm ia\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` next_adm\n    ON ia.subject_id = next_adm.subject_id\n    AND next_adm.admittime > ia.dischtime\n    AND DATE_DIFF(next_adm.admittime, ia.dischtime, DAY) <= 30\n)\n-- Calculate average readmission rate\nSELECT \n  COUNT(DISTINCT subject_id) as total_patients,\n  COUNT(DISTINCT CASE WHEN readmit_hadm IS NOT NULL THEN subject_id END) as readmitted_patients,\n  ROUND(COUNT(DISTINCT CASE WHEN readmit_hadm IS NOT NULL THEN subject_id END) * 100.0 / COUNT(DISTINCT subject_id), 2) as readmission_rate_percent\nFROM readmissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

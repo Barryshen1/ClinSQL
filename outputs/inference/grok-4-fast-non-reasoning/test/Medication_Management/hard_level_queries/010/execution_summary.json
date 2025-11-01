@@ -1,0 +1,28 @@
+{
+  "query": "I'm managing a 66\u2011year\u2011old man hospitalized with hemorrhagic stroke. For male inpatients aged 61\u201371, stratified into quintiles by first\u201124\u2011hour medication complexity score, report per quintile: number of patients, mean complexity score, average LOS, in\u2011hospital mortality, and 30\u2011day readmission rate.",
+  "final_sql": "WITH patient_admissions AS (\n  -- Base cohort: male patients aged 61-71, inpatient admissions\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender,\n    -- LOS in hours (BigQuery-compatible)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 61 AND 71\n    AND EXTRACT(YEAR FROM a.admittime) >= p.anchor_year  -- Ensure age at admission\n    AND a.admission_type IN ('ELECTIVE', 'EMERGENCY', 'URGENT')\n    AND a.dischtime > a.admittime\n),\nmed_complexity AS (\n  -- First 24h distinct medications per admission (proxy for complexity score)\n  SELECT \n    adm.hadm_id,\n    COUNT(DISTINCT LOWER(e.medication)) AS complexity_score\n  FROM \n    patient_admissions adm\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.emar` e\n  ON e.hadm_id = adm.hadm_id\n  WHERE \n    e.charttime >= adm.admittime\n    AND e.charttime < TIMESTAMP_ADD(adm.admittime, INTERVAL 24 HOUR)\n    AND e.medication IS NOT NULL\n    AND TRIM(e.medication) != ''\n  GROUP BY \n    adm.hadm_id\n),\nbase_cohort AS (\n  -- Combine admissions with complexity (0 if no meds)\n  SELECT \n    pa.*,\n    COALESCE(mc.complexity_score, 0) AS complexity_score\n  FROM \n    patient_admissions pa\n  LEFT JOIN \n    med_complexity mc\n  ON pa.hadm_id = mc.hadm_id\n),\nreadmissions AS (\n  -- Flag 30-day readmissions via self-join (fixed aggregation)\n  SELECT \n    base.hadm_id,\n    MAX(CASE \n      WHEN nexta.admittime >= base.dischtime \n      AND nexta.admittime <= TIMESTAMP_ADD(base.dischtime, INTERVAL 30 DAY)\n      AND nexta.subject_id = base.subject_id\n      AND nexta.hadm_id != base.hadm_id  -- Exclude self\n      THEN 1 \n      ELSE 0 \n    END) AS has_readmission_30d\n  FROM \n    base_cohort base\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` nexta\n  ON base.subject_id = nexta.subject_id\n  GROUP BY \n    base.hadm_id, base.dischtime, base.subject_id\n),\nfinal_cohort AS (\n  -- Add readmission flag and quintile\n  SELECT \n    base.*,\n    COALESCE(r.has_readmission_30d, 0) AS readmission_flag,  -- Keep as INT\n    NTILE(5) OVER (ORDER BY base.complexity_score) AS complexity_quintile\n  FROM \n    base_cohort base\n  LEFT JOIN \n    readmissions r\n  ON base.hadm_id = r.hadm_id\n)\n-- Aggregate by quintile\nSELECT \n  complexity_quintile,\n  COUNT(*) AS num_patients,\n  ROUND(AVG(complexity_score), 2) AS mean_complexity_score,\n  ROUND(AVG(los_hours), 2) AS avg_los_hours,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)), 4) AS in_hospital_mortality_rate,\n  ROUND(AVG(CAST(readmission_flag AS FLOAT64)), 4) AS readmission_30d_rate\nFROM \n  final_cohort\nGROUP BY \n  complexity_quintile\nORDER BY \n  complexity_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXTRACT does not support arguments of type: INTERVAL at [12:25]; reason: invalidQuery, location: query, message: EXTRACT does not support arguments of type: INTERVAL at [12:25]\n\nLocation: US\nJob ID: f7d388e4-8957-4d4f-aca0-a0229addff25\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [93:18]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [93:18]\n\nLocation: US\nJob ID: d2e9abdf-445f-498b-b5cc-9f8d414619ae\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

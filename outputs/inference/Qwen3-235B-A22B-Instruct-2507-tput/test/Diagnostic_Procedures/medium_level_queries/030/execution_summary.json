@@ -1,0 +1,22 @@
+{
+  "query": "I have a 58-year-old woman. For females 53\u201363 admitted with upper GI bleeding (1\u20138 day stays), what are p25, p50, p75 diagnostic procedures per admission for 1\u20134 vs 5\u20138 days?",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    DATETIME_ADD(a.admittime, INTERVAL p.anchor_year - EXTRACT(YEAR FROM a.admittime) YEAR) AS anchor_time_adjusted,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.admissions a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 53 AND 63\n),\nicu_stays_filtered AS (\n  SELECT\n    i.hadm_id,\n    i.los,\n    CASE\n      WHEN i.los BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN i.los BETWEEN 5 AND 8 THEN '5-8 days'\n      ELSE NULL\n    END AS stay_group\n  FROM\n    `physionet-data.mimiciv_3_1_icu`.icustays i\n  WHERE\n    i.los >= 1 AND i.los <= 8\n),\nupper_gi_bleed_admissions AS (\n  SELECT DISTINCT\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses dd\n  ON\n    d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%upper gastrointestinal bleed%'\n    OR LOWER(dd.long_title) LIKE '%upper gi bleed%'\n    OR LOWER(dd.long_title) LIKE '%hematemesis%'\n    OR LOWER(dd.long_title) LIKE '%melena%'\n),\ndiagnostic_procedures AS (\n  SELECT\n    p.hadm_id,\n    COUNT(*) AS procedure_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.procedures_icd p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.d_icd_procedures dp\n  ON\n    p.icd_code = dp.icd_code AND p.icd_version = dp.icd_version\n  WHERE\n    LOWER(dp.long_title) LIKE '%endoscopy%'\n    OR LOWER(dp.long_title) LIKE '%gastroscopy%'\n    OR LOWER(dp.long_title) LIKE '%esophagogastroduodenoscopy%'\n    OR LOWER(dp.long_title) LIKE '%diagnostic%'\n    OR LOWER(dp.long_title) LIKE '%upper gi%'\n  GROUP BY\n    p.hadm_id\n),\nadmissions_with_procedures AS (\n  SELECT\n    pf.hadm_id,\n    ifs.stay_group,\n    COALESCE(dp.procedure_count, 0) AS procedure_count\n  FROM\n    patients_filtered pf\n  INNER JOIN\n    icu_stays_filtered ifs\n  ON\n    pf.hadm_id = ifs.hadm_id\n  INNER JOIN\n    upper_gi_bleed_admissions ugb\n  ON\n    pf.hadm_id = ugb.hadm_id\n  LEFT JOIN\n    diagnostic_procedures dp\n  ON\n    pf.hadm_id = dp.hadm_id\n  WHERE\n    ifs.stay_group IS NOT NULL\n)\nSELECT\n  stay_group,\n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(25)] AS p25_procedures,\n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(50)] AS p50_procedures,\n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(75)] AS p75_procedures\nFROM\n  admissions_with_procedures\nGROUP BY\n  stay_group\nORDER BY\n  stay_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]\n\nLocation: US\nJob ID: 04785a10-4bed-4dbc-b716-90c3216a78fc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

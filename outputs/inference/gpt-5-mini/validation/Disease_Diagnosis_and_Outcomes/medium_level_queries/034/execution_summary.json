@@ -1,0 +1,16 @@
+{
+  "query": "Among female patients aged 70\u201380 admitted with a heart failure diagnosis, what are in-hospital mortality rates (%) and admission counts (N) for LOS <8 versus \u22658 days, and median time-to-death among non-survivors?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    -- elapsed seconds between admit and discharge\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) AS los_seconds\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    -- admission has at least one diagnosis whose long_title mentions \"heart failure\"\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON di.icd_code = dd.icd_code\n        AND di.icd_version = dd.icd_version\n      WHERE di.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%heart failure%'\n    )\n)\n\nSELECT\n  CASE\n    WHEN los_seconds < 8 * 86400 THEN '<8 days'\n    ELSE '>=8 days'\n  END AS los_group,\n  COUNT(*) AS admissions_N,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS deaths_N,\n  100.0 * SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)) AS mortality_pct,\n  -- median time-to-death in days among in-hospital non-survivors (NULL if no deaths in group)\n  CASE\n    WHEN SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) = 0 THEN NULL\n    ELSE APPROX_QUANTILES(\n           -- time-to-death in days (fractional)\n           IF(hospital_expire_flag = 1 AND deathtime IS NOT NULL,\n              TIMESTAMP_DIFF(deathtime, admittime, SECOND) / 86400.0,\n              NULL),\n           2\n         )[OFFSET(1)]\n  END AS median_time_to_death_days\nFROM cohort\nGROUP BY los_group\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cardiac_arrest_diagnoses AS (\n  SELECT\n    di.subject_id,\n    di.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON di.icd_code = dd.icd_code\n      AND di.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%cardiac arrest%'\n),\nfemale_post_arrest AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR)/24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      USING (subject_id)\n    JOIN cardiac_arrest_diagnoses ca\n      ON a.subject_id = ca.subject_id\n     AND a.hadm_id = ca.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n),\nlab_instability AS (\n  SELECT\n    fpa.hadm_id,\n    COUNTIF(\n      le.valuenum IS NOT NULL\n      AND le.ref_range_lower IS NOT NULL\n      AND le.ref_range_upper IS NOT NULL\n      AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n    ) AS instability_score,\n    COUNTIF(\n      le.valuenum IS NOT NULL\n      AND le.ref_range_lower IS NOT NULL\n      AND le.ref_range_upper IS NOT NULL\n      AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n    ) * 1.0 AS abnormal_lab_count_48h\n  FROM\n    female_post_arrest fpa\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON fpa.hadm_id = le.hadm_id\n     AND le.charttime BETWEEN fpa.admittime AND TIMESTAMP_ADD(fpa.admittime, INTERVAL 48 HOUR)\n  GROUP BY\n    fpa.hadm_id\n),\npercentiles AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS p90_score\n  FROM lab_instability\n),\ncohort_with_scores AS (\n  SELECT\n    fpa.*,\n    li.instability_score,\n    li.abnormal_lab_count_48h,\n    pct.p90_score\n  FROM\n    female_post_arrest fpa\n    JOIN lab_instability li USING (hadm_id)\n    CROSS JOIN percentiles pct\n),\nsummary AS (\n  SELECT\n    CASE WHEN instability_score >= p90_score THEN 'high_instability' ELSE 'all' END AS group_label,\n    COUNT(*) AS admissions_count,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(los_days) AS mean_los_days,\n    AVG(abnormal_lab_count_48h) AS mean_abnormal_labs_48h\n  FROM\n    cohort_with_scores\n  GROUP BY\n    group_label\n)\nSELECT\n  group_label,\n  admissions_count,\n  mortality_rate,\n  mean_los_days,\n  mean_abnormal_labs_48h\nFROM\n  summary\nORDER BY\n  group_label DESC;",
+      "success": true,
+      "error": null,
+      "row_count": 2
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 2
+}

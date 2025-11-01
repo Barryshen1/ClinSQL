@@ -1,0 +1,28 @@
+{
+  "query": "I have a 95\u2011year\u2011old man. Among male patients aged 90\u2013100 admitted with ACS, what are counts, percentages, and mean length of stay for index Troponin T categorized as normal/borderline/elevated?",
+  "final_sql": "WITH acs_admissions AS (\n  -- admissions with any diagnosis matching ACS-related text in the diagnosis description\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%acute%'\n    AND (\n      LOWER(dd.long_title) LIKE '%myocard%'    -- myocardial / myocardium variations\n      OR LOWER(dd.long_title) LIKE '%infarct%' -- infarction\n      OR LOWER(dd.long_title) LIKE '%coronar%' -- coronary\n      OR LOWER(dd.long_title) LIKE '%ischemi%' -- ischemia\n      OR LOWER(dd.long_title) LIKE '%angina%'  -- unstable angina\n    )\n),\n\ncohort_admissions AS (\n  -- admissions for male patients aged 90-100 (anchor_age used for age)\n  SELECT a.*\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING(subject_id)\n  JOIN acs_admissions ac\n    USING(hadm_id)\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 90 AND 100\n),\n\ntnt_lab_items AS (\n  -- lab items that correspond to Troponin T (label-based matching to capture variants)\n  SELECT itemid, label, loinc_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%' \n     OR LOWER(label) LIKE '%troponin-t%'\n     OR LOWER(label) LIKE '%troponin t hs%'\n     OR LOWER(label) LIKE '%troponin-t, high sensitivity%'\n),\n\ntnt_labevents AS (\n  -- troponin lab events (valuenum not null) joined to their d_labitems match\n  SELECT le.*\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN tnt_lab_items ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n),\n\nfirst_troponin_per_admission AS (\n  -- left join so admissions with no troponin are preserved; pick earliest troponin per hadm_id when present\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    le.labevent_id,\n    le.charttime,\n    le.valuenum,\n    le.value,\n    le.ref_range_lower,\n    le.ref_range_upper,\n    ROW_NUMBER() OVER (PARTITION BY a.hadm_id ORDER BY le.charttime ASC, le.storetime ASC, le.labevent_id ASC) AS rn\n  FROM cohort_admissions a\n  LEFT JOIN tnt_labevents le\n    ON le.hadm_id = a.hadm_id\n   AND le.charttime BETWEEN a.admittime AND a.dischtime\n)\n\nSELECT\n  tnt_category,\n  COUNT(*) AS n_admissions,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_of_cohort,\n  ROUND(AVG(TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0), 2) AS mean_los_days\nFROM (\n  -- only keep the index (earliest) troponin row per admission (rn = 1).\n  -- Admissions with no troponin will have NULL labevent_id and rn = 1 (from the LEFT JOIN).\n  SELECT\n    hadm_id,\n    admittime,\n    dischtime,\n    valuenum,\n    ref_range_upper,\n    CASE\n      WHEN labevent_id IS NULL THEN 'no_troponin'\n      -- Use reference range when available\n      WHEN ref_range_upper IS NOT NULL AND valuenum <= ref_range_upper THEN 'normal'\n      WHEN ref_range_upper IS NOT NULL AND valuenum > ref_range_upper AND valuenum <= 2 * ref_range_upper THEN 'borderline'\n      WHEN ref_range_upper IS NOT NULL AND valuenum > 2 * ref_range_upper THEN 'elevated'\n      -- Fallback numeric thresholds when no reference range present (common hs-TnT thresholds)\n      WHEN ref_range_upper IS NULL AND valuenum <= 0.014 THEN 'normal'\n      WHEN ref_range_upper IS NULL AND valuenum > 0.014 AND valuenum <= 0.04 THEN 'borderline'\n      WHEN ref_range_upper IS NULL AND valuenum > 0.04 THEN 'elevated'\n      ELSE 'unknown'\n    END AS tnt_category\n  FROM first_troponin_per_admission\n  WHERE rn = 1\n) categorized\nGROUP BY tnt_category\nORDER BY\n  CASE tnt_category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'elevated' THEN 3\n    WHEN 'no_troponin' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: loinc_code at [32:25]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [32:25]\n\nLocation: US\nJob ID: 8aa67d93-1185-4a21-8eaf-f73e3ba9643f\n",
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"ACS\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"ACS\" at [1:9]\n\nLocation: US\nJob ID: 6b44bffd-74dd-4485-ba20-bf065985676b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"-\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"-\" at [1:9]\n\nLocation: US\nJob ID: 4618eda2-012e-4043-b65c-d9d5b332be2d\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: loinc_code at [32:25]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [32:25]\n\nLocation: US\nJob ID: 8aa67d93-1185-4a21-8eaf-f73e3ba9643f\n"
+    }
+  ]
+}

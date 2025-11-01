@@ -1,0 +1,23 @@
+{
+  "query": "For an 83-year-old female with DVT: among females 78\u201388, give counts and mean noninvasive diagnostics per admission by LOS (1\u20134 vs 5\u20138 days), stratified by ICU versus no ICU?",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 78 AND 88\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_code IN (\n          '451.1', '451.11', '451.19', '451.9',  -- ICD-9\n          'I82.2', 'I82.21', 'I82.29', 'I82.9'    -- ICD-10\n        )\n    )\n),\nadmissions_with_los_icu AS (\n  SELECT\n    a.subject_id,  -- Qualified to resolve ambiguity\n    a.hadm_id,     -- Qualified to resolve ambiguity\n    a.admittime,\n    a.dischtime,\n    CASE\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 5 AND 8 THEN '5-8 days'\n      ELSE 'Other'\n    END AS los_group,\n    CASE WHEN i.stay_id IS NOT NULL THEN 'ICU' ELSE 'No ICU' END AS icu_status\n  FROM eligible_admissions a\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  WHERE\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 8  -- Focus on LOS 1-8 days\n),\nnoninvasive_events AS (\n  -- Lab events (noninvasive categories)\n  SELECT\n    le.hadm_id,\n    le.charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` li\n    ON le.itemid = li.itemid\n  WHERE\n    li.category IN (\n      'Urine', 'Stool', 'Sputum', 'Other Body Fluids', 'Cultures', 'Drug Screen',\n      'Enzymes', 'Hormones', 'Lipids', 'Metabolic', 'Microbiology', 'Procedures',\n      'Serology', 'Trace Elements', 'Urinalysis', 'Vitamins'\n    )\n    AND le.hadm_id IS NOT NULL\n  UNION ALL\n  -- Chart events (noninvasive categories) for ICU stays\n  SELECT\n    i.hadm_id,  -- Use i.hadm_id for consistency\n    ce.charttime\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON ce.stay_id = i.stay_id\n  WHERE\n    di.category IN (\n      'Vitals', 'Cardiac', 'Glasgow Coma Scale', 'Intake and Output',\n      'Respiratory', 'Temperature', 'Weights'\n    )\n    AND i.stay_id IS NOT NULL  -- Filter early for efficiency\n),\nnoninvasive_counts AS (\n  SELECT\n    a.hadm_id,\n    COUNT(ne.charttime) AS noninvasive_count\n  FROM admissions_with_los_icu a\n  LEFT JOIN noninvasive_events ne\n    ON a.hadm_id = ne.hadm_id\n    AND ne.charttime BETWEEN a.admittime AND a.dischtime\n  GROUP BY a.hadm_id\n)\nSELECT\n  aw.los_group,\n  aw.icu_status,\n  COUNT(aw.hadm_id) AS count_admissions,\n  AVG(nc.noninvasive_count) AS mean_diagnostics_per_admission\nFROM admissions_with_los_icu aw\nLEFT JOIN noninvasive_counts nc\n  ON aw.hadm_id = nc.hadm_id\nWHERE\n  aw.los_group IN ('1-4 days', '5-8 days')\nGROUP BY aw.los_group, aw.icu_status\nORDER BY aw.los_group, aw.icu_status;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [26:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [26:5]\n\nLocation: US\nJob ID: 5946e6f6-e704-470e-8efd-25d6c9e9e955\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

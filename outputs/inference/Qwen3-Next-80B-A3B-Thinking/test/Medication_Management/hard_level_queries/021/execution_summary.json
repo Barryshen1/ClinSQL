@@ -1,0 +1,23 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n      WHERE le.hadm_id = adm.hadm_id\n        AND le.itemid = 51300\n        AND le.valuenum < 1500\n    ) AS has_neutropenia,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      WHERE ce.hadm_id = adm.hadm_id\n        AND ce.itemid = 223761\n        AND ce.valuenum > 38.0\n    ) AS has_fever\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM adm.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 41 AND 51\n),\nmedication_counts AS (\n  SELECT\n    adm.hadm_id,\n    COUNT(DISTINCT pres.drug) AS unique_med_count\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n    ON adm.hadm_id = pres.hadm_id\n  WHERE pres.starttime BETWEEN adm.admittime AND adm.admittime + INTERVAL 48 HOUR\n  GROUP BY adm.hadm_id\n),\neligible_with_med_count AS (\n  SELECT\n    ea.subject_id,\n    ea.hadm_id,\n    ea.admittime,\n    ea.dischtime,\n    ea.hospital_expire_flag,\n    mc.unique_med_count,\n    DATE_DIFF(ea.dischtime, ea.admittime, DAY) AS los_days\n  FROM eligible_admissions ea\n  JOIN medication_counts mc\n    ON ea.hadm_id = mc.hadm_id\n  WHERE ea.has_neutropenia AND ea.has_fever\n),\nreadmissions AS (\n  SELECT\n    adm1.hadm_id,\n    MAX(CASE WHEN adm2.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS readmitted_30d\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm2\n    ON adm1.subject_id = adm2.subject_id\n    AND adm2.admittime > adm1.dischtime\n    AND adm2.admittime <= adm1.dischtime + INTERVAL 30 DAY\n  GROUP BY adm1.hadm_id\n),\nfinal_data AS (\n  SELECT\n    ewmc.*,\n    COALESCE(r.readmitted_30d, 0) AS readmitted_30d\n  FROM eligible_with_med_count ewmc\n  LEFT JOIN readmissions r\n    ON ewmc.hadm_id = r.hadm_id\n),\ntertile_data AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY unique_med_count) AS tertile\n  FROM final_data\n)\nSELECT\n  tertile,\n  AVG(los_days) AS avg_los_days,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_pct,\n  AVG(readmitted_30d) * 100 AS readmission_30d_pct\nFROM tertile_data\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column tertile contains an analytic function, which is not allowed in GROUP BY at [77:10]; reason: invalidQuery, location: query, message: Column tertile contains an analytic function, which is not allowed in GROUP BY at [77:10]\n\nLocation: US\nJob ID: 750be747-f2ec-4cc1-8e67-4051f86d062d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

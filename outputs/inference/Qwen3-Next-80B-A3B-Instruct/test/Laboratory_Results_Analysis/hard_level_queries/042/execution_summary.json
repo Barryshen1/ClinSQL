@@ -1,0 +1,28 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH ich_cohort AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 73 AND 83\n    AND LOWER(dicd.long_title) LIKE '%intracerebral%hemorrhage%'\n),\n\nall_cohort AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 73 AND 83\n),\n\nlab_abnormal_48h_ich AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT le.itemid) AS instability_score\n  FROM ich_cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le ON c.hadm_id = le.hadm_id\n  WHERE le.charttime >= c.admittime\n    AND le.charttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND le.flag = 'abnormal'\n  GROUP BY c.hadm_id\n),\n\nlab_abnormal_48h_all AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT le.itemid) AS instability_score\n  FROM all_cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le ON c.hadm_id = le.hadm_id\n  WHERE le.charttime >= c.admittime\n    AND le.charttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND le.flag = 'abnormal'\n  GROUP BY c.hadm_id\n),\n\ncohort_with_scores AS (\n  SELECT \n    'ICH' AS cohort,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    COALESCE(l.instability_score, 0) AS instability_score\n  FROM ich_cohort c\n  LEFT JOIN lab_abnormal_48h_ich l ON c.hadm_id = l.hadm_id\n\n  UNION ALL\n\n  SELECT \n    'All' AS cohort,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    COALESCE(l.instability_score, 0) AS instability_score\n  FROM all_cohort c\n  LEFT JOIN lab_abnormal_48h_all l ON c.hadm_id = l.hadm_id\n),\n\nquartiles AS (\n  SELECT \n    cohort,\n    instability_score,\n    hospital_expire_flag,\n    DATE_DIFF(dischtime, admittime, DAY) AS los_days,\n    NTILE(4) OVER (PARTITION BY cohort ORDER BY instability_score) AS quartile\n  FROM cohort_with_scores\n)\n\nSELECT \n  cohort,\n  quartile,\n  COUNT(*) AS count,\n  AVG(los_days) AS mean_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM quartiles\nGROUP BY cohort, quartile\nORDER BY cohort, quartile;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [37:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [37:3]\n\nLocation: US\nJob ID: c43bae68-4188-45c2-9498-f8e52d5a2e38\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dl at [30:12]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dl at [30:12]\n\nLocation: US\nJob ID: 1c4d6c68-aaae-4969-a40d-28ed30e58ccd\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

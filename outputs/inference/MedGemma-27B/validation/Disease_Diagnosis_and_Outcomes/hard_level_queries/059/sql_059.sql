@@ -1,0 +1,1 @@
+FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a;

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 55-year-old female. For women aged 50\u201360 with sepsis excluding septic shock, give in-hospital mortality (%) for LOS \u22647 vs >7 days, absolute/relative difference, and median time-to-death.",
+  "final_sql": "WITH sepsis_without_shock AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n      (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^038') OR icd_code IN ('99591', '99592', '78552'))\n      OR (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^A40|^A41') OR icd_code IN ('R6520', 'R6521'))\n    )\n    AND (icd_version, icd_code) NOT IN (\n      (9, '78552'), (10, 'R6521')  -- Explicitly exclude septic shock codes\n    )\n),\ncohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM sepsis_without_shock s\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON s.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 50 AND 60\n),\ncohort_groups AS (\n  SELECT *,\n    CASE\n      WHEN los_days <= 7 THEN 'short_stay'\n      ELSE 'long_stay'\n    END AS los_group\n  FROM cohort\n),\ngroup_aggregates AS (\n  SELECT\n    los_group,\n    COUNT(*) AS total_patients,\n    SUM(hospital_expire_flag) AS deaths,\n    AVG(hospital_expire_flag) * 100 AS mortality_rate_percent,\n    APPROX_QUANTILES(\n      IF(hospital_expire_flag = 1, DATETIME_DIFF(deathtime, admittime, DAY), NULL),\n      2\n    )[OFFSET(1)] AS median_time_to_death_days\n  FROM cohort_groups\n  GROUP BY los_group\n)\nSELECT\n  MAX(IF(los_group = 'short_stay', mortality_rate_percent, NULL)) AS mortality_short_stay,\n  MAX(IF(los_group = 'long_stay', mortality_rate_percent, NULL)) AS mortality_long_stay,\n  MAX(IF(los_group = 'long_stay', mortality_rate_percent, NULL)) - \n  MAX(IF(los_group = 'short_stay', mortality_rate_percent, NULL)) AS absolute_difference,\n  SAFE_DIVIDE(\n    MAX(IF(los_group = 'long_stay', mortality_rate_percent, NULL)) - \n    MAX(IF(los_group = 'short_stay', mortality_rate_percent, NULL)),\n    MAX(IF(los_group = 'short_stay', mortality_rate_percent, NULL))\n  ) * 100 AS relative_difference_percent,\n  MAX(IF(los_group = 'short_stay', median_time_to_death_days, NULL)) AS median_ttd_short_stay_days,\n  MAX(IF(los_group = 'long_stay', median_time_to_death_days, NULL)) AS median_ttd_long_stay_days\nFROM group_aggregates;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

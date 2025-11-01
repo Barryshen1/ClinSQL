@@ -1,0 +1,16 @@
+{
+  "query": "For an 82\u2011year\u2011old man with asthma exacerbation, among males 77\u201387 admitted 1\u20134 vs 5\u20138 days and stratified by ICU vs non\u2011ICU, what are mean, min, max CT/MRI per admission?",
+  "final_sql": "WITH\n-- Define age range and gender filter\npatient_filter AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 77 AND 87\n),\n\n-- Identify asthma exacerbation admissions\nasthma_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS admission_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    patient_filter p ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  WHERE\n    -- ICD-10 codes for asthma (J45.* and J44.*)\n    (d.icd_code LIKE 'J45%' OR d.icd_code LIKE 'J44%')\n    AND d.icd_version = 10\n),\n\n-- Identify ICU stays\nicu_stays AS (\n  SELECT DISTINCT\n    subject_id,\n    hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays`\n),\n\n-- Count CT/MRI procedures per admission\nct_mri_counts AS (\n  SELECT\n    a.hadm_id,\n    COUNT(DISTINCT p.icd_code) AS ct_mri_count\n  FROM\n    asthma_admissions a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p ON a.hadm_id = p.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d ON p.icd_code = d.icd_code AND p.icd_version = d.icd_version\n  WHERE\n    -- ICD-9/10 codes for CT/MRI procedures\n    (d.long_title LIKE '%CT%' OR d.long_title LIKE '%MRI%' OR d.long_title LIKE '%computed tomography%' OR d.long_title LIKE '%magnetic resonance%')\n  GROUP BY\n    a.hadm_id\n),\n\n-- Combine all data with admission duration categories and ICU status\nfinal_data AS (\n  SELECT\n    a.hadm_id,\n    CASE\n      WHEN a.admission_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN a.admission_days BETWEEN 5 AND 8 THEN '5-8 days'\n      ELSE NULL\n    END AS admission_duration,\n    CASE\n      WHEN EXISTS (\n        SELECT 1 FROM icu_stays i\n        WHERE i.hadm_id = a.hadm_id\n      ) THEN 'ICU'\n      ELSE 'Non-ICU'\n    END AS icu_status,\n    COALESCE(c.ct_mri_count, 0) AS ct_mri_count\n  FROM\n    asthma_admissions a\n  LEFT JOIN\n    ct_mri_counts c ON a.hadm_id = c.hadm_id\n  WHERE\n    a.admission_days BETWEEN 1 AND 8\n)\n\n-- Final aggregation\nSELECT\n  admission_duration,\n  icu_status,\n  COUNT(hadm_id) AS admission_count,\n  AVG(ct_mri_count) AS mean_ct_mri,\n  MIN(ct_mri_count) AS min_ct_mri,\n  MAX(ct_mri_count) AS max_ct_mri\nFROM\n  final_data\nGROUP BY\n  admission_duration,\n  icu_status\nORDER BY\n  admission_duration,\n  icu_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

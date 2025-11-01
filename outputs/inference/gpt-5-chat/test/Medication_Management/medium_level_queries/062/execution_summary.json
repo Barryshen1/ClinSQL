@@ -1,0 +1,22 @@
+{
+  "query": "For my 55-year-old female patient: among female inpatients 50\u201360 with diabetes and heart failure, report initiation rates of injectable GLP\u20111s in first 72h versus final 72h, with absolute and relative change.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, pat.anchor_age, pat.gender,\n    a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON a.subject_id = pat.subject_id\n  -- Female age 50-60\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 50 AND 60\n),\ndiabetes AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%diabetes%'\n),\nheart_failure AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%heart fail%'\n),\ncohort_with_dx AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN diabetes dx ON c.hadm_id = dx.hadm_id\n  JOIN heart_failure hf ON c.hadm_id = hf.hadm_id\n),\nglp1_initiations AS (\n  SELECT p.hadm_id,\n         MIN(p.starttime) AS first_glp1_time\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN cohort_with_dx cwd ON p.hadm_id = cwd.hadm_id\n  WHERE LOWER(p.drug) LIKE '%liraglutide%'\n     OR LOWER(p.drug) LIKE '%semaglutide%'\n     OR LOWER(p.drug) LIKE '%dulaglutide%'\n     OR LOWER(p.drug) LIKE '%exenatide%'\n     OR (LOWER(p.route) LIKE '%subcut%')\n  GROUP BY p.hadm_id\n),\nclassified AS (\n  SELECT cwd.hadm_id,\n         CASE\n           WHEN first_glp1_time <= DATETIME_ADD(cwd.admittime, INTERVAL 72 HOUR)\n             THEN 'first72h'\n           WHEN first_glp1_time >= DATETIME_SUB(cwd.dischtime, INTERVAL 72 HOUR)\n             THEN 'final72h'\n           ELSE NULL\n         END AS time_window\n  FROM cohort_with_dx cwd\n  LEFT JOIN glp1_initiations gi ON cwd.hadm_id = gi.hadm_id\n)\nSELECT\n  COUNTIF(time_window = 'first72h') / COUNT(*) AS first72h_rate,\n  COUNTIF(time_window = 'final72h') / COUNT(*) AS final72h_rate,\n  (COUNTIF(time_window = 'final72h') / COUNT(*)) - (COUNTIF(time_window = 'first72h') / COUNT(*)) AS absolute_change,\n  CASE WHEN COUNTIF(time_window = 'first72h') = 0 THEN NULL\n       ELSE ((COUNTIF(time_window = 'final72h') / COUNT(*)) - (COUNTIF(time_window = 'first72h') / COUNT(*)))\n              / (COUNTIF(time_window = 'first72h') / COUNT(*))\n  END AS relative_change\nFROM classified;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword WINDOW at [52:17]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword WINDOW at [52:17]\n\nLocation: US\nJob ID: d63eaafc-f3bc-4ee3-85e2-08b27cd0d1c0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

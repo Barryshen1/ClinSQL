@@ -1,0 +1,1 @@
+AND le.charttime <= sc.admittime + INTERVAL 72 HOUR;

@@ -1,0 +1,46 @@
+WITH 
+  -- Admissions with UGIB diagnosis
+  ugib_admissions AS (
+    SELECT DISTINCT hadm_id
+    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`
+    WHERE 
+      -- ICD-9 codes for UGIB
+      (icd_version = 9 AND icd_code IN ('5780', '5781', '5789', '53021', '5307', '53082', '53100', '53101', '53120', '53121', '53140', '53141', '53160', '53161', '53200', '53201', '53220', '53221', '53240', '53241', '53260', '53261', '53300', '53301', '53320', '53321', '53340', '53341', '53360', '53361', '53400', '53401', '53420', '53421', '53440', '53441', '53460', '53461')) OR 
+      -- ICD-10 codes for UGIB
+      (icd_version = 10 AND icd_code IN ('K250', 'K260', 'K270', 'K280', 'K290', 'K920', 'K921', 'K922', 'K625', 'K226', 'K9281', 'K9289'))
+  ),
+  -- Admissions with COPD exacerbation diagnosis
+  copd_exac_admissions AS (
+    SELECT DISTINCT hadm_id
+    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`
+    WHERE 
+      -- ICD-9 codes for COPD exacerbation
+      (icd_version = 9 AND icd_code IN ('49121', '49122')) OR 
+      -- ICD-10 codes for COPD exacerbation
+      (icd_version = 10 AND icd_code IN ('J441'))
+  ),
+  -- Base admissions with patient demographics and age calculation
+  base_admissions AS (
+    SELECT 
+      adm.subject_id, 
+      adm.hadm_id, 
+      adm.admittime, 
+      adm.dischtime,
+      p.gender,
+      p.anchor_age,
+      p.anchor_year,
+      -- Calculate age at admission
+      p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admission
+    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p
+      ON adm.subject_id = p.subject_id
+    WHERE p.gender = 'M'  -- Filter for male patients
+  )
+-- Calculate average LOS for the cohort
+SELECT 
+  AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS avg_length_of_stay
+FROM base_admissions ba
+-- Ensure admission has UGIB and COPD exacerbation
+INNER JOIN ugib_admissions ugib ON ba.hadm_id = ugib.hadm_id
+INNER JOIN copd_exac_admissions copd ON ba.hadm_id = copd.hadm_id
+WHERE ba.age_at_admission BETWEEN 86 AND 96;  -- Age filter;

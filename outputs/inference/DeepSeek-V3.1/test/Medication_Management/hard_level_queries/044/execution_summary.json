@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH pe_admissions AS (\n    SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON a.hadm_id = di.hadm_id\n    WHERE p.gender = 'F'\n        AND p.anchor_age BETWEEN 64 AND 74\n        AND (\n            (di.icd_version = 10 AND di.icd_code LIKE 'I26%') \n            OR (di.icd_version = 9 AND di.icd_code LIKE '4151%')\n        )\n),\n\nmeds_input AS (\n    SELECT ie.hadm_id, CAST(ie.itemid AS STRING) AS med_id\n    FROM `physionet-data.mimiciv_3_1_icu.inputevents` ie\n    INNER JOIN pe_admissions pa\n        ON ie.hadm_id = pa.hadm_id\n    WHERE ie.starttime BETWEEN pa.admittime AND DATETIME_ADD(pa.admittime, INTERVAL 24 HOUR)\n),\n\nmeds_emar AS (\n    SELECT e.hadm_id, e.medication AS med_id\n    FROM `physionet-data.mimiciv_3_1_hosp.emar` e\n    INNER JOIN pe_admissions pa\n        ON e.hadm_id = pa.hadm_id\n    WHERE e.scheduletime BETWEEN pa.admittime AND DATETIME_ADD(pa.admittime, INTERVAL 24 HOUR)\n),\n\nmeds_prescriptions AS (\n    SELECT pr.hadm_id, pr.drug AS med_id\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    INNER JOIN pe_admissions pa\n        ON pr.hadm_id = pa.hadm_id\n    WHERE pr.starttime BETWEEN pa.admittime AND DATETIME_ADD(pa.admittime, INTERVAL 24 HOUR)\n),\n\nall_meds AS (\n    SELECT hadm_id, med_id FROM meds_input\n    UNION DISTINCT\n    SELECT hadm_id, med_id FROM meds_emar\n    UNION DISTINCT\n    SELECT hadm_id, med_id FROM meds_prescriptions\n),\n\nmed_count AS (\n    SELECT \n        pa.*,\n        COUNT(DISTINCT am.med_id) AS num_meds\n    FROM pe_admissions pa\n    LEFT JOIN all_meds am\n        ON pa.hadm_id = am.hadm_id\n    GROUP BY pa.subject_id, pa.hadm_id, pa.admittime, pa.dischtime, pa.hospital_expire_flag\n),\n\ntertiles AS (\n    SELECT \n        *,\n        NTILE(3) OVER (ORDER BY num_meds) AS tertile\n    FROM med_count\n),\n\nreadmissions AS (\n    SELECT \n        t1.hadm_id,\n        COUNT(t2.hadm_id) > 0 AS readmitted_30d\n    FROM tertiles t1\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` t2\n        ON t1.subject_id = t2.subject_id\n        AND t2.admittime > t1.dischtime\n        AND t2.admittime <= DATETIME_ADD(t1.dischtime, INTERVAL 30 DAY)\n        AND t2.hadm_id != t1.hadm_id\n    GROUP BY t1.hadm_id\n)\n\nSELECT \n    tertile,\n    COUNT(*) AS admissions,\n    MIN(num_meds) AS min_meds,\n    MAX(num_meds) AS max_meds,\n    AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS avg_los,\n    AVG(hospital_expire_flag) * 100 AS mortality_pct,\n    AVG(CAST(readmitted_30d AS INT)) * 100 AS readmission_30d_pct\nFROM tertiles t\nLEFT JOIN readmissions r\n    ON t.hadm_id = r.hadm_id\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column 2 in UNION DISTINCT has incompatible types: INT64, STRING at [35:5]; reason: invalidQuery, location: query, message: Column 2 in UNION DISTINCT has incompatible types: INT64, STRING at [35:5]\n\nLocation: US\nJob ID: db993380-4001-426a-96ea-f9a9f5e10734\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

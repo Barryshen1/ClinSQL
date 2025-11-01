@@ -1,0 +1,23 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH\n-- Identify patients with Pulmonary Embolism diagnosis\npe_diagnoses AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%pulmonary embolism%'\n),\n\n-- Get patient demographics and filter for women aged 64-74\npatient_demographics AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n),\n\n-- Filter for women aged 64-74 with PE\ntarget_population AS (\n  SELECT pd.*\n  FROM patient_demographics pd\n  INNER JOIN pe_diagnoses pe\n    ON pd.hadm_id = pe.hadm_id\n  WHERE pd.age_at_admission BETWEEN 64 AND 74\n),\n\n-- Calculate medication complexity (distinct meds in first 24 hours)\nmedication_complexity AS (\n  SELECT\n    tp.hadm_id,\n    COUNT(DISTINCT pr.drug) AS med_count\n  FROM target_population tp\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON tp.hadm_id = pr.hadm_id\n    AND pr.starttime <= DATETIME_ADD(tp.admittime, INTERVAL 24 HOUR)\n  GROUP BY tp.hadm_id\n),\n\n-- Calculate LOS for each admission\nlos_calculation AS (\n  SELECT\n    tp.hadm_id,\n    tp.hospital_expire_flag,\n    DATETIME_DIFF(tp.dischtime, tp.admittime, HOUR) / 24.0 AS los_days\n  FROM target_population tp\n),\n\n-- Identify 30-day readmissions\nall_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\nreadmissions AS (\n  SELECT\n    aa.hadm_id,\n    CASE \n      WHEN aa.next_admittime <= DATETIME_ADD(aa.dischtime, INTERVAL 30 DAY) THEN 1 \n      ELSE 0 \n    END AS readmitted_30d\n  FROM all_admissions aa\n  WHERE aa.hadm_id IN (SELECT hadm_id FROM target_population)\n),\n\n-- Combine all data\ncombined_data AS (\n  SELECT\n    tp.hadm_id,\n    COALESCE(mc.med_count, 0) AS med_count,\n    lc.los_days,\n    lc.hospital_expire_flag,\n    COALESCE(r.readmitted_30d, 0) AS readmitted_30d\n  FROM target_population tp\n  LEFT JOIN medication_complexity mc ON tp.hadm_id = mc.hadm_id\n  LEFT JOIN los_calculation lc ON tp.hadm_id = lc.hadm_id\n  LEFT JOIN readmissions r ON tp.hadm_id = r.hadm_id\n),\n\n-- Assign tertiles based on medication count\ntertile_assignment AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY med_count) AS tertile\n  FROM combined_data\n)\n\n-- Aggregate results by tertile\nSELECT\n  tertile,\n  COUNT(*) AS admissions,\n  MIN(med_count) AS min_med_count,\n  MAX(med_count) AS max_med_count,\n  AVG(los_days) AS avg_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_pct,\n  AVG(readmitted_30d) * 100 AS readmission_30d_pct\nFROM tertile_assignment\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:8]\n\nLocation: US\nJob ID: 72919336-43d5-4a82-8425-fd9c17f27008\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

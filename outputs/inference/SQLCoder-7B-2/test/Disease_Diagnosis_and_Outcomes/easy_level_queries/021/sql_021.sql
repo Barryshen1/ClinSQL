@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY los) - percentile_cont(0.25) within GROUP (ORDER BY los)) AS interquartile_range FROM icustays;

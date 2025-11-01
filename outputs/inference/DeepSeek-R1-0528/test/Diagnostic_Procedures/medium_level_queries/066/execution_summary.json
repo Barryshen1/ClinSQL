@@ -1,0 +1,28 @@
+{
+  "query": "For my 93-year-old female with asthma: among females 88\u201398 with asthma, what are the 25th, 50th, and 75th percentiles of diagnostic procedures per admission for 1\u20133 versus 4\u20137 day stays?",
+  "final_sql": "WITH asthma_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE REGEXP_CONTAINS(LOWER(long_title), r'\\basthma\\b')\n),\npatient_admissions AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age, \n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 88 AND 98\n),\nasthma_admissions AS (\n  SELECT pa.*\n  FROM patient_admissions pa\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    INNER JOIN asthma_codes ac \n      ON di.icd_code = ac.icd_code AND di.icd_version = ac.icd_version\n    WHERE pa.hadm_id = di.hadm_id\n  )\n),\nprocedure_counts AS (\n  SELECT \n    aa.hadm_id,\n    DATE_DIFF(aa.dischtime, aa.admittime, DAY) AS los_days,\n    COUNT(dh.code) AS num_diag_procedures\n  FROM asthma_admissions aa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.hcpcsevents` he\n    ON aa.hadm_id = he.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh\n    ON he.hcpcs_cd = dh.code\n    AND LOWER(dh.long_description) LIKE '%diagnostic%'\n  GROUP BY aa.hadm_id, aa.admittime, aa.dischtime\n),\ncategorized AS (\n  SELECT \n    hadm_id,\n    num_diag_procedures,\n    CASE \n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n    END AS los_group\n  FROM procedure_counts\n  WHERE los_days BETWEEN 1 AND 7\n)\nSELECT \n  los_group,\n  approx_quantiles_arr[OFFSET(1)] AS p25,\n  approx_quantiles_arr[OFFSET(2)] AS p50,\n  approx_quantiles_arr[OFFSET(3)] AS p75\nFROM (\n  SELECT \n    los_group,\n    APPROX_QUANTILES(num_diag_procedures, 4) AS approx_quantiles_arr\n  FROM categorized\n  WHERE los_group IS NOT NULL\n  GROUP BY los_group\n);",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator LIKE for argument types: INT64, STRING\n  Signature: STRING LIKE STRING\n    Argument 1: Unable to coerce type INT64 to expected type STRING\n  Signature: BYTES LIKE BYTES\n    Argument 1: Unable to coerce type INT64 to expected type BYTES at [42:9]; reason: invalidQuery, location: query, message: No matching signature for operator LIKE for argument types: INT64, STRING\n  Signature: STRING LIKE STRING\n    Argument 1: Unable to coerce type INT64 to expected type STRING\n  Signature: BYTES LIKE BYTES\n    Argument 1: Unable to coerce type INT64 to expected type BYTES at [42:9]\n\nLocation: US\nJob ID: 35695211-cbf0-4b35-80c3-6a2e6d2d5555\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e1f32485-47cb-47d0-8324-2ed0b7c4a165\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

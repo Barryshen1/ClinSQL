@@ -1,0 +1,28 @@
+{
+  "query": "I have an 83-year-old man. Among male patients 78\u201388 with AMI (no shock/respiratory failure), report in\u2011hospital mortality by LOS quartile and comorbidity burden (low/med/high) with 95% CI and CKD/diabetes prevalence.",
+  "final_sql": "WITH \n  -- Identify AMI patients without shock or respiratory failure\n  ami_patients AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      p.anchor_age,\n      p.gender,\n      a.admittime,\n      a.dischtime,\n      a.deathtime,\n      a.hospital_expire_flag\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON \n      a.subject_id = p.subject_id\n    WHERE \n      p.gender = 'M'\n      AND p.anchor_age BETWEEN 78 AND 88\n      AND a.hospital_expire_flag = 0\n      AND EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE \n          d.hadm_id = a.hadm_id\n          AND d.icd_code LIKE '410%'\n      )\n      AND NOT EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE \n          d.hadm_id = a.hadm_id\n          AND d.icd_code IN ('785.52', '518.81', '518.82', '96.71')\n      )\n  ),\n  \n  -- Calculate comorbidity burden\n  comorbidity_burden AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      COUNT(DISTINCT icd_code) AS comorbidity_count\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    GROUP BY \n      subject_id, hadm_id\n  ),\n  \n  -- Categorize comorbidity burden\n  categorized_comorbidities AS (\n    SELECT \n      cb.subject_id,\n      cb.hadm_id,\n      CASE \n        WHEN cb.comorbidity_count <= 2 THEN 'low'\n        WHEN cb.comorbidity_count BETWEEN 3 AND 5 THEN 'med'\n        ELSE 'high'\n      END AS comorbidity_burden\n    FROM \n      comorbidity_burden cb\n  ),\n  \n  -- Calculate length of stay (LOS)\n  los AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      timestamp_diff(COALESCE(dischtime, deathtime), admittime, DAY) AS los_days\n    FROM \n      ami_patients\n  ),\n  \n  -- Combine data\n  combined_data AS (\n    SELECT \n      c.comorbidity_burden,\n      a.hospital_expire_flag,\n      l.los_days\n    FROM \n      ami_patients a\n    JOIN \n      los l ON a.hadm_id = l.hadm_id\n    JOIN \n      categorized_comorbidities c ON a.hadm_id = c.hadm_id\n  )\n\n-- Final query\nSELECT \n  comorbidity_burden,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  APPROX_QUANTILES(los_days, 4) AS los_quantiles\nFROM \n  combined_data\nGROUP BY \n  comorbidity_burden\nORDER BY \n  comorbidity_burden;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [79:29]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [79:29]\n\nLocation: US\nJob ID: 27d68a13-0620-4b27-8f2e-6dcd66460e2c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [70:7]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [70:7]\n\nLocation: US\nJob ID: cf3ba55b-1c7a-4f71-870a-450970b24fad\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

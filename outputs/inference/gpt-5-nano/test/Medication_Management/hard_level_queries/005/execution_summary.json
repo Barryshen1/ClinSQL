@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 48\u2011year\u2011old man. Among male inpatients aged 43\u201353 with hepatic failure, compute medication complexity score over the first 72 hours, stratify into quintiles, and report per quintile: n, min/max/mean score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH hepatic_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddi\n    ON ddi.icd_code = di.icd_code AND ddi.icd_version = di.icd_version\n  WHERE (p.gender = 'M' OR p.gender = 'Male' OR p.gender = 'm')\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND LOWER(ddi.long_title) LIKE '%hepatic%'\n),\nmeds_72h AS (\n  SELECT\n    h.subject_id,\n    h.hadm_id,\n    h.admittime,\n    h.dischtime,\n    h.hospital_expire_flag,\n    COUNT(DISTINCT ie.itemid) AS mcs\n  FROM hepatic_cohort AS h\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.inputevents` AS ie\n    ON ie.subject_id = h.subject_id\n   AND ie.hadm_id = h.hadm_id\n   AND ie.starttime >= h.admittime\n   AND ie.starttime < TIMESTAMP_ADD(h.admittime, INTERVAL 72 HOUR)\n  GROUP BY\n    h.subject_id,\n    h.hadm_id,\n    h.admittime,\n    h.dischtime,\n    h.hospital_expire_flag\n),\nobservations AS (\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.admittime,\n    m.dischtime,\n    m.hospital_expire_flag,\n    m.mcs,\n    TIMESTAMP_DIFF(m.dischtime, m.admittime, SECOND) / 86400.0 AS los_days,\n    -- 30-day readmission flag: exists a subsequent admission within 30 days after discharge\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n        WHERE a2.subject_id = m.subject_id\n          AND a2.hadm_id != m.hadm_id\n          AND a2.admittime >= m.dischtime\n          AND a2.admittime < TIMESTAMP_ADD(m.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmit_30d\n  FROM meds_72h AS m\n),\naugmented AS (\n  SELECT\n    o.*,\n    NTILE(5) OVER (ORDER BY mcs ASC) AS quintile\n  FROM observations AS o\n)\nSELECT\n  quintile,\n  COUNT(*) AS n,\n  MIN(mcs) AS min_score,\n  MAX(mcs) AS max_score,\n  AVG(mcs) AS mean_score,\n  AVG(los_days) AS mean_los_days,\n  100.0 * AVG(CAST(hospital_expire_flag AS INT64)) AS in_hospital_mortality_percent,\n  100.0 * AVG(CAST(readmit_30d AS INT64)) AS thirty_day_readmission_percent\nFROM augmented\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

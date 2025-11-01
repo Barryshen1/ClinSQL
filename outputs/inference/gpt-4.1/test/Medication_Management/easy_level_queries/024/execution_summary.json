@@ -1,0 +1,16 @@
+{
+  "query": "For my 89-year-old male patient: among hospitalized men aged 84\u201394, what is the maximum single inpatient DAPT prescription duration?",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT p.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 84 AND 94\n),\naspirin_rx AS (\n  SELECT subject_id, hadm_id, starttime, \n    COALESCE(stoptime, dischtime) AS stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  JOIN eligible_patients USING (subject_id, hadm_id)\n  WHERE LOWER(drug) LIKE '%aspirin%'\n),\np2y12_rx AS (\n  SELECT subject_id, hadm_id, starttime, \n    COALESCE(stoptime, dischtime) AS stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  JOIN eligible_patients USING (subject_id, hadm_id)\n  WHERE LOWER(drug) LIKE '%clopidogrel%'\n     OR LOWER(drug) LIKE '%ticagrelor%'\n     OR LOWER(drug) LIKE '%prasugrel%'\n),\ndapt_overlap AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    -- Overlap start: latest of both starttimes\n    GREATEST(a.starttime, p.starttime) AS overlap_start,\n    -- Overlap end: earliest of both stoptimes\n    LEAST(a.stoptime, p.stoptime) AS overlap_end\n  FROM aspirin_rx a\n  JOIN p2y12_rx p\n    ON a.subject_id = p.subject_id\n    AND a.hadm_id = p.hadm_id\n    -- Only consider overlapping periods\n    AND a.starttime < p.stoptime\n    AND p.starttime < a.stoptime\n),\ndapt_durations AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    overlap_start,\n    overlap_end,\n    -- Duration in days (fractional)\n    TIMESTAMP_DIFF(overlap_end, overlap_start, SECOND)/86400.0 AS dapt_days\n  FROM dapt_overlap\n  WHERE overlap_end > overlap_start\n)\nSELECT\n  MAX(dapt_days) AS max_single_inpatient_dapt_duration_days\nFROM dapt_durations;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

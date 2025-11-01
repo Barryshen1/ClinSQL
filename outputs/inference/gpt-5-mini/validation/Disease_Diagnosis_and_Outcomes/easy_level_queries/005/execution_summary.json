@@ -1,0 +1,28 @@
+{
+  "query": "For a 64-year-old female patient: among women aged 59\u201369 admitted with primary ischemic stroke, what is median hospital LOS (days)?",
+  "final_sql": "WITH primary_dx AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.gender,\n    d.icd_code,\n    d.icd_version\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  USING (subject_id)\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE\n    d.seq_num = 1  -- primary diagnosis\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    -- ischemic stroke definitions (ICD-10 I63.*, ICD-9 433*, 434*, 436)\n    AND (\n      (d.icd_version = 10 AND SUBSTR(d.icd_code, 1, 3) = 'I63')\n      OR (d.icd_version = 9 AND (SUBSTR(d.icd_code, 1, 3) IN ('433','434') OR d.icd_code = '436'))\n    )\n),\ncohort_los AS (\n  SELECT\n    hadm_id,\n    -- LOS in fractional days\n    TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0 AS los_days\n  FROM primary_dx\n  WHERE TIMESTAMP_DIFF(dischtime, admittime, SECOND) >= 0\n)\nSELECT\n  -- median (NULL if no admissions), and number of admissions\n  IF(\n    arr IS NULL,\n    NULL,\n    IF(\n      MOD(ARRAY_LENGTH(arr), 2) = 1,\n      arr[ORDINAL(CAST((ARRAY_LENGTH(arr) + 1) / 2 AS INT64))],\n      (\n        arr[ORDINAL(CAST(ARRAY_LENGTH(arr) / 2 AS INT64))]\n        + arr[ORDINAL(CAST(ARRAY_LENGTH(arr) / 2 AS INT64) + 1)]\n      ) / 2.0\n    )\n  ) AS median_los_days,\n  IFNULL(ARRAY_LENGTH(arr), 0) AS n_admissions\nFROM (\n  SELECT ARRAY_AGG(los_days ORDER BY los_days) AS arr\n  FROM cohort_los\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Array position in [] must be coercible to INT64 type, but has type FLOAT64 at [46:19]; reason: invalidQuery, location: query, message: Array position in [] must be coercible to INT64 type, but has type FLOAT64 at [46:19]\n\nLocation: US\nJob ID: 5e39569a-79ba-4a46-8cbf-467fd12e8413\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"DIV\" at [46:43]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"DIV\" at [46:43]\n\nLocation: US\nJob ID: 4d481407-326d-48ea-9610-cf57704d64c3\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

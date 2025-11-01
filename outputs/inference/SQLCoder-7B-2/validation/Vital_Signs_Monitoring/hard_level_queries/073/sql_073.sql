@@ -1,0 +1,1 @@
+SELECT percent_rank() OVER (ORDER BY instability) AS percentile_rank, average_length_of_stay, mortality_rate FROM patient_stats WHERE percentile_rank <= 0.1;

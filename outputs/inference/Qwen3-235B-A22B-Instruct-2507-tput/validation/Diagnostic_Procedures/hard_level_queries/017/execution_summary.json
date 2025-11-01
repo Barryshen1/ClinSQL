@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH sepsis_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (\n    (icd_version = 10 AND icd_code LIKE 'A41%' OR icd_code IN ('R6520', 'R6521'))\n  )\n),\npatients_sepsis AS (\n  SELECT DISTINCT adm.hadm_id, adm.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  INNER JOIN sepsis_codes s\n    ON diag.icd_code = s.icd_code AND diag.icd_version = 10\n),\nfirst_icu_stay AS (\n  SELECT \n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.los,\n    ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY icu.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN patients_sepsis ps ON icu.hadm_id = ps.hadm_id\n),\neligible_patients AS (\n  SELECT \n    fis.*\n  FROM first_icu_stay fis\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON fis.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 83 AND 93\n    AND fis.rn = 1\n),\nprocedure_counts AS (\n  SELECT \n    ep.stay_id,\n    COUNT(DISTINCT ep.itemid) AS distinct_procedure_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` ep\n  INNER JOIN eligible_patients epat ON ep.stay_id = epat.stay_id\n  WHERE ep.starttime <= DATETIME_ADD(epat.intime, INTERVAL 72 HOUR)\n    AND ep.starttime >= epat.intime\n  GROUP BY ep.stay_id\n),\nquartiles AS (\n  SELECT \n    epat.stay_id,\n    COALESCE(pc.distinct_procedure_count, 0) AS proc_count,\n    NTILE(4) OVER (ORDER BY COALESCE(pc.distinct_procedure_count, 0)) AS quartile,\n    epat.los,\n    adm.hospital_expire_flag\n  FROM eligible_patients epat\n  LEFT JOIN procedure_counts pc ON epat.stay_id = pc.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON epat.hadm_id = adm.hadm_id\n)\nSELECT\n  quartile,\n  AVG(proc_count) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_percent\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "query": "For a 49-year-old woman with TIA: among female patients 44\u201354, what are p25, p50, p75 of diagnostic imaging per admission by LOS (1\u20134 vs 5\u20137 days) and ICU use?",
+  "final_sql": "WITH target_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 44 AND 54\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code IN ('4350','4351','4352','4353','4358','4359'))\n          OR\n          (d.icd_version = 10 AND d.icd_code IN ('G45.0','G45.1','G45.2','G45.3','G45.4','G45.8','G45.9'))\n        )\n    )\n),\nimaging_counts AS (\n  SELECT \n    hadm_id,\n    COUNT(*) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd`\n  WHERE \n    (icd_version = 9 AND (icd_code LIKE '88%' OR icd_code LIKE '89%'))\n    OR\n    (icd_version = 10 AND (icd_code LIKE 'B%' OR icd_code LIKE 'C%'))\n  GROUP BY hadm_id\n),\nicu_use_flag AS (\n  SELECT \n    hadm_id,\n    1 AS icu_use\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\nadmission_details AS (\n  SELECT \n    ta.hadm_id,\n    DATE_DIFF(CAST(ta.dischtime AS DATE), CAST(ta.admittime AS DATE), DAY) AS los_days,\n    COALESCE(iu.icu_use, 0) AS icu_use,\n    COALESCE(ic.imaging_count, 0) AS imaging_count\n  FROM target_admissions ta\n  LEFT JOIN icu_use_flag iu\n    ON ta.hadm_id = iu.hadm_id\n  LEFT JOIN imaging_counts ic\n    ON ta.hadm_id = ic.hadm_id\n),\nfiltered_admissions AS (\n  SELECT \n    hadm_id,\n    los_days,\n    icu_use,\n    imaging_count,\n    CASE \n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7'\n    END AS los_group\n  FROM admission_details\n  WHERE los_days BETWEEN 1 AND 7\n)\nSELECT \n  los_group,\n  icu_use,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(250)] AS p25,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(500)] AS p50,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(750)] AS p75\nFROM filtered_admissions\nGROUP BY los_group, icu_use\nORDER BY los_group, icu_use;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

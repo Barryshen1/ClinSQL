@@ -1,0 +1,22 @@
+{
+  "query": "For my 81-year-old male, among inpatients aged 76\u201386, what's the 25th percentile duration (days) of IV or oral nitrate prescriptions?",
+  "final_sql": "WITH PatientAdmissions AS (\n    -- Select relevant patient and admission details, and calculate age at admission\n    SELECT\n        p.subject_id,\n        a.hadm_id,\n        p.gender,\n        p.anchor_age,\n        a.admittime,\n        -- Calculate age at admission: anchor_age is the age at anchor_year\n        -- We adjust it by the difference between the admission year and anchor_year\n        EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admission\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n),\nFilteredAdmissions AS (\n    -- Apply gender and age criteria for inpatient admissions\n    SELECT\n        pa.subject_id,\n        pa.hadm_id,\n        pa.admittime,\n        pa.age_at_admission\n    FROM\n        PatientAdmissions pa\n    WHERE\n        pa.gender = 'M'\n        AND pa.age_at_admission BETWEEN 76 AND 86\n),\nNitratePrescriptions AS (\n    -- Identify IV or oral nitrate prescriptions for the filtered patient group\n    SELECT\n        fa.subject_id,\n        fa.hadm_id,\n        pr.starttime,\n        pr.stoptime,\n        pr.drug,\n        pr.route\n    FROM\n        FilteredAdmissions fa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        ON fa.subject_id = pr.subject_id AND fa.hadm_id = pr.hadm_id\n    WHERE\n        pr.starttime IS NOT NULL\n        AND pr.stoptime IS NOT NULL\n        AND pr.starttime < pr.stoptime -- Ensure a valid, positive duration\n        AND (\n            LOWER(pr.drug) LIKE '%nitroglycerin%'\n            OR LOWER(pr.drug) LIKE '%isordil%' -- Common brand for isosorbide dinitrate\n            OR LOWER(pr.drug) LIKE '%isosorbide dinitrate%'\n            OR LOWER(pr.drug) LIKE '%isosorbide mononitrate%'\n        )\n        AND (\n            LOWER(pr.route) LIKE '%iv%'\n            OR LOWER(pr.route) LIKE '%oral%'\n            OR LOWER(pr.route) LIKE '%po%'\n        )\n),\nPrescriptionDurations AS (\n    -- Calculate the duration in fractional days for each relevant prescription\n    SELECT\n        subject_id,\n        hadm_id,\n        drug,\n        route,\n        -- Calculate duration in seconds and convert to fractional days\n        DATETIME_DIFF(stoptime, starttime, SECOND) / (60 * 60 * 24.0) AS duration_days\n    FROM\n        NitratePrescriptions\n)\n-- Calculate the 25th percentile of these durations\nSELECT\n    -- Corrected PERCENTILE_CONT usage: include the column name as the first argument\n    PERCENTILE_CONT(duration_days, 0.25) OVER () AS p25_duration_days\nFROM\n    PrescriptionDurations;",
+  "execution_success": true,
+  "row_count": 9331,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [72:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [72:5]\n\nLocation: US\nJob ID: c9aa7f85-30d9-4518-82da-46c56df94569\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 9331,
+      "error": null
+    }
+  ]
+}

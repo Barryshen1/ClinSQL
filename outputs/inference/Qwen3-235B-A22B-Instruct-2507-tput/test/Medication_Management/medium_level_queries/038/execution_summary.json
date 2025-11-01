@@ -1,0 +1,28 @@
+{
+  "query": "For a 62-year-old male inpatient: among male inpatients 57\u201367 with diabetes and acute HF, report prevalence and initiation rates (%) of GLP\u20111s in first 72h vs final 24h, with absolute and relative change.",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 57 AND 67\n),\ndiabetes_hf_cohort AS (\n  -- Ensure each hadm_id has at least one diabetes and one acute HF diagnosis\n  SELECT pc.hadm_id\n  FROM patient_cohort pc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON pc.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  GROUP BY pc.hadm_id\n  HAVING \n    SUM(CASE WHEN LOWER(d.long_title) LIKE '%diabetes%' THEN 1 ELSE 0 END) >= 1\n    AND SUM(CASE \n      WHEN LOWER(d.long_title) LIKE '%heart failure%' AND (LOWER(d.long_title) LIKE '%acute%' OR d.icd_code LIKE 'I50.%') THEN 1 \n      ELSE 0 \n    END) >= 1\n),\nglp1_prescriptions AS (\n  SELECT p.hadm_id,\n         p.starttime,\n         CASE \n           WHEN p.starttime BETWEEN adm.admittime AND DATETIME_ADD(adm.admittime, INTERVAL 72 HOUR)\n             THEN 'first_72h'\n           WHEN p.starttime >= DATETIME_SUB(adm.dischtime, INTERVAL 24 HOUR) AND p.starttime <= adm.dischtime\n             THEN 'final_24h'\n         END AS time_window\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN diabetes_hf_cohort dh ON p.hadm_id = dh.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm ON p.hadm_id = adm.hadm_id\n  WHERE LOWER(p.drug) IN (\n    'exenatide', 'liraglutide', 'semaglutide',\n    'byetta', 'victoza', 'ozempic', 'rybelsus', 'saxenda'\n  )\n    AND p.starttime IS NOT NULL\n),\ncohort_stats AS (\n  SELECT \n    COUNT(DISTINCT dh.hadm_id) AS total_patients,\n    COUNT(DISTINCT CASE WHEN gp.time_window = 'first_72h' THEN gp.hadm_id END) AS initiated_first_72h,\n    COUNT(DISTINCT CASE WHEN gp.time_window = 'final_24h' THEN gp.hadm_id END) AS initiated_final_24h,\n    COUNT(DISTINCT gp.hadm_id) AS any_glp1_use\n  FROM diabetes_hf_cohort dh\n  LEFT JOIN glp1_prescriptions gp ON dh.hadm_id = gp.hadm_id\n)\nSELECT\n  total_patients,\n  any_glp1_use,\n  ROUND(100.0 * any_glp1_use / total_patients, 2) AS prevalence_pct,\n  initiated_first_72h,\n  ROUND(100.0 * initiated_first_72h / total_patients, 2) AS initiation_first_72h_pct,\n  initiated_final_24h,\n  ROUND(100.0 * initiated_final_24h / total_patients, 2) AS initiation_final_24h_pct,\n  ROUND(\n    (100.0 * initiated_final_24h / total_patients) - (100.0 * initiated_first_72h / total_patients),\n    2\n  ) AS absolute_change_pct,\n  CASE \n    WHEN initiated_first_72h > 0 THEN\n      ROUND(\n        (initiated_final_24h - initiated_first_72h) * 100.0 / initiated_first_72h,\n        3\n      )\n    ELSE NULL \n  END AS relative_change\nFROM cohort_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/a8a9ea60-8595-4b2c-8828-14860298756e?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: a8a9ea60-8595-4b2c-8828-14860298756e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/11454224-8bf7-4b21-85b0-e69722ffc9a0?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: 11454224-8bf7-4b21-85b0-e69722ffc9a0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

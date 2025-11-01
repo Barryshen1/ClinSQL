@@ -1,0 +1,28 @@
+{
+  "query": "I have a 53-year-old female inpatient. Among female inpatients 48\u201358, compare hemorrhagic stroke vs age\u2011matched controls: first 48\u2011hour medication complexity distribution, outcomes (LOS, mortality) for patients with \u22652 serotonergic drugs versus <2, and LOS/mortality for top complexity quartile.",
+  "final_sql": "WITH hemorrhagic_stroke_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%hemorrhage%' AND LOWER(long_title) LIKE '%brain%'\n),\n\nhemorrhagic_patients AS (\n  SELECT DISTINCT di.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN hemorrhagic_stroke_codes hsc\n    ON di.icd_code = hsc.icd_code AND di.icd_version = hsc.icd_version\n),\n\nage_matched_patients AS (\n  SELECT p.subject_id, p.gender, p.anchor_age,\n         CASE WHEN hp.subject_id IS NOT NULL THEN 'Hemorrhagic_Stroke' ELSE 'Control' END AS cohort\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  LEFT JOIN hemorrhagic_patients hp ON p.subject_id = hp.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 48 AND 58\n),\n\nicu_admissions AS (\n  SELECT ia.subject_id, ia.hadm_id, ia.stay_id, ia.intime, ia.outtime, ia.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ia\n  JOIN age_matched_patients amp ON ia.subject_id = amp.subject_id\n),\n\nmeds_first48hr AS (\n  SELECT e.subject_id, e.hadm_id, ia.stay_id, e.medication,\n         COUNT(DISTINCT e.medication) OVER (PARTITION BY e.subject_id) AS total_meds,\n         SUM(CASE WHEN LOWER(e.medication) IN (\n           'sertraline', 'fluoxetine', 'paroxetine', 'citalopram', 'escitalopram',\n           'venlafaxine', 'desvenlafaxine', 'duloxetine', 'milnacipran',\n           'sumatriptan', 'rizatriptan', 'naratriptan', 'zolmitriptan', 'eletriptan', 'frovatriptan'\n         ) THEN 1 ELSE 0 END) OVER (PARTITION BY e.subject_id) AS serotonergic_meds\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` e\n  JOIN icu_admissions ia ON e.hadm_id = ia.hadm_id\n  WHERE e.charttime BETWEEN ia.intime AND DATETIME_ADD(ia.intime, INTERVAL 48 HOUR)\n),\n\nmed_complexity AS (\n  SELECT subject_id,\n         MAX(total_meds) AS total_meds,\n         MAX(serotonergic_meds) AS serotonergic_meds,\n         NTILE(4) OVER (ORDER BY MAX(total_meds)) AS med_complexity_quartile,\n         CASE WHEN MAX(serotonergic_meds) >= 2 THEN '>=2 Serotonergic' ELSE '<2 Serotonergic' END AS serotonergic_category\n  FROM meds_first48hr\n  GROUP BY subject_id\n),\n\nfinal_cohort AS (\n  SELECT amp.subject_id, amp.cohort,\n         mc.total_meds, mc.serotonergic_meds, mc.med_complexity_quartile, mc.serotonergic_category,\n         ia.los AS icu_los,\n         adm.hospital_expire_flag AS mortality\n  FROM age_matched_patients amp\n  JOIN icu_admissions ia ON amp.subject_id = ia.subject_id\n  JOIN med_complexity mc ON amp.subject_id = mc.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm ON ia.hadm_id = adm.hadm_id\n)\n\nSELECT cohort,\n       serotonergic_category,\n       med_complexity_quartile,\n       COUNT(*) AS patient_count,\n       AVG(icu_los) AS avg_icu_los,\n       AVG(mortality) AS mortality_rate\nFROM final_cohort\nGROUP BY cohort, serotonergic_category, med_complexity_quartile\nORDER BY cohort, serotonergic_category, med_complexity_quartile;",
+  "execution_success": true,
+  "row_count": 12,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "403 Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.\n\nLocation: US\nJob ID: 002431c2-db94-4cb0-babc-464468e69118\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name stay_id not found inside e at [29:37]; reason: invalidQuery, location: query, message: Name stay_id not found inside e at [29:37]\n\nLocation: US\nJob ID: 74930320-30e6-4d46-85d9-d2b275bb1c48\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 12,
+      "error": null
+    }
+  ]
+}

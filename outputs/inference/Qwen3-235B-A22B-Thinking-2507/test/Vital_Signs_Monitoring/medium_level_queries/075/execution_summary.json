@@ -1,0 +1,23 @@
+{
+  "query": "For my 61-year-old male ICU patient: among male ICU patients aged 56\u201366, categorize per-stay mean arterial pressure (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report patient counts and stroke rates.",
+  "final_sql": "WITH icu_stays_filtered AS (\n  SELECT \n    s.stay_id,\n    s.hadm_id,\n    s.intime,\n    -- Compute age at ICU admission using standard MIMIC-IV approximation\n    EXTRACT(YEAR FROM s.intime) - (p.anchor_year - p.anchor_age) AS age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM s.intime) - (p.anchor_year - p.anchor_age) BETWEEN 56 AND 66\n),\nmap_per_stay AS (\n  SELECT \n    s.stay_id,\n    AVG(c.valuenum) AS mean_map\n  FROM icu_stays_filtered s\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON s.stay_id = c.stay_id\n  WHERE c.itemid IN (220052, 225312)  -- Valid MAP item IDs\n    AND c.valuenum IS NOT NULL\n  GROUP BY s.stay_id\n),\nstroke_per_admission AS (\n  SELECT \n    d.hadm_id,\n    COALESCE(MAX(CASE \n      WHEN (d.icd_version = 9 AND d.icd_code IN ('430','431','432','433','434','436')) \n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' \n          OR d.icd_code LIKE 'I62%' OR d.icd_code LIKE 'I63%' OR d.icd_code LIKE 'I64%'))\n      THEN 1 ELSE 0 END), 0) AS has_stroke\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  GROUP BY d.hadm_id\n)\n\nSELECT\n  CASE \n    WHEN m.mean_map < 65 THEN '<65'\n    WHEN m.mean_map BETWEEN 65 AND 74 THEN '65-74'\n    WHEN m.mean_map BETWEEN 75 AND 84 THEN '75-84'\n    WHEN m.mean_map >= 85 THEN '>=85'\n  END AS map_category,\n  COUNT(*) AS patient_count,\n  AVG(s.has_stroke) AS stroke_rate\nFROM map_per_stay m\nINNER JOIN icu_stays_filtered f ON m.stay_id = f.stay_id\nINNER JOIN stroke_per_admission s ON f.hadm_id = s.hadm_id\nGROUP BY map_category\nORDER BY \n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65-74' THEN 2\n    WHEN '75-84' THEN 3\n    WHEN '>=85' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:18]\n\nLocation: US\nJob ID: df616282-a535-401f-833d-280e70d0e41c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

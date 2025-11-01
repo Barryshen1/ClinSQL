@@ -1,0 +1,1 @@
+WHEN intime < DATETIME_ADD(admittime, INTERVAL 1 DAY);

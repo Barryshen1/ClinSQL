@@ -1,0 +1,29 @@
+{
+  "query": "I have a 56\u2011year\u2011old female postoperative patient. Among female surgical admissions aged 51\u201361, stratified by 24\u2011h medication complexity quartiles (unique drugs plus weighted high\u2011risk classes), report LOS, in\u2011hospital mortality (%) and 30\u2011day readmission (%) and counts by quartile for comparison.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    -- Calculate birth year and age at admission\n    (p.anchor_year - p.anchor_age) AS birth_year,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 51 AND 61\n),\nsurgical_admissions AS (\n  SELECT DISTINCT e.subject_id, e.hadm_id\n  FROM eligible_admissions e\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi \n    ON e.hadm_id = pi.hadm_id\n  WHERE REGEXP_CONTAINS(pi.icd_code, r'^[0-6][0-9]')   -- Note: This regex may not be appropriate for ICD-9-CM; consider using BETWEEN '00000' AND '69999' if needed\n),\nhigh_risk_drugs AS (\n  SELECT drug, weight\n  FROM UNNEST([\n    STRUCT('warfarin' AS drug, 2 AS weight),\n    STRUCT('heparin', 2),\n    STRUCT('enoxaparin', 2),\n    STRUCT('insulin', 2),\n    STRUCT('morphine', 2),\n    STRUCT('fentanyl', 2),\n    STRUCT('aspirin', 1)   -- Example non-high-risk\n  ]) \n),\nadmission_prescriptions AS (\n  SELECT \n    p.hadm_id,\n    p.drug,\n    p.starttime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN surgical_admissions sa \n    ON p.hadm_id = sa.hadm_id\n  WHERE p.starttime BETWEEN sa.admittime AND TIMESTAMP_ADD(sa.admittime, INTERVAL 24 HOUR)\n),\nadmission_complexity AS (\n  SELECT \n    ap.hadm_id,\n    COUNT(DISTINCT ap.drug) AS unique_drugs,\n    COALESCE(SUM(hr.weight), 0) AS total_weight,\n    COUNT(DISTINCT ap.drug) + COALESCE(SUM(hr.weight), 0) AS complexity\n  FROM admission_prescriptions ap\n  LEFT JOIN high_risk_drugs hr \n    ON LOWER(ap.drug) = LOWER(hr.drug)   -- Exact match; consider using LIKE for partial matches if needed\n  GROUP BY ap.hadm_id\n),\ncomplexity_quartiles AS (\n  SELECT \n    hadm_id,\n    complexity,\n    NTILE(4) OVER (ORDER BY complexity) AS quartile\n  FROM admission_complexity\n),\noutcomes AS (\n  SELECT \n    a.hadm_id,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    a.hospital_expire_flag,\n    -- Check for 30-day readmission: at least one readmission within 30 days\n    (SELECT COUNT(*) > 0 \n     FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n     WHERE a2.subject_id = a.subject_id\n       AND a2.admittime > a.dischtime\n       AND a2.admittime <= TIMESTAMP_ADD(a.dischtime, INTERVAL 30 DAY)\n    ) AS readmitted\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN surgical_admissions sa \n    ON a.hadm_id = sa.hadm_id\n),\nfinal_data AS (\n  SELECT \n    cq.quartile,\n    COUNT(*) AS count,\n    AVG(o.los) AS avg_los,\n    SUM(CAST(o.hospital_expire_flag AS INT)) / COUNT(*) * 100 AS mortality_percent,\n    SUM(CAST(o.readmitted AS INT)) / COUNT(*) * 100 AS readmission_percent\n  FROM complexity_quartiles cq\n  INNER JOIN outcomes o \n    ON cq.hadm_id = o.hadm_id\n  GROUP BY cq.quartile\n  ORDER BY cq.quartile\n)\nSELECT * FROM final_data;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name admittime not found inside sa at [44:32]; reason: invalidQuery, location: query, message: Name admittime not found inside sa at [44:32]\n\nLocation: US\nJob ID: 200f277b-d82e-4cb7-954d-07d53f51919d\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword TO at [1:23]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword TO at [1:23]\n\nLocation: US\nJob ID: 8147bcef-b66f-43b9-80bd-ca38b790649d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword WHERE at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword WHERE at [1:1]\n\nLocation: US\nJob ID: 8d588e3e-3336-452a-842d-733a7c37f6aa\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name admittime not found inside sa at [44:32]; reason: invalidQuery, location: query, message: Name admittime not found inside sa at [44:32]\n\nLocation: US\nJob ID: 200f277b-d82e-4cb7-954d-07d53f51919d\n"
+    }
+  ]
+}

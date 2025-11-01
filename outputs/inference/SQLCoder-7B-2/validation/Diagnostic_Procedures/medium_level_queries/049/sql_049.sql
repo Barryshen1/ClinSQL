@@ -1,0 +1,1 @@
+SELECT CAST(COUNT(*) filter (WHERE EXTRACT(DAY FROM (dischtime - admittime)) BETWEEN 1 AND 3) AS FLOAT) / NULLIF(COUNT(*) filter (WHERE EXTRACT(DAY FROM (dischtime - admittime)) BETWEEN 4 AND 7), 0) AS proportion FROM admissions a JOIN patients p ON a.subject_id = p.subject_id WHERE p.gender = 'M' AND p.anchor_age = 92 AND p.anchor_year_group = 'sepsis' AND p.dod IS NULL;

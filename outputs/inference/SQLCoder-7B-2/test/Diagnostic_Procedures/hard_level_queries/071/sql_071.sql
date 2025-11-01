@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY los) AS q25, percentile_cont(0.50) within GROUP (ORDER BY los) AS q50, percentile_cont(0.90) within GROUP (ORDER BY los) AS q90, MAX(los) AS max_los FROM icustays WHERE length_of_stay > 72;

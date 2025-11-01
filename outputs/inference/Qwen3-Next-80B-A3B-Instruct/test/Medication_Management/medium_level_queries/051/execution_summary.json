@@ -1,0 +1,28 @@
+{
+  "query": "For a 91\u2011year\u2011old female inpatient: among females 86\u201396 with DM and HF, report by class (Insulin vs Oral Agents) early (first 12h) and late (final 72h) rates (%) and early\u2192late transitions.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    i.hadm_id,\n    i.intime,\n    i.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON p.subject_id = i.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON p.subject_id = d.subject_id AND i.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 86 AND 96\n    AND (\n      d_icd.long_title LIKE '%Diabetes Mellitus%' \n      OR d.icd_code LIKE 'E1%'\n    )\n    AND (\n      d_icd.long_title LIKE '%Heart Failure%' \n      OR d.icd_code LIKE 'I50%'\n    )\n    AND i.los >= 3  -- ICU stay at least 72 hours (3 days)\n),\n\nprescriptions_in_icu AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.starttime,\n    p.drug,\n    p.route,\n    c.intime,\n    c.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN cohort c\n    ON p.subject_id = c.subject_id AND p.hadm_id = c.hadm_id\n  WHERE p.starttime IS NOT NULL\n),\n\nmed_class AS (\n  SELECT\n    subject_id,\n    starttime,\n    CASE\n      WHEN LOWER(drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN drug IN (\n        'metformin', 'glipizide', 'glyburide', 'glimepiride', 'pioglitazone', 'rosiglitazone',\n        'sitagliptin', 'saxagliptin', 'linagliptin', 'empagliflozin', 'canagliflozin', 'dapagliflozin',\n        'repaglinide', 'nateglinide', 'chlorpropamide', 'tolbutamide', 'acetohexamide', 'tolazamide'\n      ) THEN 'Oral'\n      ELSE 'Other'\n    END AS drug_class\n  FROM prescriptions_in_icu\n),\n\npatient_window_exposure AS (\n  SELECT\n    subject_id,\n    MAX(CASE\n      WHEN starttime BETWEEN intime AND intime + INTERVAL 12 HOUR\n        AND drug_class = 'Insulin' THEN 1\n      ELSE 0\n    END) AS early_insulin,\n    MAX(CASE\n      WHEN starttime BETWEEN intime AND intime + INTERVAL 12 HOUR\n        AND drug_class = 'Oral' THEN 1\n      ELSE 0\n    END) AS early_oral,\n    MAX(CASE\n      WHEN starttime BETWEEN outtime - INTERVAL 72 HOUR AND outtime\n        AND drug_class = 'Insulin' THEN 1\n      ELSE 0\n    END) AS late_insulin,\n    MAX(CASE\n      WHEN starttime BETWEEN outtime - INTERVAL 72 HOUR AND outtime\n        AND drug_class = 'Oral' THEN 1\n      ELSE 0\n    END) AS late_oral\n  FROM med_class\n  GROUP BY subject_id, intime, outtime\n),\n\nsummary AS (\n  SELECT\n    COUNT(*) AS total_patients,\n    SUM(early_insulin) AS early_insulin_count,\n    SUM(early_oral) AS early_oral_count,\n    SUM(late_insulin) AS late_insulin_count,\n    SUM(late_oral) AS late_oral_count,\n    SUM(CASE WHEN early_oral = 1 AND late_insulin = 1 THEN 1 ELSE 0 END) AS transition_oral_to_insulin,\n    SUM(CASE WHEN early_insulin = 1 AND late_oral = 1 THEN 1 ELSE 0 END) AS transition_insulin_to_oral,\n    SUM(CASE WHEN early_insulin = 1 AND late_insulin = 1 THEN 1 ELSE 0 END) AS transition_insulin_continued,\n    SUM(CASE WHEN early_oral = 1 AND late_oral = 1 THEN 1 ELSE 0 END) AS transition_oral_continued\n  FROM patient_window_exposure\n)\n\nSELECT\n  ROUND(100.0 * early_insulin_count / total_patients, 2) AS early_insulin_rate_percent,\n  ROUND(100.0 * early_oral_count / total_patients, 2) AS early_oral_rate_percent,\n  ROUND(100.0 * late_insulin_count / total_patients, 2) AS late_insulin_rate_percent,\n  ROUND(100.0 * late_oral_count / total_patients, 2) AS late_oral_rate_percent,\n  transition_oral_to_insulin,\n  transition_insulin_to_oral,\n  transition_insulin_continued,\n  transition_oral_continued\nFROM summary;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: intime at [63:30]; reason: invalidQuery, location: query, message: Unrecognized name: intime at [63:30]\n\nLocation: US\nJob ID: 9a8dddd7-b8bb-46c2-b386-8a6e3b8fab3d\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"medication\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"medication\" at [1:16]\n\nLocation: US\nJob ID: ce8c862a-515c-4e60-85c7-5636fdf8ffc9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword THEN but got identifier \"ILIKE\" at [46:17]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword THEN but got identifier \"ILIKE\" at [46:17]\n\nLocation: US\nJob ID: ca501924-44d2-4623-bdd5-945b776cdea5\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: intime at [63:30]; reason: invalidQuery, location: query, message: Unrecognized name: intime at [63:30]\n\nLocation: US\nJob ID: 9a8dddd7-b8bb-46c2-b386-8a6e3b8fab3d\n"
+    }
+  ]
+}

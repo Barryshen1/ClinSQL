@@ -1,0 +1,22 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH cohort_patients AS (\n    SELECT\n        pa.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime,\n        ad.hospital_expire_flag,\n        ic.stay_id,\n        ic.intime AS icu_intime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` pa\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON pa.subject_id = ad.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` ic\n        ON ad.hadm_id = ic.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON ad.hadm_id = di.hadm_id\n    WHERE\n        pa.gender = 'M'\n        AND pa.anchor_age BETWEEN 44 AND 54\n        AND di.seq_num = 1 -- Primary diagnosis\n        AND (\n            -- ICD-9 code for Pulmonary Embolism\n            (di.icd_version = 9 AND di.icd_code = '4151') OR\n            -- ICD-10 codes for Pulmonary Embolism (I26.0xx, I26.9xx)\n            (di.icd_version = 10 AND di.icd_code LIKE 'I26%')\n        )\n),\n-- Select the first ICU stay for each qualifying hospital admission\nfirst_icu_stay_per_hadm AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        admittime,\n        dischtime,\n        hospital_expire_flag,\n        stay_id,\n        icu_intime,\n        ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY icu_intime) AS rn\n    FROM\n        cohort_patients\n),\n-- Calculate distinct procedures within first 72 hours and hospital LOS for each patient's first ICU stay\npatient_summary AS (\n    SELECT\n        fis.subject_id,\n        fis.hadm_id,\n        fis.stay_id,\n        fis.hospital_expire_flag,\n        DATETIME_DIFF(fis.dischtime, fis.admittime, HOUR) / 24.0 AS hospital_los_days,\n        -- Count distinct procedures. Grouping by (subject_id, hadm_id, stay_id) and then LEFT JOINing means if no procedures, count will be 0.\n        COUNT(DISTINCT pe.itemid) AS distinct_procedure_count -- Count distinct item IDs\n    FROM\n        first_icu_stay_per_hadm fis\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n        ON fis.stay_id = pe.stay_id\n        AND pe.starttime BETWEEN fis.icu_intime AND DATETIME_ADD(fis.icu_intime, INTERVAL 72 HOUR)\n    WHERE\n        fis.rn = 1\n    GROUP BY\n        fis.subject_id, fis.hadm_id, fis.stay_id, fis.hospital_expire_flag, fis.admittime, fis.dischtime\n),\n-- Assign quintiles based on distinct procedure count\nquintiled_patients AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        stay_id,\n        hospital_expire_flag,\n        hospital_los_days,\n        distinct_procedure_count,\n        NTILE(5) OVER (ORDER BY distinct_procedure_count) AS diagnostic_intensity_quintile\n    FROM\n        patient_summary\n)\n-- Aggregate results by diagnostic intensity quintile\nSELECT\n    diagnostic_intensity_quintile,\n    AVG(distinct_procedure_count) AS average_procedure_count,\n    AVG(hospital_los_days) AS average_hospital_los_days,\n    -- Calculate mortality percentage\n    AVG(CASE WHEN hospital_expire_flag = 1 THEN 1.0 ELSE 0.0 END) * 100 AS mortality_percentage\nFROM\n    quintiled_patients\nGROUP BY\n    diagnostic_intensity_quintile\nORDER BY\n    diagnostic_intensity_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [72:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [72:1]\n\nLocation: US\nJob ID: 33b6de93-63ac-4a5d-aa07-594faed40ce0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "My 72\u2011year\u2011old female: among female inpatients 67\u201377 with T2DM and HF, give initiation % by class (insulin, met, SU, DPP\u20114, SGLT2, GLP\u20111, TZD) first 12h vs final 48h and net change (pp).",
+  "final_sql": "WITH\n-- Get female patients aged 67-77 with T2DM and HF\npatient_cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS admission_duration_hours\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 67 AND 77\n    AND p.subject_id IN (\n      -- Patients with T2DM (E11.x)\n      SELECT subject_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE icd_code LIKE 'E11%'\n    )\n    AND p.subject_id IN (\n      -- Patients with HF (I50.x)\n      SELECT subject_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE icd_code LIKE 'I50%'\n    )\n),\n\n-- Map medications to their classes\nmedication_classes AS (\n  SELECT\n    hadm_id,\n    subject_id,\n    CASE\n      WHEN LOWER(drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN LOWER(drug) LIKE '%metformin%' THEN 'Metformin'\n      WHEN LOWER(drug) LIKE '%glipizide%' OR\n           LOWER(drug) LIKE '%glyburide%' OR\n           LOWER(drug) LIKE '%glimepiride%' THEN 'Sulfonylurea'\n      WHEN LOWER(drug) LIKE '%sitagliptin%' OR\n           LOWER(drug) LIKE '%saxagliptin%' OR\n           LOWER(drug) LIKE '%linagliptin%' OR\n           LOWER(drug) LIKE '%alogliptin%' THEN 'DPP-4 Inhibitor'\n      WHEN LOWER(drug) LIKE '%canagliflozin%' OR\n           LOWER(drug) LIKE '%dapagliflozin%' OR\n           LOWER(drug) LIKE '%empagliflozin%' OR\n           LOWER(drug) LIKE '%ertugliflozin%' THEN 'SGLT2 Inhibitor'\n      WHEN LOWER(drug) LIKE '%exenatide%' OR\n           LOWER(drug) LIKE '%liraglutide%' OR\n           LOWER(drug) LIKE '%dulaglutide%' OR\n           LOWER(drug) LIKE '%semaglutide%' THEN 'GLP-1 Agonist'\n      WHEN LOWER(drug) LIKE '%pioglitazone%' OR\n           LOWER(drug) LIKE '%rosiglitazone%' THEN 'Thiazolidinedione'\n      ELSE 'Other'\n    END AS medication_class,\n    starttime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n),\n\n-- First 12 hours window\nfirst_12h AS (\n  SELECT\n    pc.hadm_id,\n    mc.medication_class,\n    COUNT(DISTINCT pc.subject_id) AS patient_count\n  FROM\n    patient_cohort pc\n  JOIN\n    medication_classes mc ON pc.hadm_id = mc.hadm_id\n  WHERE\n    TIMESTAMP_DIFF(mc.starttime, pc.admittime, HOUR) BETWEEN 0 AND 12\n  GROUP BY\n    pc.hadm_id, mc.medication_class\n),\n\n-- Final 48 hours window\nfinal_48h AS (\n  SELECT\n    pc.hadm_id,\n    mc.medication_class,\n    COUNT(DISTINCT pc.subject_id) AS patient_count\n  FROM\n    patient_cohort pc\n  JOIN\n    medication_classes mc ON pc.hadm_id = mc.hadm_id\n  WHERE\n    TIMESTAMP_DIFF(pc.dischtime, mc.starttime, HOUR) BETWEEN 0 AND 48\n    AND TIMESTAMP_DIFF(mc.starttime, pc.admittime, HOUR) >= (pc.admission_duration_hours - 48)\n  GROUP BY\n    pc.hadm_id, mc.medication_class\n),\n\n-- Total patients in cohort\ntotal_patients AS (\n  SELECT COUNT(DISTINCT hadm_id) AS total FROM patient_cohort\n)\n\n-- Final results\nSELECT\n  COALESCE(f12.medication_class, f48.medication_class) AS medication_class,\n  SUM(f12.patient_count) AS first_12h_count,\n  ROUND(SUM(f12.patient_count) * 100.0 / (SELECT total FROM total_patients), 2) AS first_12h_percent,\n  SUM(f48.patient_count) AS final_48h_count,\n  ROUND(SUM(f48.patient_count) * 100.0 / (SELECT total FROM total_patients), 2) AS final_48h_percent,\n  ROUND((SUM(COALESCE(f48.patient_count, 0)) - SUM(COALESCE(f12.patient_count, 0))) * 100.0 / (SELECT total FROM total_patients), 2) AS net_change_pp\nFROM\n  (SELECT hadm_id, medication_class, patient_count FROM first_12h) f12\nFULL OUTER JOIN\n  (SELECT hadm_id, medication_class, patient_count FROM final_48h) f48\nON\n  f12.hadm_id = f48.hadm_id AND f12.medication_class = f48.medication_class\nGROUP BY\n  medication_class\nORDER BY\n  net_change_pp DESC;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: prescription_id at [32:5]; reason: invalidQuery, location: query, message: Unrecognized name: prescription_id at [32:5]\n\nLocation: US\nJob ID: 02ec35e9-0dab-453b-bbf4-0e46dc87022f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: medication at [35:18]; reason: invalidQuery, location: query, message: Unrecognized name: medication at [35:18]\n\nLocation: US\nJob ID: f8dc0f37-11b2-4fc8-ac90-4c5df338fb75\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

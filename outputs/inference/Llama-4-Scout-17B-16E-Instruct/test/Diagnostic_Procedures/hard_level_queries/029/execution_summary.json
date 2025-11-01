@@ -1,0 +1,28 @@
+{
+  "query": "For my 73\u2011year\u2011old male patient: among male ICU patients 68\u201378 who received vasopressors within 72 hours, stratify 72\u2011hour diagnostic load (labs + imaging, repeats included) into quartiles and report average procedure count, hospital LOS, in\u2011hospital mortality, and 30\u2011day readmission rates.",
+  "final_sql": "WITH \n-- Identify ICU patients with vasopressors\nvasopressor_patients AS (\n  SELECT \n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    EXTRACT(DAY FROM TIMESTAMP_DIFF(ie.intime, p.admittime, DAY)) AS admission_day,\n    ie.intime\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` ie\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` p ON ie.hadm_id = p.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND ie.intime BETWEEN p.admittime AND TIMESTAMP_ADD(p.admittime, INTERVAL 3 DAY)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.inputevents` i\n      WHERE i.stay_id = ie.stay_id\n      AND i.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%Vasopressor%')\n      AND i.starttime BETWEEN ie.intime AND TIMESTAMP_ADD(ie.intime, INTERVAL 3 DAY)\n    )\n),\n\n-- Calculate 72-hour diagnostic load\ndiagnostic_load AS (\n  SELECT \n    vp.subject_id,\n    vp.hadm_id,\n    COUNT(DISTINCT \n      CASE \n        WHEN ce.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE category = 'Lab') THEN ce.itemid\n        WHEN ie.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE category IN ('Imaging', 'Procedure')) THEN ie.itemid\n      END\n    ) AS diagnostic_load\n  FROM \n    vasopressor_patients vp\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce ON vp.stay_id = ce.stay_id AND ce.charttime BETWEEN vp.intime AND TIMESTAMP_ADD(vp.intime, INTERVAL 3 DAY)\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_icu.procedureevents` ie ON vp.stay_id = ie.stay_id AND ie.starttime BETWEEN vp.intime AND TIMESTAMP_ADD(vp.intime, INTERVAL 3 DAY)\n  GROUP BY \n    vp.subject_id, vp.hadm_id\n),\n\n-- Calculate outcomes\noutcomes AS (\n  SELECT \n    dl.subject_id,\n    dl.hadm_id,\n    a.hospital_expire_flag,\n    a.dischtime,\n    a.admittime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS hospital_LOS,\n    COUNT(DISTINCT p.seq_num) AS procedure_count,\n    CASE \n      WHEN ra.readmit_time IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS readmitted_within_30_days\n  FROM \n    diagnostic_load dl\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON dl.hadm_id = a.hadm_id\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p ON dl.hadm_id = p.hadm_id\n  LEFT JOIN (\n    SELECT \n      a1.subject_id,\n      a1.hadm_id,\n      MIN(a2.admittime) AS readmit_time\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a1\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a2 ON a1.subject_id = a2.subject_id\n    WHERE \n      a1.dischtime < a2.admittime\n      AND a2.admittime BETWEEN TIMESTAMP_ADD(a1.dischtime, INTERVAL 1 DAY) AND TIMESTAMP_ADD(a1.dischtime, INTERVAL 30 DAY)\n    GROUP BY \n      a1.subject_id, a1.hadm_id\n  ) ra ON dl.hadm_id = ra.hadm_id\n  GROUP BY \n    dl.subject_id, dl.hadm_id, a.hospital_expire_flag, a.dischtime, a.admittime, ra.readmit_time\n)\n\n-- Stratify by diagnostic load quartiles and report outcomes\nSELECT \n  NTILE(4) OVER (ORDER BY diagnostic_load) AS quartile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(hospital_LOS) AS avg_hospital_LOS,\n  AVG(CAST(hospital_expire_flag AS INT64)) AS in_hospital_mortality_rate,\n  AVG(readmitted_within_30_days) AS 30_day_readmission_rate\nFROM \n  outcomes o\nJOIN \n  diagnostic_load dl ON o.hadm_id = dl.hadm_id\nGROUP BY \n  quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected \"30_day_readmission_rate\" at [93:37]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \"30_day_readmission_rate\" at [93:37]\n\nLocation: US\nJob ID: 935d3040-6c1e-45ac-bcc2-fed7a8043390\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [74:39]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [74:39]\n\nLocation: US\nJob ID: 64e33304-68e6-41a5-a25b-3fd85d4b2d6f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword ON at [24:19]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword ON at [24:19]\n\nLocation: US\nJob ID: 27f39d82-d879-4f6b-b75d-e2d7a8a16a5f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \"30_day_readmission_rate\" at [93:37]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \"30_day_readmission_rate\" at [93:37]\n\nLocation: US\nJob ID: 935d3040-6c1e-45ac-bcc2-fed7a8043390\n"
+    }
+  ]
+}

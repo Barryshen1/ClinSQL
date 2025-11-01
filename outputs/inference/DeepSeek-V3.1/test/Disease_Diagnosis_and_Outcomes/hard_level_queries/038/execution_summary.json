@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old man. In male inpatients aged 74\u201384 with AKI, what are the cohort\u2019s median risk score (IQR) and 30\u2011day mortality? Compare ARDS rate and survivor LOS to general male inpatients 74\u201384 and give the risk percentile.",
+  "final_sql": "WITH \naki_cohort AS (\n    SELECT \n        p.subject_id, \n        a.hadm_id, \n        a.admittime, \n        a.dischtime, \n        a.deathtime,\n        a.hospital_expire_flag,\n        -- Check if death within 30 days of admission\n        CASE WHEN a.deathtime IS NOT NULL AND \n                  DATETIME_DIFF(a.deathtime, a.admittime, DAY) <= 30 \n             THEN 1 ELSE 0 END AS mortality_30day,\n        -- Check for ARDS diagnosis during the admission\n        MAX(CASE WHEN d.icd_code IN ('518.82', 'J80') THEN 1 ELSE 0 END) AS has_ards\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        ON a.hadm_id = d.hadm_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 74 AND 84\n        AND d.icd_code IN ('584.9', 'N17.9')  -- AKI codes\n    GROUP BY p.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime, a.hospital_expire_flag\n),\ngeneral_cohort AS (\n    SELECT \n        p.subject_id, \n        a.hadm_id, \n        a.admittime, \n        a.dischtime, \n        a.deathtime,\n        a.hospital_expire_flag,\n        -- Check for ARDS diagnosis during the admission\n        MAX(CASE WHEN d.icd_code IN ('518.82', 'J80') THEN 1 ELSE 0 END) AS has_ards\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        ON a.hadm_id = d.hadm_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 74 AND 84\n    GROUP BY p.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime, a.hospital_expire_flag\n),\naki_summary AS (\n    SELECT \n        'AKI Cohort' AS cohort,\n        COUNT(*) AS num_patients,\n        NULL AS median_risk_score,  -- Cannot compute with available data\n        NULL AS iqr_risk_score,     -- Cannot compute with available data\n        AVG(1.0 * mortality_30day) * 100 AS mortality_30day_percent,\n        AVG(1.0 * has_ards) * 100 AS ards_rate,\n        (SELECT APPROX_QUANTILES(DATETIME_DIFF(dischtime, admittime, DAY), 100)[OFFSET(50)]\n         FROM aki_cohort \n         WHERE hospital_expire_flag = 0) AS median_survivor_los\n    FROM aki_cohort\n),\ngeneral_summary AS (\n    SELECT \n        'General Cohort' AS cohort,\n        COUNT(*) AS num_patients,\n        AVG(1.0 * has_ards) * 100 AS ards_rate,\n        (SELECT APPROX_QUANTILES(DATETIME_DIFF(dischtime, admittime, DAY), 100)[OFFSET(50)]\n         FROM general_cohort \n         WHERE hospital_expire_flag = 0) AS median_survivor_los\n    FROM general_cohort\n)\nSELECT \n    a.cohort,\n    a.num_patients,\n    a.median_risk_score,\n    a.iqr_risk_score,\n    a.mortality_30day_percent,\n    a.ards_rate AS ards_rate_aki,\n    g.ards_rate AS ards_rate_general,\n    a.median_survivor_los AS los_survivor_aki,\n    g.median_survivor_los AS los_survivor_general\nFROM aki_summary a\nCROSS JOIN general_summary g;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column dischtime which is neither grouped nor aggregated at [54:39]; reason: invalidQuery, location: query, message: SELECT list expression references column dischtime which is neither grouped nor aggregated at [54:39]\n\nLocation: US\nJob ID: 247963cf-9d23-4304-9a01-fb0521fb7522\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

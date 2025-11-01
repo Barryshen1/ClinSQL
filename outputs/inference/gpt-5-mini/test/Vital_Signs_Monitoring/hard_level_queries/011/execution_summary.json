@@ -1,0 +1,22 @@
+{
+  "query": "My 60-year-old female ICU patient has an instability score of 60 from the first 24 hours. Among female ICU patients aged 55\u201365 with pneumonia, what percentile is this score? Also report ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH instability_items AS (\n  -- find itemids whose label mentions \"instability\" (adjust pattern if your score has a different name)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%instability%'\n),\n\nfirst24_instability AS (\n  -- maximal instability numeric value within first 24 hours of each ICU stay\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    MAX(ce.valuenum) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON ce.subject_id = icu.subject_id\n   AND ce.hadm_id = icu.hadm_id\n   AND ce.stay_id = icu.stay_id\n  JOIN instability_items di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n    -- inside first 24 hours of ICU stay\n    AND ce.charttime >= icu.intime\n    AND ce.charttime < TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n  GROUP BY ce.subject_id, ce.hadm_id, ce.stay_id\n),\n\npneumonia_admissions AS (\n  -- admissions with any diagnosis whose long_title mentions pneumonia\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%pneumonia%'\n),\n\ncohort AS (\n  -- attach patient/admission/icu metadata, restrict to female age 55-65 and pneumonia admissions\n  SELECT\n    f24.subject_id,\n    f24.hadm_id,\n    f24.stay_id,\n    f24.instability_score,\n    p.gender,\n    p.anchor_age,\n    a.deathtime,\n    a.hospital_expire_flag,\n    icu.intime,\n    icu.outtime,\n    icu.los\n  FROM first24_instability f24\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON f24.subject_id = icu.subject_id\n   AND f24.hadm_id = icu.hadm_id\n   AND f24.stay_id = icu.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON f24.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f24.hadm_id = a.hadm_id\n  JOIN pneumonia_admissions pn\n    ON f24.hadm_id = pn.hadm_id\n  WHERE LOWER(p.gender) = 'f'\n    AND p.anchor_age BETWEEN 55 AND 65\n),\n\nwith_rank AS (\n  -- compute cohort size, number <= 60 and decile (NTILE 10 descending for \"most unstable\" = decile 1)\n  SELECT\n    c.*,\n    COUNT(*) OVER () AS cohort_n,\n    SUM(CASE WHEN instability_score <= 60 THEN 1 ELSE 0 END) OVER () AS n_le_60,\n    NTILE(10) OVER (ORDER BY instability_score DESC) AS decile_desc\n  FROM cohort c\n)\n\n-- final output: percentile of 60 among cohort, and stats for the most unstable decile (decile_desc = 1)\nSELECT\n  'percentile_of_60' AS metric,\n  ROUND(100.0 * MAX(n_le_60) / NULLIF(MAX(cohort_n), 0), 2) AS percentile_of_60,\n  MAX(cohort_n) AS cohort_size,\n  NULL AS decile_size,\n  NULL AS mean_los_days,\n  NULL AS median_los_days,\n  NULL AS icu_mortality_pct\nFROM with_rank\n\nUNION ALL\n\nSELECT\n  'top_decile' AS metric,\n  NULL AS percentile_of_60,\n  MAX(cohort_n) AS cohort_size,\n  COUNT(*) AS decile_size,\n  -- mean ICU LOS (days)\n  ROUND(AVG(los), 2) AS mean_los_days,\n  -- approximate median ICU LOS in the top decile\n  (SELECT APPROX_QUANTILES(los, 2)[OFFSET(1)] FROM with_rank WHERE decile_desc = 1) AS median_los_days,\n  -- ICU mortality percent: admissions.deathtime between ICU intime and outtime\n  ROUND(100.0 * SUM(CASE WHEN deathtime IS NOT NULL AND deathtime BETWEEN intime AND outtime THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS icu_mortality_pct\nFROM with_rank\nWHERE decile_desc = 1;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:15]\n\nLocation: US\nJob ID: 84e8e4b2-694a-492e-b5c3-5edb01891dcc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

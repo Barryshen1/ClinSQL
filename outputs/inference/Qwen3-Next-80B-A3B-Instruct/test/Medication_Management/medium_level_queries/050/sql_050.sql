@@ -1,0 +1,1 @@
+with `with analyzing a cohort...` — this is not valid SQL...;

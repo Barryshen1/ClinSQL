@@ -1,0 +1,16 @@
+{
+  "query": "I have a 48-year-old male inpatient. Among male inpatients aged 43\u201353 with a transplant diagnosis, compute medication complexity score over the first 7 hospital days, stratify into quartiles, and report per quartile: n, mean score, LOS, in-hospital mortality, and 30-day readmission",
+  "final_sql": "WITH transplant_codes AS (\n  -- Common transplant-related ICD codes (diagnoses)\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    (icd_version = 10 AND icd_code LIKE 'Z94%')  -- Transplanted organ status\n    OR (icd_version = 9 AND icd_code IN ('V42.0', 'V42.1', 'V42.2', 'V42.3', 'V42.4', 'V42.5', 'V42.6', 'V42.7', 'V42.8', 'V42.9'))\n    -- Add other transplant-related codes if needed\n),\n\ncohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.hospital_expire_flag,\n    pat.anchor_age,\n    pat.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  INNER JOIN transplant_codes tc\n    ON diag.icd_code = tc.icd_code AND diag.icd_version = tc.icd_version\n  WHERE \n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 43 AND 53\n),\n\nmedications AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT p.drug) AS complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n    AND p.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.subject_id, c.hadm_id\n),\n\ncohort_with_meds AS (\n  SELECT \n    c.*,\n    COALESCE(m.complexity_score, 0) AS complexity_score\n  FROM cohort c\n  LEFT JOIN medications m\n    ON c.hadm_id = m.hadm_id AND c.subject_id = m.subject_id\n),\n\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY complexity_score) AS complexity_quartile\n  FROM cohort_with_meds\n),\n\nreadmissions AS (\n  SELECT \n    q1.hadm_id,\n    COUNT(q2.hadm_id) > 0 AS readmitted_30d\n  FROM quartiles q1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` q2\n    ON q1.subject_id = q2.subject_id\n    AND q2.admittime > q1.dischtime\n    AND q2.admittime <= DATETIME_ADD(q1.dischtime, INTERVAL 30 DAY)\n  GROUP BY q1.hadm_id\n)\n\nSELECT \n  complexity_quartile,\n  COUNT(*) AS n,\n  AVG(complexity_score) AS mean_complexity_score,\n  AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS mean_los_days,\n  AVG(hospital_expire_flag) AS in_hospital_mortality_rate,\n  AVG(CAST(readmitted_30d AS INT)) AS readmission_30d_rate\nFROM quartiles q\nLEFT JOIN readmissions r\n  ON q.hadm_id = r.hadm_id\nGROUP BY complexity_quartile\nORDER BY complexity_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

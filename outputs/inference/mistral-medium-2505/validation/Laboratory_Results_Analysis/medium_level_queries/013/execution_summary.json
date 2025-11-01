@@ -1,0 +1,28 @@
+{
+  "query": "For a 55-year-old male: among male patients 50\u201360 admitted with chest pain or AMI whose initial hs\u2011TnT > ULN (0.014 ng/mL), report patient and admission counts, mean, median, IQR.",
+  "final_sql": "WITH\n-- Get male patients aged 50-60\neligible_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 50 AND 60\n),\n\n-- Get admissions with chest pain or AMI\nchest_pain_ami_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n  ON\n    d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM eligible_patients)\n    AND (\n      -- Chest pain ICD codes (example - adjust as needed)\n      di.icd_code IN ('R07.9', 'R07.1', 'R07.2', 'I21.9', 'I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4')\n      -- Or use LIKE for broader matching if needed\n      OR di.long_title LIKE '%chest pain%'\n      OR di.long_title LIKE '%acute myocardial infarction%'\n      OR di.long_title LIKE '%AMI%'\n    )\n),\n\n-- Get first hs-TnT measurement per admission\nfirst_hs_tnt AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d\n  ON\n    l.itemid = d.itemid\n  JOIN\n    chest_pain_ami_admissions cpa\n  ON\n    l.subject_id = cpa.subject_id AND l.hadm_id = cpa.hadm_id\n  WHERE\n    d.label = 'Troponin T, High Sensitivity'\n    AND l.valuenum > 0.014  -- ULN for hs-TnT\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY l.subject_id, l.hadm_id ORDER BY l.charttime) = 1\n),\n\n-- Calculate percentiles\npercentiles AS (\n  SELECT\n    PERCENTILE_DISC(valuenum, 0.5) OVER() AS median_hs_tnt,\n    PERCENTILE_DISC(valuenum, 0.25) OVER() AS q1_hs_tnt,\n    PERCENTILE_DISC(valuenum, 0.75) OVER() AS q3_hs_tnt\n  FROM first_hs_tnt\n  LIMIT 1\n)\n\n-- Final aggregation\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(DISTINCT hadm_id) AS admission_count,\n  AVG(valuenum) AS mean_hs_tnt,\n  (SELECT median_hs_tnt FROM percentiles) AS median_hs_tnt,\n  (SELECT q1_hs_tnt FROM percentiles) AS q1_hs_tnt,\n  (SELECT q3_hs_tnt FROM percentiles) AS q3_hs_tnt,\n  (SELECT q3_hs_tnt FROM percentiles) - (SELECT q1_hs_tnt FROM percentiles) AS iqr_hs_tnt\nFROM\n  first_hs_tnt;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Subquery of type IN must have only one output column at [56:35]; reason: invalidQuery, location: query, message: Subquery of type IN must have only one output column at [56:35]\n\nLocation: US\nJob ID: 58965431-0af6-4a1f-9d12-b4a8b2b6a946\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: c84a8107-5292-4577-b42c-08a183e1fcb7\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "I have a 67-year-old female ICU patient. Among female ICU patients aged 62\u201372, show first-24h per-measurement temperature categories (<36.0 / 36.0\u201337.9 / \u226538.0\u00b0C) with mean, median, IQR and AKI rate.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    i.intime,\n    i.stay_id,\n    i.hadm_id,\n    EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age) AS age_at_intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age) BETWEEN 62 AND 72\n),\n\nadmissions AS (\n  SELECT hadm_id, admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\n\ncreatinine AS (\n  SELECT \n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum AS creatinine\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  WHERE l.itemid = 50912\n    AND l.valuenum IS NOT NULL\n),\n\nbaseline_creatinine AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    MIN(c.creatinine) AS baseline\n  FROM creatinine c\n  JOIN admissions a\n    ON c.hadm_id = a.hadm_id\n  WHERE c.charttime BETWEEN a.admittime AND a.admittime + INTERVAL 48 HOUR\n  GROUP BY c.subject_id, c.hadm_id\n),\n\naki AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    MAX(CASE WHEN c.creatinine >= b.baseline + 0.3 THEN 1 ELSE 0 END) AS aki_flag\n  FROM creatinine c\n  JOIN baseline_creatinine b\n    ON c.subject_id = b.subject_id AND c.hadm_id = b.hadm_id\n  JOIN admissions a\n    ON c.hadm_id = a.hadm_id\n  WHERE c.charttime BETWEEN a.admittime AND a.admittime + INTERVAL 48 HOUR\n  GROUP BY c.subject_id, c.hadm_id\n),\n\ntemp_measurements AS (\n  SELECT \n    c.subject_id,\n    c.stay_id,\n    c.hadm_id,\n    c.charttime,\n    c.valuenum AS temperature,\n    CASE \n      WHEN c.valuenum < 36.0 THEN '<36.0'\n      WHEN c.valuenum >= 36.0 AND c.valuenum < 38.0 THEN '36.0-37.9'\n      ELSE '\u226538.0'\n    END AS temp_category\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON c.itemid = d.itemid\n  JOIN cohort co\n    ON c.stay_id = co.stay_id\n  WHERE LOWER(d.label) LIKE '%temperature%'\n    AND c.charttime BETWEEN co.intime AND co.intime + INTERVAL 24 HOUR\n    AND c.valuenum IS NOT NULL\n),\n\npatient_category AS (\n  SELECT \n    t.subject_id,\n    t.temp_category,\n    COALESCE(MAX(a.aki_flag), 0) AS has_aki\n  FROM temp_measurements t\n  LEFT JOIN aki a\n    ON t.hadm_id = a.hadm_id\n  GROUP BY t.subject_id, t.temp_category\n)\n\nSELECT \n  temp_category,\n  AVG(temperature) AS mean_temp,\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY temperature) AS median_temp,\n  PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY temperature) - PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY temperature) AS iqr_temp,\n  SUM(has_aki) / COUNT(DISTINCT subject_id) AS aki_rate\nFROM (\n  SELECT \n    t.temp_category,\n    t.temperature,\n    pc.has_aki\n  FROM temp_measurements t\n  JOIN patient_category pc\n    ON t.subject_id = pc.subject_id AND t.temp_category = pc.temp_category\n) AS combined\nGROUP BY temp_category;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got keyword WITHIN at [93:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [93:24]\n\nLocation: US\nJob ID: cffef19f-8020-49ea-ba0a-5afec97e32c9\n",
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [74:17]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [74:17]\n\nLocation: US\nJob ID: d03d9fca-1ece-4b4c-9171-5d8d3dba946c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [93:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [93:24]\n\nLocation: US\nJob ID: cffef19f-8020-49ea-ba0a-5afec97e32c9\n"
+    }
+  ]
+}

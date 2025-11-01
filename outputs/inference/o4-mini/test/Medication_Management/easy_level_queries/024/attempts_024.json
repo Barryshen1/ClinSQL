@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 84 AND 94\n),\n-- Extract aspirin prescriptions\naspirin_rx AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    starttime AS asp_start,\n    stoptime  AS asp_stop\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    lower(drug) LIKE '%aspirin%'\n    AND starttime IS NOT NULL\n    AND stoptime  IS NOT NULL\n),\n-- Extract P2Y12 inhibitor prescriptions\np2y12_rx AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    starttime AS pyr_start,\n    stoptime  AS pyr_stop\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    -- clopidogrel, prasugrel, ticagrelor\n    (\n      lower(drug) LIKE '%clopidogrel%'\n      OR lower(drug) LIKE '%prasugrel%'\n      OR lower(drug) LIKE '%ticagrelor%'\n    )\n    AND starttime IS NOT NULL\n    AND stoptime  IS NOT NULL\n),\n-- Compute DAPT overlap durations\ndapt_overlaps AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    -- compute overlap interval\n    GREATEST(a.asp_start, p.pyr_start) AS overlap_start,\n    LEAST  (a.asp_stop,  p.pyr_stop ) AS overlap_end\n  FROM\n    cohort AS c\n    JOIN aspirin_rx AS a\n      ON c.subject_id = a.subject_id\n     AND c.hadm_id    = a.hadm_id\n    JOIN p2y12_rx AS p\n      ON c.subject_id = p.subject_id\n     AND c.hadm_id    = p.hadm_id\n),\n-- Filter valid overlaps and compute duration in days\ndapt_durations AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    overlap_start,\n    overlap_end,\n    -- duration in full days\n    TIMESTAMP_DIFF(overlap_end, overlap_start, DAY) AS duration_days\n  FROM\n    dapt_overlaps\n  WHERE\n    overlap_end > overlap_start\n)\n-- Final: maximum single continuous DAPT duration\nSELECT\n  MAX(duration_days) AS max_dapt_duration_days\nFROM\n  dapt_durations;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

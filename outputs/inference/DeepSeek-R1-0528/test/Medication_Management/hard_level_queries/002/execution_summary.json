@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 72-year-old man with AMI. Among male inpatients aged 67-77 with AMI, stratified into tertiles by first-24-hour medication complexity score, report per tertile: admission count, score range and mean, mean LOS (days), in-hospital mortality%, and 30-day readmission%.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      WHERE \n        d.hadm_id = a.hadm_id AND \n        ((d.icd_version = 9 AND d.icd_code LIKE '410%') OR \n         (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%')))\n    )\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 67 AND 77\n),\n\nmed_score AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT e.medication) AS complexity_score\n  FROM base_cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar` e\n    ON c.hadm_id = e.hadm_id\n    AND e.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 24 HOUR)\n  GROUP BY c.hadm_id\n),\n\ncohort_with_next_adm AS (\n  SELECT \n    c.*,\n    LEAD(a.admittime) OVER (PARTITION BY c.subject_id ORDER BY a.admittime) AS next_admittime\n  FROM base_cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON c.subject_id = a.subject_id\n),\n\ncohort_with_metrics AS (\n  SELECT \n    c.*,\n    COALESCE(m.complexity_score, 0) AS complexity_score,\n    DATETIME_DIFF(c.dischtime, c.admittime, DAY) AS los_days,\n    c.hospital_expire_flag AS mortality_flag,\n    CASE \n      WHEN c.hospital_expire_flag = 1 THEN 0\n      WHEN DATETIME_DIFF(c.next_admittime, c.dischtime, DAY) <= 30 THEN 1\n      ELSE 0 \n    END AS readmission_flag\n  FROM cohort_with_next_adm c\n  LEFT JOIN med_score m\n    ON c.hadm_id = m.hadm_id\n),\n\ntertile_groups AS (\n  SELECT \n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM cohort_with_metrics\n)\n\nSELECT \n  tertile,\n  COUNT(hadm_id) AS admission_count,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  ROUND(AVG(complexity_score), 2) AS mean_score,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(AVG(mortality_flag) * 100, 2) AS mortality_percent,\n  ROUND(AVG(readmission_flag) * 100, 2) AS readmission_percent\nFROM tertile_groups\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

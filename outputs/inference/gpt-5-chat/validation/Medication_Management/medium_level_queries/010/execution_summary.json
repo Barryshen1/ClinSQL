@@ -1,0 +1,22 @@
+{
+  "query": "My 72\u2011year\u2011old female: among female inpatients 67\u201377 with T2DM and HF, give initiation % by class (insulin, met, SU, DPP\u20114, SGLT2, GLP\u20111, TZD) first 12h vs final 48h and net change (pp).",
+  "final_sql": "WITH cohort AS (\n  SELECT a.subject_id, a.hadm_id, p.gender, p.anchor_age, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  -- Female & age restriction\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 67 AND 77\n),\ndx AS (\n  SELECT hadm_id,\n    MAX(CASE WHEN (\n      (icd_version = 9 AND icd_code LIKE '250%' AND (RIGHT(icd_code,1) IN ('0','2')))\n      OR (icd_version = 10 AND icd_code LIKE 'E11%')\n    ) THEN 1 ELSE 0 END) AS has_t2dm,\n    MAX(CASE WHEN (\n      (icd_version = 9 AND icd_code LIKE '428%')\n      OR (icd_version = 10 AND icd_code LIKE 'I50%')\n    ) THEN 1 ELSE 0 END) AS has_hf\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\ncohort_dx AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN dx d ON c.hadm_id = d.hadm_id\n  WHERE d.has_t2dm = 1\n    AND d.has_hf = 1\n),\nrx_class AS (\n  SELECT pr.subject_id, pr.hadm_id, pr.starttime,\n    CASE\n      WHEN LOWER(pr.drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN LOWER(pr.drug) LIKE '%metformin%' THEN 'Metformin'\n      WHEN LOWER(pr.drug) LIKE '%glipizide%' OR LOWER(pr.drug) LIKE '%glyburide%' OR LOWER(pr.drug) LIKE '%glimepiride%' THEN 'Sulfonylurea'\n      WHEN LOWER(pr.drug) LIKE '%sitagliptin%' OR LOWER(pr.drug) LIKE '%linagliptin%' OR LOWER(pr.drug) LIKE '%alogliptin%' OR LOWER(pr.drug) LIKE '%saxagliptin%' THEN 'DPP4'\n      WHEN LOWER(pr.drug) LIKE '%canagliflozin%' OR LOWER(pr.drug) LIKE '%dapagliflozin%' OR LOWER(pr.drug) LIKE '%empagliflozin%' THEN 'SGLT2'\n      WHEN LOWER(pr.drug) LIKE '%exenatide%' OR LOWER(pr.drug) LIKE '%liraglutide%' OR LOWER(pr.drug) LIKE '%dulaglutide%' OR LOWER(pr.drug) LIKE '%semaglutide%' THEN 'GLP1'\n      WHEN LOWER(pr.drug) LIKE '%pioglitazone%' OR LOWER(pr.drug) LIKE '%rosiglitazone%' THEN 'TZD'\n      ELSE NULL\n    END AS drug_class\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n),\nrx_window AS (\n  SELECT cd.subject_id, cd.hadm_id, r.drug_class,\n    CASE\n      WHEN r.starttime BETWEEN cd.admittime AND DATETIME_ADD(cd.admittime, INTERVAL 12 HOUR) THEN 'first12h'\n      WHEN r.starttime BETWEEN DATETIME_SUB(cd.dischtime, INTERVAL 48 HOUR) AND cd.dischtime THEN 'final48h'\n      ELSE NULL\n    END AS time_window\n  FROM cohort_dx cd\n  JOIN rx_class r\n    ON cd.subject_id = r.subject_id\n    AND cd.hadm_id = r.hadm_id\n  WHERE r.drug_class IS NOT NULL\n),\ndistinct_rx AS (\n  SELECT DISTINCT subject_id, hadm_id, drug_class, time_window\n  FROM rx_window\n  WHERE time_window IS NOT NULL\n),\ncounts AS (\n  SELECT\n    drug_class,\n    SUM(CASE WHEN time_window = 'first12h' THEN 1 ELSE 0 END) AS pts_first12h,\n    SUM(CASE WHEN time_window = 'final48h' THEN 1 ELSE 0 END) AS pts_final48h\n  FROM distinct_rx\n  GROUP BY drug_class\n),\ndenominator AS (\n  SELECT COUNT(DISTINCT hadm_id) AS n_patients\n  FROM cohort_dx\n)\nSELECT\n  c.drug_class,\n  ROUND(100.0 * c.pts_first12h / d.n_patients, 2) AS pct_first12h,\n  ROUND(100.0 * c.pts_final48h / d.n_patients, 2) AS pct_final48h,\n  ROUND( (100.0 * c.pts_final48h / d.n_patients) -\n         (100.0 * c.pts_first12h / d.n_patients), 2) AS net_change_pp\nFROM counts c\nCROSS JOIN denominator d\nORDER BY drug_class;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword WINDOW at [50:12]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword WINDOW at [50:12]\n\nLocation: US\nJob ID: fdeae92d-ec8a-4840-9f4c-e465acede304\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For a 61-year-old female ICU patient: among female ICU stays aged 56\u201366, categorize per-stay mean MAP over first 48 hours (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report count, mean, median, IQR.",
+  "final_sql": "WITH eligible_stays AS (\n  SELECT \n    i.stay_id,\n    i.subject_id,\n    i.intime,\n    p.gender,\n    p.anchor_age\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    i.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 56 AND 66\n),\nmap_data AS (\n  SELECT \n    es.stay_id,\n    c.charttime,\n    c.valuenum AS map_value\n  FROM \n    eligible_stays es\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  ON \n    es.subject_id = c.subject_id\n    AND es.stay_id = c.stay_id\n  WHERE \n    c.itemid = 220052  -- MAP\n    AND c.valuenum IS NOT NULL \n    AND c.valuenum > 0\n    AND c.charttime >= es.intime\n    AND c.charttime <= TIMESTAMP_ADD(es.intime, INTERVAL 48 HOUR)\n),\nper_stay_means AS (\n  SELECT \n    stay_id,\n    AVG(map_value) AS mean_map\n  FROM \n    map_data\n  GROUP BY \n    stay_id\n  HAVING \n    COUNT(*) >= 1  -- Ensure data in first 48h\n),\ncategorized_stays AS (\n  SELECT \n    CASE \n      WHEN mean_map < 65 THEN '<65'\n      WHEN mean_map >= 65 AND mean_map <= 74 THEN '65-74'\n      WHEN mean_map >= 75 AND mean_map <= 84 THEN '75-84'\n      ELSE '>=85'\n    END AS map_category,\n    mean_map,\n    -- Pre-compute percentiles per category\n    AVG(mean_map) OVER (PARTITION BY \n      CASE \n        WHEN mean_map < 65 THEN '<65'\n        WHEN mean_map >= 65 AND mean_map <= 74 THEN '65-74'\n        WHEN mean_map >= 75 AND mean_map <= 84 THEN '75-84'\n        ELSE '>=85'\n      END\n    ) AS category_mean_map,\n    PERCENTILE_CONT(mean_map, 0.5) OVER (PARTITION BY \n      CASE \n        WHEN mean_map < 65 THEN '<65'\n        WHEN mean_map >= 65 AND mean_map <= 74 THEN '65-74'\n        WHEN mean_map >= 75 AND mean_map <= 84 THEN '75-84'\n        ELSE '>=85'\n      END\n    ) AS category_median_map,\n    PERCENTILE_CONT(mean_map, 0.25) OVER (PARTITION BY \n      CASE \n        WHEN mean_map < 65 THEN '<65'\n        WHEN mean_map >= 65 AND mean_map <= 74 THEN '65-74'\n        WHEN mean_map >= 75 AND mean_map <= 84 THEN '75-84'\n        ELSE '>=85'\n      END\n    ) AS category_iqr_lower,\n    PERCENTILE_CONT(mean_map, 0.75) OVER (PARTITION BY \n      CASE \n        WHEN mean_map < 65 THEN '<65'\n        WHEN mean_map >= 65 AND mean_map <= 74 THEN '65-74'\n        WHEN mean_map >= 75 AND mean_map <= 84 THEN '75-84'\n        ELSE '>=85'\n      END\n    ) AS category_iqr_upper\n  FROM \n    per_stay_means\n)\nSELECT \n  map_category,\n  COUNT(*) AS stay_count,\n  MAX(category_mean_map) AS mean_map,  -- Same value for all rows in category\n  MAX(category_median_map) AS median_map,\n  MAX(category_iqr_lower) AS iqr_lower,\n  MAX(category_iqr_upper) AS iqr_upper\nFROM \n  categorized_stays\nGROUP BY \n  map_category\nORDER BY \n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65-74' THEN 2\n    WHEN '75-84' THEN 3\n    WHEN '>=85' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Window ORDER BY is not allowed for analytic function percentile_cont at [64:40]; reason: invalidQuery, location: query, message: Window ORDER BY is not allowed for analytic function percentile_cont at [64:40]\n\nLocation: US\nJob ID: 818e4bf7-f2be-4246-84a1-694b7645a4a4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

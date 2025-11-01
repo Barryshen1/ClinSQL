@@ -1,0 +1,28 @@
+{
+  "query": "In women 83\u201393 with heart failure, stratified by ICU vs non\u2011ICU, LOS <8 vs \u22658, and comorbidity burden (0\u20131/2/\u22653), report mortality (%), median LOS, CKD and diabetes prevalence.",
+  "final_sql": "WITH patients AS (\n  SELECT subject_id, gender, anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients\n  WHERE gender = 'F'\n),\nadms AS (\n  SELECT a.*, p.anchor_age,\n         (EXTRACT(YEAR FROM a.admittime) - 2008 + p.anchor_age) AS age_at_adm\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN patients p ON a.subject_id = p.subject_id\n  WHERE (EXTRACT(YEAR FROM a.admittime) - 2008 + p.anchor_age) BETWEEN 83 AND 93\n),\nhf_adms AS (\n  SELECT DISTINCT ad.hadm_id, ad.subject_id, ad.admittime, ad.dischtime, ad.hospital_expire_flag, ad.age_at_adm,\n         DATE_DIFF(ad.dischtime, ad.admittime, DAY) AS los_days\n  FROM adms ad\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d ON ad.hadm_id = d.hadm_id\n  WHERE ((d.icd_version = 9 AND d.icd_code LIKE '428%')\n     OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%'))\n     AND ad.dischtime > ad.admittime\n),\ncomorb AS (\n  SELECT hadm_id,\n         MAX(CASE WHEN ((icd_version = 9 AND icd_code LIKE '250%') OR (icd_version = 10 AND icd_code LIKE 'E1[0-4]%')) THEN 1 ELSE 0 END) AS has_diabetes,\n         MAX(CASE WHEN ((icd_version = 9 AND icd_code LIKE '585%') OR (icd_version = 10 AND icd_code LIKE 'N18%')) THEN 1 ELSE 0 END) AS has_ckd,\n         MAX(CASE WHEN ((icd_version = 9 AND icd_code LIKE '40[0-9]%') OR (icd_version = 10 AND icd_code LIKE 'I1[0-5]%')) THEN 1 ELSE 0 END) AS has_htn,\n         MAX(CASE WHEN ((icd_version = 9 AND icd_code LIKE '41[0-4]%') OR (icd_version = 10 AND (icd_code LIKE 'I20%' OR icd_code LIKE 'I21%' OR icd_code LIKE 'I22%' OR icd_code LIKE 'I23%' OR icd_code LIKE 'I24%' OR icd_code LIKE 'I25%'))) THEN 1 ELSE 0 END) AS has_ihd,\n         MAX(CASE WHEN ((icd_version = 9 AND icd_code = '427.31') OR (icd_version = 10 AND icd_code = 'I48')) THEN 1 ELSE 0 END) AS has_afib,\n         MAX(CASE WHEN ((icd_version = 9 AND icd_code LIKE '49[0-6]%') OR (icd_version = 10 AND (icd_code LIKE 'J4[0-4]%' OR icd_code = 'J47'))) THEN 1 ELSE 0 END) AS has_copd\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n  WHERE hadm_id IN (SELECT hadm_id FROM hf_adms)\n  GROUP BY hadm_id\n),\nbase AS (\n  SELECT h.hadm_id, h.hospital_expire_flag, h.los_days,\n         COALESCE(c.has_diabetes, 0) AS diabetes_flag,\n         COALESCE(c.has_ckd, 0) AS ckd_flag,\n         CASE WHEN (COALESCE(c.has_diabetes, 0) + COALESCE(c.has_ckd, 0) + COALESCE(c.has_htn, 0) + COALESCE(c.has_ihd, 0) + COALESCE(c.has_afib, 0) + COALESCE(c.has_copd, 0)) <= 1 THEN '0-1'\n              WHEN (COALESCE(c.has_diabetes, 0) + COALESCE(c.has_ckd, 0) + COALESCE(c.has_htn, 0) + COALESCE(c.has_ihd, 0) + COALESCE(c.has_afib, 0) + COALESCE(c.has_copd, 0)) = 2 THEN '2'\n              ELSE '>=3'\n         END AS comorbidity_burden,\n         CASE WHEN EXISTS(SELECT 1 FROM `physionet-data.mimiciv_3_1_icu`.icustays i WHERE i.hadm_id = h.hadm_id) THEN 'ICU' ELSE 'non-ICU' END AS icu_flag,\n         CASE WHEN h.los_days < 8 THEN '<8' ELSE '>=8' END AS los_cat\n  FROM hf_adms h\n  LEFT JOIN comorb c ON h.hadm_id = c.hadm_id\n  WHERE h.los_days >= 0\n),\ntemp AS (\n  SELECT *,\n         PERCENTILE_CONT(los_days, 0.5) OVER (PARTITION BY icu_flag, los_cat, comorbidity_burden) AS median_los\n  FROM base\n)\nSELECT \n  icu_flag,\n  los_cat,\n  comorbidity_burden,\n  COUNT(*) AS n,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct,\n  ANY_VALUE(median_los) AS median_los,\n  ROUND(AVG(diabetes_flag) * 100, 2) AS diabetes_prevalence_pct,\n  ROUND(AVG(ckd_flag) * 100, 2) AS ckd_prevalence_pct\nFROM temp\nGROUP BY icu_flag, los_cat, comorbidity_burden\nORDER BY icu_flag, los_cat, comorbidity_burden;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:11]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:11]\n\nLocation: US\nJob ID: 410bcefe-b7d5-44bc-bd88-9fa8036251c3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: burden_count at [39:20]; reason: invalidQuery, location: query, message: Unrecognized name: burden_count at [39:20]\n\nLocation: US\nJob ID: 0b90af9d-6a5f-4174-a5b5-9c53cda86a5c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

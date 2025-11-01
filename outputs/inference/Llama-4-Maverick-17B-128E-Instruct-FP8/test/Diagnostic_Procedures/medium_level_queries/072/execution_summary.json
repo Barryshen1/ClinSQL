@@ -1,0 +1,16 @@
+{
+  "query": "I have a 57-year-old female. Among women 52\u201362 with acute pancreatitis, give mean, min and max diagnostic procedures per admission for 1\u20134 vs 5\u20138 days, stratified by primary vs secondary.",
+  "final_sql": "WITH \n-- Step 1: Identify Acute Pancreatitis ICD codes\nacute_pancreatitis_icd AS (\n  SELECT icd_code \n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` \n  WHERE lower(long_title) LIKE '%acute pancreatitis%' \n  AND icd_version = 9  -- or 10, depending on the codes you find\n),\n-- Step 2: Patient selection and diagnosis details\npatient_diagnosis AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    d.icd_code,\n    d.seq_num,\n    CASE WHEN d.seq_num = 1 THEN 'primary' ELSE 'secondary' END AS diagnosis_priority\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F' \n  AND p.anchor_age BETWEEN 52 AND 62\n  AND d.icd_code IN (SELECT icd_code FROM acute_pancreatitis_icd)\n),\n-- Step 3: Count diagnostic procedures per admission\nprocedures_count AS (\n  SELECT \n    hadm_id, \n    COUNT(*) AS num_procedures\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd`\n  GROUP BY hadm_id\n),\n-- Step 4: Calculate LOS and categorize\nlos_details AS (\n  SELECT \n    a.hadm_id,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los,\n    COALESCE(DATETIME_DIFF(i.outtime, i.intime, DAY), 0) AS icu_los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON a.hadm_id = i.hadm_id\n),\n-- Step 5: Combine data and analyze\ncombined_data AS (\n  SELECT \n    pd.diagnosis_priority,\n    CASE \n      WHEN ld.hospital_los BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN ld.hospital_los BETWEEN 5 AND 8 THEN '5-8 days'\n      ELSE 'outside range'\n    END AS los_category,\n    pc.num_procedures\n  FROM patient_diagnosis pd\n  JOIN procedures_count pc ON pd.hadm_id = pc.hadm_id\n  JOIN los_details ld ON pd.hadm_id = ld.hadm_id\n  WHERE ld.hospital_los BETWEEN 1 AND 8  -- Filter for LOS range of interest\n)\nSELECT \n  diagnosis_priority,\n  los_category,\n  AVG(num_procedures) AS mean_procedures,\n  MIN(num_procedures) AS min_procedures,\n  MAX(num_procedures) AS max_procedures\nFROM combined_data\nGROUP BY diagnosis_priority, los_category\nORDER BY diagnosis_priority, los_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

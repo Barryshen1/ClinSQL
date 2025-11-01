@@ -1,0 +1,22 @@
+{
+  "query": "For a 44\u2011year\u2011old man: among male 39\u201349 with pneumonia (aspiration vs community\u2011acquired), provide in\u2011hospital mortality (%) by LOS (1\u20133/4\u20137/\u22658 days) and day\u20111 ICU status; report absolute/relative differences and average comorbidity count.",
+  "final_sql": "WITH elixhauser_conditions AS (\n  SELECT 'I50' AS icd_code_prefix, 'heart_failure' AS condition\n  UNION ALL SELECT 'E11', 'diabetes' \n  UNION ALL SELECT 'N18', 'renal_failure'\n  UNION ALL SELECT 'I10', 'hypertension'\n  UNION ALL SELECT 'I48', 'arrhythmia'\n  UNION ALL SELECT 'J44', 'copd'\n  UNION ALL SELECT 'C', 'cancer'\n  UNION ALL SELECT 'K70', 'liver_disease'\n  UNION ALL SELECT 'E66', 'obesity'\n  UNION ALL SELECT 'F32', 'depression'\n),\npneumonia_codes AS (\n  SELECT 'J69.0' AS icd_code, 'aspiration' AS pneumonia_type\n  UNION ALL\n  SELECT 'J18.9', 'community'\n  UNION ALL\n  SELECT 'J13', 'community'\n  UNION ALL\n  SELECT 'J14', 'community'\n  UNION ALL\n  SELECT 'J15.9', 'community'\n),\npatients_with_pneumonia AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    -- Calculate age at admission\n    (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) AS age_at_admit,\n    -- Determine pneumonia type\n    CASE \n      WHEN di.icd_code = 'J69.0' THEN 'aspiration'\n      ELSE 'community'\n    END AS pneumonia_type\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  JOIN pneumonia_codes pc ON di.icd_code = pc.icd_code\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 39 AND 49\n),\npneumonia_with_los_icu AS (\n  SELECT\n    pwp.*,\n    -- Calculate LOS in days\n    DATETIME_DIFF(pwp.dischtime, pwp.admittime, HOUR) / 24.0 AS los_days,\n    -- ICU on day 1: ICU intime within 24h of admission and overlaps\n    CASE \n      WHEN i.stay_id IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS icu_day1\n  FROM patients_with_pneumonia pwp\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON pwp.hadm_id = i.hadm_id\n    AND i.intime < DATETIME_ADD(pwp.admittime, INTERVAL 24 HOUR)\n    AND i.outtime >= pwp.admittime\n),\npneumonia_with_comorbidities AS (\n  SELECT\n    p.*,\n    -- Count number of distinct elixhauser conditions per patient\n    COALESCE(COUNT(DISTINCT ec.condition), 0) AS comorbidity_count\n  FROM pneumonia_with_los_icu p\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON p.hadm_id = di.hadm_id\n  LEFT JOIN elixhauser_conditions ec \n    ON di.icd_code LIKE CONCAT(ec.icd_code_prefix, '%')\n  GROUP BY p.subject_id, p.hadm_id, p.admittime, p.dischtime, p.hospital_expire_flag, \n           p.anchor_age, p.anchor_year, p.age_at_admit, p.pneumonia_type, \n           p.los_days, p.icu_day1\n),\nfinal_cohort AS (\n  SELECT\n    pneumonia_type,\n    CASE\n      WHEN los_days >= 1 AND los_days <= 3 THEN '1-3 days'\n      WHEN los_days > 3 AND los_days <= 7 THEN '4-7 days'\n      WHEN los_days >= 8 THEN '>=8 days'\n      ELSE NULL\n    END AS los_group,\n    icu_day1,\n    hospital_expire_flag,\n    comorbidity_count\n  FROM pneumonia_with_comorbidities\n  WHERE los_days IS NOT NULL AND los_days > 0  -- Exclude negative/zero LOS\n)\nSELECT\n  pneumonia_type,\n  los_group,\n  icu_day1,\n  COUNT(*) AS n,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_rate_pct,\n  AVG(comorbidity_count) AS avg_comorbidity_count\nFROM final_cohort\nWHERE los_group IS NOT NULL\nGROUP BY pneumonia_type, los_group, icu_day1\nORDER BY pneumonia_type, los_group, icu_day1;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Query without FROM clause cannot have a GROUP BY clause at [2:65]; reason: invalidQuery, location: query, message: Query without FROM clause cannot have a GROUP BY clause at [2:65]\n\nLocation: US\nJob ID: a4b3b585-314a-4af5-9d20-f0479772f72a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

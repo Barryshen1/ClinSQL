@@ -1,0 +1,16 @@
+{
+  "query": "I have a 44-year-old female inpatient. Among female inpatients 39\u201349 with asthma exacerbation, what is the 75th\u2011percentile lab instability score in the first 48 hours? Compare critical\u2011lab events per admission to all inpatients and report cohort LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON a.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON dx.icd_code = dd.icd_code\n   AND dx.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND LOWER(dd.long_title) LIKE '%asthma%'\n    AND LOWER(dd.long_title) LIKE '%exacerb%'\n),\ncritical_labs AS (\n  SELECT l.hadm_id,\n         COUNT(*) AS critical_lab_events\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN cohort c\n    ON l.hadm_id = c.hadm_id\n  WHERE l.flag IS NOT NULL\n    AND l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY l.hadm_id\n),\nall_admissions AS (\n  SELECT a.hadm_id, a.admittime, a.dischtime,\n         DATE_DIFF(a.dischtime, a.admittime, DAY) AS los,\n         a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\nall_critical_labs AS (\n  SELECT l.hadm_id,\n         COUNT(*) AS critical_lab_events\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN all_admissions a\n    ON l.hadm_id = a.hadm_id\n  WHERE l.flag IS NOT NULL\n    AND l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 48 HOUR)\n  GROUP BY l.hadm_id\n),\ncohort_with_labs AS (\n  SELECT c.*,\n         IFNULL(cl.critical_lab_events, 0) AS critical_lab_events\n  FROM cohort c\n  LEFT JOIN critical_labs cl\n    ON c.hadm_id = cl.hadm_id\n),\nall_with_labs AS (\n  SELECT a.*,\n         IFNULL(cl.critical_lab_events, 0) AS critical_lab_events\n  FROM all_admissions a\n  LEFT JOIN all_critical_labs cl\n    ON a.hadm_id = cl.hadm_id\n),\ncohort_stats AS (\n  SELECT\n    APPROX_QUANTILES(critical_lab_events, 4)[OFFSET(3)] AS p75_lab_instability,\n    AVG(los) AS avg_los,\n    SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate\n  FROM cohort_with_labs\n),\nall_stats AS (\n  SELECT\n    AVG(critical_lab_events) AS avg_lab_instability,\n    AVG(los) AS avg_los,\n    SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate\n  FROM all_with_labs\n)\nSELECT\n  cs.p75_lab_instability,\n  cs.avg_los AS cohort_avg_los,\n  cs.mortality_rate AS cohort_mortality_rate,\n  ast.avg_lab_instability AS all_avg_lab_instability,\n  ast.avg_los AS all_avg_los,\n  ast.mortality_rate AS all_mortality_rate\nFROM cohort_stats cs\nJOIN all_stats ast\n  ON TRUE;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

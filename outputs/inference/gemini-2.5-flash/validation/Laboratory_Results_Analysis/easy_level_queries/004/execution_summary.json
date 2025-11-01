@@ -1,0 +1,22 @@
+{
+  "query": "For my 76-year-old female hospitalized with sepsis, what is the median platelet count (average over first 24 hours) among similar patients?",
+  "final_sql": "WITH SepsisFemale76yoAdmissions AS (\n    SELECT DISTINCT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    WHERE\n        pat.anchor_age = 76 -- Filter for 76-year-old patients\n        AND pat.gender = 'F' -- Filter for female patients\n        AND (\n            -- Sepsis ICD-10 codes (A40.x, A41.x)\n            (diag.icd_version = 10 AND (diag.icd_code LIKE 'A40%' OR diag.icd_code LIKE 'A41%'))\n            OR\n            -- Sepsis ICD-9 codes (038.x, 995.91, 995.92)\n            (diag.icd_version = 9 AND (diag.icd_code LIKE '038%' OR diag.icd_code = '99591' OR diag.icd_code = '99592'))\n        )\n),\n-- For each identified admission, extract platelet counts within the first 24 hours\n-- and calculate the average for that admission.\nCombinedPlateletAverages AS (\n    SELECT\n        sfa.subject_id,\n        sfa.hadm_id,\n        AVG(le.valuenum) AS avg_platelet_24hr\n    FROM\n        SepsisFemale76yoAdmissions sfa\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON sfa.subject_id = le.subject_id\n        AND sfa.hadm_id = le.hadm_id\n    WHERE\n        le.itemid = 51265 -- itemid for 'Platelet Count'\n        AND le.valuenum IS NOT NULL -- Ensure a numeric value exists\n        AND le.valuenum > 0 -- Ensure platelet count is positive and sensible\n        AND le.charttime >= sfa.admittime\n        AND le.charttime <= TIMESTAMP_ADD(sfa.admittime, INTERVAL 24 HOUR) -- Within first 24 hours of admission\n    GROUP BY\n        sfa.subject_id,\n        sfa.hadm_id\n)\n-- Calculate the median of these 24-hour average platelet counts.\nSELECT\n    APPROX_QUANTILES(avg_platelet_24hr, 2)[OFFSET(1)] AS median_avg_platelet_count_24hr\nFROM\n    CombinedPlateletAverages\nWHERE\n    avg_platelet_24hr IS NOT NULL; -- Exclude admissions where no platelet count was found in the first 24 hours;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \")\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \")\" at [1:12]\n\nLocation: US\nJob ID: 4758847c-aa86-4339-a181-60f67f391043\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

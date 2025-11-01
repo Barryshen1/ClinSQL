@@ -1,0 +1,22 @@
+{
+  "query": "For my 92\u2011year\u2011old female patient: among female patients 87\u201397 admitted with chest pain, report counts, percentages, and mean, median, IQR of index hs\u2011TnT by category (Normal\u22640.04; Borderline 0.04\u20130.1; Injury>0.1).",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    pat.anchor_year,\n    pat.anchor_age,\n    pat.gender,\n    (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) + pat.anchor_age AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'F'\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE\n        diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code LIKE '786.5%')\n          OR (diag.icd_version = 10 AND diag.icd_code LIKE 'R07%')\n        )\n    )\n),\nfiltered_cohort AS (\n  SELECT\n    subject_id,\n    hadm_id\n  FROM cohort\n  WHERE age_at_admission BETWEEN 87 AND 97\n),\nfirst_troponin AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.valuenum AS troponin_value\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN filtered_cohort c\n    ON l.subject_id = c.subject_id AND l.hadm_id = c.hadm_id\n  WHERE\n    l.itemid = 51003  -- hs-TnT\n    AND l.valuenum IS NOT NULL  -- Ensure numeric value exists\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY l.subject_id, l.hadm_id\n    ORDER BY l.charttime, l.labevent_id\n  ) = 1  -- First troponin per admission\n),\ncategorized AS (\n  SELECT\n    hadm_id,\n    troponin_value,\n    CASE\n      WHEN troponin_value <= 0.04 THEN 'Normal'\n      WHEN troponin_value > 0.04 AND troponin_value <= 0.1 THEN 'Borderline'\n      WHEN troponin_value > 0.1 THEN 'Injury'\n    END AS category\n  FROM first_troponin\n)\nSELECT\n  category,\n  COUNT(hadm_id) AS n,\n  ROUND(COUNT(hadm_id) * 100.0 / (SELECT COUNT(*) FROM categorized), 2) AS percentage,\n  ROUND(AVG(troponin_value), 3) AS mean,\n  ROUND(APPROX_QUANTILES(troponin_value, 100)[OFFSET(50)], 3) AS median,\n  ROUND(APPROX_QUANTILES(troponin_value, 100)[OFFSET(75)] - APPROX_QUANTILES(troponin_value, 100)[OFFSET(25)], 3) AS iqr\nFROM categorized\nGROUP BY category\nORDER BY\n  CASE category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Injury' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "403 Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.\n\nLocation: US\nJob ID: ecfb26aa-27a4-4ea2-a417-364084b413c3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+with `h.hour_start` and `h.hour_end` (TIMESTAMP) using `BETWEEN`. This caused a type mismatch. The fix casts `ce.charttime` to TIMESTAMP for consistent comparison.
+- Added `DISTINCT` in the `cohort` CTE to prevent duplicate ICU stays from multiple RRT procedures, ensuring accurate cohort counts.
+- Minimal changes were made: only the necessary type cast and `DISTINCT` were added. All other logic remains unchanged to preserve the original analytical intent.
+- The query now correctly computes percentiles and IQRs for the vital instability index, hypotensive/tachycardic hours, ICU LOS, and mortality rate as requested.;

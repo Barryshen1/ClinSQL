@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 62-year-old man. Among male non\u2011elective medicine inpatients aged 57\u201367, report mean, median (p50), p75, p90 LOS by discharged alive versus in\u2011hospital death, and percentile rank of 5\u2011day stay.",
+  "final_sql": "WITH\n  -- Step 1: Define the cohort of interest and calculate LOS for each admission.\n  cohort_los AS (\n    SELECT\n      adm.hospital_expire_flag,\n      -- Calculate LOS in days with fractional precision.\n      DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n    WHERE\n      -- Filter for male patients.\n      pat.gender = 'M'\n      -- Filter for age at admission between 57 and 67.\n      AND (\n        pat.anchor_age + EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year\n      ) BETWEEN 57 AND 67\n      -- Filter for non-elective admissions.\n      AND adm.admission_type IN (\n        'EMERGENCY', 'URGENT', 'DIRECT EMER.', 'DIRECT URGENT', 'EW EMER.'\n      )\n      -- Filter for patients who were on a 'MED' service at any point.\n      AND EXISTS (\n        SELECT\n          1\n        FROM\n          `physionet-data.mimiciv_3_1_hosp.services` AS s\n        WHERE\n          s.hadm_id = adm.hadm_id AND s.curr_service = 'MED'\n      )\n      -- Ensure LOS can be calculated.\n      AND adm.dischtime IS NOT NULL\n      AND adm.admittime IS NOT NULL\n  ),\n  -- Step 2: Calculate aggregate LOS statistics, grouped by survival status.\n  los_stats AS (\n    SELECT\n      hospital_expire_flag,\n      CASE\n        WHEN hospital_expire_flag = 1\n        THEN 'In-Hospital Death'\n        ELSE 'Discharged Alive'\n      END AS outcome,\n      AVG(los_days) AS mean_los,\n      -- APPROX_QUANTILES is efficient for calculating multiple percentiles.\n      APPROX_QUANTILES(los_days, 100) [OFFSET(50)] AS median_los_p50,\n      APPROX_QUANTILES(los_days, 100) [OFFSET(75)] AS p75_los,\n      APPROX_QUANTILES(los_days, 100) [OFFSET(90)] AS p90_los\n    FROM\n      cohort_los\n    GROUP BY\n      hospital_expire_flag\n  ),\n  -- Step 3: Calculate the percentile rank of a 5-day stay for the entire cohort.\n  percentile_rank_stat AS (\n    SELECT\n      -- This calculates the proportion of stays <= 5 days (Empirical CDF).\n      COUNTIF(los_days <= 5) / COUNT(los_days) AS percentile_rank_of_5_day_stay\n    FROM\n      cohort_los\n  )\n-- Final Step: Combine the grouped statistics with the overall percentile rank.\nSELECT\n  ls.outcome,\n  ls.mean_los,\n  ls.median_los_p50,\n  ls.p75_los,\n  ls.p90_los,\n  prs.percentile_rank_of_5_day_stay\nFROM\n  los_stats AS ls\nCROSS JOIN\n  percentile_rank_stat AS prs\nORDER BY\n  ls.hospital_expire_flag;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

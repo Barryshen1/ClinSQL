@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating a 45\u2011year\u2011old woman with AKI. Among female inpatients 40\u201350 with AKI, stratify by composite risk (5\u00d7comorbidities +50 if ARDS) into quintiles and report per quintile: N; 30\u2011day post\u2011discharge mortality %; ARDS co\u2011occurrence %; median survivor LOS (days).",
+  "final_sql": "WITH\n-- Define AKI and ARDS ICD codes\nicd_codes AS (\n  SELECT\n    'N17' AS icd_code, 'AKI' AS condition UNION ALL\n    SELECT 'N17.0', 'AKI' UNION ALL\n    SELECT 'N17.1', 'AKI' UNION ALL\n    SELECT 'N17.2', 'AKI' UNION ALL\n    SELECT 'N17.8', 'AKI' UNION ALL\n    SELECT 'N17.9', 'AKI' UNION ALL\n    SELECT 'J80', 'ARDS' UNION ALL\n    SELECT 'J80.0', 'ARDS'\n),\n\n-- Get female patients aged 40-50\neligible_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age,\n    dod\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 40 AND 50\n),\n\n-- Get admissions with AKI diagnosis\naki_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    TIMESTAMP(a.admittime) AS admittime,\n    TIMESTAMP(a.dischtime) AS dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    icd_codes c\n    ON d.icd_code = c.icd_code AND c.condition = 'AKI'\n  WHERE\n    a.hospital_expire_flag = 0  -- Exclude in-hospital deaths\n),\n\n-- Get all diagnoses for these patients (excluding AKI)\ncomorbidities AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    COUNT(DISTINCT d.icd_code) AS comorbidity_count,\n    MAX(CASE WHEN c.condition = 'ARDS' THEN 1 ELSE 0 END) AS has_ards\n  FROM\n    aki_admissions a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    icd_codes c\n    ON d.icd_code = c.icd_code\n  WHERE\n    c.condition != 'AKI'  -- Exclude AKI from comorbidity count\n  GROUP BY\n    a.subject_id, a.hadm_id\n),\n\n-- Calculate composite risk score\nrisk_scores AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP(p.dod) AS dod,\n    c.comorbidity_count,\n    c.has_ards,\n    (5 * c.comorbidity_count) + (50 * c.has_ards) AS composite_risk_score\n  FROM\n    aki_admissions a\n  JOIN\n    eligible_patients p\n    ON a.subject_id = p.subject_id\n  JOIN\n    comorbidities c\n    ON a.subject_id = c.subject_id AND a.hadm_id = c.hadm_id\n),\n\n-- Calculate 30-day post-discharge mortality\nmortality AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    CASE\n      WHEN dod IS NOT NULL\n      AND TIMESTAMP_DIFF(dod, dischtime, DAY) BETWEEN 1 AND 30\n      THEN 1\n      ELSE 0\n    END AS died_within_30_days\n  FROM\n    risk_scores\n),\n\n-- Combine all data with quintiles\nfinal_data AS (\n  SELECT\n    r.subject_id,\n    r.hadm_id,\n    r.composite_risk_score,\n    m.died_within_30_days,\n    c.has_ards,\n    TIMESTAMP_DIFF(r.dischtime, r.admittime, DAY) AS los_days,\n    NTILE(5) OVER (ORDER BY r.composite_risk_score) AS risk_quintile\n  FROM\n    risk_scores r\n  JOIN\n    mortality m\n    ON r.subject_id = m.subject_id AND r.hadm_id = m.hadm_id\n  JOIN\n    comorbidities c\n    ON r.subject_id = c.subject_id AND r.hadm_id = c.hadm_id\n),\n\n-- Calculate median LOS for survivors by quintile\nquintile_stats AS (\n  SELECT\n    risk_quintile,\n    PERCENTILE_CONT(CASE WHEN died_within_30_days = 0 THEN los_days ELSE NULL END, 0.5)\n      OVER (PARTITION BY risk_quintile) AS median_los_survivors\n  FROM\n    final_data\n)\n\n-- Final aggregation by quintile\nSELECT\n  f.risk_quintile,\n  COUNT(*) AS n,\n  ROUND(100 * AVG(f.died_within_30_days), 1) AS mortality_30day_percent,\n  ROUND(100 * AVG(f.has_ards), 1) AS ards_cooccurrence_percent,\n  ROUND(q.median_los_survivors, 1) AS median_los_survivors\nFROM\n  final_data f\nJOIN\n  quintile_stats q\n  ON f.risk_quintile = q.risk_quintile\nGROUP BY\n  f.risk_quintile, q.median_los_survivors\nORDER BY\n  f.risk_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function TIMESTAMP_DIFF\n  Argument types: TIMESTAMP, DATETIME, DATE_TIME_PART\n  Signature: TIMESTAMP_DIFF(TIMESTAMP, TIMESTAMP, DATE_TIME_PART)\n    Argument 2: Unable to coerce type DATETIME to expected type TIMESTAMP\n  Signature: TIMESTAMP_DIFF(DATETIME, DATETIME, DATE_TIME_PART)\n    Argument 1: Unable to coerce type TIMESTAMP to expected type DATETIME at [98:11]; reason: invalidQuery, location: query, message: No matching signature for function TIMESTAMP_DIFF\n  Argument types: TIMESTAMP, DATETIME, DATE_TIME_PART\n  Signature: TIMESTAMP_DIFF(TIMESTAMP, TIMESTAMP, DATE_TIME_PART)\n    Argument 2: Unable to coerce type DATETIME to expected type TIMESTAMP\n  Signature: TIMESTAMP_DIFF(DATETIME, DATETIME, DATE_TIME_PART)\n    Argument 1: Unable to coerce type TIMESTAMP to expected type DATETIME at [98:11]\n\nLocation: US\nJob ID: ab53afd2-6eb7-435e-b6d8-2a82ca584d14\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [132:9]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [132:9]\n\nLocation: US\nJob ID: 7c3447e4-fd5a-47e4-881a-07f8f3731aa7\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

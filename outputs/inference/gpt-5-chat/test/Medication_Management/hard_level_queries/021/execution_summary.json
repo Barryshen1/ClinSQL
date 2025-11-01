@@ -1,0 +1,22 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH dx_flags AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.anchor_age,\n    pat.gender,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    -- Flags for each diagnosis category\n    MAX(CASE WHEN (diag.icd_version = 9 AND diag.icd_code LIKE '2880%')\n              OR (diag.icd_version = 10 AND diag.icd_code LIKE 'D70%')\n             THEN 1 ELSE 0 END) AS neutropenia_flag,\n    MAX(CASE WHEN (diag.icd_version = 9 AND diag.icd_code = '7806')\n              OR (diag.icd_version = 10 AND diag.icd_code LIKE 'R50%')\n             THEN 1 ELSE 0 END) AS fever_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.subject_id = diag.subject_id\n   AND adm.hadm_id = diag.hadm_id\n  GROUP BY adm.subject_id, adm.hadm_id, pat.anchor_age, pat.gender,\n           adm.admittime, adm.dischtime, adm.hospital_expire_flag\n),\ncohort AS (\n  SELECT\n    *\n  FROM dx_flags\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 41 AND 51\n    AND neutropenia_flag = 1\n    AND fever_flag = 1\n),\nmed_counts AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT p.drug) AS uniq_med_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.subject_id = p.subject_id\n   AND c.hadm_id = p.hadm_id\n   AND p.starttime >= c.admittime\n   AND p.starttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.subject_id, c.hadm_id\n),\ncohort_with_meds AS (\n  SELECT\n    c.*,\n    m.uniq_med_count,\n    DATETIME_DIFF(c.dischtime, c.admittime, DAY) AS los_days\n  FROM cohort c\n  JOIN med_counts m\n    ON c.subject_id = m.subject_id\n   AND c.hadm_id = m.hadm_id\n),\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY uniq_med_count) AS tertile\n  FROM cohort_with_meds\n),\nreadmit_flags AS (\n  SELECT\n    t.subject_id,\n    t.hadm_id,\n    t.tertile,\n    t.los_days,\n    t.hospital_expire_flag,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = t.subject_id\n        AND a2.hadm_id != t.hadm_id\n        AND a2.admittime > t.dischtime\n        AND a2.admittime <= DATETIME_ADD(t.dischtime, INTERVAL 30 DAY)\n    ) AS readmit_30d\n  FROM tertiles t\n)\nSELECT\n  tertile,\n  AVG(los_days) AS avg_los_days,\n  100 * AVG(CAST(hospital_expire_flag AS FLOAT64)) AS in_hosp_mortality_pct,\n  100 * AVG(CAST(readmit_30d AS INT64)) AS readmit_30d_pct\nFROM readmit_flags\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [85:18]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [85:18]\n\nLocation: US\nJob ID: 8b8b28e0-0c51-45b7-af70-f4307b48dc1d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

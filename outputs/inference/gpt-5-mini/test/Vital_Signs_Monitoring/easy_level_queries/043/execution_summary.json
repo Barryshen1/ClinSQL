@@ -1,0 +1,16 @@
+{
+  "query": "For my 82-year-old male patient, what's the average first recorded GCS total at ICU admission among men 77\u201387?",
+  "final_sql": "WITH gcs_items AS (\n  -- identify itemids that likely correspond to GCS total/score\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE (LOWER(label) LIKE '%gcs%' OR LOWER(label) LIKE '%glasgow%' OR LOWER(abbreviation) LIKE '%gcs%')\n    AND (LOWER(label) LIKE '%total%' OR LOWER(label) LIKE '%score%' OR LOWER(label) LIKE '%total score%')\n),\n\ngcs_events AS (\n  -- chartevents restricted to identified GCS total items with numeric values\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN gcs_items gi USING(itemid)\n  WHERE ce.valuenum IS NOT NULL\n),\n\nearliest_gcs_per_stay AS (\n  -- earliest GCS charttime per ICU stay within the first 24 hours after ICU intime\n  SELECT\n    ge.stay_id,\n    ge.subject_id,\n    ge.hadm_id,\n    MIN(ge.charttime) AS first_gcs_time\n  FROM gcs_events ge\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` s\n    ON ge.stay_id = s.stay_id\n  WHERE ge.charttime >= s.intime\n    AND ge.charttime <= TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR)\n  GROUP BY ge.stay_id, ge.subject_id, ge.hadm_id\n),\n\nfirst_gcs_value AS (\n  -- get the numeric GCS value that corresponds to the earliest time per stay\n  SELECT\n    eg.stay_id,\n    eg.subject_id,\n    eg.hadm_id,\n    ge.valuenum AS first_gcs,\n    eg.first_gcs_time\n  FROM earliest_gcs_per_stay eg\n  JOIN gcs_events ge\n    ON ge.stay_id = eg.stay_id\n   AND ge.charttime = eg.first_gcs_time\n  -- ensure plausible GCS totals only\n  WHERE ge.valuenum BETWEEN 3 AND 15\n)\n\nSELECT\n  ROUND(AVG(fg.first_gcs), 2) AS avg_first_gcs_total,\n  COUNT(DISTINCT fg.stay_id) AS n_icustays,\n  COUNT(DISTINCT fg.subject_id) AS n_subjects\nFROM first_gcs_value fg\nJOIN `physionet-data.mimiciv_3_1_icu.icustays` s\n  ON fg.stay_id = s.stay_id\nJOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON fg.subject_id = p.subject_id\nWHERE p.gender = 'M'\n  AND p.anchor_age BETWEEN 77 AND 87;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

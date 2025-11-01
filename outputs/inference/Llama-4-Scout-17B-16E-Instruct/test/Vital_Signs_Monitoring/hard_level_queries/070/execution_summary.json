@@ -1,0 +1,28 @@
+{
+  "query": "I have an 83\u2011year\u2011old man to evaluate. Among male ICU patients aged 78\u201388 with HHS, for the top quartile by 24\u2011hour HR/MAP/RR CV sum, report stay instability score, decile, abnormal vital count, ICU LOS, and in\u2011hospital mortality.",
+  "final_sql": "WITH \n-- Define vital signs itemids\nvital_signs AS (\n  SELECT \n    itemid,\n    label\n  FROM \n    `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE \n    label IN ('Heart Rate', 'Mean Arterial Pressure', 'Respiratory Rate')\n),\n\n-- Extract vital signs\nvital_data AS (\n  SELECT \n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.itemid,\n    ce.charttime,\n    ce.valuenum\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN \n    vital_signs vs ON ce.itemid = vs.itemid\n  WHERE \n    ce.valuenum IS NOT NULL\n),\n\n-- Calculate CV for each vital sign per patient\npatient_cv AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    itemid,\n    STDDEV(valuenum) / AVG(valuenum) AS cv\n  FROM \n    vital_data\n  GROUP BY \n    subject_id,\n    hadm_id,\n    stay_id,\n    itemid\n),\n\n-- Sum CVs and filter patients of interest\nfiltered_patients AS (\n  SELECT \n    pd.subject_id,\n    ic.stay_id,\n    ic.hadm_id,\n    pd.anchor_age,\n    pd.gender,\n    SUM(pc.cv) AS total_cv\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` pd\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` ic ON pd.subject_id = ic.subject_id\n  JOIN \n    patient_cv pc ON ic.subject_id = pc.subject_id AND ic.stay_id = pc.stay_id\n  WHERE \n    pd.gender = 'M' AND\n    pd.anchor_age BETWEEN 78 AND 88\n  GROUP BY \n    pd.subject_id,\n    ic.stay_id,\n    ic.hadm_id,\n    pd.anchor_age,\n    pd.gender\n),\n\n-- Calculate quartiles\nquartile_calc AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY total_cv DESC) AS quartile\n  FROM \n    filtered_patients\n),\n\ntop_quartile_patients AS (\n  SELECT \n    subject_id,\n    stay_id,\n    hadm_id,\n    anchor_age,\n    gender,\n    total_cv\n  FROM \n    quartile_calc\n  WHERE \n    quartile = 4\n),\n\n-- Calculate outcomes\noutcomes AS (\n  SELECT \n    tq.subject_id,\n    tq.hadm_id,\n    tq.stay_id,\n    ic.los AS icu_los,\n    CASE \n      WHEN a.hospital_expire_flag = 1 THEN 1 \n      ELSE 0 \n    END AS in_hospital_mortality\n  FROM \n    top_quartile_patients tq\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` ic ON tq.stay_id = ic.stay_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON tq.hadm_id = a.hadm_id\n)\n\n-- Final selection\nSELECT \n  o.subject_id,\n  o.hadm_id,\n  o.stay_id,\n  o.icu_los,\n  o.in_hospital_mortality,\n  -- We assume a simple instability score based on ICU LOS\n  o.icu_los * o.in_hospital_mortality AS instability_score,\n  -- Assign a decile based on total_cv\n  PERCENT_RANK() OVER (ORDER BY o.total_cv) * 10 AS decile,\n  -- Assume abnormal vital count is the number of vital signs with CV > 1\n  SUM(CASE WHEN pc.cv > 1 THEN 1 ELSE 0 END) OVER (PARTITION BY o.subject_id, o.stay_id) AS abnormal_vital_count\nFROM \n  outcomes o\nJOIN \n  patient_cv pc ON o.subject_id = pc.subject_id AND o.stay_id = pc.stay_id\nGROUP BY \n  o.subject_id,\n  o.hadm_id,\n  o.stay_id,\n  o.icu_los,\n  o.in_hospital_mortality,\n  o.total_cv;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name total_cv not found inside o at [125:35]; reason: invalidQuery, location: query, message: Name total_cv not found inside o at [125:35]\n\nLocation: US\nJob ID: be8ee87d-ac3d-4b66-bfb2-eac80cabd03b\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: STDEV; Did you mean stddev? at [37:5]; reason: invalidQuery, location: query, message: Function not found: STDEV; Did you mean stddev? at [37:5]\n\nLocation: US\nJob ID: 20b93888-4135-4433-a8df-45305a45abb0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [117:3]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [117:3]\n\nLocation: US\nJob ID: b2c0d88d-cf45-41fa-94ee-8ec88097d922\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name total_cv not found inside o at [125:35]; reason: invalidQuery, location: query, message: Name total_cv not found inside o at [125:35]\n\nLocation: US\nJob ID: be8ee87d-ac3d-4b66-bfb2-eac80cabd03b\n"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "Patient: 45-year-old woman. Among female inpatients aged 40\u201350 with neutropenic fever, stratify admissions by medication complexity score (first 48 hours) into quartiles and report per quartile: patient count, mean/min/max score, mean LOS, mortality %, and 30-day readmission %.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.hospital_expire_flag,\n        DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id AND adm.subject_id = diag.subject_id\n    WHERE pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 40 AND 50\n        AND diag.icd_code = 'D70.0'\n        AND diag.icd_version = 10\n),\n\nmed_score AS (\n    SELECT \n        c.hadm_id,\n        COUNT(DISTINCT p.drug) AS complexity_score\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n        ON c.hadm_id = p.hadm_id AND c.subject_id = p.subject_id\n    WHERE p.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    GROUP BY c.hadm_id\n),\n\nquartiles AS (\n    SELECT \n        hadm_id,\n        complexity_score,\n        NTILE(4) OVER (ORDER BY complexity_score) AS quartile\n    FROM med_score\n),\n\nreadmissions AS (\n    SELECT \n        c1.hadm_id,\n        COUNT(DISTINCT c2.hadm_id) > 0 AS readmit_30d\n    FROM cohort c1\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` c2\n        ON c1.subject_id = c2.subject_id\n        AND c2.admittime > c1.dischtime\n        AND c2.admittime <= DATETIME_ADD(c1.dischtime, INTERVAL 30 DAY)\n    GROUP BY c1.hadm_id\n)\n\nSELECT \n    q.quartile,\n    COUNT(DISTINCT q.hadm_id) AS patient_count,\n    AVG(ms.complexity_score) AS mean_score,\n    MIN(ms.complexity_score) AS min_score,\n    MAX(ms.complexity_score) AS max_score,\n    AVG(c.los_days) AS mean_los,\n    AVG(CAST(c.hospital_expire_flag AS INT)) * 100 AS mortality_pct,\n    AVG(CAST(r.readmit_30d AS INT)) * 100 AS readmit_30d_pct\nFROM quartiles q\nINNER JOIN med_score ms ON q.hadm_id = ms.hadm_id\nINNER JOIN cohort c ON q.hadm_id = c.hadm_id\nLEFT JOIN readmissions r ON q.hadm_id = r.hadm_id\nGROUP BY q.quartile\nORDER BY q.quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

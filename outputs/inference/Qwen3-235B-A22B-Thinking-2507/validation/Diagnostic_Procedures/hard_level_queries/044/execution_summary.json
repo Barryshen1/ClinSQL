@@ -1,0 +1,23 @@
+{
+  "query": "I'm evaluating an 87\u2011year\u2011old man. Among male ICU patients aged 82\u201392 with cardiogenic shock, stratify first\u201124\u2011hour procedure burden into quintiles and report for each quintile mean procedure count, mean hospital LOS in days, and in\u2011hospital mortality percentage.",
+  "final_sql": "WITH base_population AS (\n  SELECT \n    a.hadm_id,\n    p.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 82 AND 92\n    AND EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = a.hadm_id\n          AND (\n            (d.icd_code = '78551' AND d.icd_version = 9)\n            OR (d.icd_code = 'I462' AND d.icd_version = 10)\n          )\n    )\n),\nfirst_icu_stay AS (\n  SELECT \n    stay_id,\n    hadm_id,\n    intime,\n    outtime\n  FROM (\n    SELECT \n      i.stay_id,\n      i.hadm_id,\n      i.intime,\n      i.outtime,\n      ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS stay_rank\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    INNER JOIN base_population bp\n      ON i.hadm_id = bp.hadm_id\n  ) ranked\n  WHERE stay_rank = 1\n),\nprocedure_count AS (\n  SELECT \n    fis.stay_id,\n    fis.hadm_id,\n    COUNT(pe.stay_id) AS procedure_count\n  FROM first_icu_stay fis\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON fis.stay_id = pe.stay_id\n    AND pe.starttime >= fis.intime\n    AND pe.starttime < TIMESTAMP_ADD(fis.intime, INTERVAL 24 HOUR)\n  GROUP BY fis.stay_id, fis.hadm_id\n),\nquintiles AS (\n  SELECT \n    pc.stay_id,\n    pc.hadm_id,\n    pc.procedure_count,\n    NTILE(5) OVER (ORDER BY pc.procedure_count) AS quintile\n  FROM procedure_count pc\n)\nSELECT \n  q.quintile,\n  AVG(q.procedure_count) AS mean_procedure_count,\n  AVG(TIMESTAMP_DIFF(bp.dischtime, bp.admittime, SECOND) / 86400.0) AS mean_hospital_los_days,\n  (SUM(bp.hospital_expire_flag) * 100.0 / COUNT(*)) AS mortality_pct\nFROM quintiles q\nINNER JOIN base_population bp\n  ON q.hadm_id = bp.hadm_id\nGROUP BY q.quintile\nORDER BY q.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"shock\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"shock\" at [1:18]\n\nLocation: US\nJob ID: 34864817-d175-42b2-8914-247566f7262b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

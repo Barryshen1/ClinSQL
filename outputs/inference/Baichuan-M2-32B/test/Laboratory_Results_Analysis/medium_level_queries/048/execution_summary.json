@@ -1,0 +1,17 @@
+{
+  "query": "For a 60-year-old woman: among female patients aged 55\u201365 admitted with AMI whose first hs\u2011TnT >0.01 ng/mL, report patient and admission counts and hs\u2011TnT mean, median, and IQR.",
+  "final_sql": "WITH \nhs_tnt_item AS (\n    SELECT itemid \n    FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n    WHERE label LIKE '%troponin T%' \n        AND (label LIKE '%high sensitivity%' OR label LIKE '%hs%')\n    LIMIT 1\n),\nami_diagnoses AS (\n    SELECT \n        subject_id,\n        hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_version = 10\n        AND icd_code LIKE 'I21%'\n        AND seq_num = 1\n),\neligible_admissions AS (\n    SELECT \n        a.hadm_id,\n        a.subject_id,\n        a.admittime,\n        a.dischtime,\n        p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n        ON a.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n        AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 55 AND 65\n),\nami_admissions AS (\n    SELECT \n        e.hadm_id,\n        e.subject_id,\n        e.admittime,\n        e.dischtime,\n        e.age_at_admission\n    FROM eligible_admissions e\n    INNER JOIN ami_diagnoses d \n        ON e.hadm_id = d.hadm_id AND e.subject_id = d.subject_id\n),\nhs_tnt_labs AS (\n    SELECT \n        l.hadm_id,\n        l.subject_id,\n        l.valuenum,\n        l.charttime\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n    INNER JOIN hs_tnt_item h ON l.itemid = h.itemid\n    INNER JOIN ami_admissions a \n        ON l.hadm_id = a.hadm_id AND l.subject_id = a.subject_id\n    WHERE l.charttime BETWEEN a.admittime AND a.dischtime\n        AND l.valuenum > 0.01\n        AND l.valueuom = 'ng/mL'\n),\nfirst_hs_tnt_per_adm AS (\n    SELECT \n        hadm_id,\n        subject_id,\n        valuenum AS hs_tnt_value\n    FROM (\n        SELECT \n            hadm_id,\n            subject_id,\n            valuenum,\n            ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n        FROM hs_tnt_labs\n    ) \n    WHERE rn = 1\n)\nSELECT \n    COUNT(DISTINCT subject_id) AS patient_count,\n    COUNT(DISTINCT hadm_id) AS admission_count,\n    AVG(hs_tnt_value) AS mean_hs_tnt,\n    APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(50)] AS median_hs_tnt,\n    APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(25)] AS iqr_lower,\n    APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(75)] AS iqr_upper\nFROM first_hs_tnt_per_adm;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

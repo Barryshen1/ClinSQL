@@ -1,0 +1,28 @@
+{
+  "query": "My 56-year-old male inpatient: among male inpatients 51\u201361 with diabetes and acute heart failure, report percent prevalence of Basal\u2011Bolus, Basal, Bolus, sliding\u2011scale in first 24h vs final 12h and percentage\u2011point change.",
+  "final_sql": "WITH \n-- Filter patients\npatients_filter AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    p.anchor_age, \n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 51 AND 61\n),\n\n-- Identify diabetes and acute heart failure\ndiagnoses_filter AS (\n  SELECT \n    subject_id, \n    hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    icd_code IN (\n      '250.0', '250.1', '250.2', '250.3', '250.4', '250.5', '250.6', '250.7', '250.8', '250.9', \n      '402.01', '402.11', '402.21', '402.31', '402.41', '402.91', '404.01', '404.11', \n      '404.21', '404.31', '404.41', '404.91', '428.0'\n    )\n),\n\n-- Identify insulin regimens\ninsulin_regimens AS (\n  SELECT \n    p.subject_id, \n    p.hadm_id, \n    ph.starttime, \n    ph.stoptime, \n    ph.medication\n  FROM \n    patients_filter p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.pharmacy` ph\n  ON \n    p.hadm_id = ph.hadm_id\n  WHERE \n    ph.medication LIKE '%insulin%'\n),\n\n-- Determine time periods\ntime_periods AS (\n  SELECT \n    hadm_id, \n    admittime, \n    dischtime,\n    TIMESTAMP_ADD(admittime, INTERVAL 24 HOUR) AS first_24h_end,\n    TIMESTAMP_SUB(dischtime, INTERVAL 12 HOUR) AS final_12h_start\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions`\n),\n\n-- Calculate total patients with diabetes and acute heart failure\ntotal_patients AS (\n  SELECT \n    COUNT(DISTINCT df.hadm_id) AS total\n  FROM \n    diagnoses_filter df\n  JOIN \n    patients_filter pf ON df.hadm_id = pf.hadm_id\n),\n\n-- Calculate prevalence and percentage-point change for each regimen\nregimen_prevalence AS (\n  SELECT \n    tp.hadm_id,\n    ir.medication,\n    CASE \n      WHEN ir.starttime BETWEEN tp.admittime AND tp.first_24h_end THEN 'first_24h'\n      WHEN ir.starttime BETWEEN tp.final_12h_start AND tp.dischtime THEN 'final_12h'\n      ELSE NULL\n    END AS period\n  FROM \n    time_periods tp\n  JOIN \n    diagnoses_filter df ON tp.hadm_id = df.hadm_id\n  JOIN \n    insulin_regimens ir ON tp.hadm_id = ir.hadm_id\n),\n\nregimen_counts AS (\n  SELECT \n    medication,\n    period,\n    COUNT(DISTINCT hadm_id) AS count\n  FROM \n    regimen_prevalence\n  GROUP BY \n    medication, period\n)\n\n-- Calculate final prevalence and percentage-point change\nSELECT \n  medication AS regimen,\n  COALESCE(first_24h_count / (SELECT total FROM total_patients) * 100, 0) AS first_24h_prevalence,\n  COALESCE(final_12h_count / (SELECT total FROM total_patients) * 100, 0) AS final_12h_prevalence,\n  COALESCE(final_12h_count / (SELECT total FROM total_patients) * 100, 0) - \n  COALESCE(first_24h_count / (SELECT total FROM total_patients) * 100, 0) AS percentage_point_change\nFROM \n  (\n    SELECT \n      medication,\n      SUM(CASE WHEN period = 'first_24h' THEN count ELSE 0 END) AS first_24h_count,\n      SUM(CASE WHEN period = 'final_12h' THEN count ELSE 0 END) AS final_12h_count\n    FROM \n      regimen_counts\n    GROUP BY \n      medication\n  ) AS counts\nWHERE \n  medication LIKE '%Basal-Bolus%' OR \n  medication LIKE '%Basal%' OR \n  medication LIKE '%Bolus%' OR \n  medication LIKE '%sliding-scale%';",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 5546f97d-2ead-462e-99d2-d9f0e2e849d8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [68:20]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [68:20]\n\nLocation: US\nJob ID: 16611cef-8114-4f71-819a-c84a62fce3dc\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

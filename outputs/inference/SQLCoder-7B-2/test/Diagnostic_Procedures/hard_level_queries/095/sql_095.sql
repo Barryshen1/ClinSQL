@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY (icu_patients.los + icu_patients.dod) / 2) AS percentile_score, icu_patients.los AS icu_length_of_stay, icu_patients.dod AS in_hospital_death_rate FROM icu_patients;

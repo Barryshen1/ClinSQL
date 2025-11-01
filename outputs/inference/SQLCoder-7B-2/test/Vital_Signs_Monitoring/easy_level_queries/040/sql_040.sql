@@ -1,0 +1,1 @@
+SELECT stddev(p.value) AS standard_deviation FROM patients p JOIN icustays i ON p.subject_id = i.subject_id JOIN chartevents c ON i.stay_id = c.stay_id WHERE p.gender = 1 AND p.anchor_year = 60 AND i.first_careunit = 'ICU' AND c.itemid = 87167870 AND c.charttime BETWEEN i.intime AND i.outtime AND p.anchor_year BETWEEN 55 AND 65;

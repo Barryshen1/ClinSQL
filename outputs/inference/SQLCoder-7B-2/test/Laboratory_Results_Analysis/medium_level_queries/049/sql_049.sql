@@ -1,0 +1,1 @@
+SELECT COUNT(DISTINCT mtt.subject_id) AS cohort_size, mtt.value AS uln, percentile_cont(0.25) within GROUP (ORDER BY mtt.value) AS p25, percentile_cont(0.50) within GROUP (ORDER BY mtt.value) AS p50, percentile_cont(0.75) within GROUP (ORDER BY mtt.value) AS p75, mtr.interquartile_range AS value_range FROM male_troponin_t_values mtt JOIN male_troponin_t_range mtr ON TRUE;

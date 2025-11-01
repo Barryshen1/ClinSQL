@@ -1,0 +1,16 @@
+{
+  "query": "For a 65-year-old man: among male ICU patients aged 60\u201370 with intracranial hemorrhage (first ICU stay), what is the 75th percentile of procedure burden in the first 72h? Report mean ICU LOS (days) and hospital mortality versus general ICU population.",
+  "final_sql": "WITH first_icu AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY icu.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n),\nfirst_icu_only AS (\n  SELECT f.subject_id, f.hadm_id, f.stay_id, f.intime, f.outtime, f.los\n  FROM first_icu f\n  WHERE f.rn = 1\n),\ndiag_ich AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%intracerebral hemorrhage%'\n     OR LOWER(dd.long_title) LIKE '%intracranial hemorrhage%'\n     OR LOWER(dd.long_title) LIKE '%subarachnoid hemorrhage%'\n     OR LOWER(dd.long_title) LIKE '%subdural hemorrhage%'\n     OR LOWER(dd.long_title) LIKE '%epidural hemorrhage%'\n),\nproc_counts AS (\n  SELECT\n    fi.subject_id,\n    fi.hadm_id,\n    fi.stay_id,\n    COUNT(pe.itemid) AS proc_burden_72h\n  FROM first_icu_only fi\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON fi.stay_id = pe.stay_id\n    AND pe.starttime >= fi.intime\n    AND pe.starttime < TIMESTAMP_ADD(fi.intime, INTERVAL 72 HOUR)\n  GROUP BY fi.subject_id, fi.hadm_id, fi.stay_id\n),\ncohort AS (\n  SELECT\n    fi.subject_id,\n    fi.hadm_id,\n    fi.stay_id,\n    p.gender,\n    p.anchor_age,\n    adm.hospital_expire_flag,\n    fi.los,\n    COALESCE(pc.proc_burden_72h, 0) AS proc_burden_72h,\n    CASE WHEN ich.subject_id IS NOT NULL THEN 1 ELSE 0 END AS ich_flag\n  FROM first_icu_only fi\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON fi.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON fi.hadm_id = adm.hadm_id\n  LEFT JOIN proc_counts pc\n    ON fi.subject_id = pc.subject_id AND fi.stay_id = pc.stay_id\n  LEFT JOIN diag_ich ich\n    ON fi.subject_id = ich.subject_id AND fi.hadm_id = ich.hadm_id\n),\nich_group AS (\n  SELECT *\n  FROM cohort\n  WHERE gender = 'M' AND anchor_age BETWEEN 60 AND 70 AND ich_flag = 1\n),\nsummary_ich AS (\n  SELECT\n    'ICH_male_60_70' AS grp,\n    APPROX_QUANTILES(proc_burden_72h, 100)[OFFSET(75)] AS p75_proc_burden,\n    AVG(los) AS mean_icu_los_days,\n    AVG(hospital_expire_flag) AS hospital_mortality_rate\n  FROM ich_group\n),\nsummary_all AS (\n  SELECT\n    'general_icu' AS grp,\n    NULL AS p75_proc_burden,\n    AVG(los) AS mean_icu_los_days,\n    AVG(hospital_expire_flag) AS hospital_mortality_rate\n  FROM cohort\n)\nSELECT * FROM summary_ich\nUNION ALL\nSELECT * FROM summary_all;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For a 93-year-old male admitted with pneumonia, among males aged 88\u201398 with pneumonia and ICU stay, report cohort size; composite risk score distribution (min, 25th, median, 75th, max); in-hospital mortality, AKI, ARDS rates; and median survival days for decedents.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    adm.hadm_id,\n    p.anchor_age,\n    p.gender,\n    adm.hospital_expire_flag,\n    adm.admittime,\n    adm.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON p.subject_id = adm.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddx\n    ON dx.icd_code = ddx.icd_code\n    AND dx.icd_version = ddx.icd_version\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON adm.hadm_id = icu.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 88 AND 98\n    AND LOWER(ddx.long_title) LIKE '%pneumonia%'\n),\ndrg_scores AS (\n  SELECT hadm_id, MAX(drg_severity) + MAX(drg_mortality) AS composite_score\n  FROM `physionet-data.mimiciv_3_1_hosp.drgcodes`\n  GROUP BY hadm_id\n),\naki_flags AS (\n  SELECT DISTINCT hadm_id, 1 AS aki_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code LIKE '584%')\n     OR (icd_version = 10 AND icd_code LIKE 'N17%')\n),\nards_flags AS (\n  SELECT DISTINCT hadm_id, 1 AS ards_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND (icd_code IN ('51882','51881','5185')))\n     OR (icd_version = 10 AND icd_code = 'J80')\n),\ncohort_with_flags AS (\n  SELECT\n    b.subject_id,\n    b.hadm_id,\n    b.hospital_expire_flag,\n    b.admittime,\n    b.dischtime,\n    d.composite_score,\n    IFNULL(a.aki_flag,0) AS aki_flag,\n    IFNULL(r.ards_flag,0) AS ards_flag\n  FROM base_cohort b\n  LEFT JOIN drg_scores d USING (hadm_id)\n  LEFT JOIN aki_flags a USING (hadm_id)\n  LEFT JOIN ards_flags r USING (hadm_id)\n),\ncomposite_percentiles AS (\n  SELECT\n    APPROX_QUANTILES(composite_score, 100)[SAFE_OFFSET(0)] AS composite_min,\n    APPROX_QUANTILES(composite_score, 100)[SAFE_OFFSET(25)] AS composite_p25,\n    APPROX_QUANTILES(composite_score, 100)[SAFE_OFFSET(50)] AS composite_median,\n    APPROX_QUANTILES(composite_score, 100)[SAFE_OFFSET(75)] AS composite_p75,\n    APPROX_QUANTILES(composite_score, 100)[SAFE_OFFSET(100)] AS composite_max\n  FROM cohort_with_flags\n  WHERE composite_score IS NOT NULL\n),\nmedian_survival_decedents AS (\n  SELECT\n    APPROX_QUANTILES(DATE_DIFF(dischtime, admittime, DAY), 100)[SAFE_OFFSET(50)] AS median_survival_days_decedents\n  FROM cohort_with_flags\n  WHERE hospital_expire_flag = 1\n),\ncohort_metrics AS (\n  SELECT\n    COUNT(DISTINCT subject_id) AS cohort_size,\n    100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate_percent,\n    100.0 * SUM(aki_flag) / COUNT(*) AS aki_rate_percent,\n    100.0 * SUM(ards_flag) / COUNT(*) AS ards_rate_percent\n  FROM cohort_with_flags\n  WHERE composite_score IS NOT NULL\n)\nSELECT\n  cm.cohort_size,\n  cp.composite_min,\n  cp.composite_p25,\n  cp.composite_median,\n  cp.composite_p75,\n  cp.composite_max,\n  cm.mortality_rate_percent,\n  cm.aki_rate_percent,\n  cm.ards_rate_percent,\n  msd.median_survival_days_decedents\nFROM cohort_metrics cm\nCROSS JOIN composite_percentiles cp\nCROSS JOIN median_survival_decedents msd;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column composite_score which is neither grouped nor aggregated at [59:19]; reason: invalidQuery, location: query, message: SELECT list expression references column composite_score which is neither grouped nor aggregated at [59:19]\n\nLocation: US\nJob ID: 96a617e1-065c-4f7c-8e74-913126172894\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references cp.composite_min which is neither grouped nor aggregated at [74:3]; reason: invalidQuery, location: query, message: SELECT list expression references cp.composite_min which is neither grouped nor aggregated at [74:3]\n\nLocation: US\nJob ID: 385385f7-0930-47e8-a682-b87c2c4a04b9\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

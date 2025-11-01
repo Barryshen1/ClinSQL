@@ -1,0 +1,16 @@
+{
+  "query": "For my 49-year-old female, among hospitalized women 44\u201354 on DAPT, what is the SD of single antiplatelet prescription duration?",
+  "final_sql": "WITH dapt_patients AS (\n  -- Identify admissions with concurrent DAPT (aspirin + clopidogrel overlap)\n  SELECT DISTINCT p.subject_id, pr1.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr1\n    ON a.subject_id = pr1.subject_id AND a.hadm_id = pr1.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr2\n    ON a.subject_id = pr2.subject_id AND a.hadm_id = pr2.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND pr1.drug LIKE '%ASPIRIN%'\n    AND pr2.drug LIKE '%CLOPIDOGREL%'\n    AND pr1.starttime <= pr2.stoptime\n    AND pr2.starttime <= pr1.stoptime\n    AND pr1.starttime IS NOT NULL\n    AND pr1.stoptime IS NOT NULL\n    AND pr2.starttime IS NOT NULL\n    AND pr2.stoptime IS NOT NULL\n),\n\nantiplatelet_prescriptions AS (\n  -- All antiplatelet prescriptions for DAPT patients\n  SELECT DISTINCT dp.subject_id, dp.hadm_id, pr.pharmacy_id,\n         pr.drug, pr.starttime, pr.stoptime,\n         TIMESTAMP_DIFF(pr.stoptime, pr.starttime, DAY) AS duration_days\n  FROM dapt_patients dp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON dp.subject_id = pr.subject_id AND dp.hadm_id = pr.hadm_id\n  WHERE (pr.drug LIKE '%ASPIRIN%'\n         OR pr.drug LIKE '%CLOPIDOGREL%'\n         OR pr.drug LIKE '%PRASUGREL%'\n         OR pr.drug LIKE '%TICAGRELOR%'\n         OR pr.drug LIKE '%TICLOPIDINE%')\n    AND pr.starttime IS NOT NULL\n    AND pr.stoptime IS NOT NULL\n),\n\nsingle_antiplatelet AS (\n  -- Filter to single (non-DAPT) antiplatelet: no overlap with both aspirin + clopidogrel in same admission\n  SELECT ap.*\n  FROM antiplatelet_prescriptions ap\n  LEFT JOIN (\n    SELECT DISTINCT subject_id, hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n    WHERE drug LIKE '%ASPIRIN%' OR drug LIKE '%CLOPIDOGREL%'\n  ) combo ON ap.subject_id = combo.subject_id AND ap.hadm_id = combo.hadm_id\n  GROUP BY ap.subject_id, ap.hadm_id, ap.pharmacy_id, ap.drug, ap.starttime, ap.stoptime, ap.duration_days\n  HAVING COUNTIF(combo.hadm_id IS NOT NULL) < 2  -- Less than full DAPT overlap per admission\n     OR ap.duration_days IS NULL  -- Exclude if duration invalid\n)\n\n-- Compute SD of (average) single antiplatelet durations per patient\nSELECT STDDEV(duration_avg) AS sd_single_antiplatelet_duration_days\nFROM (\n  SELECT subject_id, AVG(duration_days) AS duration_avg\n  FROM single_antiplatelet\n  GROUP BY subject_id\n  HAVING COUNT(duration_days) > 0  -- Patients with at least one valid single prescription\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

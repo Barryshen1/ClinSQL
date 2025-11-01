@@ -1,0 +1,1 @@
+SELECT h.hadm_id, (percentile_cont(0.75) within GROUP (ORDER BY pr.icd_code) - percentile_cont(0.25) within GROUP (ORDER BY pr.icd_code)) AS interquartile_range FROM male_procedures pr JOIN admissions a ON a.subject_id = pr.subject_id JOIN icustays h ON h.subject_id = a.subject_id AND h.hadm_id = a.hadm_id GROUP BY h.hadm_id ORDER BY interquartile_range NULLS LAST;

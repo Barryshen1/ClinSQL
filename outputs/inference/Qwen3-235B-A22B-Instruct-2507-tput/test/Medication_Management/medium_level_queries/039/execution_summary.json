@@ -1,0 +1,16 @@
+{
+  "query": "I have a 57\u2011year\u2011old male inpatient. In males 52\u201362 with T2DM and heart failure, report prevalence (%) of injectable GLP\u20111s in first 24h versus final 48h, and absolute and relative change.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  -- T2DM diagnosis\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d1\n    ON a.hadm_id = d1.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses dc1\n    ON d1.icd_code = dc1.icd_code AND d1.icd_version = dc1.icd_version\n  -- Heart failure diagnosis\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d2\n    ON a.hadm_id = d2.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses dc2\n    ON d2.icd_code = dc2.icd_code AND d2.icd_version = dc2.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND dc1.long_title LIKE '%diabetes mellitus type 2%'\n    AND dc1.icd_code LIKE 'E11%'\n    AND dc2.long_title LIKE '%heart failure%'\n    AND dc2.icd_code LIKE 'I50%'\n),\nglp1_use AS (\n  SELECT DISTINCT\n    c.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_ADD(a.admittime, INTERVAL 24 HOUR) AS first_24h_end,\n    DATETIME_SUB(a.dischtime, INTERVAL 48 HOUR) AS final_48h_start,\n    -- Check if any GLP-1 given in first 24h\n    MAX(CASE \n      WHEN pr.starttime >= a.admittime \n       AND pr.starttime < DATETIME_ADD(a.admittime, INTERVAL 24 HOUR)\n       THEN 1 ELSE 0 END) AS received_first_24h,\n    -- Check if any GLP-1 given in final 48h\n    MAX(CASE \n      WHEN pr.starttime >= DATETIME_SUB(a.dischtime, INTERVAL 48 HOUR)\n       AND pr.starttime <= a.dischtime\n       THEN 1 ELSE 0 END) AS received_final_48h\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON c.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.prescriptions pr\n    ON a.hadm_id = pr.hadm_id\n  WHERE LOWER(pr.drug) IN ('liraglutide', 'semaglutide', 'exenatide', 'dulaglutide', 'lixisenatide')\n    AND LOWER(pr.route) LIKE '%subcut%'\n    AND pr.starttime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n  GROUP BY c.subject_id, a.hadm_id, a.admittime, a.dischtime\n),\nsummary AS (\n  SELECT\n    COUNT(*) AS total_patients,\n    AVG(received_first_24h) * 100 AS pct_first_24h,\n    AVG(received_final_48h) * 100 AS pct_final_48h\n  FROM glp1_use\n)\nSELECT\n  pct_first_24h,\n  pct_final_48h,\n  ROUND(pct_final_48h - pct_first_24h, 2) AS absolute_change,\n  ROUND(\n    CASE \n      WHEN pct_first_24h > 0 \n      THEN (pct_final_48h - pct_first_24h) / pct_first_24h * 100 \n      ELSE NULL \n    END, 2) AS relative_change_percent\nFROM summary;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

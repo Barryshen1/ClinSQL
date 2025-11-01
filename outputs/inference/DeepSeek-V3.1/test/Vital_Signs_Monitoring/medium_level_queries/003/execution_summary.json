@@ -1,0 +1,16 @@
+{
+  "query": "I have a 76\u2011year\u2011old man. Among male ICU patients aged 71\u201381, report per\u2011stay mean, median, IQR of average temperature over first 48h across categories (<36.0, 36.0\u201337.9, \u226538.0) and MI rate.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id, \n    ie.intime, \n    ie.outtime,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 71 AND 81\n),\n\ntemp_48h AS (\n  SELECT \n    c.stay_id,\n    AVG(ce.valuenum) AS avg_temp\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n  WHERE ce.itemid = 223761  -- Temperature Celsius\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= c.intime\n    AND ce.charttime <= DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY c.stay_id\n),\n\ntemp_categorized AS (\n  SELECT \n    t.stay_id,\n    t.avg_temp,\n    CASE \n      WHEN t.avg_temp < 36.0 THEN '<36.0'\n      WHEN t.avg_temp BETWEEN 36.0 AND 37.9 THEN '36.0-37.9'\n      WHEN t.avg_temp >= 38.0 THEN '>=38.0'\n    END AS temp_category\n  FROM temp_48h t\n),\n\nmi_diagnosis AS (\n  SELECT \n    c.stay_id,\n    MAX(\n      CASE \n        WHEN di.icd_code LIKE '410%' AND di.icd_version = 9 THEN 1\n        WHEN di.icd_code LIKE 'I21%' AND di.icd_version = 10 THEN 1\n        WHEN di.icd_code LIKE 'I22%' AND di.icd_version = 10 THEN 1\n        ELSE 0 \n      END\n    ) AS mi_flag\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON c.hadm_id = di.hadm_id\n  GROUP BY c.stay_id\n)\n\nSELECT \n  tc.temp_category,\n  COUNT(*) AS num_stays,\n  AVG(tc.avg_temp) AS mean_avg_temp,\n  APPROX_QUANTILES(tc.avg_temp, 100)[OFFSET(50)] AS median_avg_temp,\n  APPROX_QUANTILES(tc.avg_temp, 100)[OFFSET(25)] AS q1_avg_temp,\n  APPROX_QUANTILES(tc.avg_temp, 100)[OFFSET(75)] AS q3_avg_temp,\n  SUM(mi.mi_flag) AS mi_count,\n  AVG(mi.mi_flag) AS mi_rate\nFROM temp_categorized tc\nINNER JOIN mi_diagnosis mi\n  ON tc.stay_id = mi.stay_id\nGROUP BY tc.temp_category\nORDER BY \n  CASE \n    WHEN tc.temp_category = '<36.0' THEN 1\n    WHEN tc.temp_category = '36.0-37.9' THEN 2\n    WHEN tc.temp_category = '>=38.0' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have an 81-year-old man. Among male ICU patients aged 76\u201386 with acute myocardial infarction, stratified by quartiles of distinct procedures in the first 24 hours, report mean procedure count, mean ICU LOS, and hospital mortality (%) for each quartile.",
+  "final_sql": "WITH\n-- Get male patients aged 76-86\neligible_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 76 AND 86\n),\n\n-- Get admissions with AMI diagnosis\nami_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM eligible_patients)\n    AND (\n      -- ICD-10 codes for AMI\n      (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n      OR\n      -- ICD-9 codes for AMI\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n    )\n),\n\n-- Get first ICU stay per admission\nfirst_icu_stays AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id, i.hadm_id ORDER BY i.intime) as icu_seq\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN\n    ami_admissions a\n    ON i.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n  WHERE\n    i.intime IS NOT NULL\n    AND i.outtime IS NOT NULL\n),\n\n-- Get distinct procedures in first 24 hours of ICU stay\nicu_procedures AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    COUNT(DISTINCT p.icd_code) AS distinct_procedures\n  FROM\n    first_icu_stays f\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    ON f.subject_id = p.subject_id AND f.hadm_id = p.hadm_id\n    AND p.chartdate BETWEEN f.intime AND TIMESTAMP_ADD(f.intime, INTERVAL 24 HOUR)\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON f.subject_id = pe.subject_id AND f.hadm_id = pe.hadm_id AND f.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN f.intime AND TIMESTAMP_ADD(f.intime, INTERVAL 24 HOUR)\n  WHERE\n    f.icu_seq = 1  -- Only first ICU stay per admission\n  GROUP BY\n    f.subject_id, f.hadm_id, f.stay_id\n),\n\n-- Add quartile information\nprocedure_quartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY distinct_procedures) AS procedure_quartile\n  FROM\n    icu_procedures\n)\n\n-- Final aggregation by quartile\nSELECT\n  procedure_quartile,\n  AVG(distinct_procedures) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los,\n  SUM(hospital_expire_flag) * 100.0 / COUNT(*) AS hospital_mortality_percentage\nFROM\n  procedure_quartiles q\nJOIN\n  first_icu_stays f\n  ON q.subject_id = f.subject_id AND q.hadm_id = f.hadm_id AND q.stay_id = f.stay_id\nJOIN\n  ami_admissions a\n  ON q.subject_id = a.subject_id AND q.hadm_id = a.hadm_id\nWHERE\n  f.icu_seq = 1  -- Only first ICU stay per admission\nGROUP BY\n  procedure_quartile\nORDER BY\n  procedure_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [78:12]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [78:12]\n\nLocation: US\nJob ID: ca9922e2-189d-43be-85c8-e0c9d9ca1f5f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

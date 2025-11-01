@@ -1,0 +1,22 @@
+{
+  "query": "My 71\u2011year\u2011old female with AMI, no initial shock or respiratory failure: among females 66\u201376 with AMI, report in\u2011hospital mortality (%) and median time\u2011to\u2011death (days) by LOS 1\u20133/4\u20137/\u22658 and emergent vs non\u2011emergent admission.",
+  "final_sql": "WITH base AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.admission_type,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n),\nami_filtered AS (\n  SELECT\n    b.hadm_id,\n    b.subject_id,\n    a.admittime,\n    b.dischtime,\n    b.deathtime,\n    b.admission_type,\n    b.hospital_expire_flag,\n    (b.anchor_age + (EXTRACT(YEAR FROM a.admittime) - b.anchor_year)) AS age_at_adm\n  FROM base AS b\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.hadm_id = b.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = b.subject_id AND di.hadm_id = b.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE (\n          (di.icd_version = 9 AND di.icd_code LIKE '410%')\n          OR\n          (di.icd_version = 10 AND di.icd_code LIKE 'I21%')\n        )\n    AND LOWER(dd.long_title) LIKE '%myocardial infarction%'\n    -- Age at admission within 66-76\n    AND (b.anchor_age + (EXTRACT(YEAR FROM a.admittime) - b.anchor_year)) BETWEEN 66 AND 76\n),\nmetrics AS (\n  SELECT\n    m.hadm_id,\n    m.subject_id,\n    m.admittime,\n    m.dischtime,\n    m.deathtime,\n    m.admission_type,\n    m.hospital_expire_flag,\n    m.age_at_adm,\n    CASE\n      -- LOS in days: use dischtime if available; else use deathtime if patient died\n      WHEN m.dischtime IS NOT NULL THEN DATE_DIFF(DATE(m.dischtime), DATE(m.admittime), DAY)\n      WHEN m.deathtime IS NOT NULL THEN DATE_DIFF(DATE(m.deathtime), DATE(m.admittime), DAY)\n      ELSE NULL\n    END AS los_days,\n    CASE\n      -- Time to death in days (only for those who died)\n      WHEN m.deathtime IS NOT NULL THEN DATE_DIFF(DATE(m.deathtime), DATE(m.admittime), DAY)\n      ELSE NULL\n    END AS time_to_death_days,\n    CASE WHEN (m.deathtime IS NOT NULL OR m.hospital_expire_flag = 1) THEN 1 ELSE 0 END AS died_in_hosp\n  FROM ami_filtered AS m\n),\nlabeled AS (\n  SELECT\n    CASE\n      WHEN los_days IS NULL THEN 'Unknown'\n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n      WHEN los_days >= 8 THEN '>=8'\n    END AS los_bucket,\n    CASE WHEN LOWER(admission_type) = 'emergency' THEN 'Emergent' ELSE 'Non-Emergent' END AS admission_status,\n    los_days,\n    time_to_death_days,\n    died_in_hosp\n  FROM metrics\n  WHERE los_days IS NOT NULL\n),\ncounts AS (\n  -- summary counts per group\n  SELECT\n    los_bucket,\n    admission_status,\n    COUNT(*) AS total_admissions,\n    SUM(died_in_hosp) AS in_hospital_deaths\n  FROM labeled\n  GROUP BY los_bucket, admission_status\n),\nmedians AS (\n  -- median time-to-death per group (among those with time_to_death_days)\n  SELECT\n    l.los_bucket,\n    l.admission_status,\n    APPROX_QUANTILES(l.time_to_death_days, 100)[OFFSET(50)] AS median_time_to_death_days\n  FROM labeled AS l\n  WHERE l.time_to_death_days IS NOT NULL\n  GROUP BY l.los_bucket, l.admission_status\n)\nSELECT\n  c.los_bucket AS los_bucket,\n  c.admission_status AS admission_status,\n  c.total_admissions,\n  c.in_hospital_deaths,\n  SAFE_DIVIDE(c.in_hospital_deaths, c.total_admissions) * 100 AS mortality_percent,\n  m.median_time_to_death_days\nFROM counts AS c\nLEFT JOIN medians AS m\n  ON c.los_bucket = m.los_bucket\n  AND c.admission_status = m.admission_status\nORDER BY los_bucket, admission_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_bucket at [95:5]; reason: invalidQuery, location: query, message: Unrecognized name: los_bucket at [95:5]\n\nLocation: US\nJob ID: 055cf215-918b-45fd-905e-0ba7c73a6c1d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

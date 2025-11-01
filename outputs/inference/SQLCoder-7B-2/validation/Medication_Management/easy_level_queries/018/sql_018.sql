@@ -1,0 +1,1 @@
+SELECT MAX(p.stoptime - p.starttime) AS max_duration FROM prescriptions p JOIN patients pt ON p.subject_id = pt.subject_id JOIN admissions a ON p.subject_id = a.subject_id WHERE pt.gender = 'M' AND pt.anchor_age = 87 AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2018 AND 2020 AND p.drug = 'digoxin';

@@ -1,0 +1,28 @@
+{
+  "query": "For my 87\u2011year\u2011old female patient, among women 82\u201392 admitted with chest pain or AMI and initial troponin T >0.01 ng/mL, report p25, p50, p75 and min\u2013max.",
+  "final_sql": "WITH initial_troponin AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      valuenum,\n      -- Use ROW_NUMBER to find the first measurement based on charttime for each admission\n      ROW_NUMBER() OVER(PARTITION BY hadm_id ORDER BY charttime) as rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.labevents`\n    WHERE\n      itemid = 50993 -- d_labitems.label = 'Troponin T'\n      AND valuenum IS NOT NULL\n      AND valueuom = 'ng/mL'\n  ) AS ranked_labs\n  WHERE\n    rn = 1\n),\n\n-- CTE to identify admissions with a diagnosis of chest pain or AMI\nrelevant_admissions AS (\n  SELECT DISTINCT\n    hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` USING (icd_code, icd_version)\n  WHERE\n    LOWER(long_title) LIKE '%chest pain%' OR LOWER(long_title) LIKE '%myocardial infarction%'\n)\n\n-- Main query to join, filter, and calculate statistics\nSELECT\n  APPROX_QUANTILES(it.valuenum, 100)[OFFSET(25)] AS p25_troponin_t,\n  APPROX_QUANTILES(it.valuenum, 100)[OFFSET(50)] AS p50_troponin_t,\n  APPROX_QUANTILES(it.valuenum, 100)[OFFSET(75)] AS p75_troponin_t,\n  MIN(it.valuenum) AS min_troponin_t,\n  MAX(it.valuenum) AS max_troponin_t\nFROM\n  initial_troponin AS it\n-- Ensure the admission had the relevant diagnosis\nINNER JOIN\n  relevant_admissions AS ra\n  ON it.hadm_id = ra.hadm_id\n-- Join to patient demographics to filter by gender and get anchor dates for age calculation\nINNER JOIN\n  `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n  ON it.subject_id = pat.subject_id\n-- Join to admissions to get admittime for accurate age calculation\nINNER JOIN\n  `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  ON it.hadm_id = adm.hadm_id\n-- Apply the final cohort filters\nWHERE\n  pat.gender = 'F'\n  -- Calculate age at admission for more accurate filtering\n  AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) BETWEEN 82 AND 92\n  AND it.valuenum > 0.01;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]\n\nLocation: US\nJob ID: 2c6e6d50-21f4-459d-bd7c-528253876a1d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]\n\nLocation: US\nJob ID: e8c84f32-7f72-484d-8340-f9ed60331b06\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

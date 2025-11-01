@@ -1,0 +1,1 @@
+SELECT MAX(l.value) AS max_creatinine_value FROM labevents l JOIN patients p ON l.subject_id = p.subject_id JOIN admissions a ON l.subject_id = a.subject_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dob)) = 66 AND l.itemid = 11105 AND a.admission_type_id = 757071 AND l.charttime BETWEEN a.intime AND a.intime + INTERVAL '24 hours';

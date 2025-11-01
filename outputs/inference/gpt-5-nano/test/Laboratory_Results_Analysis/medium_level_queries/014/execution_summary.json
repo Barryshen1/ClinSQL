@@ -1,0 +1,16 @@
+{
+  "query": "For my 84-year-old male, among male patients aged 79\u201389 admitted with ACS, what are counts and percentages of the initial Troponin T categorized as Normal, Borderline, and Elevated?",
+  "final_sql": "WITH troponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin%' AND LOWER(label) LIKE '%t%'\n),\n\n-- 2) First Troponin-T measurement per admission\nfirst_troponin AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.valueuom,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n),\n\n-- 3) Keep only the initial Troponin-T per admission\ninitial_troponin AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    charttime,\n    valuenum,\n    valueuom\n  FROM first_troponin\n  WHERE rn = 1\n),\n\n-- 4) Build the ACS-ACS cohort with age-at-admission and gender filters\ncohort AS (\n  SELECT\n    it.subject_id,\n    it.hadm_id,\n    it.charttime,\n    it.valuenum,\n    it.valueuom,\n    a.admittime,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_adm\n  FROM initial_troponin it\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.hadm_id = it.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON di.hadm_id = a.hadm_id AND di.subject_id = a.subject_id\n  WHERE\n    (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%' OR di.icd_code LIKE 'I20%' OR di.icd_code LIKE 'I24%')\n    AND p.gender IN ('M','Male')\n),\n\n-- 5) Classify Troponin-T into Normal/Borderline/Elevated\ncategorized AS (\n  SELECT\n    CASE\n      WHEN LOWER(valueuom) LIKE '%ng/l%' THEN\n        CASE\n          WHEN valuenum <= 14 THEN 'Normal'\n          WHEN valuenum <= 52 THEN 'Borderline'\n          ELSE 'Elevated'\n        END\n      WHEN LOWER(valueuom) LIKE '%ng/ml%' THEN\n        CASE\n          WHEN valuenum <= 0.014 THEN 'Normal'\n          WHEN valuenum <= 0.052 THEN 'Borderline'\n          ELSE 'Elevated'\n        END\n      ELSE NULL -- unknown/unsupported units\n    END AS category\n  FROM cohort\n)\n\n-- 6) Compute counts and percentages (exclude unknown categories)\n, total AS (\n  SELECT COUNT(*) AS total\n  FROM categorized\n  WHERE category IS NOT NULL\n)\n\nSELECT\n  category AS troponin_category,\n  COUNT(*) AS count,\n  ROUND(100.0 * COUNT(*) / t.total, 1) AS percent\nFROM categorized c\nCROSS JOIN total t\nWHERE c.category IS NOT NULL\nGROUP BY category, t.total\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

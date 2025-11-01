@@ -1,0 +1,16 @@
+{
+  "query": "67-year-old male with pneumonia: among male pneumonia admissions, what's the 75th percentile of mean serum glucose in first 24h?",
+  "final_sql": "WITH pneumonia_hads AS (\n  -- hospital admissions with any diagnosis mentioning \"pneumonia\"\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dic\n    ON d.icd_code = dic.icd_code\n   AND d.icd_version = dic.icd_version\n  WHERE LOWER(dic.long_title) LIKE '%pneumonia%'\n),\n\nmale_pneumonia_admissions AS (\n  -- restrict to male patients' admissions\n  SELECT a.hadm_id, a.subject_id, a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN pneumonia_hads ph\n    ON a.hadm_id = ph.hadm_id\n  WHERE LOWER(p.gender) = 'm'\n),\n\nglucose_lab_items AS (\n  -- lab itemids likely representing serum/blood glucose\n  SELECT itemid, label, fluid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%glucose%'\n    AND (\n      LOWER(COALESCE(fluid, '')) LIKE '%serum%'\n      OR LOWER(COALESCE(fluid, '')) LIKE '%blood%'\n      OR LOWER(label) LIKE '%serum%'\n      OR LOWER(label) LIKE '%blood%'\n    )\n),\n\nglucose_vals_24h AS (\n  -- glucose lab measurements within first 24 hours of admission for the cohort\n  SELECT\n    l.hadm_id,\n    l.subject_id,\n    l.charttime,\n    l.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN glucose_lab_items gli\n    ON l.itemid = gli.itemid\n  JOIN male_pneumonia_admissions mpa\n    ON l.hadm_id = mpa.hadm_id\n  WHERE l.valuenum IS NOT NULL\n    AND l.charttime >= mpa.admittime\n    AND l.charttime <= TIMESTAMP_ADD(mpa.admittime, INTERVAL 24 HOUR)\n),\n\nmean_glucose_per_hadm AS (\n  -- compute mean glucose per admission (first 24h)\n  SELECT\n    hadm_id,\n    AVG(valuenum) AS mean_glucose\n  FROM glucose_vals_24h\n  GROUP BY hadm_id\n)\n\n-- final: 75th percentile (approximate) of per-admission mean glucose\nSELECT\n  -- APPROX_QUANTILES returns an array of quantiles; using 100 buckets and taking offset 75\n  (APPROX_QUANTILES(mean_glucose, 100))[OFFSET(75)] AS p75_mean_serum_glucose_male_pneumonia,\n  COUNT(*) AS n_admissions_used\nFROM mean_glucose_per_hadm;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

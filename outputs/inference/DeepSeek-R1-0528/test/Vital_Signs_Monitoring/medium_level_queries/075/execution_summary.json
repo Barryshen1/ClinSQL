@@ -1,0 +1,16 @@
+{
+  "query": "For my 61-year-old male ICU patient: among male ICU patients aged 56\u201366, categorize per-stay mean arterial pressure (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report patient counts and stroke rates.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    ie.stay_id,\n    ie.subject_id,\n    ie.hadm_id,\n    p.anchor_age + (EXTRACT(YEAR FROM ie.intime) - p.anchor_year) AS age_icu\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n),\nfiltered_cohort AS (\n  SELECT *\n  FROM cohort\n  WHERE age_icu BETWEEN 56 AND 66\n),\nmap_data AS (\n  SELECT \n    fc.stay_id,\n    fc.subject_id,\n    fc.hadm_id,\n    AVG(ce.valuenum) AS avg_map\n  FROM filtered_cohort fc\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON fc.stay_id = ce.stay_id\n  WHERE ce.itemid IN (220052, 220181)  -- MAP item IDs\n    AND ce.valuenum BETWEEN 0 AND 300  -- Valid MAP range\n  GROUP BY fc.stay_id, fc.subject_id, fc.hadm_id\n),\nstroke_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    -- ICD-9 Stroke Codes\n    (icd_version = 9 AND \n      REGEXP_CONTAINS(icd_code, r'^(430|431|432|433|434|436)')) OR \n    -- ICD-10 Stroke Codes\n    (icd_version = 10 AND \n      REGEXP_CONTAINS(icd_code, r'^(I6[0-4])'))\n),\ncombined_data AS (\n  SELECT \n    md.stay_id,\n    md.subject_id,\n    md.hadm_id,\n    md.avg_map,\n    CASE WHEN sa.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS stroke_flag\n  FROM map_data md\n  LEFT JOIN stroke_admissions sa\n    ON md.hadm_id = sa.hadm_id\n),\ncategorized AS (\n  SELECT \n    *,\n    CASE \n      WHEN avg_map < 65 THEN '<65'\n      WHEN avg_map < 75 THEN '65-74'\n      WHEN avg_map < 85 THEN '75-84'\n      ELSE '>=85'\n    END AS map_category\n  FROM combined_data\n)\nSELECT \n  map_category,\n  COUNT(*) AS count_stays,\n  COUNT(DISTINCT subject_id) AS count_patients,\n  SUM(stroke_flag) AS count_strokes,\n  ROUND(SAFE_DIVIDE(SUM(stroke_flag), COUNT(*)), 4) AS stroke_rate\nFROM categorized\nGROUP BY map_category\nORDER BY \n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65-74' THEN 2\n    WHEN '75-84' THEN 3\n    WHEN '>=85' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

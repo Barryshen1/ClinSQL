@@ -1,0 +1,1 @@
+SELECT CAST(COUNT(CASE WHEN d.deathtime IS NOT NULL THEN 1 END) AS FLOAT) / NULLIF(COUNT(*), 0) AS in_hospital_mortality_rate FROM admissions a JOIN patients p ON a.subject_id = p.subject_id JOIN icustays i ON a.subject_id = i.subject_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dob)) BETWEEN 40 AND 50 AND i.los <= 5;

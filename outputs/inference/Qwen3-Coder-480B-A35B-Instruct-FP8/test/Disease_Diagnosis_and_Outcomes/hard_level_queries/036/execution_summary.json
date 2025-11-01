@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 78\u2011year\u2011old male with pneumonia and high comorbidity. In male patients 73\u201383 with pneumonia and top\u2011quartile comorbidity, what is his composite risk percentile? Provide cohort in\u2011hospital mortality %, major complication %, and median survival days.",
+  "final_sql": "WITH pneumonia_admissions AS (\n  -- Identify admissions with pneumonia as primary diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    d.seq_num = 1\n    AND LOWER(dd.long_title) LIKE '%pneumonia%'\n),\n\neligible_patients AS (\n  -- Filter patients by gender and age\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    pa.hadm_id,\n    pa.admittime,\n    pa.dischtime,\n    pa.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    pneumonia_admissions pa\n    ON p.subject_id = pa.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 73 AND 83\n),\n\ncomorbidity_scores AS (\n  -- Compute comorbidity score (Elixhauser-like) excluding pneumonia\n  SELECT\n    ep.subject_id,\n    ep.hadm_id,\n    COUNT(DISTINCT d.icd_code) AS comorbidity_count\n  FROM\n    eligible_patients ep\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON ep.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    d.seq_num > 1\n    AND LOWER(dd.long_title) NOT LIKE '%pneumonia%'\n  GROUP BY\n    ep.subject_id, ep.hadm_id\n),\n\npatients_with_quartiles AS (\n  -- Assign comorbidity quartile\n  SELECT\n    ep.*,\n    cs.comorbidity_count,\n    NTILE(4) OVER (ORDER BY cs.comorbidity_count) AS comorbidity_quartile\n  FROM\n    eligible_patients ep\n  JOIN\n    comorbidity_scores cs\n    ON ep.hadm_id = cs.hadm_id\n),\n\ntop_comorbidity_cohort AS (\n  -- Top quartile only\n  SELECT *\n  FROM patients_with_quartiles\n  WHERE comorbidity_quartile = 4\n),\n\ncomplications AS (\n  -- Identify major complications (e.g., respiratory failure, septic shock)\n  SELECT DISTINCT\n    d.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    d.seq_num > 1\n    AND (\n      LOWER(dd.long_title) LIKE '%respiratory failure%'\n      OR LOWER(dd.long_title) LIKE '%septic shock%'\n      OR LOWER(dd.long_title) LIKE '%acute kidney failure%'\n    )\n),\n\nsurvival_days AS (\n  SELECT\n    hadm_id,\n    DATE_DIFF(dischtime, admittime, DAY) AS survival_days\n  FROM top_comorbidity_cohort\n  WHERE dischtime IS NOT NULL AND admittime IS NOT NULL\n),\n\nfinal_stats AS (\n  SELECT\n    -- Mortality %\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent,\n\n    -- Complication %\n    AVG(CASE WHEN c.hadm_id IS NOT NULL THEN 1 ELSE 0 END) * 100 AS complication_percent,\n\n    -- Median survival days\n    APPROX_QUANTILES(s.survival_days, 2)[OFFSET(1)] AS median_survival_days\n  FROM\n    top_comorbidity_cohort t\n  LEFT JOIN\n    complications c\n    ON t.hadm_id = c.hadm_id\n  LEFT JOIN\n    survival_days s\n    ON t.hadm_id = s.hadm_id\n)\n\nSELECT * FROM final_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [112:38]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [112:38]\n\nLocation: US\nJob ID: 0e55c6eb-a0ae-40be-95ba-98186dcce9ee\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

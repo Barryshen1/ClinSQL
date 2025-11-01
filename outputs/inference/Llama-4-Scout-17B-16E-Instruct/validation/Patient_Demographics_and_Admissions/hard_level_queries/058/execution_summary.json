@@ -1,0 +1,28 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH \n  -- Define the population of interest: male Medicare patients aged 50-60 admitted from ED with lower GI bleed\n  inclusion_criteria AS (\n    SELECT \n      a.hadm_id,\n      a.subject_id,\n      a.admit_provider_id,\n      a.admission_location,\n      a.admission_type,\n      p.anchor_age,\n      p.gender,\n      a.insurance,\n      a.edregtime,\n      a.edouttime\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON \n      a.subject_id = p.subject_id\n    WHERE \n      a.admission_type = 'Emergency'\n      AND a.admission_location = 'ED'\n      AND p.gender = 'M'\n      AND p.anchor_age BETWEEN 50 AND 60\n      AND a.insurance = 'Medicare'\n      AND EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE \n          d.hadm_id = a.hadm_id\n          AND d.icd_code LIKE 'K62.1'  -- Lower GI bleeding\n          AND d.seq_num = 1  -- Principal diagnosis\n      )\n  ),\n  \n  -- Calculate length of stay (LOS) for each admission\n  los AS (\n    SELECT \n      ic.hadm_id,\n      TIMESTAMPDIFF(DAY, a.admittime, a.dischtime) + \n      (CASE \n         WHEN a.dischtime IS NULL THEN 1 \n         ELSE 0 \n       END) AS los_days\n    FROM \n      inclusion_criteria ic\n    INNER JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON \n      ic.hadm_id = a.hadm_id\n  ),\n  \n  -- Identify readmitted patients within 30 days\n  readmitted_patients AS (\n    SELECT \n      a.hadm_id,\n      MIN(b.admittime) AS readmit_time\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN \n      inclusion_criteria ic\n    ON \n      a.subject_id = ic.subject_id\n    INNER JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` b\n    ON \n      ic.subject_id = b.subject_id\n    WHERE \n      a.dischtime IS NOT NULL\n      AND b.admittime BETWEEN a.dischtime AND TIMESTAMP_ADD(a.dischtime, INTERVAL 30 DAY)\n      AND b.admission_type <> 'Re-admit'\n    GROUP BY \n      a.hadm_id\n  ),\n  \n  -- Merge LOS and readmission status\n  final_results AS (\n    SELECT \n      COALESCE(rp.hadm_id, ic.hadm_id) AS hadm_id,\n      los.los_days,\n      CASE \n        WHEN rp.hadm_id IS NOT NULL THEN 1 \n        ELSE 0 \n      END AS readmitted\n    FROM \n      los\n    LEFT JOIN \n      readmitted_patients rp\n    ON \n      los.hadm_id = rp.hadm_id\n    INNER JOIN \n      inclusion_criteria ic\n    ON \n      los.hadm_id = ic.hadm_id\n  )\n\nSELECT \n  SUM(readmitted) / COUNT(*) AS readmission_rate,\n  PERCENTILE_CONT(0.5)(los_days) WITHIN GROUP (ORDER BY los_days) FILTER (WHERE readmitted = 1) AS median_los_readmitted,\n  PERCENTILE_CONT(0.5)(los_days) WITHIN GROUP (ORDER BY los_days) FILTER (WHERE readmitted = 0) AS median_los_not_readmitted,\n  AVG(CASE WHEN los_days > 6 AND readmitted = 1 THEN 1 ELSE 0 END) AS percent_los_gt_6_readmitted,\n  AVG(CASE WHEN los_days > 6 AND readmitted = 0 THEN 1 ELSE 0 END) AS percent_los_gt_6_not_readmitted\nFROM \n  final_results;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Double function call parentheses at [100:23]; reason: invalidQuery, location: query, message: Syntax error: Double function call parentheses at [100:23]\n\nLocation: US\nJob ID: 09362a50-6dcf-453e-bf5f-d9856df47fab\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [97:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [97:24]\n\nLocation: US\nJob ID: 4ac5f99f-ef60-4757-832b-4dca05c9b32f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Double function call parentheses at [17:31]; reason: invalidQuery, location: query, message: Syntax error: Double function call parentheses at [17:31]\n\nLocation: US\nJob ID: 309e8d21-bd51-40b8-8e6a-ba0ae3f57743\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Double function call parentheses at [100:23]; reason: invalidQuery, location: query, message: Syntax error: Double function call parentheses at [100:23]\n\nLocation: US\nJob ID: 09362a50-6dcf-453e-bf5f-d9856df47fab\n"
+    }
+  ]
+}

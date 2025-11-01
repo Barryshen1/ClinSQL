@@ -1,0 +1,16 @@
+{
+  "query": "For a 55-year-old female, among females 50\u201360 on anticoagulants, median ICU LOS (days) for first ICU stay during first admission?",
+  "final_sql": "WITH\n-- Get first admission per patient\nfirst_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY hadm_id) AS admission_rank\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\n\n-- Get first ICU stay per admission\nfirst_icu_stays AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    TIMESTAMP_DIFF(i.outtime, i.intime, DAY) AS los_days,\n    ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS icu_rank\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN first_admissions fa ON i.subject_id = fa.subject_id AND i.hadm_id = fa.hadm_id\n  WHERE fa.admission_rank = 1  -- First admission\n),\n\n-- Patients on anticoagulants during admission\nanticoagulant_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN first_admissions fa ON p.subject_id = fa.subject_id AND p.hadm_id = fa.hadm_id\n  WHERE fa.admission_rank = 1  -- First admission\n  AND (\n    -- Common anticoagulant drugs (expand as needed)\n    LOWER(p.drug) LIKE '%warfarin%'\n    OR LOWER(p.drug) LIKE '%heparin%'\n    OR LOWER(p.drug) LIKE '%apixaban%'\n    OR LOWER(p.drug) LIKE '%rivaroxaban%'\n    OR LOWER(p.drug) LIKE '%dabigatran%'\n    OR LOWER(p.drug) LIKE '%edoxaban%'\n  )\n),\n\n-- Final cohort: females 50-60 on anticoagulants with first ICU stay\ncohort AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    fis.los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN first_icu_stays fis ON p.subject_id = fis.subject_id\n  JOIN anticoagulant_patients ap ON p.subject_id = ap.subject_id AND fis.hadm_id = ap.hadm_id\n  WHERE p.gender = 'F'\n  AND p.anchor_age BETWEEN 50 AND 60\n  AND fis.icu_rank = 1  -- First ICU stay\n)\n\n-- Calculate median ICU LOS\nSELECT\n  PERCENTILE_CONT(cohort.los_days, 0.5) OVER() AS median_icu_los_days\nFROM cohort\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

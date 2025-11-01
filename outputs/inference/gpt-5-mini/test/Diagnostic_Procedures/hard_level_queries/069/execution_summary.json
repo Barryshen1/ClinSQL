@@ -1,0 +1,16 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH pe_admissions AS (\n  -- Admissions of male patients age 44-54 with a pulmonary embolism diagnosis\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id AND a.subject_id = di.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND LOWER(dd.long_title) LIKE '%pulmonary embol%'\n),\n\nfirst_icustays AS (\n  -- First ICU stay (earliest intime) per hospital admission\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    WHERE hadm_id IN (SELECT hadm_id FROM pe_admissions)\n  ) icu\n  WHERE rn = 1\n),\n\nproc_counts AS (\n  -- Count distinct procedures (by itemid) in the first 72 ICU hours for each first ICU stay\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    COALESCE(COUNT(DISTINCT p.itemid), 0) AS proc_count\n  FROM first_icustays f\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON p.subject_id = f.subject_id\n   AND p.hadm_id = f.hadm_id\n   AND p.stay_id = f.stay_id\n   AND p.starttime BETWEEN f.intime AND TIMESTAMP_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY f.subject_id, f.hadm_id, f.stay_id, f.intime\n),\n\nproc_quintiles AS (\n  -- Assign quintiles based on procedure count (lowest counts -> quintile 1)\n  SELECT\n    pc.*,\n    NTILE(5) OVER (ORDER BY proc_count) AS quintile\n  FROM proc_counts pc\n),\n\nfinal_prep AS (\n  -- Attach admission-level outcomes (LOS and hospital mortality)\n  SELECT\n    q.quintile,\n    q.proc_count,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- LOS in days with fractional days\n    SAFE_DIVIDE(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR), 24.0) AS los_days\n  FROM proc_quintiles q\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON q.hadm_id = a.hadm_id\n  -- Ensure we only consider admissions in the PE cohort (redundant but explicit)\n  WHERE a.hadm_id IN (SELECT hadm_id FROM pe_admissions)\n)\n\nSELECT\n  quintile,\n  COUNT(*) AS n_stays,\n  ROUND(AVG(proc_count), 2) AS avg_proc_count,\n  ROUND(AVG(los_days), 2) AS avg_hospital_los_days,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_percent\nFROM final_prep\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

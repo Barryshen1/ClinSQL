@@ -1,0 +1,22 @@
+{
+  "query": "I have an 81-year-old man. Among male ICU patients aged 76\u201386 with acute myocardial infarction, stratified by quartiles of distinct procedures in the first 24 hours, report mean procedure count, mean ICU LOS, and hospital mortality (%) for each quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.los,\n    i.intime,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM (\n    SELECT *,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu`.icustays\n  ) i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON i.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON i.hadm_id = a.hadm_id\n  WHERE i.rn = 1\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n      WHERE d.hadm_id = i.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '410%')\n          OR\n          (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n        )\n    )\n),\nprocedures AS (\n  SELECT\n    c.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pe\n    ON pe.stay_id = c.stay_id\n    AND pe.itemid IS NOT NULL\n    AND pe.starttime >= c.intime\n    AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 1 DAY)\n  GROUP BY c.stay_id\n),\nenriched AS (\n  SELECT\n    c.*,\n    COALESCE(pr.procedure_count, 0) AS procedure_count\n  FROM cohort c\n  LEFT JOIN procedures pr\n    ON pr.stay_id = c.stay_id\n),\nquartiled AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM enriched\n)\nSELECT\n  quartile,\n  ROUND(AVG(procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(los), 2) AS mean_icu_los,\n  ROUND((SUM(hospital_expire_flag) * 100.0 / COUNT(*)), 2) AS hospital_mortality_pct\nFROM quartiled\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [28:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [28:12]\n\nLocation: US\nJob ID: 7124dffb-19e5-40d4-87d3-4079edaee65d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

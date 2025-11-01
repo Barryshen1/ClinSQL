@@ -1,0 +1,23 @@
+{
+  "query": "89-year-old male ICU patient with ischemic stroke: among male ICU patients aged 84\u201394 with ischemic stroke, what percentile is a first 72 hours vital-sign instability score of 80? Also report ICU LOS and mortality for the top instability quartile.",
+  "final_sql": "WITH eligible_patients AS (\n    SELECT \n        p.subject_id,\n        p.anchor_age,\n        i.stay_id,\n        i.hadm_id,\n        i.intime,\n        i.los\n    FROM \n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN \n        `physionet-data.mimiciv_3_1_icu.icustays` i ON p.subject_id = i.subject_id\n    JOIN \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON i.hadm_id = d.hadm_id\n    WHERE \n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 84 AND 94\n        AND (\n            (d.icd_version = 9 AND d.icd_code LIKE '434%')\n            OR (d.icd_version = 10 AND d.icd_code LIKE 'I63%')\n        )\n),\nvital_signs AS (\n    SELECT \n        e.stay_id,\n        COUNT(*) AS abnormal_count\n    FROM \n        eligible_patients e\n    JOIN \n        `physionet-data.mimiciv_3_1_icu.chartevents` c ON e.stay_id = c.stay_id\n    WHERE \n        c.charttime BETWEEN e.intime AND e.intime + INTERVAL 72 HOUR\n        AND c.itemid IN (220045, 220050, 220210, 223762)\n        AND (\n            (c.itemid = 220045 AND (c.valuenum < 60 OR c.valuenum > 100))\n            OR (c.itemid = 220050 AND (c.valuenum < 90 OR c.valuenum > 120))\n            OR (c.itemid = 220210 AND (c.valuenum < 12 OR c.valuenum > 20))\n            OR (c.itemid = 223762 AND (c.valuenum < 36.1 OR c.valuenum > 37.2))\n        )\n    GROUP BY \n        e.stay_id\n),\npatient_scores AS (\n    SELECT \n        e.stay_id,\n        e.hadm_id,\n        e.los,\n        COALESCE(v.abnormal_count, 0) AS score\n    FROM \n        eligible_patients e\n    LEFT JOIN \n        vital_signs v ON e.stay_id = v.stay_id\n),\npercentile_80 AS (\n    SELECT \n        (COUNT(CASE WHEN score <= 80 THEN 1 END) * 100.0 / COUNT(*)) AS percentile\n    FROM \n        patient_scores\n),\ntop_quartile_threshold AS (\n    SELECT \n        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY score) AS threshold\n    FROM \n        patient_scores\n),\nmortality_stats AS (\n    SELECT \n        AVG(p.los) AS avg_los,\n        AVG(CAST(a.hospital_expire_flag AS FLOAT64)) AS mortality_rate\n    FROM \n        patient_scores p\n    JOIN \n        `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.hadm_id = a.hadm_id\n    CROSS JOIN \n        top_quartile_threshold tq\n    WHERE \n        p.score >= tq.threshold\n)\nSELECT \n    p.percentile,\n    m.avg_los,\n    m.mortality_rate\nFROM \n    percentile_80 p\nCROSS JOIN \n    mortality_stats m;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [62:31]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [62:31]\n\nLocation: US\nJob ID: 219499b7-01c4-49fc-a98f-b65bd923f76f\n",
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [40:5]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [40:5]\n\nLocation: US\nJob ID: 543713ef-fde4-4ab0-9983-10ebafa7be80\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [62:31]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [62:31]\n\nLocation: US\nJob ID: 219499b7-01c4-49fc-a98f-b65bd923f76f\n"
+    }
+  ]
+}

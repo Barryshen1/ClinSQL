@@ -1,0 +1,28 @@
+{
+  "query": "I have a 55-year-old female with intracranial hemorrhage. In female ICU patients aged 50\u201360 with ICH, what are the 25th, 50th, 90th percentiles and maximum procedure burden in initial 72 hours? Compare hospital LOS and in-hospital mortality to general ICU.",
+  "final_sql": "WITH ICH_ADMISSIONS AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  WHERE p.gender = 'Female'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND (\n      (di.icd_version = 10 AND (\n         di.icd_code LIKE 'I60%' OR\n         di.icd_code LIKE 'I61%' OR\n         di.icd_code LIKE 'I62%'\n      ))\n      OR\n      (di.icd_version = 9 AND (di.icd_code BETWEEN '430' AND '432'))\n    )\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n      WHERE ic.hadm_id = a.hadm_id\n    )\n),\n\nICH_ICU_STAYS AS (\n  SELECT\n    ic.subject_id,\n    ic.hadm_id,\n    ic.stay_id,\n    ic.intime\n  FROM ICH_ADMISSIONS AS a\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n    ON a.hadm_id = ic.hadm_id\n),\n\nBURDEN AS (\n  SELECT\n    s.hadm_id,\n    s.stay_id,\n    COUNT(*) AS burden\n  FROM ICH_ICU_STAYS AS s\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON s.subject_id = pe.subject_id\n   AND s.hadm_id = pe.hadm_id\n   AND s.stay_id = pe.stay_id\n   AND pe.starttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 72 HOUR)\n  GROUP BY s.hadm_id, s.stay_id\n),\n\n-- Compute quantiles for burden. Cast to FLOAT64 to ensure numeric input.\nBURDEN_QUANT AS (\n  SELECT APPROX_QUANTILES(CAST(burden AS FLOAT64), 100) AS quantiles\n  FROM BURDEN\n),\n\n-- Subset: female ICH, age 50-60 ICU subset: hospital LOS and in-hospital mortality\nLOS_SUBSET AS (\n  SELECT\n    MEDIAN(TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 3600.0) AS subset_hosp_los_hours,\n    SAFE_DIVIDE(\n      SUM(CASE WHEN a.hospital_expire_flag = 1 OR a.deathtime IS NOT NULL THEN 1 ELSE 0 END),\n      COUNT(*) ) AS subset_in_hosp_mortality_rate\n  FROM ICH_ADMISSIONS AS a\n  WHERE EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n      WHERE ic.hadm_id = a.hadm_id\n  )\n),\n\n-- General ICU: hospital LOS and in-hospital mortality for all ICU patients\nLOS_ALL_ICU AS (\n  SELECT\n    MEDIAN(TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 3600.0) AS allicu_median_los_hours,\n    SAFE_DIVIDE(\n      SUM(CASE WHEN a.hospital_expire_flag = 1 OR a.deathtime IS NOT NULL THEN 1 ELSE 0 END),\n      COUNT(*) ) AS allicu_mortality_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n    ON ic.hadm_id = a.hadm_id\n)\n\nSELECT\n  -- Burden percentiles for the ICH female 50-60 ICU cohort\n  b.quantiles[OFFSET(25)] AS burden_p25,\n  b.quantiles[OFFSET(50)] AS burden_p50,\n  b.quantiles[OFFSET(90)] AS burden_p90,\n  b.quantiles[OFFSET(100)] AS burden_max,\n  -- Subset results\n  ls.subset_hosp_los_hours AS subset_hosp_los_median_hours,\n  ls.subset_in_hosp_mortality_rate AS subset_in_hosp_mortality_rate,\n  -- General ICU results\n  li.allicu_median_los_hours AS allicu_hosp_los_median_hours,\n  li.allicu_mortality_rate AS allicu_in_hosp_mortality_rate\nFROM BURDEN_QUANT AS b\nCROSS JOIN LOS_SUBSET AS ls\nCROSS JOIN LOS_ALL_ICU AS li;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Invalid cast from STRUCT<hadm_id INT64, stay_id INT64, burden INT64> to FLOAT64 at [59:32]; reason: invalidQuery, location: query, message: Invalid cast from STRUCT<hadm_id INT64, stay_id INT64, burden INT64> to FLOAT64 at [59:32]\n\nLocation: US\nJob ID: 7f7b4408-7fef-4c8a-96cd-81491792bd97\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword WITH at [2:1]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword WITH at [2:1]\n\nLocation: US\nJob ID: fef6dd3c-96c4-4998-96d4-dfdb78341c59\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, stay_id INT64, burden INT64> does not at [59:27]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, stay_id INT64, burden INT64> does not at [59:27]\n\nLocation: US\nJob ID: ac882783-35fe-4339-8958-db6b50079b30\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from STRUCT<hadm_id INT64, stay_id INT64, burden INT64> to FLOAT64 at [59:32]; reason: invalidQuery, location: query, message: Invalid cast from STRUCT<hadm_id INT64, stay_id INT64, burden INT64> to FLOAT64 at [59:32]\n\nLocation: US\nJob ID: 7f7b4408-7fef-4c8a-96cd-81491792bd97\n"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH\n-- 1. Base cohort: male, age 64-74, upper GI bleeding primary diagnosis\nbase AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx_pri\n    ON a.hadm_id = dx_pri.hadm_id\n       AND dx_pri.seq_num = 1\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND dx_pri.icd_code IN ('K92.0','K92.1','K92.2')  -- upper GI bleeding codes\n),\n-- 2. Compute per-admission metrics\nhadm_metrics AS (\n  SELECT\n    b.subject_id,\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.deathtime,\n    -- count all diagnoses\n    COUNT(dx.icd_code) AS diagnosis_count,\n    -- major complication flag\n    MAX(\n      CASE\n        WHEN dx.icd_code IN (\n             -- replace with your actual major complication codes\n             '998.2','998.3','999.3'\n           ) THEN 1 ELSE 0\n      END\n    ) AS major_comp_flag\n  FROM\n    base b\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON b.hadm_id = dx.hadm_id\n  GROUP BY\n    b.subject_id,\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.deathtime\n),\n-- 3. Compute scores, LOS, mortality, and assign quintile\nscored AS (\n  SELECT\n    *,\n    diagnosis_count + 20 * major_comp_flag AS score,\n    CASE\n      WHEN deathtime IS NOT NULL\n           AND DATE_DIFF(deathtime, admittime, DAY) <= 30 THEN 1\n      ELSE 0\n    END AS mort_30d_flag,\n    DATE_DIFF(dischtime, admittime, DAY) AS los,\n    NTILE(5) OVER (ORDER BY diagnosis_count + 20 * major_comp_flag) AS quintile\n  FROM\n    hadm_metrics\n),\n-- 4. Aggregate by quintile\nagg AS (\n  SELECT\n    quintile,\n    COUNT(*)                        AS n,\n    ROUND(AVG(score), 2)            AS mean_score,\n    ROUND(100 * AVG(mort_30d_flag), 1) AS pct_mort_30d,\n    ROUND(100 * AVG(major_comp_flag), 1) AS pct_major_comp,\n    -- median LOS among survivors\n    -- use APPROX_QUANTILES over the LOS of survivors in each quintile\n    APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_los_survivors\n  FROM\n    scored\n  WHERE\n    mort_30d_flag = 0\n  GROUP BY\n    quintile\n)\nSELECT\n  *\nFROM\n  agg\nORDER BY\n  quintile;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

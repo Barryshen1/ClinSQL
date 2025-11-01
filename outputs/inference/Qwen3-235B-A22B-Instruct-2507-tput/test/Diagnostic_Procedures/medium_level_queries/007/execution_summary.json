@@ -1,0 +1,22 @@
+{
+  "query": "For a 55\u2011year\u2011old woman, among female patients 50\u201360 with ACS, report p25, p50, p75 diagnostic procedures per admission, stratified by LOS (1\u20134 vs 5\u20138 days) and primary vs secondary diagnosis.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    -- Compute age at admission\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admit,\n    a.admittime,\n    a.dischtime,\n    -- Calculate LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    di.seq_num,\n    -- Flag if this admission has ACS\n    di.icd_code,\n    di.icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON a.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 50 AND 60\n    AND (LOWER(d.long_title) LIKE '%myocardial infarction%'\n       OR LOWER(d.long_title) LIKE '%unstable angina%'\n       OR LOWER(d.long_title) LIKE '%acute coronary syndrome%')\n),\nacs_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    los_days,\n    -- Classify diagnosis priority: primary if any ACS is primary (seq_num=1), else secondary\n    CASE WHEN MIN(seq_num) = 1 THEN 'primary' ELSE 'secondary' END AS diagnosis_type\n  FROM patient_admissions\n  GROUP BY subject_id, hadm_id, los_days\n  HAVING los_days BETWEEN 1 AND 8  -- Only keep 1\u20138 day stays\n),\nprocedure_counts AS (\n  SELECT\n    a.hadm_id,\n    a.los_days,\n    a.diagnosis_type,\n    COUNT(p.icd_code) AS num_procedures  -- Count procedures per admission using valid column\n  FROM acs_admissions a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.procedures_icd p\n    ON a.hadm_id = p.hadm_id\n  GROUP BY a.hadm_id, a.los_days, a.diagnosis_type\n),\nstratified AS (\n  SELECT\n    diagnosis_type,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 8 THEN '5-8 days'\n    END AS los_group,\n    num_procedures\n  FROM procedure_counts\n  WHERE los_days BETWEEN 1 AND 8\n)\nSELECT\n  diagnosis_type,\n  los_group,\n  APPROX_QUANTILES(num_procedures, 1000)[OFFSET(250)] AS p25_procedures,\n  APPROX_QUANTILES(num_procedures, 1000)[OFFSET(500)] AS p50_procedures,\n  APPROX_QUANTILES(num_procedures, 1000)[OFFSET(750)] AS p75_procedures\nFROM stratified\nWHERE los_group IS NOT NULL\nGROUP BY diagnosis_type, los_group\nORDER BY diagnosis_type, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name proc_icd_id not found inside p at [44:13]; reason: invalidQuery, location: query, message: Name proc_icd_id not found inside p at [44:13]\n\nLocation: US\nJob ID: 6a450f12-69d9-4e14-950b-f867117010ad\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

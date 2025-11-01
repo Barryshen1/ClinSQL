@@ -1,0 +1,28 @@
+{
+  "query": "For a 55-year-old male: among male patients 50\u201360 admitted with chest pain or AMI whose initial hs\u2011TnT > ULN (0.014 ng/mL), report patient and admission counts, mean, median, IQR.",
+  "final_sql": "WITH FilteredAdmissions AS (\n    SELECT\n        p.subject_id,\n        ad.hadm_id,\n        ad.admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON p.subject_id = ad.subject_id\n    WHERE\n        p.gender = 'M'\n        -- anchor_age represents patient's age at their first admission, used as proxy for age at the current admission.\n        AND p.anchor_age BETWEEN 50 AND 60\n        AND EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dicd\n            WHERE\n                dicd.hadm_id = ad.hadm_id\n                AND (\n                    -- ICD-10 codes for Acute Myocardial Infarction (I21.xx) or Chest Pain (R07.4)\n                    (dicd.icd_version = 10 AND (dicd.icd_code LIKE 'I21%' OR dicd.icd_code = 'R074'))\n                    OR\n                    -- ICD-9 codes for Acute Myocardial Infarction (410.xx) or Chest Pain (786.5x)\n                    (dicd.icd_version = 9 AND (dicd.icd_code LIKE '410%' OR dicd.icd_code LIKE '7865%'))\n                )\n        )\n),\nInitialHsTnT AS (\n    SELECT\n        le.subject_id,\n        le.hadm_id,\n        le.valuenum AS hs_tnt_val,\n        ROW_NUMBER() OVER (PARTITION BY le.subject_id, le.hadm_id ORDER BY le.charttime, le.labevent_id) AS rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n    INNER JOIN\n        FilteredAdmissions fa\n        ON le.subject_id = fa.subject_id AND le.hadm_id = fa.hadm_id\n    WHERE\n        le.itemid = 51003 -- Item ID for Troponin T, High Sensitivity (hs-TnT)\n        AND le.valuenum IS NOT NULL -- Ensure a numeric value exists\n        AND le.valuenum > 0 -- hs-TnT values should be positive\n)\nSELECT\n    COUNT(DISTINCT iht.subject_id) AS patient_count,\n    COUNT(DISTINCT iht.hadm_id) AS admission_count,\n    AVG(iht.hs_tnt_val) AS mean_hs_tnt,\n    -- Use APPROX_QUANTILES for quantiles as PERCENTILE_CONT is reported as unsupported\n    APPROX_QUANTILES(iht.hs_tnt_val, 4)[OFFSET(2)] AS median_hs_tnt,\n    APPROX_QUANTILES(iht.hs_tnt_val, 4)[OFFSET(1)] AS q1_hs_tnt,\n    APPROX_QUANTILES(iht.hs_tnt_val, 4)[OFFSET(3)] AS q3_hs_tnt\nFROM\n    InitialHsTnT iht\nWHERE\n    iht.rn = 1 -- Select only the first recorded hs-TnT value for each admission\n    AND iht.hs_tnt_val > 0.014 -- Filter for values higher than the Upper Limit of Normal (ULN);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references iht.hs_tnt_val which is neither grouped nor aggregated at [49:21]; reason: invalidQuery, location: query, message: SELECT list expression references iht.hs_tnt_val which is neither grouped nor aggregated at [49:21]\n\nLocation: US\nJob ID: 7c832d76-8062-414b-99ba-0662170e9bc3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: d7b4cc1b-e3d6-4888-af26-5444029b4a1f\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

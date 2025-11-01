@@ -1,0 +1,29 @@
+{
+  "query": "For my 43\u2011year\u2011old female with AKI: among female AKI admissions age 38\u201348, compare 1\u20134 vs 5\u20137 day stays, stratified by ICU use \u2014 mean, min, and max non\u2011invasive diagnostics per admission.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    p.gender,\n    -- Approximate birth date: using anchor_year and anchor_age\n    DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), INTERVAL p.anchor_age YEAR) AS approx_birth_date,\n    TIMESTAMP_DIFF(a.admittime, DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), INTERVAL p.anchor_age YEAR), YEAR) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND TIMESTAMP_DIFF(a.admittime, DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), INTERVAL p.anchor_age YEAR), YEAR) BETWEEN 38 AND 48\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\naki_admissions AS (\n  SELECT \n    ba.*,\n    CASE WHEN d.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_aki\n  FROM base_admissions ba\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n    WHERE d.icd_code IN (\n      'N17.0', 'N17.1', 'N17.8', 'N17.9', \n      'R91.0'   -- Acute kidney failure\n    )\n  ) d ON ba.hadm_id = d.hadm_id\n  WHERE d.hadm_id IS NOT NULL   -- only keep if AKI\n),\nicu_use AS (\n  SELECT \n    aki.hadm_id,\n    CASE WHEN i.hadm_id IS NOT NULL THEN 'ICU' ELSE 'Non-ICU' END AS icu_use\n  FROM aki_admissions aki\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON aki.hadm_id = i.hadm_id\n),\n-- Now, count diagnostics per admission from various tables\nlab_counts AS (\n  SELECT hadm_id, COUNT(*) AS lab_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n  GROUP BY hadm_id\n),\nmicro_counts AS (\n  SELECT hadm_id, COUNT(*) AS micro_count\n  FROM `physionet-data.mimiciv_3_1_hosp.microbiologyevents`\n  GROUP BY hadm_id\n),\nchart_counts AS (\n  SELECT hadm_id, COUNT(*) AS chart_count\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents`\n  GROUP BY hadm_id\n),\noutput_counts AS (\n  SELECT hadm_id, COUNT(*) AS output_count\n  FROM `physionet-data.mimiciv_3_1_icu.outputevents`\n  GROUP BY hadm_id\n),\nomr_counts AS (\n  SELECT hadm_id, COUNT(*) AS omr_count\n  FROM `physionet-data.mimiciv_3_1_hosp.omr`\n  GROUP BY hadm_id\n),\ntotal_diagnostics AS (\n  SELECT \n    iu.hadm_id,\n    iu.icu_use,\n    aki.los_days,\n    COALESCE(lc.lab_count,0) + COALESCE(mc.micro_count,0) + COALESCE(cc.chart_count,0) + COALESCE(oc.output_count,0) + COALESCE(omc.omr_count,0) AS total_diagnostics\n  FROM icu_use iu\n  INNER JOIN aki_admissions aki ON iu.hadm_id = aki.hadm_id\n  LEFT JOIN lab_counts lc ON iu.hadm_id = lc.hadm_id\n  LEFT JOIN micro_counts mc ON iu.hadm_id = mc.hadm_id\n  LEFT JOIN chart_counts cc ON iu.hadm_id = cc.hadm_id\n  LEFT JOIN output_counts oc ON iu.hadm_id = oc.hadm_id\n  LEFT JOIN omr_counts omc ON iu.hadm_id = omc.hadm_id\n),\ngrouped_data AS (\n  SELECT \n    CASE \n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7 days'\n    END AS los_group,\n    icu_use,\n    total_diagnostics\n  FROM total_diagnostics\n  WHERE los_days BETWEEN 1 AND 7   -- already filtered, but for safety\n)\nSELECT \n  los_group,\n  icu_use,\n  COUNT(*) AS num_admissions,\n  AVG(total_diagnostics) AS mean_diagnostics,\n  MIN(total_diagnostics) AS min_diagnostics,\n  MAX(total_diagnostics) AS max_diagnostics\nFROM grouped_data\nGROUP BY los_group, icu_use\nORDER BY los_group, icu_use;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: hadm_id at [63:10]; reason: invalidQuery, location: query, message: Unrecognized name: hadm_id at [63:10]\n\nLocation: US\nJob ID: a9a2ddc3-bc33-4e8b-bb8d-dda3b66deafa\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:9]\n\nLocation: US\nJob ID: 380a074c-2016-4311-8c4d-8adaaed364f6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_icu.datetimesevents was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_icu.datetimesevents was not found in location US\n\nLocation: US\nJob ID: b8a1bce1-4cd1-40fd-b7ae-bb3469923aab\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hadm_id at [63:10]; reason: invalidQuery, location: query, message: Unrecognized name: hadm_id at [63:10]\n\nLocation: US\nJob ID: a9a2ddc3-bc33-4e8b-bb8d-dda3b66deafa\n"
+    }
+  ]
+}

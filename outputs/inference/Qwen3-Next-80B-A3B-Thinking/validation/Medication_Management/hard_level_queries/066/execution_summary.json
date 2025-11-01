@@ -1,0 +1,23 @@
+{
+  "query": "I have a 48-year-old male inpatient. Among male inpatients aged 43\u201353 with a transplant diagnosis, compute medication complexity score over the first 7 hospital days, stratify into quartiles, and report per quartile: n, mean score, LOS, in-hospital mortality, and 30-day readmission",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag,\n        p.anchor_age,\n        p.anchor_year\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n        ON a.subject_id = p.subject_id\n    WHERE p.gender = 'M'\n        AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 43 AND 53\n        AND EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n            JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di \n                ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n            WHERE d.hadm_id = a.hadm_id\n                AND (LOWER(di.long_title) LIKE '%transplant%' OR LOWER(di.long_title) LIKE '%graft%')\n        )\n),\nmedication_score AS (\n    SELECT \n        c.hadm_id,\n        COUNT(DISTINCT pr.drug) AS medication_count\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr \n        ON c.hadm_id = pr.hadm_id\n        AND pr.starttime >= c.admittime\n        AND pr.starttime < c.admittime + INTERVAL 7 DAY\n    GROUP BY c.hadm_id\n),\nlos_mortality AS (\n    SELECT \n        c.hadm_id,\n        DATE_DIFF(c.dischtime, c.admittime, DAY) AS los,\n        c.hospital_expire_flag,\n        CASE WHEN EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n            WHERE a2.subject_id = c.subject_id\n                AND a2.admittime > c.dischtime\n                AND a2.admittime <= c.dischtime + INTERVAL 30 DAY\n        ) THEN 1 ELSE 0 END AS readmission_30d\n    FROM cohort c\n),\ncombined AS (\n    SELECT \n        m.hadm_id,\n        m.medication_count,\n        l.los,\n        l.hospital_expire_flag,\n        l.readmission_30d\n    FROM medication_score m\n    JOIN los_mortality l \n        ON m.hadm_id = l.hadm_id\n),\nquartiles AS (\n    SELECT \n        *,\n        NTILE(4) OVER (ORDER BY medication_count) AS quartile\n    FROM combined\n)\nSELECT \n    quartile,\n    COUNT(*) AS n,\n    AVG(medication_count) AS mean_score,\n    AVG(los) AS mean_los,\n    AVG(hospital_expire_flag) AS in_hospital_mortality,\n    AVG(readmission_30d) AS thirty_day_readmission\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got identifier \"ILIKE\" at [21:36]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got identifier \"ILIKE\" at [21:36]\n\nLocation: US\nJob ID: 83a01bcd-6675-4979-af98-228aa92b6be9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

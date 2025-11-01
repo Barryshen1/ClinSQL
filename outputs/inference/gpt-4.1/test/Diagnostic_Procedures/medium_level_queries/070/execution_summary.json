@@ -1,0 +1,22 @@
+{
+  "query": "For a 64-year-old man, among males 59\u201369 with heart failure, give the 25th, 50th, and 75th percentiles of radiography/CT per admission for 1\u20134 vs 5\u20138 day stays, by ICU use.",
+  "final_sql": "WITH cohort AS (\n  -- Select male patients aged 59-69\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    p.gender\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n),\nhf_admissions AS (\n  -- Admissions with heart failure diagnosis\n  SELECT DISTINCT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN cohort c ON adm.subject_id = c.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx ON adm.hadm_id = dx.hadm_id\n  WHERE\n    (\n      (dx.icd_version = 9 AND dx.icd_code LIKE '428%') -- ICD-9 Heart Failure\n      OR\n      (dx.icd_version = 10 AND dx.icd_code LIKE 'I50%') -- ICD-10 Heart Failure\n    )\n),\nlos_bins AS (\n  -- Calculate LOS and bin\n  SELECT\n    ha.subject_id,\n    ha.hadm_id,\n    ha.admittime,\n    ha.dischtime,\n    DATETIME_DIFF(ha.dischtime, ha.admittime, DAY) AS los_days,\n    CASE\n      WHEN DATETIME_DIFF(ha.dischtime, ha.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4'\n      WHEN DATETIME_DIFF(ha.dischtime, ha.admittime, DAY) BETWEEN 5 AND 8 THEN '5-8'\n      ELSE NULL\n    END AS los_bin\n  FROM\n    hf_admissions ha\n),\nradiology_ct_codes AS (\n  -- Get ICD procedure codes for radiography/CT\n  SELECT\n    icd_code,\n    icd_version\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE\n    (\n      (icd_version = 9 AND (icd_code LIKE '87%' OR icd_code LIKE '88%')) -- 87: radiology, 88: CT/MRI\n      OR\n      (icd_version = 10 AND (icd_code LIKE 'B%' OR icd_code LIKE 'C%' OR icd_code LIKE 'D%')) -- Example: imaging codes in ICD-10-PCS\n    )\n),\nrad_ct_counts AS (\n  -- Count radiography/CT procedures per admission\n  SELECT\n    lb.subject_id,\n    lb.hadm_id,\n    lb.los_bin,\n    COUNT(DISTINCT proc.icd_code) AS rad_ct_count\n  FROM\n    los_bins lb\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n      ON lb.hadm_id = proc.hadm_id\n    LEFT JOIN radiology_ct_codes rc\n      ON proc.icd_code = rc.icd_code AND proc.icd_version = rc.icd_version\n  WHERE\n    lb.los_bin IS NOT NULL\n    AND rc.icd_code IS NOT NULL -- Only count procedures that match radiology/CT codes\n  GROUP BY\n    lb.subject_id, lb.hadm_id, lb.los_bin\n),\nicu_use AS (\n  -- Determine ICU use per admission\n  SELECT\n    hadm_id,\n    1 AS icu_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY\n    hadm_id\n),\nfinal AS (\n  -- Merge counts and ICU use\n  SELECT\n    r.subject_id,\n    r.hadm_id,\n    r.los_bin,\n    IFNULL(r.rad_ct_count, 0) AS rad_ct_count,\n    IF(i.icu_flag IS NULL, 'No ICU', 'ICU') AS icu_use\n  FROM\n    rad_ct_counts r\n    LEFT JOIN icu_use i ON r.hadm_id = i.hadm_id\n)\nSELECT\n  los_bin,\n  icu_use,\n  APPROX_QUANTILES(rad_ct_count, 4)[OFFSET(1)] AS pct_25,\n  APPROX_QUANTILES(rad_ct_count, 4)[OFFSET(2)] AS pct_50,\n  APPROX_QUANTILES(rad_ct_count, 4)[OFFSET(3)] AS pct_75,\n  COUNT(*) AS n_admissions\nFROM\n  final\nGROUP BY\n  los_bin, icu_use\nORDER BY\n  los_bin, icu_use;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXISTS subquery is not supported inside join predicate.; reason: invalidQuery, location: query, message: EXISTS subquery is not supported inside join predicate.\n\nLocation: US\nJob ID: f9baa9b2-a684-43bf-a91b-0dd76582ad0d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

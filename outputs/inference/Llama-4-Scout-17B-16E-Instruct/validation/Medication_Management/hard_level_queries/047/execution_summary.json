@@ -1,0 +1,22 @@
+{
+  "query": "I have a 53-year-old female inpatient. Among female inpatients 48\u201358, compare hemorrhagic stroke vs age\u2011matched controls: first 48\u2011hour medication complexity distribution, outcomes (LOS, mortality) for patients with \u22652 serotonergic drugs versus <2, and LOS/mortality for top complexity quartile.",
+  "final_sql": "WITH \n-- Step 1: Patient Selection\npatients_selected AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime,\n    p.anchor_age, \n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F' \n    AND p.anchor_age BETWEEN 48 AND 58\n),\n\n-- Step 2: Hemorrhagic Stroke Identification\nhemorrhagic_stroke AS (\n  SELECT \n    subject_id, \n    hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    icd_code LIKE '907.0'  -- ICD-9 code for hemorrhagic stroke\n    OR icd_code LIKE 'I62%'  -- ICD-10 codes for hemorrhagic stroke\n),\n\n-- Step 3: Medication Complexity within first 48 hours\nmedication_complexity AS (\n  SELECT \n    p.subject_id, \n    p.hadm_id,\n    COUNT(DISTINCT m.drug) AS num_drugs\n  FROM \n    patients_selected p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.prescriptions` m \n      ON p.hadm_id = m.hadm_id\n  WHERE \n    m.starttime BETWEEN p.admittime AND TIMESTAMP_ADD(p.admittime, INTERVAL 48 HOUR)\n  GROUP BY \n    p.subject_id, \n    p.hadm_id\n),\n\n-- Step 4: Identify serotonergic drugs\nserotonergic_drugs AS (\n  SELECT \n    subject_id, \n    hadm_id,\n    COUNT(DISTINCT drug) AS num_serotonergic_drugs\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE \n    LOWER(drug) LIKE '%fluoxetine%' \n    OR LOWER(drug) LIKE '%sertraline%' \n    OR LOWER(drug) LIKE '%paroxetine%' \n    OR LOWER(drug) LIKE '%citalopram%' \n    OR LOWER(drug) LIKE '%escitalopram%' \n    -- Add more serotonergic drugs as needed\n  GROUP BY \n    subject_id, \n    hadm_id\n),\n\n-- Step 5: Calculate outcomes (LOS, Mortality)\noutcomes AS (\n  SELECT \n    a.hadm_id, \n    a.subject_id, \n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours,\n    CASE \n      WHEN a.deathtime IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS mortality\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n)\n\n-- Final query combining all steps\nSELECT \n  CASE \n    WHEN hs.hadm_id IS NOT NULL THEN 'Hemorrhagic Stroke'\n    ELSE 'Controls'\n  END AS group_category,\n  mc.num_drugs,\n  COALESCE(sd.num_serotonergic_drugs, 0) AS num_serotonergic_drugs,\n  o.los_hours,\n  o.mortality\nFROM \n  patients_selected p\n  LEFT JOIN hemorrhagic_stroke hs \n    ON p.hadm_id = hs.hadm_id\n  JOIN medication_complexity mc \n    ON p.hadm_id = mc.hadm_id\n  LEFT JOIN serotonergic_drugs sd \n    ON p.hadm_id = sd.hadm_id\n  JOIN outcomes o \n    ON p.hadm_id = o.hadm_id;",
+  "execution_success": true,
+  "row_count": 40997,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name admittime not found inside p at [43:35]; reason: invalidQuery, location: query, message: Name admittime not found inside p at [43:35]\n\nLocation: US\nJob ID: 7e7f91d2-0904-40c4-bf3b-16914048110b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 40997,
+      "error": null
+    }
+  ]
+}

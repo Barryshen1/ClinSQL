@@ -1,0 +1,22 @@
+{
+  "query": "I have an 85-year-old man. Among male patients 80\u201390 admitted with ACS, report counts, percentages, and mean hospital length of stay for the first hs\u2011TnT categorized as Normal/Borderline/Myocardial Injury.",
+  "final_sql": "WITH acs_admissions AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.subject_id = diag.subject_id\n   AND adm.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON diag.icd_code = d.icd_code\n   AND diag.icd_version = d.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 80 AND 90\n    AND (\n      (diag.icd_version = 9 AND (\n         diag.icd_code LIKE '410%' OR  -- AMI\n         diag.icd_code LIKE '411%'))   -- Unstable angina\n      OR\n      (diag.icd_version = 10 AND (\n         diag.icd_code LIKE 'I20%' OR\n         diag.icd_code LIKE 'I21%' OR\n         diag.icd_code LIKE 'I22%' OR\n         diag.icd_code LIKE 'I24%'))\n    )\n),\ntroponin_labs AS (\n  SELECT le.subject_id, le.hadm_id,\n         le.charttime, le.valuenum, le.valueuom\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON le.itemid = dl.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND (\n      LOWER(dl.label) LIKE '%troponin t (high sensitivity)%'\n      OR LOWER(dl.label) LIKE '%hs-tn%'\n      OR LOWER(dl.label) LIKE '%high sensitivity troponin t%'\n    )\n),\nfirst_tnI AS (\n  SELECT subject_id, hadm_id, valuenum, valueuom\n  FROM (\n    SELECT tl.*,\n           ROW_NUMBER() OVER (PARTITION BY tl.hadm_id ORDER BY charttime) AS rn\n    FROM troponin_labs tl\n    JOIN acs_admissions aa\n      ON tl.subject_id = aa.subject_id\n     AND tl.hadm_id = aa.hadm_id\n  ) sub\n  WHERE rn = 1\n),\ncategorized AS (\n  SELECT f.subject_id, f.hadm_id,\n         CASE\n           WHEN valuenum < 14 THEN 'Normal'\n           WHEN valuenum >= 14 AND valuenum < 50 THEN 'Borderline'\n           ELSE 'Myocardial Injury'\n         END AS tn_category,\n         DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM first_tnI f\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON f.subject_id = adm.subject_id\n   AND f.hadm_id = adm.hadm_id\n)\nSELECT tn_category,\n       COUNT(*) AS patient_count,\n       ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percentage,\n       ROUND(AVG(los_days), 2) AS mean_los_days\nFROM categorized\nGROUP BY tn_category\nORDER BY tn_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [43:44]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [43:44]\n\nLocation: US\nJob ID: 2ec9ae6b-9fea-4655-976e-4b2be58cce4e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

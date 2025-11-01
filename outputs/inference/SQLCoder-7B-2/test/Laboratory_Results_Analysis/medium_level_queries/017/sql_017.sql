@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY value) - percentile_cont(0.25) within GROUP (ORDER BY value) AS interquartile_range FROM labevents WHERE subject_id = 1234567890 AND hadm_id IN (SELECT hadm_id FROM admissions WHERE gender = 'M' AND age >= 47 AND age <= 57) AND itemid = 1234567890 AND first_troponin_t > 0.014;

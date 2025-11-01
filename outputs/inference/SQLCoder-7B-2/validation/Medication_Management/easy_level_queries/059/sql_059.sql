@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY (stoptime - starttime)) AS percentile_75 FROM prescriptions WHERE subject_id IN (SELECT subject_id FROM admissions WHERE gender = 'M' AND age(CURRENT_DATE, date_trunc('year', birthdate)) BETWEEN 38 AND 48) AND drug_type = 'ARB';

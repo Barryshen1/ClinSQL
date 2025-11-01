@@ -1,0 +1,16 @@
+{
+  "query": "I have an 82-year-old male. Among male patients age 77\u201387 admitted with AMI, what's the distribution of initial hs\u2011TnT (normal / borderline / myocardial injury)? Report counts and percentages.",
+  "final_sql": "WITH ami_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  WHERE\n    (\n      (di.icd_version = 10 AND di.icd_code LIKE 'I21%') OR\n      (di.icd_version = 9  AND di.icd_code LIKE '410%')\n    )\n    AND p.gender = 'M'\n    AND NOT (p.anchor_age IS NULL OR p.anchor_year IS NULL)\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 77 AND 87\n),\ntn_events AS (\n  SELECT\n    am.hadm_id,\n    am.subject_id,\n    le.charttime,\n    le.valuenum AS tn_value,\n    le.valueuom AS tn_unit\n  FROM ami_admissions AS am\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.subject_id = am.subject_id AND le.hadm_id = am.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n    ON dli.itemid = le.itemid\n  WHERE\n    LOWER(dli.label) LIKE '%troponin t%' OR LOWER(dli.label) LIKE '%troponin_t%'\n),\ninitial_rn AS (\n  SELECT\n    hadm_id,\n    subject_id,\n    charttime,\n    tn_value,\n    tn_unit,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n  FROM tn_events\n  WHERE tn_value IS NOT NULL AND tn_unit IS NOT NULL\n),\ncategorized AS (\n  SELECT\n    hadm_id,\n    subject_id,\n    charttime,\n    tn_value,\n    tn_unit,\n    CASE\n      WHEN LOWER(tn_unit) LIKE '%ng/l%' THEN\n        CASE\n          WHEN tn_value < 14 THEN 'normal'\n          WHEN tn_value < 53 THEN 'borderline'\n          ELSE 'myocardial injury'\n        END\n      WHEN LOWER(tn_unit) LIKE '%ng/ml%' THEN\n        CASE\n          WHEN (tn_value * 1000) < 14 THEN 'normal'\n          WHEN (tn_value * 1000) < 53 THEN 'borderline'\n          ELSE 'myocardial injury'\n        END\n      ELSE NULL\n    END AS hs_tn_category,\n    rn\n  FROM initial_rn\n  WHERE rn = 1\n),\nfinal_categories AS (\n  SELECT hs_tn_category\n  FROM categorized\n  WHERE hs_tn_category IS NOT NULL\n),\nagg AS (\n  SELECT hs_tn_category, COUNT(*) AS cnt\n  FROM final_categories\n  GROUP BY hs_tn_category\n),\ntot AS (\n  SELECT SUM(cnt) AS total FROM agg\n)\nSELECT\n  a.hs_tn_category AS hs_tn_category,\n  a.cnt AS count,\n  ROUND(100.0 * a.cnt / t.total, 1) AS pct\nFROM agg AS a\nCROSS JOIN tot AS t\nORDER BY hs_tn_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

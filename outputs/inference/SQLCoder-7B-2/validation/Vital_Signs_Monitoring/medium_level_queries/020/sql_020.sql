@@ -1,0 +1,1 @@
+SELECT percent_rank() OVER (ORDER BY (SELECT AVG(value) FROM labevents WHERE itemid = 155250 AND subject_id = 757071 AND charttime BETWEEN intime AND outtime)) AS percentile_rank FROM icustays WHERE subject_id = 757071 AND gender = 'F' AND age(CURRENT_DATE, date_trunc('year', birthdate)) BETWEEN 58 AND 68 AND length_of_stay = 48;

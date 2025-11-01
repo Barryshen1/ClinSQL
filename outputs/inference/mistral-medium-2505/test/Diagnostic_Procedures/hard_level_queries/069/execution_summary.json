@@ -1,0 +1,22 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH\n-- Get male patients aged 44-54\nmale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 44 AND 54\n),\n\n-- Get patients with pulmonary embolism diagnosis\npe_patients AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    male_patients p ON d.subject_id = p.subject_id\n  WHERE\n    -- ICD-9 code for pulmonary embolism (415.1) or ICD-10 (I26)\n    (d.icd_code LIKE '415.1%' OR d.icd_code LIKE 'I26%')\n),\n\n-- Get first ICU stay per admission\nfirst_icu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime AS icu_intime,\n    s.outtime AS icu_outtime,\n    ROW_NUMBER() OVER (PARTITION BY s.subject_id, s.hadm_id ORDER BY s.intime) AS stay_rank\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    pe_patients p ON s.subject_id = p.subject_id AND s.hadm_id = p.hadm_id\n  WHERE\n    s.intime IS NOT NULL\n),\n\n-- Get procedures in first 72 hours of first ICU stay\nearly_procedures AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    COUNT(DISTINCT p.itemid) AS procedure_count\n  FROM\n    first_icu_stays f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON f.subject_id = p.subject_id\n    AND f.stay_id = p.stay_id\n    AND p.starttime BETWEEN f.icu_intime\n    AND TIMESTAMP_ADD(f.icu_intime, INTERVAL 72 HOUR)\n  WHERE\n    f.stay_rank = 1  -- Only first ICU stay\n  GROUP BY\n    f.subject_id, f.hadm_id, f.stay_id\n),\n\n-- Calculate quintiles\nquintiles AS (\n  SELECT\n    procedure_count,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM\n    early_procedures\n),\n\n-- Get hospital LOS and mortality\npatient_outcomes AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    e.procedure_count,\n    q.quintile,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los,\n    a.hospital_expire_flag\n  FROM\n    early_procedures e\n  JOIN\n    quintiles q ON e.procedure_count = q.procedure_count\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON e.subject_id = a.subject_id AND e.hadm_id = a.hadm_id\n)\n\n-- Final aggregation by quintile\nSELECT\n  quintile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(hospital_los) AS avg_hospital_los_days,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_percentage\nFROM\n  patient_outcomes\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [81:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [81:7]\n\nLocation: US\nJob ID: 6d7aa2ce-3d78-44df-9247-fccef249d672\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

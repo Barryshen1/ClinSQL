@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY value) AS percentile_25 FROM omr JOIN patients ON omr.subject_id = patients.subject_id JOIN icustays ON omr.subject_id = icustays.subject_id WHERE patients.gender = 'F' AND patients.anchor_age = 56 AND icustays.first_careunit IN ('ICU', 'Step-down') AND patients.anchor_year BETWEEN 51 AND 61;

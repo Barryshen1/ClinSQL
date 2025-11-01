@@ -1,0 +1,28 @@
+{
+  "query": "For my 64-year-old male patient with ACS, among males 59\u201369 what are p25/p50/p75 of diagnostic procedures per admission, stratified by 1\u20133 vs 4\u20137 days and primary vs secondary diagnosis?",
+  "final_sql": "WITH acs_codes AS (\n  SELECT '410%' AS pattern, 9 AS icd_version UNION ALL -- ICD-9 AMI\n  SELECT '411%' , 9 UNION ALL -- ICD-9 acute coronary insufficiency\n  SELECT 'I20.0', 10 UNION ALL -- ICD-10 unstable angina\n  SELECT 'I21%' , 10 UNION ALL -- ICD-10 AMI\n  SELECT 'I22%' , 10           -- ICD-10 subsequent AMI\n),\nacs_admissions AS (\n  SELECT\n    di.subject_id,\n    di.hadm_id,\n    CASE WHEN MIN(CASE WHEN di.seq_num = 1 THEN 1 ELSE 0 END) = 1\n         THEN 'primary' ELSE 'secondary' END AS acs_dx_type\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN acs_codes ac\n    ON di.icd_version = ac.icd_version\n   AND di.icd_code LIKE ac.pattern\n  GROUP BY di.subject_id, di.hadm_id\n),\ndiagnostic_proc_counts AS (\n  SELECT\n    pi.subject_id,\n    pi.hadm_id,\n    COUNT(*) AS diagnostic_proc_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dpi\n    ON pi.icd_code = dpi.icd_code\n   AND pi.icd_version = dpi.icd_version\n  WHERE LOWER(dpi.long_title) LIKE '%diagnostic%'\n  GROUP BY pi.subject_id, pi.hadm_id\n),\nbase_cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n),\ncohort AS (\n  SELECT\n    b.subject_id,\n    b.hadm_id,\n    acs.acs_dx_type,\n    CASE WHEN b.los_days BETWEEN 1 AND 3 THEN '1-3d'\n         WHEN b.los_days BETWEEN 4 AND 7 THEN '4-7d'\n         ELSE NULL END AS los_group,\n    COALESCE(dpc.diagnostic_proc_count, 0) AS diagnostic_proc_count\n  FROM base_cohort b\n  JOIN acs_admissions acs\n    ON b.subject_id = acs.subject_id\n   AND b.hadm_id = acs.hadm_id\n  LEFT JOIN diagnostic_proc_counts dpc\n    ON b.subject_id = dpc.subject_id\n   AND b.hadm_id = dpc.hadm_id\n  WHERE b.los_days BETWEEN 1 AND 7\n)\nSELECT\n  los_group,\n  acs_dx_type,\n  COUNT(DISTINCT hadm_id) AS n_admissions,\n  quantiles[OFFSET(1)] AS p25,\n  quantiles[OFFSET(2)] AS p50,\n  quantiles[OFFSET(3)] AS p75\nFROM (\n  SELECT\n    los_group,\n    acs_dx_type,\n    APPROX_QUANTILES(diagnostic_proc_count, 4) AS quantiles,\n    ARRAY_AGG(DISTINCT hadm_id) AS hadm_ids\n  FROM cohort\n  WHERE los_group IS NOT NULL\n  GROUP BY los_group, acs_dx_type\n)\nORDER BY los_group, acs_dx_type;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: hadm_id; Did you mean hadm_ids? at [66:18]; reason: invalidQuery, location: query, message: Unrecognized name: hadm_id; Did you mean hadm_ids? at [66:18]\n\nLocation: US\nJob ID: 1124fc4c-c433-4671-b41b-0a672bc1fca0\n",
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column diagnostic_proc_count which is neither grouped nor aggregated at [67:19]; reason: invalidQuery, location: query, message: SELECT list expression references column diagnostic_proc_count which is neither grouped nor aggregated at [67:19]\n\nLocation: US\nJob ID: d7c6d28b-1196-4ac6-bd17-acb80e858d85\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: ad298865-05d6-4f30-9a7a-70bbb11672af\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hadm_id; Did you mean hadm_ids? at [66:18]; reason: invalidQuery, location: query, message: Unrecognized name: hadm_id; Did you mean hadm_ids? at [66:18]\n\nLocation: US\nJob ID: 1124fc4c-c433-4671-b41b-0a672bc1fca0\n"
+    }
+  ]
+}

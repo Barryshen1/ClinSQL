@@ -1,0 +1,16 @@
+{
+  "query": "I have a 43\u2011year\u2011old woman. Among female inpatients aged 38\u201348 with AMI, calculate a 72\u2011hour lab instability score, stratify AMI patients into quartiles, and report LOS and in\u2011hospital mortality for each quartile. Compare overall critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH female_age_range AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n),\nami_flags AS (\n  SELECT\n    d.subject_id,\n    d.hadm_id,\n    1 AS is_ami\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE ( (d.icd_version = 9 AND d.icd_code LIKE '410%')\n       OR (d.icd_version = 10 AND d.icd_code LIKE 'I21%') )\n  GROUP BY subject_id, hadm_id\n),\ncohort AS (\n  SELECT\n    f.*,\n    IF(ami.is_ami = 1, 1, 0) AS is_ami\n  FROM female_age_range f\n  LEFT JOIN ami_flags ami\n    ON f.subject_id = ami.subject_id\n    AND f.hadm_id = ami.hadm_id\n),\ncritical_labs AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    COUNT(*) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN cohort c\n    ON l.subject_id = c.subject_id\n    AND l.hadm_id = c.hadm_id\n  WHERE l.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n    AND (\n      (l.valuenum IS NOT NULL AND l.ref_range_lower IS NOT NULL AND l.ref_range_upper IS NOT NULL\n         AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper))\n      OR (LOWER(l.flag) LIKE '%abnormal%')\n    )\n  GROUP BY l.subject_id, l.hadm_id\n),\ncohort_with_score AS (\n  SELECT\n    c.*,\n    COALESCE(cl.instability_score, 0) AS instability_score\n  FROM cohort c\n  LEFT JOIN critical_labs cl\n    ON c.subject_id = cl.subject_id\n    AND c.hadm_id = cl.hadm_id\n),\nami_quartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY instability_score DESC) AS instability_quartile\n  FROM cohort_with_score\n  WHERE is_ami = 1\n),\nquartile_summary AS (\n  SELECT\n    instability_quartile,\n    COUNT(*) AS n_admissions,\n    AVG(los_days) AS avg_los_days,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM ami_quartiles\n  GROUP BY instability_quartile\n  ORDER BY instability_quartile\n),\noverall_critical_rate AS (\n  SELECT\n    CASE WHEN is_ami = 1 THEN 'AMI' ELSE 'Control' END AS group_type,\n    AVG(CASE WHEN instability_score > 0 THEN 1 ELSE 0 END) AS critical_lab_rate\n  FROM cohort_with_score\n  GROUP BY group_type\n)\n-- Final output: quartile stats + critical lab rate table\nSELECT 'QUARTILE_SUMMARY' AS table_type, * \nFROM quartile_summary\nUNION ALL\nSELECT 'CRITICAL_LAB_RATE' AS table_type,\n       NULL AS instability_quartile,\n       NULL AS n_admissions,\n       NULL AS avg_los_days,\n       NULL AS mortality_rate,\nFROM overall_critical_rate;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

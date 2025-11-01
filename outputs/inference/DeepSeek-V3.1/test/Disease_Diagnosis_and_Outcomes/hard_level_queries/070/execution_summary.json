@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 64\u2011year\u2011old female inpatient with DVT and high comorbidity burden. Among females 59\u201369 with DVT above the 75th comorbidity percentile, report cohort size, 30\u2011day mortality, major complication rate, median survival for decedents, and composite risk score quartiles.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.deathtime,\n        pat.dod,\n        pat.gender,\n        pat.anchor_age,\n        -- Count distinct ICD codes (excluding DVT) as comorbidity proxy\n        COUNT(DISTINCT CASE WHEN diag.icd_code NOT LIKE 'I82%' AND diag.icd_code NOT LIKE '453%' THEN diag.icd_code ELSE NULL END) AS comorbidity_count\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    WHERE pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 59 AND 69\n        AND (diag.icd_code LIKE 'I82%' OR diag.icd_code LIKE '453%')  -- DVT codes\n    GROUP BY adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.deathtime, pat.dod, pat.gender, pat.anchor_age\n),\ncomorbidity_threshold AS (\n    SELECT \n        APPROX_QUANTILES(comorbidity_count, 100)[OFFSET(75)] AS p75\n    FROM cohort\n),\ncohort_filtered AS (\n    SELECT \n        cohort.*,\n        -- Check if patient died within 30 days of admission\n        CASE WHEN dod IS NOT NULL AND DATE_DIFF(DATE(dod), DATE(admittime), DAY) <= 30 THEN 1 ELSE 0 END AS mortality_30day,\n        -- Check if had ICU stay (as proxy for major complication)\n        CASE WHEN icu.stay_id IS NOT NULL THEN 1 ELSE 0 END AS had_icu_stay,\n        -- Survival days for decedents\n        CASE WHEN dod IS NOT NULL THEN DATE_DIFF(DATE(dod), DATE(admittime), DAY) ELSE NULL END AS survival_days\n    FROM cohort\n    CROSS JOIN comorbidity_threshold\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON cohort.hadm_id = icu.hadm_id\n    WHERE cohort.comorbidity_count >= comorbidity_threshold.p75\n),\ncomposite_quartiles AS (\n    SELECT \n        subject_id,\n        hadm_id,\n        comorbidity_count,\n        NTILE(4) OVER (ORDER BY comorbidity_count) AS risk_quartile\n    FROM cohort_filtered\n),\ndecedents_survival AS (\n    SELECT \n        PERCENTILE_CONT(survival_days, 0.5) OVER () AS median_survival_days\n    FROM cohort_filtered\n    WHERE survival_days IS NOT NULL\n    LIMIT 1\n)\nSELECT \n    COUNT(*) AS cohort_size,\n    SUM(mortality_30day) AS mortality_30day_count,\n    AVG(mortality_30day) * 100 AS mortality_30day_rate,\n    SUM(had_icu_stay) AS major_complication_count,\n    AVG(had_icu_stay) * 100 AS major_complication_rate,\n    (SELECT median_survival_days FROM decedents_survival) AS median_survival_days,\n    risk_quartile,\n    COUNT(*) AS quartile_count\nFROM cohort_filtered\nINNER JOIN composite_quartiles\n    USING (subject_id, hadm_id)\nGROUP BY risk_quartile\nORDER BY risk_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column survival_days which is neither grouped nor aggregated at [61:21]; reason: invalidQuery, location: query, message: SELECT list expression references column survival_days which is neither grouped nor aggregated at [61:21]\n\nLocation: US\nJob ID: ad5bb24c-3cb8-468b-9cc8-cba5a03cd6db\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 94\u2011year\u2011old male patient, among men age 89\u201399 with non\u2011emergent admissions, report mean, median, p75, p90 LOS by discharge (home, hospice, in\u2011hospital death) and percent with LOS <5 days.",
+  "final_sql": "WITH patient_los AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit,\n    -- Compute LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.dischtime >= a.admittime  -- valid LOS\n    -- Filter age at admission: 89 to 99 inclusive\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 89 AND 99\n    -- Non-emergent: exclude EMERGENCY\n    AND a.admission_type != 'EMERGENCY'\n),\ndischarge_groups AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    los_days,\n    CASE\n      WHEN discharge_location = 'HOME' THEN 'Home'\n      WHEN discharge_location LIKE 'HOSPICE%' THEN 'Hospice'\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      ELSE NULL\n    END AS discharge_group\n  FROM patient_los\n  WHERE discharge_location = 'HOME'\n     OR discharge_location LIKE 'HOSPICE%'\n     OR hospital_expire_flag = 1\n)\nSELECT\n  discharge_group,\n  AVG(los_days) AS mean_los,\n  PERCENTILE_CONT(los_days, 0.5) OVER (PARTITION BY discharge_group) AS median_los,\n  PERCENTILE_CONT(los_days, 0.75) OVER (PARTITION BY discharge_group) AS p75_los,\n  PERCENTILE_CONT(los_days, 0.90) OVER (PARTITION BY discharge_group) AS p90_los,\n  AVG(CASE WHEN los_days < 5 THEN 1.0 ELSE 0.0 END) AS pct_los_lt_5d\nFROM discharge_groups\nGROUP BY discharge_group, los_days  -- Required for window functions to work with GROUP BY\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 87,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 87,
+      "error": null
+    }
+  ]
+}

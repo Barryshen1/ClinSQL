@@ -1,0 +1,28 @@
+{
+  "query": "Patient: female, 55. Among female inpatients aged 50\u201360 with hyperosmolar hyperglycemic state, what is the 75th percentile of the first\u201148\u2011hour laboratory instability score? For admissions \u2265 this threshold, give mortality, mean LOS (days), and compare critical\u2011lab rates versus general inpatients.",
+  "final_sql": "WITH \n-- Target population: female inpatients aged 50-60 with HHS\ntarget_population AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    p.gender,\n    p.anchor_age,\n    d.icd_code\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      ON a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND d.icd_code LIKE '%276.51%'  -- Hyperosmolar hyperglycemic state\n),\n\n-- Laboratory instability score (simple example: count abnormal lab results within 48h)\nlab_instability_score AS (\n  SELECT \n    le.hadm_id,\n    COUNT(*) AS score\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON le.hadm_id = a.hadm_id\n  WHERE \n    le.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND (le.ref_range_lower IS NOT NULL OR le.ref_range_upper IS NOT NULL)\n    AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n  GROUP BY \n    le.hadm_id\n),\n\n-- Calculate 75th percentile of lab instability score\npercentile_score AS (\n  SELECT \n    APPROX_QUANTILES(score, 0.75)[OFFSET(0)] AS threshold\n  FROM \n    lab_instability_score\n),\n\n-- Admissions with score >= threshold\nhigh_risk_admissions AS (\n  SELECT \n    lis.hadm_id,\n    a.dischtime,\n    a.deathtime,\n    COALESCE(a.deathtime, a.dischtime) AS outcome_time,\n    a.admittime  -- Include admittime for calculations\n  FROM \n    lab_instability_score lis\n  JOIN \n    target_population tp \n      ON lis.hadm_id = tp.hadm_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON lis.hadm_id = a.hadm_id\n  CROSS JOIN \n    percentile_score ps\n  WHERE \n    lis.score >= ps.threshold\n),\n\n-- Calculate mortality, mean LOS, and critical-lab rates\nresults AS (\n  SELECT \n    COUNT(DISTINCT hadm_id) AS num_admissions,\n    SUM(CASE WHEN outcome_time = deathtime THEN 1 ELSE 0 END) AS num_deaths,\n    AVG(TIMESTAMP_DIFF(outcome_time, admittime, DAY)) AS mean_LOS\n  FROM \n    high_risk_admissions\n)\n\nSELECT \n  num_admissions,\n  num_deaths,\n  num_deaths / num_admissions AS mortality_rate,\n  mean_LOS\nFROM \n  results;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [46:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [46:5]\n\nLocation: US\nJob ID: 39459e81-e45b-49fa-a4ac-ff10b07e358c\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [43:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [43:27]\n\nLocation: US\nJob ID: 896a6b7c-8701-4cf2-9ef1-61f8ec63aa5c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: admittime at [32:23]; reason: invalidQuery, location: query, message: Unrecognized name: admittime at [32:23]\n\nLocation: US\nJob ID: c7621b4a-cc92-4483-8c3f-53152d2a17cd\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [46:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [46:5]\n\nLocation: US\nJob ID: 39459e81-e45b-49fa-a4ac-ff10b07e358c\n"
+    }
+  ]
+}

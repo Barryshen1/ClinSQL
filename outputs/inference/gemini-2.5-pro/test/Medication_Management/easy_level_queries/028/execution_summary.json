@@ -1,0 +1,16 @@
+{
+  "query": "For my 49-year-old female, among hospitalized women 44\u201354 on DAPT, what is the SD of single antiplatelet prescription duration?",
+  "final_sql": "WITH\n  -- Step 1: Identify hospital admissions for female patients aged 44-54.\n  patient_cohort AS (\n    SELECT\n      adm.hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n      pat.gender = 'F'\n      AND (\n        pat.anchor_age + EXTRACT(\n          YEAR\n          FROM\n            adm.admittime\n        ) - pat.anchor_year\n      ) BETWEEN 44 AND 54\n  ),\n  -- Step 2: Identify all prescriptions for relevant antiplatelet drugs and classify them.\n  antiplatelet_scripts AS (\n    SELECT\n      hadm_id,\n      starttime,\n      stoptime,\n      CASE\n        WHEN LOWER(drug) LIKE '%aspirin%'\n        THEN 'aspirin'\n        WHEN\n          LOWER(drug) LIKE '%clopidogrel%'\n          OR LOWER(drug) LIKE '%plavix%'\n          OR LOWER(drug) LIKE '%prasugrel%'\n          OR LOWER(drug) LIKE '%effient%'\n          OR LOWER(drug) LIKE '%ticagrelor%'\n          OR LOWER(drug) LIKE '%brilinta%'\n        THEN 'p2y12_inhibitor'\n        ELSE NULL\n      END AS drug_class\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.prescriptions`\n    WHERE\n      -- Broad filter for performance before the CASE statement\n      LOWER(drug) LIKE '%aspirin%'\n      OR LOWER(drug) LIKE '%clopidogrel%'\n      OR LOWER(drug) LIKE '%plavix%'\n      OR LOWER(drug) LIKE '%prasugrel%'\n      OR LOWER(drug) LIKE '%effient%'\n      OR LOWER(drug) LIKE '%ticagrelor%'\n      OR LOWER(drug) LIKE '%brilinta%'\n  ),\n  -- Step 3: Identify the hospital admissions from our cohort that received DAPT.\n  -- DAPT is defined as receiving at least one aspirin and one P2Y12 inhibitor during the admission.\n  dapt_admissions AS (\n    SELECT\n      aps.hadm_id\n    FROM\n      antiplatelet_scripts AS aps\n    WHERE\n      aps.hadm_id IN (\n        SELECT\n          hadm_id\n        FROM\n          patient_cohort\n      )\n      AND aps.drug_class IS NOT NULL\n    GROUP BY\n      aps.hadm_id\n    HAVING\n      COUNT(DISTINCT aps.drug_class) >= 2\n  )\n-- Step 4: From the DAPT admissions, calculate the standard deviation of the duration \n-- of all single antiplatelet prescriptions.\nSELECT\n  STDDEV(\n    DATETIME_DIFF(aps.stoptime, aps.starttime, DAY)\n  ) AS sd_single_antiplatelet_duration_days\nFROM\n  antiplatelet_scripts AS aps\n  INNER JOIN\n    dapt_admissions AS da\n    ON aps.hadm_id = da.hadm_id\nWHERE\n  -- Ensure duration is calculable and makes sense (is positive)\n  aps.starttime IS NOT NULL\n  AND aps.stoptime IS NOT NULL\n  AND aps.stoptime > aps.starttime;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

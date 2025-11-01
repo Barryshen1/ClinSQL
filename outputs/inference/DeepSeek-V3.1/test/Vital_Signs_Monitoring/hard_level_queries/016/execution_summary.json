@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 62-year-old male post\u2013solid-organ transplant in the ICU. Among male ICU patients aged 57\u201367, compare Transplant vs Non\u2011Transplant during the first 72 hours: median and percentiles of composite instability score (count of fever>38.5\u00b0C, SpO2<90%, RR>20 events), ICU LOS, and mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ie.los,\n    adm.hospital_expire_flag AS mortality,\n    CASE WHEN dx.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS transplant\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON ie.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id \n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n    WHERE (\n      (icd_version = 10 AND icd_code LIKE 'T86%') OR\n      (icd_version = 9 AND icd_code IN ('V42.0', 'V42.1', 'V42.7', 'V42.8', 'V42.9'))\n    )\n  ) dx \n    ON ie.hadm_id = dx.hadm_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age BETWEEN 57 AND 67\n),\n\ninstability_events AS (\n  SELECT \n    c.stay_id,\n    COUNT(*) AS instability_score  -- Count each event (row) not distinct times\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  WHERE (\n    (ce.itemid = 223761 AND ce.valuenum > 38.5) OR  -- Temperature Celsius\n    (ce.itemid = 220277 AND ce.valuenum < 90) OR    -- SpO2\n    (ce.itemid = 220210 AND ce.valuenum > 20)       -- Respiratory Rate\n  )\n  GROUP BY c.stay_id\n)\n\nSELECT \n  c.transplant,\n  COUNT(*) AS n_stays,\n  -- For instability score: median and percentiles\n  APPROX_QUANTILES(COALESCE(ie.instability_score, 0), 100)[OFFSET(50)] AS median_instability,\n  APPROX_QUANTILES(COALESCE(ie.instability_score, 0), 100)[OFFSET(25)] AS p25_instability,\n  APPROX_QUANTILES(COALESCE(ie.instability_score, 0), 100)[OFFSET(75)] AS p75_instability,\n  -- For ICU LOS\n  APPROX_QUANTILES(c.los, 100)[OFFSET(50)] AS median_los,\n  APPROX_QUANTILES(c.los, 100)[OFFSET(25)] AS p25_los,\n  APPROX_QUANTILES(c.los, 100)[OFFSET(75)] AS p75_los,\n  -- For mortality\n  ROUND(SUM(c.mortality) / COUNT(*) * 100, 2) AS mortality_percent\nFROM cohort c\nLEFT JOIN instability_events ie\n  ON c.stay_id = ie.stay_id\nGROUP BY c.transplant\nORDER BY c.transplant;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name icd_code not found inside dx at [10:18]; reason: invalidQuery, location: query, message: Name icd_code not found inside dx at [10:18]\n\nLocation: US\nJob ID: 18f4eef3-0ab6-40ac-a11f-f86973078159\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

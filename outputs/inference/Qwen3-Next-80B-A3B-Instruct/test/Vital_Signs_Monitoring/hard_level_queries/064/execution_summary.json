@@ -1,0 +1,22 @@
+{
+  "query": "For a 50-year-old male ICU patient with ARF: among male ICU patients 45\u201355, what is the 95th\u2011percentile composite instability score in the first 48 h? For the top quartile, compare hypotension (MAP<65), tachycardia, ICU LOS, and mortality to age\u2011matched cohort.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    p.anchor_age,\n    p.gender\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p ON i.subject_id = p.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd di ON i.hadm_id = di.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND (LOWER(d.long_title) LIKE '%acute renal failure%'\n         OR LOWER(d.long_title) LIKE '%acute kidney injury%')\n),\n\nvitals_48h AS (\n  SELECT\n    c.stay_id,\n    ce.itemid,\n    ce.charttime,\n    ce.valuenum,\n    CASE \n      WHEN ce.itemid = (SELECT itemid FROM physionet-data.mimiciv_3_1_icu.d_items WHERE label = 'Mean Arterial Pressure') AND ce.valuenum < 65 THEN 1\n      ELSE 0\n    END AS hypotension_event,\n    CASE \n      WHEN ce.itemid = (SELECT itemid FROM physionet-data.mimiciv_3_1_icu.d_items WHERE label = 'Heart Rate') AND ce.valuenum > 130 THEN 1\n      ELSE 0\n    END AS tachycardia_event\n  FROM cohort c\n  JOIN physionet-data.mimiciv_3_1_icu.chartevents ce ON c.stay_id = ce.stay_id\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime <= TIMESTAMP_ADD(c.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n    AND ce.itemid IN (\n      SELECT itemid FROM physionet-data.mimiciv_3_1_icu.d_items WHERE label IN ('Mean Arterial Pressure', 'Heart Rate')\n    )\n),\n\ncomposite_score AS (\n  SELECT\n    stay_id,\n    SUM(hypotension_event) AS hypotension_count,\n    SUM(tachycardia_event) AS tachycardia_count,\n    SUM(hypotension_event) + SUM(tachycardia_event) AS composite_score\n  FROM vitals_48h\n  GROUP BY stay_id\n),\n\npercentiles_and_quartiles AS (\n  SELECT\n    cs.*,\n    PERCENTILE_CONT(composite_score, 0.95) OVER () AS p95_composite,\n    NTILE(4) OVER (ORDER BY composite_score) AS quartile\n  FROM composite_score cs\n)\n\nSELECT\n  'Top Quartile' AS group_label,\n  AVG(hypotension_count) AS avg_hypotension_count,\n  AVG(tachycardia_count) AS avg_tachycardia_count,\n  AVG(i.los) AS avg_icu_los,\n  AVG(CAST(a.hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM percentiles_and_quartiles pq\nJOIN physionet-data.mimiciv_3_1_icu.icustays i ON pq.stay_id = i.stay_id\nJOIN physionet-data.mimiciv_3_1_hosp.admissions a ON i.hadm_id = a.hadm_id\nWHERE quartile = 4\n\nUNION ALL\n\nSELECT\n  'Cohort' AS group_label,\n  AVG(hypotension_count) AS avg_hypotension_count,\n  AVG(tachycardia_count) AS avg_tachycardia_count,\n  AVG(i.los) AS avg_icu_los,\n  AVG(CAST(a.hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM percentiles_and_quartiles pq\nJOIN physionet-data.mimiciv_3_1_icu.icustays i ON pq.stay_id = i.stay_id\nJOIN physionet-data.mimiciv_3_1_hosp.admissions a ON i.hadm_id = a.hadm_id\n\nORDER BY group_label;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: dd483ec2-a6d7-4201-b929-89f756e5fe13\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

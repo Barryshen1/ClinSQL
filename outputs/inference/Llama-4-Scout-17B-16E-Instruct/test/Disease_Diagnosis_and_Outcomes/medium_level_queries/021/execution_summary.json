@@ -1,0 +1,28 @@
+{
+  "query": "I have a 65-year-old male. Among males 60\u201370 with postoperative complications (ICU vs non\u2011ICU), report in\u2011hospital mortality (%) and N by LOS (1\u20133/4\u20137/\u22658 days) and Charlson (\u22643/4\u20135/>5), with median time\u2011to\u2011death.",
+  "final_sql": "WITH \n  -- Calculate Charlson Comorbidity Index (simplified, actual implementation may vary)\n  charlson_index AS (\n    SELECT \n      subject_id, \n      hadm_id,\n      -- Simplified example, real implementation requires detailed ICD mapping\n      COUNT(DISTINCT icd_code) AS charlson_score\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    GROUP BY \n      subject_id, \n      hadm_id\n  ),\n\n  -- Identify postoperative complications\n  complications AS (\n    SELECT \n      subject_id, \n      hadm_id,\n      TRUE AS has_complication\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      icd_code LIKE '998%'  -- Example for postoperative complications\n  ),\n\n  -- Prepare patient data\n  patients_data AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      p.gender,\n      p.anchor_age,\n      a.admittime,\n      a.dischtime,\n      a.deathtime,\n      a.hospital_expire_flag,\n      COALESCE(ic.stay_id, NULL) AS stay_id,\n      cc.charlson_score,\n      c.has_complication\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n    LEFT JOIN \n      `physionet-data.mimiciv_3_1_icu.icustays` ic ON a.hadm_id = ic.hadm_id\n    LEFT JOIN \n      charlson_index cc ON a.subject_id = cc.subject_id AND a.hadm_id = cc.hadm_id\n    LEFT JOIN \n      complications c ON a.subject_id = c.subject_id AND a.hadm_id = c.hadm_id\n    WHERE \n      p.gender = 'M' AND\n      p.anchor_age BETWEEN 60 AND 70\n  ),\n\n  -- Calculate in-hospital mortality and other metrics\n  patient_metrics AS (\n    SELECT \n      has_complication,\n      stay_id IS NOT NULL AS is_icu,\n      CASE \n        WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3'\n        WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7'\n        ELSE '>=8'\n      END AS los_category,\n      CASE \n        WHEN charlson_score <= 3 THEN '<=3'\n        WHEN charlson_score BETWEEN 4 AND 5 THEN '4-5'\n        ELSE '>5'\n      END AS charlson_category,\n      a.hospital_expire_flag,\n      a.admittime,\n      a.deathtime\n    FROM \n      patients_data a\n  )\n\nSELECT \n  has_complication,\n  is_icu,\n  los_category,\n  charlson_category,\n  hospital_expire_flag,\n  COUNT(*) AS N,\n  APPROX_QUANTILES(TIMESTAMP_DIFF(deathtime, admittime, DAY), 1000)[500] AS median_time_to_death\nFROM \n  patient_metrics\nWHERE \n  deathtime IS NOT NULL\nGROUP BY \n  has_complication,\n  is_icu,\n  los_category,\n  charlson_category,\n  hospital_expire_flag\nORDER BY \n  has_complication,\n  is_icu,\n  los_category,\n  charlson_category;",
+  "execution_success": true,
+  "row_count": 20,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [72:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [72:24]\n\nLocation: US\nJob ID: 9e1d468f-01d9-4637-9b70-87f0233069d8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function DATE_DIFF\n  Argument types: DATETIME, DATETIME\n  Signature: DATE_DIFF(DATE, DATE, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(DATETIME, DATETIME, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(TIMESTAMP, TIMESTAMP, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments at [63:14]; reason: invalidQuery, location: query, message: No matching signature for function DATE_DIFF\n  Argument types: DATETIME, DATETIME\n  Signature: DATE_DIFF(DATE, DATE, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(DATETIME, DATETIME, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(TIMESTAMP, TIMESTAMP, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments at [63:14]\n\nLocation: US\nJob ID: 5515232e-c7f2-48f2-9d2c-454339e45840\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 20,
+      "error": null
+    }
+  ]
+}

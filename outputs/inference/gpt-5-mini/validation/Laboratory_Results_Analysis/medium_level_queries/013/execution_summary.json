@@ -1,0 +1,28 @@
+{
+  "query": "For a 55-year-old male: among male patients 50\u201360 admitted with chest pain or AMI whose initial hs\u2011TnT > ULN (0.014 ng/mL), report patient and admission counts, mean, median, IQR.",
+  "final_sql": "WITH patients50_60_male AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 50 AND 60\n),\n\nadm_with_diag AS (\n  -- admissions for patients in age/gender group that have ANY diagnosis matching chest pain / AMI phrases\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN patients50_60_male p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE (\n    LOWER(dd.long_title) LIKE '%chest pain%'\n    OR LOWER(dd.long_title) LIKE '%myocardial infarction%'\n    OR LOWER(dd.long_title) LIKE '%acute myocardial%'\n    OR LOWER(dd.long_title) LIKE '%angina%'\n    OR LOWER(dd.long_title) LIKE '%acute coronary%'\n    OR LOWER(dd.long_title) LIKE '%st elevation%'\n  )\n),\n\ntroponin_items AS (\n  -- find lab itemids that look like troponin\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin%'\n),\n\ninitial_troponin_per_adm AS (\n  -- earliest troponin (by charttime) within each admission (hadm_id)\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum AS val,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC, le.labevent_id ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti ON le.itemid = ti.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON le.hadm_id = a.hadm_id AND le.subject_id = a.subject_id\n       AND le.charttime BETWEEN a.admittime AND a.dischtime\n  WHERE le.valuenum IS NOT NULL\n),\n\ninitial_tn_cohort AS (\n  -- keep only initial troponin (rn = 1), only admissions that are in our diagnosis cohort,\n  -- and apply ULN filter val > 0.014\n  SELECT it.subject_id, it.hadm_id, it.val\n  FROM initial_troponin_per_adm it\n  JOIN adm_with_diag ad ON it.hadm_id = ad.hadm_id\n  WHERE it.rn = 1\n    AND it.val > 0.014\n),\n\nordered_vals AS (\n  -- create an ordered list and compute row numbers and total count\n  SELECT\n    val,\n    ROW_NUMBER() OVER (ORDER BY val) AS row_num,\n    COUNT(*) OVER () AS n\n  FROM initial_tn_cohort\n),\n\npositions AS (\n  -- compute desired positions for quantiles using (n+1)*p convention\n  SELECT\n    n,\n    CAST(FLOOR((n + 1) / 2.0) AS INT64) AS m_pos1,\n    CAST(CEIL((n + 1) / 2.0) AS INT64)  AS m_pos2,\n    CAST(FLOOR((n + 1) / 4.0) AS INT64) AS q1_pos1,\n    CAST(CEIL((n + 1) / 4.0) AS INT64)  AS q1_pos2,\n    CAST(FLOOR(3 * (n + 1) / 4.0) AS INT64) AS q3_pos1,\n    CAST(CEIL(3 * (n + 1) / 4.0) AS INT64)  AS q3_pos2\n  FROM (SELECT n FROM ordered_vals LIMIT 1)\n)\n\nSELECT\n  -- counts\n  (SELECT COUNT(DISTINCT hadm_id) FROM initial_tn_cohort) AS admission_count,\n  (SELECT COUNT(DISTINCT subject_id) FROM initial_tn_cohort) AS patient_count,\n\n  -- mean\n  (SELECT AVG(val) FROM initial_tn_cohort) AS mean_initial_hsTnT_ng_per_mL,\n\n  -- median (average of m_pos1 and m_pos2 values as needed)\n  (SELECT AVG(val)\n   FROM ordered_vals ov\n   CROSS JOIN positions pos\n   WHERE ov.row_num IN (pos.m_pos1, pos.m_pos2)\n  ) AS median_initial_hsTnT_ng_per_mL,\n\n  -- Q1\n  (SELECT AVG(val)\n   FROM ordered_vals ov\n   CROSS JOIN positions pos\n   WHERE ov.row_num IN (pos.q1_pos1, pos.q1_pos2)\n  ) AS Q1_initial_hsTnT_ng_per_mL,\n\n  -- Q3\n  (SELECT AVG(val)\n   FROM ordered_vals ov\n   CROSS JOIN positions pos\n   WHERE ov.row_num IN (pos.q3_pos1, pos.q3_pos2)\n  ) AS Q3_initial_hsTnT_ng_per_mL,\n\n  -- IQR = Q3 - Q1\n  ((SELECT AVG(val)\n    FROM ordered_vals ov\n    CROSS JOIN positions pos\n    WHERE ov.row_num IN (pos.q3_pos1, pos.q3_pos2)\n   )\n   -\n   (SELECT AVG(val)\n    FROM ordered_vals ov\n    CROSS JOIN positions pos\n    WHERE ov.row_num IN (pos.q1_pos1, pos.q1_pos2)\n   )\n  ) AS IQR_initial_hsTnT_ng_per_mL\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:16]\n\nLocation: US\nJob ID: 8da22fa8-baf5-41cf-829a-cd508a4f6515\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"chest\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"chest\" at [1:16]\n\nLocation: US\nJob ID: f1ed813a-9095-4fa2-936d-2bbf223d0cac\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

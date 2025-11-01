@@ -1,0 +1,28 @@
+{
+  "query": "I have a 68\u2011year\u2011old male post\u2011op ICU patient. Among male post\u2011op ICU patients aged 63\u201373 in the top quartile of instability, what is the 95th\u2011percentile instability score and how do fever (>38.5\u00b0C), SpO2<90%, RR>20 episodes, ICU LOS, and in\u2011hospital mortality compare to other post\u2011op patients?",
+  "final_sql": "WITH \n-- Define post-op male patients aged 63-73\npost_op_males AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admission_type,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 63 AND 73\n    AND a.admission_type = 'Elective'\n),\n\n-- Identify ICU stays for post-op males\npost_op_male_icustays AS (\n  SELECT \n    istay.subject_id,\n    istay.hadm_id,\n    istay.stay_id,\n    istay.intime,\n    istay.outtime\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` istay\n  JOIN \n    post_op_males pom\n  ON \n    istay.hadm_id = pom.hadm_id\n),\n\n-- Calculate instability score components\ninstability_scores AS (\n  SELECT \n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    COUNT(CASE WHEN ce.itemid = 220050 AND ce.valuenum > 38.5 THEN 1 END) AS fever_count,\n    COUNT(CASE WHEN ce.itemid = 220179 AND ce.valuenum < 90 THEN 1 END) AS spo2_low_count,\n    COUNT(CASE WHEN ce.itemid = 220050 AND ce.valuenum > 20 THEN 1 END) AS rr_high_count\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  GROUP BY \n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id\n),\n\n-- Calculate total instability score\ninstability_total AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    fever_count,\n    spo2_low_count,\n    rr_high_count,\n    (fever_count + spo2_low_count + rr_high_count) AS total_instability_score\n  FROM \n    instability_scores\n),\n\n-- Identify top quartile of instability\ntop_quartile AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    fever_count,\n    spo2_low_count,\n    rr_high_count,\n    total_instability_score\n  FROM (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      fever_count,\n      spo2_low_count,\n      rr_high_count,\n      total_instability_score,\n      PERCENT_RANK() OVER (ORDER BY total_instability_score) AS percentile\n    FROM \n      instability_total\n  ) AS subquery\n  WHERE \n    percentile >= 0.75\n),\n\n-- Calculate 95th percentile instability score\npercentile_95 AS (\n  SELECT \n    APPROX_QUANTILES(total_instability_score, 0.95)[OFFSET(1)] AS percentile_95_score\n  FROM \n    instability_total\n)\n\n-- Compare clinical outcomes\nSELECT \n  (SELECT percentile_95_score FROM percentile_95) AS percentile_95_score,\n  AVG(TIMESTAMP_DIFF(i.outtime, i.intime, 'SECOND') / 3600) AS avg_icu_los,\n  SUM(a.hospital_expire_flag) / COUNT(*) AS in_hospital_mortality\nFROM \n  top_quartile tq\nJOIN \n  post_op_male_icustays pomi\nON \n  tq.hadm_id = pomi.hadm_id\nJOIN \n  `physionet-data.mimiciv_3_1_icu.icustays` i\nON \n  pomi.stay_id = i.stay_id\nJOIN \n  `physionet-data.mimiciv_3_1_hosp.admissions` a\nON \n  pomi.hadm_id = a.hadm_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [100:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [100:5]\n\nLocation: US\nJob ID: 1dc3394d-9411-419c-851b-c62b27d0c579\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [84:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [84:25]\n\nLocation: US\nJob ID: e1d7dbf7-3942-443d-93c6-5d47e15492aa\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [98:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [98:27]\n\nLocation: US\nJob ID: 693f0d05-85c7-4964-a795-fcaf7aca160d\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [100:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: INT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [100:5]\n\nLocation: US\nJob ID: 1dc3394d-9411-419c-851b-c62b27d0c579\n"
+    }
+  ]
+}

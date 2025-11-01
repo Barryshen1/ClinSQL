@@ -1,0 +1,16 @@
+{
+  "query": "I have a 63\u2011year\u2011old man admitted for COPD exacerbation. Among male patients 58\u201368, stratified into tertiles by medication complexity during the first 72h, report for each tertile: n, min/max and mean complexity score, mean LOS, mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH copd_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    -- Compute LOS in days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'Male'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND LOWER(dd.long_title) LIKE '%copd%'\n),\ncomplexity AS (\n  SELECT\n    ca.subject_id,\n    ca.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM copd_admissions ca\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON ca.subject_id = pr.subject_id\n    AND ca.hadm_id = pr.hadm_id\n    AND pr.starttime >= ca.admittime\n    AND pr.starttime < TIMESTAMP_ADD(ca.admittime, INTERVAL 72 HOUR)\n  GROUP BY ca.subject_id, ca.hadm_id\n),\nreadmissions AS (\n  SELECT\n    ca.subject_id,\n    ca.hadm_id,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = ca.subject_id\n          AND a2.hadm_id != ca.hadm_id\n          AND a2.admittime > ca.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(ca.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 ELSE 0\n    END AS readmit_30d_flag\n  FROM copd_admissions ca\n),\nfull_data AS (\n  SELECT\n    ca.subject_id,\n    ca.hadm_id,\n    co.complexity_score,\n    ca.los_days,\n    ca.hospital_expire_flag,\n    ra.readmit_30d_flag\n  FROM copd_admissions ca\n  JOIN complexity co\n    ON ca.subject_id = co.subject_id\n   AND ca.hadm_id = co.hadm_id\n  JOIN readmissions ra\n    ON ca.subject_id = ra.subject_id\n   AND ca.hadm_id = ra.hadm_id\n),\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM full_data\n)\nSELECT\n  tertile,\n  COUNT(*) AS n,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  ROUND(AVG(complexity_score), 2) AS mean_complexity,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(100 * AVG(hospital_expire_flag), 2) AS mortality_percent,\n  ROUND(100 * AVG(readmit_30d_flag), 2) AS readmit_30d_percent\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

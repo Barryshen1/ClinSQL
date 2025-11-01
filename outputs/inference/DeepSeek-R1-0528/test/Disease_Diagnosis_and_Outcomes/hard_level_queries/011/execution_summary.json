@@ -1,0 +1,16 @@
+{
+  "query": "For my 93-year-old female with AMI who had an ICU stay, among female inpatients 88\u201398 with AMI post-ICU, what is the average composite risk percentile? Report cohort 30\u2011day mortality, AKI and ARDS rates, and median survival of decedents.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.deathtime,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  -- Filter for AMI diagnosis\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE d.hadm_id = a.hadm_id\n      AND (\n        (d.icd_version = 9 AND d.icd_code LIKE '410%') \n        OR (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'))\n      )\n  )\n  -- Ensure ICU stay\n  AND EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    WHERE i.hadm_id = a.hadm_id\n  )\n  -- Apply age and gender filters\n  AND p.gender = 'F'\n  AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 88 AND 98\n),\n\ncohort_outcomes AS (\n  SELECT\n    c.*,\n    -- 30-day mortality flag (in-hospital death within 30 days)\n    CASE \n      WHEN c.deathtime IS NOT NULL \n        AND DATE_DIFF(c.deathtime, c.admittime, DAY) <= 30 \n        THEN 1 \n      ELSE 0 \n    END AS mortality_30d,\n    -- AKI diagnosis flag\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = c.hadm_id\n          AND (\n            (d.icd_version = 9 AND d.icd_code LIKE '584%')\n            OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n          )\n      ) THEN 1\n      ELSE 0\n    END AS aki_flag,\n    -- ARDS diagnosis flag\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = c.hadm_id\n          AND (\n            (d.icd_version = 9 AND d.icd_code = '518.82')\n            OR (d.icd_version = 10 AND d.icd_code = 'J80')\n          )\n      ) THEN 1\n      ELSE 0\n    END AS ards_flag,\n    -- Survival days (for decedents only)\n    CASE \n      WHEN c.deathtime IS NOT NULL \n        THEN DATE_DIFF(c.deathtime, c.admittime, DAY) \n      ELSE NULL \n    END AS survival_days\n  FROM cohort c\n)\n\nSELECT\n  -- Composite risk percentile (undefined in MIMIC)\n  NULL AS avg_composite_risk_percentile,\n  -- 30-day mortality rate (%)\n  ROUND(AVG(mortality_30d) * 100, 2) AS mortality_30d_rate_pct,\n  -- AKI rate (%)\n  ROUND(AVG(aki_flag) * 100, 2) AS aki_rate_pct,\n  -- ARDS rate (%)\n  ROUND(AVG(ards_flag) * 100, 2) AS ards_rate_pct,\n  -- Median survival of decedents (days)\n  APPROX_QUANTILES(survival_days, 2 IGNORE NULLS)[OFFSET(1)] AS median_survival_days\nFROM cohort_outcomes;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

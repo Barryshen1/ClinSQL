@@ -1,0 +1,22 @@
+{
+  "query": "I have a 71-year-old male. Among male ICU patients aged 66\u201376 who were invasively ventilated, what is the interquartile range of systolic blood pressure measured in the first 6 hours?",
+  "final_sql": "WITH\n-- Step 1: define the male 66\u201376 cohort from hosp patients\ncohort_patients AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  WHERE LOWER(p.gender) = 'male'\n    AND p.anchor_age BETWEEN 66 AND 76\n),\n\n-- Step 2: identify ICU stays with invasive ventilation (intubation)\nventilated_icustays AS (\n  SELECT i.subject_id, i.hadm_id, i.stay_id, i.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n  JOIN cohort_patients AS cp\n    ON cp.subject_id = i.subject_id\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n      ON pe.itemid = di.itemid\n    WHERE pe.subject_id = i.subject_id\n      AND pe.hadm_id = i.hadm_id\n      AND (\n        LOWER(di.label) LIKE '%intubation%' OR\n        LOWER(di.label) LIKE '%endotracheal%' OR\n        LOWER(di.label) LIKE '%tracheal%ventilation%'\n      )\n  )\n),\n\n-- Step 3: SBP measurements within first 6 hours of ICU intime\nsbp_measurements AS (\n  SELECT\n    vi.subject_id,\n    vi.hadm_id,\n    vi.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM ventilated_icustays AS vi\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ce.subject_id = vi.subject_id\n   AND ce.hadm_id = vi.hadm_id\n   AND ce.stay_id = vi.stay_id\n   AND ce.charttime >= vi.intime\n   AND ce.charttime < TIMESTAMP_ADD(vi.intime, INTERVAL 6 HOUR)\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n    -- identify systolic blood pressure entries\n    AND LOWER(di.label) LIKE '%systolic%'\n    AND LOWER(di.label) LIKE '%blood%'\n)\n\n-- Step 4: compute IQR from SBP values\nSELECT\n  quant[OFFSET(1)] AS q1,\n  quant[OFFSET(3)] AS q3,\n  quant[OFFSET(3)] - quant[OFFSET(1)] AS iqr\nFROM (\n  SELECT APPROX_QUANTILES(valuenum, 4) AS quant\n  FROM sbp_measurements\n) AS t;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 A valid date part name is required but found H at [43:59]; reason: invalidQuery, location: query, message: A valid date part name is required but found H at [43:59]\n\nLocation: US\nJob ID: 1e1cff23-36a8-4deb-ae04-ade118069824\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

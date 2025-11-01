@@ -1,0 +1,29 @@
+{
+  "query": "I\u2019m evaluating a 90\u2011year\u2011old woman. Among female inpatients aged 85\u201395 hospitalized with asthma exacerbation, stratify by the composite comorbidity risk score into quartiles and report in\u2011hospital mortality, cardiovascular and neurologic complication rates for each quartile.",
+  "final_sql": "WITH charlson_mapping AS (\n  SELECT 'I21' AS icd_code, 1 AS weight, 'myocardial_infarction' AS category\n  UNION ALL SELECT 'I50', 1, 'congestive_heart_failure'\n  UNION ALL SELECT 'I70', 1, 'peripheral_vascular'\n  UNION ALL SELECT 'I6', 1, 'cerebrovascular'\n  UNION ALL SELECT 'F03', 1, 'dementia'\n  UNION ALL SELECT 'M3', 1, 'rheumatologic'\n  UNION ALL SELECT 'K25', 1, 'peptic_ulcer'\n  UNION ALL SELECT 'K26', 1, 'peptic_ulcer'\n  UNION ALL SELECT 'K70', 1, 'mild_liver'\n  UNION ALL SELECT 'E11', 1, 'diabetes'\n  UNION ALL SELECT 'E10', 2, 'diabetes'\n  UNION ALL SELECT 'E12', 2, 'diabetes'\n  UNION ALL SELECT 'G72', 2, 'hemiplegia_paraplegia'\n  UNION ALL SELECT 'N17', 2, 'renal'\n  UNION ALL SELECT 'N18', 2, 'renal'\n  UNION ALL SELECT 'C', 2, 'malignancy'\n  UNION ALL SELECT 'C7', 6, 'malignancy'\n  UNION ALL SELECT 'K71', 3, 'moderate_severe_liver'\n  UNION ALL SELECT 'K72', 3, 'moderate_severe_liver'\n  UNION ALL SELECT 'B24', 6, 'aids'\n),\neligible_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 85 AND 95\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_code LIKE 'J45.901%'\n        AND d.icd_version = 10  -- Added to ensure ICD-10\n    )\n),\ndiagnoses_for_cohort AS (\n  SELECT\n    d.hadm_id,\n    d.icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN eligible_admissions e\n    ON d.hadm_id = e.hadm_id\n  WHERE d.icd_version = 10  -- Added to ensure ICD-10\n),\ncharlson_scores AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    COALESCE(SUM(weight), 0) AS cci  -- Changed MAX_WEIGHT to weight\n  FROM eligible_admissions e\n  LEFT JOIN diagnoses_for_cohort d\n    ON e.hadm_id = d.hadm_id\n  LEFT JOIN charlson_mapping cm\n    ON d.icd_code LIKE CONCAT(cm.icd_code, '%')\n  GROUP BY e.subject_id, e.hadm_id\n),\ncci_quartiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    cci,\n    NTILE(4) OVER (ORDER BY cci) AS quartile\n  FROM charlson_scores\n),\ncomplications AS (\n  SELECT\n    e.hadm_id,\n    e.subject_id,\n    MAX(CASE WHEN cm.category IN ('myocardial_infarction', 'congestive_heart_failure', 'peripheral_vascular', 'cerebrovascular') THEN 1 ELSE 0 END) AS has_cardiovascular,\n    MAX(CASE WHEN cm.category IN ('dementia', 'hemiplegia_paraplegia', 'cerebrovascular') THEN 1 ELSE 0 END) AS has_neurologic\n  FROM eligible_admissions e\n  LEFT JOIN diagnoses_for_cohort d\n    ON e.hadm_id = d.hadm_id\n  LEFT JOIN charlson_mapping cm\n    ON d.icd_code LIKE CONCAT(cm.icd_code, '%')\n  GROUP BY e.hadm_id, e.subject_id\n)\nSELECT\n  q.quartile,\n  COUNT(DISTINCT q.hadm_id) AS num_patients,\n  ROUND(100 * AVG(e.hospital_expire_flag), 2) AS mortality_rate,\n  ROUND(100 * AVG(c.has_cardiovascular), 2) AS cardiovascular_complication_rate,\n  ROUND(100 * AVG(c.has_neurologic), 2) AS neurologic_complication_rate\nFROM cci_quartiles q\nINNER JOIN eligible_admissions e\n  ON q.hadm_id = e.hadm_id AND q.subject_id = e.subject_id\nINNER JOIN complications c\n  ON q.hadm_id = c.hadm_id AND q.subject_id = c.subject_id\nGROUP BY q.quartile\nORDER BY q.quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:13]\n\nLocation: US\nJob ID: d372ec4a-31df-487f-b8f4-d9818ac5fffe\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: MAX_WEIGHT at [53:18]; reason: invalidQuery, location: query, message: Unrecognized name: MAX_WEIGHT at [53:18]\n\nLocation: US\nJob ID: 15ac6a50-00ea-41a9-9760-1d5d86a08df9\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 63-year-old female. Among female Medicare patients aged 58\u201368 admitted via the ED with a principal femoral neck fracture, what is the 30-day readmission rate, median index LOS for readmitted versus non\u2011readmitted, and percent of initial stays >8 days?",
+  "final_sql": "WITH femoral_index AS (\n  -- Identify index admissions that meet inclusion criteria\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    -- LOS in days (integer days)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON a.hadm_id = di.hadm_id AND di.seq_num = 1  -- principal diagnosis\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND LOWER(a.insurance) LIKE '%medicare%'\n    AND a.admission_type = 'EMERGENCY'\n    AND a.hospital_expire_flag = 0  -- exclude in-hospital deaths (cannot be readmitted)\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    -- Match likely femoral neck fracture ICDs / descriptions (ICD-9 820*, ICD-10 S72.0*, or descriptive text)\n    AND (\n      LOWER(COALESCE(dd.long_title, '')) LIKE '%femoral neck%'\n      OR LOWER(COALESCE(dd.long_title, '')) LIKE '%neck of femur%'\n      OR di.icd_code LIKE '820%'       -- ICD-9 fracture of neck of femur\n      OR LOWER(di.icd_code) LIKE 's72.0%'  -- ICD-10 fracture of neck of femur (S72.0*)\n    )\n),\n\nindex_with_readmit AS (\n  -- For each index admission determine whether there is any readmission within 30 days\n  SELECT\n    fi.*,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = fi.subject_id\n        AND a2.hadm_id != fi.hadm_id\n        AND a2.admittime IS NOT NULL\n        AND a2.admittime > fi.dischtime\n        AND a2.admittime <= TIMESTAMP_ADD(fi.dischtime, INTERVAL 30 DAY)\n    ) AS readmitted_within_30d\n  FROM femoral_index fi\n)\n\nSELECT\n  COUNT(*) AS total_index_admissions,\n  -- readmission rate (%)\n  ROUND( 100.0 * SUM(CASE WHEN readmitted_within_30d THEN 1 ELSE 0 END) / COUNT(*), 2) AS readmission_rate_pct,\n  -- median LOS for readmitted (approximate median using APPROX_QUANTILES)\n  CAST(\n    (SELECT IFNULL(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 0)\n     FROM index_with_readmit\n     WHERE readmitted_within_30d = TRUE)\n    AS INT64\n  ) AS median_los_readmitted_days,\n  -- median LOS for non-readmitted\n  CAST(\n    (SELECT IFNULL(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 0)\n     FROM index_with_readmit\n     WHERE readmitted_within_30d = FALSE)\n    AS INT64\n  ) AS median_los_non_readmitted_days,\n  -- percent of initial stays > 8 days\n  ROUND( 100.0 * SUM(CASE WHEN los_days > 8 THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_index_stays_gt_8_days\nFROM index_with_readmit;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For a 45-year-old male in ICU: among male ICU patients 40\u201350, report percent in per-stay mean SBP categories (<140; 140\u2013159; \u2265160 mmHg) during first 48 h and MI rate per category.",
+  "final_sql": "WITH eligible_stays AS (\n  -- Filter to male patients aged 40-50 with first ICU stay\n  SELECT \n    p.subject_id,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY i.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = i.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND rn = 1  -- Ensure only first ICU stay per patient\n),\n\nsystolic_bp AS (\n  -- Extract SBP measurements in first 48 hours\n  SELECT \n    es.stay_id,\n    es.hadm_id,\n    c.valuenum AS sbp\n  FROM eligible_stays es\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON es.subject_id = c.subject_id\n    AND es.hadm_id = c.hadm_id\n    AND es.stay_id = c.stay_id\n  WHERE c.itemid = 220045  -- Arterial systolic blood pressure\n    AND c.valuenum IS NOT NULL\n    AND c.valuenum > 0\n    AND c.charttime >= es.intime\n    AND c.charttime < TIMESTAMP_ADD(es.intime, INTERVAL 48 HOUR)\n),\n\nstay_sbp AS (\n  -- Compute per-stay mean SBP\n  SELECT \n    stay_id,\n    hadm_id,\n    AVG(sbp) AS avg_sbp\n  FROM systolic_bp\n  GROUP BY stay_id, hadm_id\n),\n\nmi_admissions AS (\n  -- Identify admissions with acute MI (ICD-10 I21.*)\n  SELECT DISTINCT\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE d.icd_version = 'ICD-10'\n    AND d.icd_code LIKE 'I21%'\n),\n\ncategorized_stays AS (\n  -- Categorize stays and flag MI\n  SELECT \n    s.stay_id,\n    s.hadm_id,\n    s.avg_sbp,\n    CASE \n      WHEN s.avg_sbp < 140 THEN '<140'\n      WHEN s.avg_sbp >= 140 AND s.avg_sbp < 160 THEN '140-159'\n      WHEN s.avg_sbp >= 160 THEN '>=160'\n      ELSE NULL\n    END AS sbp_category,\n    CASE WHEN m.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_mi\n  FROM stay_sbp s\n  LEFT JOIN mi_admissions m\n    ON s.hadm_id = m.hadm_id\n)\n\n-- Compute percentages\nSELECT \n  sbp_category,\n  ROUND((COUNT(*) * 100.0 / (SELECT COUNT(*) FROM categorized_stays)), 2) AS percent_of_stays,\n  ROUND((SUM(has_mi) * 100.0 / COUNT(*)), 2) AS mi_rate_percent\nFROM categorized_stays\nWHERE sbp_category IS NOT NULL\nGROUP BY sbp_category\nORDER BY \n  CASE sbp_category\n    WHEN '<140' THEN 1\n    WHEN '140-159' THEN 2\n    WHEN '>=160' THEN 3\n  END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: rn at [14:9]; reason: invalidQuery, location: query, message: Unrecognized name: rn at [14:9]\n\nLocation: US\nJob ID: ffee490d-b677-426f-b3e8-fcedc5f0681b\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [50:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [50:9]\n\nLocation: US\nJob ID: 4c4bae47-7431-452e-ade5-c5701a5e9c7c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [49:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [49:9]\n\nLocation: US\nJob ID: 28e7bb8c-9f69-4a97-a9fe-e3a814633b1f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: rn at [14:9]; reason: invalidQuery, location: query, message: Unrecognized name: rn at [14:9]\n\nLocation: US\nJob ID: ffee490d-b677-426f-b3e8-fcedc5f0681b\n"
+    }
+  ]
+}

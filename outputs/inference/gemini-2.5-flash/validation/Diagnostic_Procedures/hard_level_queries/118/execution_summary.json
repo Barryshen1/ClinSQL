@@ -1,0 +1,22 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH AdmissionsFiltered AS (\n    -- Step 1 & 2: Identify female ICU admissions aged 44-54 with AMI.\n    -- Calculate effective age at admission and rank ICU stays for each admission.\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag,\n        icu.stay_id,\n        icu.intime AS icu_intime,\n        ROW_NUMBER() OVER (PARTITION BY adm.subject_id, adm.hadm_id ORDER BY icu.intime) AS rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN (\n        -- Subquery to select admissions with Acute Myocardial Infarction (AMI) diagnosis\n        SELECT DISTINCT hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        WHERE\n            (di.icd_version = 9 AND STARTS_WITH(di.icd_code, '410')) -- ICD-9 AMI\n            OR (di.icd_version = 10 AND (STARTS_WITH(di.icd_code, 'I21') OR STARTS_WITH(di.icd_code, 'I22'))) -- ICD-10 AMI\n    ) AS ami_diag\n        ON adm.hadm_id = ami_diag.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON adm.subject_id = icu.subject_id\n        AND adm.hadm_id = icu.hadm_id\n    WHERE\n        pat.gender = 'F'\n        AND (pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year)) BETWEEN 44 AND 54\n        AND icu.intime IS NOT NULL -- Ensure a valid ICU start time\n),\nFirstICUStayCohort AS (\n    -- Filter for only the first ICU stay for each qualifying admission\n    SELECT\n        subject_id,\n        hadm_id,\n        admittime,\n        dischtime,\n        hospital_expire_flag,\n        stay_id,\n        icu_intime\n    FROM AdmissionsFiltered\n    WHERE rn = 1\n),\nProcedures72h AS (\n    -- Step 3: Calculate procedure count in the first 72 hours of the first ICU stay.\n    SELECT\n        fics.subject_id,\n        fics.hadm_id,\n        fics.stay_id,\n        COUNT(pe.itemid) AS procedure_count_72h\n    FROM\n        `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    INNER JOIN\n        FirstICUStayCohort fics\n        ON pe.subject_id = fics.subject_id\n        AND pe.hadm_id = fics.hadm_id\n        AND pe.stay_id = fics.stay_id\n    WHERE\n        pe.starttime >= fics.icu_intime\n        AND pe.starttime < DATETIME_ADD(fics.icu_intime, INTERVAL 72 HOUR)\n    GROUP BY\n        fics.subject_id, fics.hadm_id, fics.stay_id\n)\n-- Final SELECT to stratify and report requested metrics\nSELECT\n    procedure_quartile,\n    COUNT(t.subject_id) AS n_per_quartile, -- Number of qualifying first ICU stays/admissions in this quartile\n    AVG(t.procedure_count_72h) AS mean_procedure_count,\n    AVG(DATETIME_DIFF(t.dischtime, t.admittime, HOUR) / 24.0) AS avg_hospital_los_days,\n    SUM(CASE WHEN t.hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(t.subject_id) AS in_hospital_mortality_pct\nFROM (\n    SELECT\n        fics.subject_id,\n        fics.hadm_id,\n        fics.admittime,\n        fics.dischtime,\n        fics.hospital_expire_flag,\n        COALESCE(p72.procedure_count_72h, 0) AS procedure_count_72h, -- Use COALESCE to treat NULL as 0 procedures\n        NTILE(4) OVER (ORDER BY COALESCE(p72.procedure_count_72h, 0)) AS procedure_quartile\n    FROM\n        FirstICUStayCohort fics\n    LEFT JOIN\n        Procedures72h p72\n        ON fics.subject_id = p72.subject_id\n        AND fics.hadm_id = p72.hadm_id\n        AND fics.stay_id = p72.stay_id\n) AS t\nGROUP BY\n    procedure_quartile\nORDER BY\n    procedure_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"ICU\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"ICU\" at [1:12]\n\nLocation: US\nJob ID: ed9680d7-9061-4bde-b1b7-eb08de338ba3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

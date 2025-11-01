@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY heart_rate) - percentile_cont(0.25) within GROUP (ORDER BY heart_rate)) AS interquartile_range FROM (SELECT l.value AS heart_rate FROM labevents l JOIN icu_patients i ON l.subject_id = i.subject_id WHERE l.itemid = 87167 AND l.charttime >= (CURRENT_DATE - interval '2 days')) AS patient_hr;

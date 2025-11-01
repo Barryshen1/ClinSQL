@@ -1,0 +1,22 @@
+{
+  "query": "I have a 56\u2011year\u2011old female on invasive mechanical ventilation. Among female ICU patients aged 51\u201361, what percentile is an instability score of 80 in the first 48 hours? Also report ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH instability_item AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%instability score%'\n),\n\n-- Step 1: Female ICU patients aged 51-61\nfemale_icu AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 51 AND 61\n),\n\n-- Step 2: Identify those on invasive mechanical ventilation in first 48h\nvent_stays AS (\n  SELECT DISTINCT f.stay_id\n  FROM female_icu f\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` proc\n    ON f.stay_id = proc.stay_id\n  WHERE\n    LOWER(proc.ordercategorydescription) LIKE '%ventilation%'\n    AND LOWER(proc.ordercategorydescription) LIKE '%invasive%'\n    AND proc.starttime <= DATETIME_ADD(f.intime, INTERVAL 48 HOUR)\n),\n\n-- Step 3: Get instability scores in first 48h\ninstability_scores AS (\n  SELECT\n    f.stay_id,\n    MAX(c.valuenum) AS max_instability_score\n  FROM female_icu f\n  JOIN vent_stays v ON f.stay_id = v.stay_id\n  JOIN instability_item i ON TRUE\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON f.stay_id = c.stay_id\n    AND c.itemid = i.itemid\n    AND c.charttime BETWEEN f.intime AND DATETIME_ADD(f.intime, INTERVAL 48 HOUR)\n    AND c.valuenum IS NOT NULL\n  GROUP BY f.stay_id\n),\n\n-- Step 4: Add LOS and mortality\ninstability_with_outcomes AS (\n  SELECT\n    s.stay_id,\n    s.max_instability_score,\n    f.los,\n    a.hospital_expire_flag\n  FROM instability_scores s\n  JOIN female_icu f ON s.stay_id = f.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.hadm_id = a.hadm_id\n),\n\n-- Step 5: Calculate percentile for score 80\npercentile_calc AS (\n  SELECT\n    COUNTIF(max_instability_score < 80) AS below_80,\n    COUNT(*) AS total\n  FROM instability_with_outcomes\n),\n\n-- Step 6: Find 90th percentile cutoff\ndecile_calc AS (\n  SELECT\n    APPROX_QUANTILES(max_instability_score, 10)[OFFSET(9)] AS decile_cutoff\n  FROM instability_with_outcomes\n),\n\n-- Step 7: Outcomes for top decile\ntop_decile AS (\n  SELECT\n    los,\n    hospital_expire_flag\n  FROM instability_with_outcomes, decile_calc\n  WHERE max_instability_score >= decile_calc.decile_cutoff\n)\n\n-- Final output\nSELECT\n  -- Part 1: Percentile of instability score 80\n  SAFE_DIVIDE((SELECT below_80 FROM percentile_calc), (SELECT total FROM percentile_calc)) * 100 AS percentile_of_80,\n  -- Part 2: Top decile outcomes\n  (SELECT COUNT(*) FROM top_decile) AS top_decile_n,\n  (SELECT AVG(los) FROM top_decile) AS top_decile_avg_los,\n  (SELECT APPROX_QUANTILES(los, 2)[OFFSET(1)] FROM top_decile) AS top_decile_median_los,\n  (SELECT SAFE_DIVIDE(SUM(CAST(hospital_expire_flag AS INT64)), COUNT(*)) FROM top_decile) AS top_decile_mortality_rate;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [95:11]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [95:11]\n\nLocation: US\nJob ID: 821e72ae-50c8-4645-9134-ffcd55ea9510\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT stddev(l.value) AS standard_deviation FROM labevents l JOIN patients p ON l.subject_id = p.subject_id WHERE p.gender = 'M' AND p.anchor_age = 82 AND EXTRACT(YEAR FROM l.charttime) = p.anchor_year AND l.itemid = 261 AND l.value IS NOT NULL AND l.value > 90 AND l.value < 100;

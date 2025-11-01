@@ -1,0 +1,16 @@
+{
+  "query": "For a 42-year-old woman, among female urgent/emergency admissions aged 37\u201347, report LOS mean, 25th/50th/75th percentiles and percentile rank of a 7\u2011day stay by discharge outcome (home/facility/in-hospital death).",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.discharge_location,\n    p.gender,\n    p.anchor_age,\n    a.admission_type,\n    -- Calculate LOS in days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND a.admission_type IN ('URGENT', 'EMERGENCY')\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n)\n, classified AS (\n  SELECT\n    *,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN LOWER(discharge_location) LIKE '%home%' THEN 'Home'\n      ELSE 'Facility'\n    END AS discharge_outcome\n  FROM cohort\n  WHERE los IS NOT NULL AND los >= 0\n)\n, stats AS (\n  SELECT\n    discharge_outcome,\n    COUNT(*) AS n_admissions,\n    ROUND(AVG(los), 2) AS mean_los,\n    -- Get percentiles\n    APPROX_QUANTILES(los, 4)[OFFSET(1)] AS los_25th,\n    APPROX_QUANTILES(los, 4)[OFFSET(2)] AS los_50th,\n    APPROX_QUANTILES(los, 4)[OFFSET(3)] AS los_75th\n  FROM classified\n  GROUP BY discharge_outcome\n)\n, percentile_rank_7d AS (\n  SELECT\n    discharge_outcome,\n    -- Percentile rank of 7-day LOS among admissions in each outcome group\n    ROUND(\n      SUM(CASE WHEN los <= 7 THEN 1 ELSE 0 END) / COUNT(*)\n    , 4) AS percentile_rank_7d\n  FROM classified\n  GROUP BY discharge_outcome\n)\nSELECT\n  s.discharge_outcome,\n  s.n_admissions,\n  s.mean_los,\n  s.los_25th,\n  s.los_50th,\n  s.los_75th,\n  pr.percentile_rank_7d\nFROM stats s\nLEFT JOIN percentile_rank_7d pr\n  ON s.discharge_outcome = pr.discharge_outcome\nORDER BY\n  -- Show Home, Facility, Death in order\n  CASE s.discharge_outcome\n    WHEN 'Home' THEN 1\n    WHEN 'Facility' THEN 2\n    WHEN 'In-hospital death' THEN 3\n    ELSE 4\n  END\n;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

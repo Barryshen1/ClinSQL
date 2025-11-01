@@ -1,0 +1,1 @@
+SELECT AVG(p.value) AS average_value FROM patients p JOIN admissions a ON p.subject_id = a.subject_id JOIN labevents l ON a.hadm_id = l.hadm_id WHERE p.gender = 'F' AND p.anchor_age = 76 AND EXTRACT(YEAR FROM l.charttime) BETWEEN 2019 AND 2021 AND l.itemid = 848070 AND l.valueuom = 'mmHg' GROUP BY a.stay_id ORDER BY a.stay_id NULLS LAST;

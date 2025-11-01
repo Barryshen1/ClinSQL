@@ -1,0 +1,28 @@
+{
+  "query": "For my 43-year-old female inpatient with T2D and heart failure, among females 38\u201348 with both diagnoses, report percentages initiated on insulin versus oral agents in first vs final 72h only.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 38 AND 48\n),\n\nadmissions_with_diagnoses AS (\n  SELECT a.hadm_id, a.subject_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN patients_filtered p ON a.subject_id = p.subject_id\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n      ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n    WHERE di.hadm_id = a.hadm_id\n      AND d.icd_code LIKE 'E11%'\n      AND d.icd_version = 10\n  )\n  AND EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n      ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n    WHERE di.hadm_id = a.hadm_id\n      AND d.icd_code LIKE 'I50%'\n      AND d.icd_version = 10\n  )\n),\n\nantidiabetic_meds AS (\n  SELECT p.hadm_id,\n    p.starttime,\n    CASE\n      WHEN REGEXP_CONTAINS(LOWER(p.drug), r'insulin|lantus|levemir|novolog|humalog|apidra|toujeo|basaglar|admelog|fiasp')\n        THEN 'insulin'\n      WHEN LOWER(p.drug) IN (\n        'metformin', 'glipizide', 'glyburide', 'glimepiride', 'sitagliptin', 'saxagliptin',\n        'linagliptin', 'pioglitazone', 'rosiglitazone', 'acarbose', 'miglitol', 'repaglinide', 'nateglinide'\n      )\n        THEN 'oral'\n      ELSE NULL\n    END AS drug_class\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions p\n  INNER JOIN admissions_with_diagnoses a ON p.hadm_id = a.hadm_id\n  WHERE p.starttime IS NOT NULL\n    AND (\n      REGEXP_CONTAINS(LOWER(p.drug), r'insulin|lantus|levemir|novolog|humalog|apidra|toujeo|basaglar|admelog|fiasp')\n      OR LOWER(p.drug) IN (\n        'metformin', 'glipizide', 'glyburide', 'glimepiride', 'sitagliptin', 'saxagliptin',\n        'linagliptin', 'pioglitazone', 'rosiglitazone', 'acarbose', 'miglitol', 'repaglinide', 'nateglinide'\n      )\n    )\n),\n\nfirst_admin_times AS (\n  SELECT hadm_id,\n    MIN(CASE WHEN drug_class = 'insulin' THEN starttime END) AS first_insulin_time,\n    MIN(CASE WHEN drug_class = 'oral' THEN starttime END) AS first_oral_time\n  FROM antidiabetic_meds\n  GROUP BY hadm_id\n),\n\ninitiation_timing AS (\n  SELECT a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    CASE\n      WHEN f.first_insulin_time IS NOT NULL\n       AND f.first_insulin_time >= a.admittime\n       AND f.first_insulin_time <= DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n      THEN 1 ELSE 0 END AS initiated_insulin_first_72h,\n    CASE\n      WHEN f.first_insulin_time IS NOT NULL\n       AND f.first_insulin_time >= DATETIME_SUB(a.dischtime, INTERVAL 72 HOUR)\n       AND f.first_insulin_time <= a.dischtime\n      THEN 1 ELSE 0 END AS initiated_insulin_last_72h,\n    CASE\n      WHEN f.first_oral_time IS NOT NULL\n       AND f.first_oral_time >= a.admittime\n       AND f.first_oral_time <= DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n      THEN 1 ELSE 0 END AS initiated_oral_first_72h,\n    CASE\n      WHEN f.first_oral_time IS NOT NULL\n       AND f.first_oral_time >= DATETIME_SUB(a.dischtime, INTERVAL 72 HOUR)\n       AND f.first_oral_time <= a.dischtime\n      THEN 1 ELSE 0 END AS initiated_oral_last_72h\n  FROM admissions_with_diagnoses a\n  LEFT JOIN first_admin_times f ON a.hadm_id = f.hadm_id\n)\n\nSELECT\n  ROUND(100.0 * SUM(initiated_insulin_first_72h) / COUNT(*), 2) AS pct_insulin_initiated_first_72h,\n  ROUND(100.0 * SUM(initiated_oral_first_72h) / COUNT(*), 2) AS pct_oral_initiated_first_72h,\n  ROUND(100.0 * SUM(initiated_insulin_last_72h) / COUNT(*), 2) AS pct_insulin_initiated_last_72h,\n  ROUND(100.0 * SUM(initiated_oral_last_72h) / COUNT(*), 2) AS pct_oral_initiated_last_72h\nFROM initiation_timing;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]\n\nLocation: US\nJob ID: ee7cfa30-67c5-4a6a-97b8-7aa25686a96b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: starttime at [58:47]; reason: invalidQuery, location: query, message: Unrecognized name: starttime at [58:47]\n\nLocation: US\nJob ID: fc727681-cd41-42b8-8bc4-218494dfc4f6\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have an 85\u2011year\u2011old woman. Among females 80\u201390 with heart failure, stratified ICU vs non\u2011ICU and LOS <8 vs \u22658 days, report in\u2011hospital mortality (%) and CKD and diabetes prevalence.",
+  "final_sql": "WITH cohort AS (\n  -- Select admissions for females age 80-90 with heart failure\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    pat.anchor_age,\n    pat.gender,\n    -- Calculate LOS in days\n    SAFE_CAST(TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS FLOAT64) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON adm.subject_id = pat.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      ON adm.hadm_id = diag.hadm_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 80 AND 90\n    AND (\n      -- Heart failure ICD-10: I50.x, ICD-9: 428.x\n      (diag.icd_version = 10 AND diag.icd_code LIKE 'I50%')\n      OR\n      (diag.icd_version = 9 AND diag.icd_code LIKE '428%')\n    )\n),\nicu_flags AS (\n  -- Flag admissions with any ICU stay\n  SELECT DISTINCT\n    hadm_id,\n    1 AS had_icu\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays`\n),\nckd_flags AS (\n  -- Flag admissions with CKD diagnosis\n  SELECT DISTINCT\n    hadm_id,\n    1 AS has_ckd\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    (icd_version = 10 AND icd_code LIKE 'N18%')\n    OR\n    (icd_version = 9 AND icd_code LIKE '585%')\n),\ndm_flags AS (\n  -- Flag admissions with diabetes diagnosis\n  SELECT DISTINCT\n    hadm_id,\n    1 AS has_dm\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    (icd_version = 10 AND (\n      icd_code LIKE 'E10%' OR\n      icd_code LIKE 'E11%' OR\n      icd_code LIKE 'E12%' OR\n      icd_code LIKE 'E13%' OR\n      icd_code LIKE 'E14%'\n    ))\n    OR\n    (icd_version = 9 AND icd_code LIKE '250%')\n),\nfinal AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.los_days,\n    IFNULL(i.had_icu, 0) AS had_icu,\n    c.hospital_expire_flag,\n    IFNULL(ckd.has_ckd, 0) AS has_ckd,\n    IFNULL(dm.has_dm, 0) AS has_dm\n  FROM\n    cohort c\n    LEFT JOIN icu_flags i ON c.hadm_id = i.hadm_id\n    LEFT JOIN ckd_flags ckd ON c.hadm_id = ckd.hadm_id\n    LEFT JOIN dm_flags dm ON c.hadm_id = dm.hadm_id\n)\nSELECT\n  CASE\n    WHEN had_icu = 1 AND los_days < 8 THEN 'ICU, LOS <8'\n    WHEN had_icu = 1 AND los_days >= 8 THEN 'ICU, LOS \u22658'\n    WHEN had_icu = 0 AND los_days < 8 THEN 'Non-ICU, LOS <8'\n    WHEN had_icu = 0 AND los_days >= 8 THEN 'Non-ICU, LOS \u22658'\n    ELSE 'Other'\n  END AS group_label,\n  COUNT(*) AS n_admissions,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 1) AS mortality_percent,\n  ROUND(100 * SUM(CASE WHEN has_ckd = 1 THEN 1 ELSE 0 END) / COUNT(*), 1) AS ckd_percent,\n  ROUND(100 * SUM(CASE WHEN has_dm = 1 THEN 1 ELSE 0 END) / COUNT(*), 1) AS diabetes_percent\nFROM\n  final\nGROUP BY\n  group_label\nORDER BY\n  group_label;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "As an 84-year-old man, among male patients aged 79\u201389 admitted with suspected ACS, what are counts, percentages, and mean, median, and IQR of the initial Troponin T by category (normal/borderline/elevated)?",
+  "final_sql": "WITH acs_admissions AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE \n    ( (d.icd_version = 9 AND (d.icd_code LIKE '410%' OR d.icd_code LIKE '411%' )) \n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%' OR d.icd_code LIKE 'I200%' OR d.icd_code LIKE 'I201%'))\n    )\n),\neligible_patients AS (\n  SELECT p.subject_id, p.anchor_age, p.gender, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN acs_admissions acs\n    ON a.hadm_id = acs.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 79 AND 89\n),\ntroponin_t_labs AS (\n  SELECT le.subject_id, le.hadm_id, le.charttime, le.valuenum, le.valueuom\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` di\n    ON le.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%troponin t%'\n    AND le.valuenum IS NOT NULL\n    AND le.valueuom = 'ng/mL'\n),\nfirst_trop_per_admit AS (\n  SELECT t.subject_id, t.hadm_id, t.valuenum, t.charttime\n  FROM troponin_t_labs t\n  JOIN eligible_patients ep\n    ON t.subject_id = ep.subject_id\n    AND t.hadm_id = ep.hadm_id\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY t.hadm_id ORDER BY t.charttime ASC) = 1\n),\ncategorised AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum,\n    CASE\n      WHEN valuenum <= 0.01 THEN 'Normal'\n      WHEN valuenum <= 0.03 THEN 'Borderline'\n      ELSE 'Elevated'\n    END AS category\n  FROM first_trop_per_admit\n),\nstats AS (\n  SELECT\n    category,\n    COUNT(*) AS cnt,\n    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct,\n    ROUND(AVG(valuenum), 4) AS mean_trop,\n    APPROX_QUANTILES(valuenum, 4)[OFFSET(2)] AS median_trop,\n    ROUND(APPROX_QUANTILES(valuenum, 4)[OFFSET(3)] \n          - APPROX_QUANTILES(valuenum, 4)[OFFSET(1)], 4) AS iqr_trop\n  FROM categorised\n  GROUP BY category\n)\nSELECT *\nFROM stats\nORDER BY \n  CASE category \n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Elevated' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

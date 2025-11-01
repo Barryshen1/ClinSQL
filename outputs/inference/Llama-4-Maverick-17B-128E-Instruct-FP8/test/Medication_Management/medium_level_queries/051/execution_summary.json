@@ -1,0 +1,16 @@
+{
+  "query": "For a 91\u2011year\u2011old female inpatient: among females 86\u201396 with DM and HF, report by class (Insulin vs Oral Agents) early (first 12h) and late (final 72h) rates (%) and early\u2192late transitions.",
+  "final_sql": "WITH cohort AS (\n  SELECT p.subject_id, p.anchor_age, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 86 AND 96\n  AND a.hadm_id IN (\n    SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_code IN ('250', '428') OR icd_code LIKE '250%' OR icd_code LIKE '428%' \n  )\n),\nmeds AS (\n  SELECT c.subject_id, c.hadm_id, e.charttime, \n         CASE \n           WHEN e.medication LIKE '%insulin%' THEN 'Insulin'\n           WHEN e.medication NOT LIKE '%insulin%' AND (e.medication LIKE '%metformin%' OR e.medication LIKE '%glipizide%') THEN 'Oral Agents'\n           ELSE 'Other'\n         END AS med_class\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.emar` e ON c.hadm_id = e.hadm_id\n  WHERE e.charttime IS NOT NULL\n),\nstay_times AS (\n  SELECT c.subject_id, c.hadm_id, \n         MIN(a.admittime) AS admit_time, \n         MAX(a.dischtime) AS discharge_time\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON c.hadm_id = a.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n),\nmed_analysis AS (\n  SELECT m.subject_id, m.hadm_id, m.med_class,\n         CASE \n           WHEN m.charttime BETWEEN s.admit_time AND (s.admit_time + INTERVAL 12 HOUR) THEN 'Early'\n           WHEN m.charttime BETWEEN (s.discharge_time - INTERVAL 72 HOUR) AND s.discharge_time THEN 'Late'\n           ELSE 'Other'\n         END AS timing\n  FROM meds m\n  INNER JOIN stay_times s ON m.hadm_id = s.hadm_id\n  WHERE m.charttime BETWEEN s.admit_time AND s.discharge_time\n)\n\nSELECT med_class, timing, COUNT(DISTINCT hadm_id) AS num_hadm,\n       COUNT(DISTINCT hadm_id) * 1.0 / (SELECT COUNT(DISTINCT hadm_id) FROM cohort) AS rate\nFROM med_analysis\nWHERE timing IN ('Early', 'Late')\nGROUP BY med_class, timing\n\nUNION ALL\n\nSELECT 'Transition' AS med_class, \n       CONCAT(early.med_class, '->', late.med_class) AS timing,\n       COUNT(DISTINCT early.hadm_id) AS num_hadm,\n       COUNT(DISTINCT early.hadm_id) * 1.0 / (SELECT COUNT(DISTINCT hadm_id) FROM cohort) AS rate\nFROM med_analysis early\nINNER JOIN med_analysis late ON early.hadm_id = late.hadm_id\nWHERE early.timing = 'Early' AND late.timing = 'Late'\nGROUP BY early.med_class, late.med_class;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

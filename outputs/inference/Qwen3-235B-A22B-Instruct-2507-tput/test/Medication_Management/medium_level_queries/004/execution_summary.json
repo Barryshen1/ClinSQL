@@ -1,0 +1,16 @@
+{
+  "query": "Regarding my 50-year-old male inpatient: among male inpatients 45\u201355 with T2DM and heart failure, report % started on GLP\u20111 within 72h, % on GLP\u20111 in last 48h, and net change.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 45 AND 55\n),\n\ndiagnosis_filtered AS (\n  SELECT\n    di.hadm_id,\n    MAX(CASE WHEN di.icd_code LIKE 'E11%' THEN 1 ELSE 0 END) AS has_t2dm,\n    MAX(CASE WHEN di.icd_code LIKE 'I50%' THEN 1 ELSE 0 END) AS has_hf\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  GROUP BY di.hadm_id\n),\n\ncohort AS (\n  SELECT pa.*\n  FROM patient_admissions pa\n  JOIN diagnosis_filtered df\n    ON pa.hadm_id = df.hadm_id\n  WHERE df.has_t2dm = 1\n    AND df.has_hf = 1\n),\n\nglp1_drugs AS (\n  SELECT DISTINCT hadm_id,\n    starttime,\n    COALESCE(stoptime, dischtime) AS stoptime,\n    admittime,\n    dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN cohort c USING (hadm_id)\n  WHERE LOWER(drug) LIKE '%liraglutide%'\n     OR LOWER(drug) LIKE '%semaglutide%'\n     OR LOWER(drug) LIKE '%dulaglutide%'\n     OR LOWER(drug) LIKE '%exenatide%'\n     OR LOWER(drug) LIKE '%lixisenatide%'\n),\n\ncohort_with_flags AS (\n  SELECT\n    c.hadm_id,\n    -- Flag: started within 72h of admission\n    MAX(CASE WHEN g.starttime <= DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n              AND g.starttime >= c.admittime THEN 1 ELSE 0 END) AS started_early,\n    -- Flag: on GLP-1 in last 48h (overlap with [dischtime - 48h, dischtime])\n    MAX(CASE WHEN g.stoptime > DATETIME_SUB(c.dischtime, INTERVAL 48 HOUR)\n              AND g.starttime < c.dischtime THEN 1 ELSE 0 END) AS on_late\n  FROM cohort c\n  LEFT JOIN glp1_drugs g ON c.hadm_id = g.hadm_id\n  GROUP BY c.hadm_id\n)\n\nSELECT\n  100.0 * SUM(started_early) / COUNT(*) AS pct_started_early,\n  100.0 * SUM(on_late) / COUNT(*) AS pct_on_late,\n  (100.0 * SUM(on_late) / COUNT(*) - 100.0 * SUM(started_early) / COUNT(*)) AS net_change\nFROM cohort_with_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

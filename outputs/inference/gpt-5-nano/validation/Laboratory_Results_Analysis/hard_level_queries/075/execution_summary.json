@@ -1,0 +1,28 @@
+{
+  "query": "As a consultant for a 47\u2011year\u2011old man, among male inpatients aged 42\u201352 with DVT, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u226595th percentile report mortality, mean LOS, and compare critical lab rates to all inpatients.",
+  "final_sql": "WITH dvt_hadm AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS di\n    ON d.icd_code = di.icd_code\n   AND d.icd_version = di.icd_version\n  WHERE di.long_title LIKE '%venous thrombosis%'\n),\ncohort AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime,\n         p.gender, p.anchor_age,\n         a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN dvt_hadm AS dv\n    ON a.subject_id = dv.subject_id AND a.hadm_id = dv.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 42 AND 52\n),\nlab_events AS (\n  SELECT e.subject_id, e.hadm_id, e.charttime, e.valuenum,\n         e.ref_range_lower, e.ref_range_upper\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS e\n  JOIN cohort AS c\n    ON e.subject_id = c.subject_id AND e.hadm_id = c.hadm_id\n  WHERE e.charttime BETWEEN c.admittime\n                     AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n),\nlis_per_adm AS (\n  SELECT c.subject_id, c.hadm_id,\n         COUNT(*) AS total_lab,\n         SUM(CASE\n               WHEN e.valuenum IS NOT NULL\n                    AND e.ref_range_lower IS NOT NULL\n                    AND e.ref_range_upper IS NOT NULL\n                    AND (e.valuenum < e.ref_range_lower OR e.valuenum > e.ref_range_upper)\n                 THEN 1 ELSE 0\n             END) AS lis_count\n  FROM cohort c\n  LEFT JOIN lab_events e\n    ON c.subject_id = e.subject_id AND c.hadm_id = e.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n),\nlis_per_adm_with_rate AS (\n  SELECT la.subject_id, la.hadm_id, la.total_lab, la.lis_count,\n         CASE WHEN la.total_lab > 0\n              THEN CAST(la.lis_count AS FLOAT64) / la.total_lab\n              ELSE NULL\n         END AS abnormal_rate\n  FROM lis_per_adm AS la\n),\n-- 95th percentile of LIS (calculated without WITHIN GROUP)\np95 AS (\n  SELECT lis_count AS p95_lis\n  FROM (\n    SELECT lis_count,\n           ROW_NUMBER() OVER (ORDER BY lis_count) AS rn,\n           COUNT(*) OVER () AS total\n    FROM lis_per_adm\n  )\n  WHERE rn = CAST(CEILING(0.95 * total) AS INT64)\n  LIMIT 1\n),\nhigh_lis AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime,\n         l.total_lab, l.lis_count, l.abnormal_rate,\n         (TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0) AS los_days,\n         CASE WHEN a.deathtime IS NOT NULL OR a.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS death_flag\n  FROM lis_per_adm_with_rate AS l\n  JOIN cohort AS a\n    ON l.subject_id = a.subject_id AND l.hadm_id = a.hadm_id\n  JOIN p95\n    ON l.lis_count >= p95.p95_lis\n),\nsummary AS (\n  SELECT\n     CAST(AVG(death_flag) * 100 AS FLOAT64) AS mortality_rate_high_lis_pct,\n     AVG(los_days) AS mean_los_days_high_lis,\n     AVG(abnormal_rate) AS mean_abnormal_rate_high_lis\n  FROM high_lis\n),\nall_inpatients_summary AS (\n  SELECT AVG(abnormal_rate) AS mean_abnormal_rate_all_inpatients\n  FROM lis_per_adm_with_rate\n)\n\nSELECT '95th_percentile_of_LIS' AS metric, p95_lis AS value\nFROM p95\nUNION ALL\nSELECT 'Mortality_rate_high_LIS_pct', mortality_rate_high_lis_pct\nFROM summary\nUNION ALL\nSELECT 'Mean_LOS_high_LIS_days', mean_los_days_high_lis\nFROM summary\nUNION ALL\nSELECT 'Mean_Abnormal_rate_high_LIS', mean_abnormal_rate_high_lis\nFROM summary\nUNION ALL\nSELECT 'Mean_Abnormal_rate_all_inpatients', mean_abnormal_rate_all_inpatients\nFROM all_inpatients_summary\nUNION ALL\nSELECT 'High_LIS_admission_count', COUNT(*) FROM high_lis\nUNION ALL\nSELECT 'Total_admissions_in_cohort', COUNT(*) FROM lis_per_adm_with_rate\nORDER BY metric;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [61:37]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [61:37]\n\nLocation: US\nJob ID: 4bf8ba79-5909-4c8c-9793-c5f4552ac455\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hospital_expire_flag not found inside a at [68:49]; reason: invalidQuery, location: query, message: Name hospital_expire_flag not found inside a at [68:49]\n\nLocation: US\nJob ID: 877114d4-9896-49ad-b0df-39b067f8cca5\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      USING(subject_id)\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n    -- hospital stay >= 48 hours\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 48\n),\n\nglp1_events AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    -- flag if any GLP-1 in first 48h\n    MAX(CASE\n      WHEN pr.starttime BETWEEN c.admittime \n                            AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n      THEN 1 ELSE 0\n    END) AS first48_flag,\n    -- flag if any GLP-1 in last 12h\n    MAX(CASE\n      WHEN pr.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR)\n                            AND c.dischtime\n      THEN 1 ELSE 0\n    END) AS last12_flag\n  FROM\n    cohort AS c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n      ON pr.hadm_id = c.hadm_id\n      AND pr.subject_id = c.subject_id\n      -- injectable GLP-1 agonists\n      AND LOWER(pr.drug) IN (\n        'liraglutide', 'exenatide', 'dulaglutide',\n        'semaglutide', 'albiglutide', 'lixisenatide'\n      )\n      -- ensure injectable route\n      AND (\n        LOWER(pr.route) LIKE '%subcut%' OR\n        LOWER(pr.route) LIKE '%inject%'\n      )\n  GROUP BY\n    c.subject_id,\n    c.hadm_id\n)\n\nSELECT\n  COUNT(1) AS total_patients,\n  100.0 * SUM(first48_flag) / COUNT(1) AS pct_first48,\n  100.0 * SUM(last12_flag) / COUNT(1) AS pct_last12,\n  100.0 * ABS( SUM(first48_flag) - SUM(last12_flag) ) / COUNT(1)\n    AS absolute_pp_difference\nFROM\n  glp1_events;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

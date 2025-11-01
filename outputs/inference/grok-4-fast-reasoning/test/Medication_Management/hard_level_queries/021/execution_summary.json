@@ -1,0 +1,22 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    p.anchor_age, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 41 AND 51\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = a.subject_id \n        AND d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '288.0%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'D70%')\n        )\n    )\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = a.subject_id \n        AND d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '780.6%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'R50%')\n        )\n    )\n),\nmed_counts AS (\n  SELECT \n    c.hadm_id, \n    COUNT(DISTINCT pres.drug) AS unique_meds\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres \n    ON c.hadm_id = pres.hadm_id\n    AND pres.starttime >= c.admittime\n    AND pres.starttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.hadm_id\n),\ncohort_with_meds AS (\n  SELECT \n    c.*, \n    COALESCE(m.unique_meds, 0) AS unique_meds\n  FROM cohort c\n  LEFT JOIN med_counts m \n    ON c.hadm_id = m.hadm_id\n),\ntertiles AS (\n  SELECT *, \n    NTILE(3) OVER (ORDER BY unique_meds ASC) AS tertile\n  FROM cohort_with_meds\n),\nreadmits AS (\n  SELECT \n    t.*, \n    CASE \n      WHEN t.hospital_expire_flag = 0 \n        AND EXISTS (\n          SELECT 1 \n          FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n          WHERE a2.subject_id = t.subject_id \n            AND a2.hadm_id != t.hadm_id\n            AND a2.admittime > t.dischtime\n            AND a2.admittime <= TIMESTAMP_ADD(t.dischtime, INTERVAL 30 DAY)\n        ) \n      THEN 1 \n      ELSE 0 \n    END AS readmit_flag\n  FROM tertiles t\n)\nSELECT \n  tertile,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(los_days), 2) AS avg_los_days,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct,\n  ROUND(\n    SAFE_DIVIDE(\n      SUM(readmit_flag) * 100.0, \n      SUM(CASE WHEN hospital_expire_flag = 0 THEN 1 ELSE 0 END)\n    ), 2\n  ) AS readmission_30d_pct\nFROM readmits\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [21:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [21:12]\n\nLocation: US\nJob ID: 6dafa93d-c792-447a-9a4a-d0f234a97710\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

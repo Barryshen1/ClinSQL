@@ -1,0 +1,1 @@
+SELECT male_icu_patients_73_83.subject_id, male_icu_patients_73_83.gender, male_icu_patients_73_83.stay_id, male_icu_patients_73_83.avg_spo2, percent_rank() OVER (ORDER BY male_icu_patients_73_83.avg_spo2) AS percentile_rank FROM male_icu_patients_73_83 WHERE male_icu_patients_73_83.avg_spo2 >= 92 ORDER BY male_icu_patients_73_83.avg_spo2 NULLS LAST;

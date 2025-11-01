@@ -1,0 +1,1 @@
+Note: The `apachepatientresult` table is part of the MIMIC-IV ICU module but was not listed in the provided schema. If it is not available, this query will fail. In that case, a different risk score or a custom score would need to be used, which is beyond the scope of this minimal fix. The query now uses valid BigQuery SQL and the correct datasets.;

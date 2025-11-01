@@ -1,0 +1,23 @@
+{
+  "query": "I have an 85-year-old woman with hemorrhagic stroke. Among women aged 80-90 with hemorrhagic stroke, what are mean, min and max ultrasounds per admission for 1-4 versus 5-7 day stays?",
+  "final_sql": "WITH \n-- Get admissions for women 80-90\nfiltered_admissions AS (\n    SELECT \n        a.hadm_id,\n        p.gender,\n        -- Compute age at admission\n        p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n        AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 80 AND 90\n),\n-- Filter for hemorrhagic stroke diagnoses\nstroke_admissions AS (\n    SELECT \n        fa.hadm_id\n    FROM filtered_admissions fa\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON fa.hadm_id = di.hadm_id\n    WHERE \n        (di.icd_version = 9 AND di.icd_code IN ('430','431','432'))\n        OR \n        (di.icd_version = 10 AND (di.icd_code LIKE 'I60%' OR di.icd_code LIKE 'I61%' OR di.icd_code LIKE 'I62%'))\n    GROUP BY fa.hadm_id\n),\n-- Count ultrasound procedures per admission\nultrasound_counts AS (\n    SELECT \n        h.hadm_id,\n        COUNT(*) AS ultrasound_count\n    FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n        ON h.hcpcs_cd = d.code\n    WHERE LOWER(d.long_description) LIKE '%ultrasound%'\n    GROUP BY h.hadm_id\n),\n-- Get ICU stay information for these admissions\nicu_stays AS (\n    SELECT \n        i.hadm_id,\n        i.los,\n        CASE WHEN i.los >= 1 AND i.los < 5 THEN 1 ELSE 0 END AS is_short_stay,\n        CASE WHEN i.los >= 5 AND i.los <= 7 THEN 1 ELSE 0 END AS is_medium_stay\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    WHERE i.hadm_id IN (SELECT hadm_id FROM stroke_admissions)\n),\n-- Aggregate ICU stay flags per admission\nadmission_groups AS (\n    SELECT \n        hadm_id,\n        MAX(is_short_stay) AS has_short_stay,\n        MAX(is_medium_stay) AS has_medium_stay\n    FROM icu_stays\n    GROUP BY hadm_id\n),\n-- Combine with ultrasound counts\nbase_data AS (\n    SELECT \n        ag.hadm_id,\n        COALESCE(uc.ultrasound_count, 0) AS ultrasound_count,\n        ag.has_short_stay,\n        ag.has_medium_stay\n    FROM admission_groups ag\n    LEFT JOIN ultrasound_counts uc\n        ON ag.hadm_id = uc.hadm_id\n)\n\n-- Calculate statistics for each group\nSELECT \n    '1-4 days' AS stay_group,\n    AVG(ultrasound_count) AS mean_ultrasound,\n    MIN(ultrasound_count) AS min_ultrasound,\n    MAX(ultrasound_count) AS max_ultrasound\nFROM base_data\nWHERE has_short_stay = 1\nUNION ALL\nSELECT \n    '5-7 days' AS stay_group,\n    AVG(ultrasound_count) AS mean_ultrasound,\n    MIN(ultrasound_count) AS min_ultrasound,\n    MAX(ultrasound_count) AS max_ultrasound\nFROM base_data\nWHERE has_medium_stay = 1;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:18]\n\nLocation: US\nJob ID: def42436-cc8a-4bab-ae79-8222cb53450a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

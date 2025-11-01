@@ -1,0 +1,16 @@
+{
+  "query": "I have a 78-year-old man admitted with ACS. Among male patients aged 73\u201383 with elevated initial Troponin T, please summarize cohort statistics including average length of stay and in-hospital mortality.",
+  "final_sql": "WITH troponin_t_items AS (\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE REGEXP_CONTAINS(LOWER(label), r'troponin[\\s\\-_]*t')\n),\n\ninitial_troponin AS (\n  -- earliest troponin T lab during the admission\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.itemid,\n    l.charttime,\n    l.valuenum,\n    l.valueuom,\n    l.flag,\n    l.ref_range_upper,\n    ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN troponin_t_items d ON l.itemid = d.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON l.hadm_id = a.hadm_id\n   AND l.charttime >= a.admittime\n   AND l.charttime <= a.dischtime\n),\n\ninitial_troponin_first AS (\n  SELECT subject_id, hadm_id, charttime, valuenum, valueuom, flag, ref_range_upper\n  FROM initial_troponin\n  WHERE rn = 1\n),\n\nelevated_initial_troponin AS (\n  -- heuristic: elevated if flagged high, or numeric > ref_range_upper, or numeric > 0.01 as a fallback\n  SELECT hadm_id, subject_id, charttime, valuenum, valueuom, flag, ref_range_upper\n  FROM initial_troponin_first\n  WHERE valuenum IS NOT NULL\n    AND (\n      flag = 'H'\n      OR (ref_range_upper IS NOT NULL AND valuenum > ref_range_upper)\n      OR valuenum > 0.01\n    )\n),\n\nacs_admissions AS (\n  -- admissions with diagnoses matching ACS / MI / unstable angina terms\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE (\n    (d.long_title IS NOT NULL AND (\n       LOWER(d.long_title) LIKE '%myocardial%'\n    OR LOWER(d.long_title) LIKE '%acute coronary syndrome%'\n    OR LOWER(d.long_title) LIKE '%unstable angina%'\n    ))\n  )\n),\n\nfinal_cohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN elevated_initial_troponin t\n    ON a.hadm_id = t.hadm_id\n  JOIN acs_admissions acs\n    ON a.hadm_id = acs.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 73 AND 83\n)\n\nSELECT\n  COUNT(*) AS n_admissions,\n  COUNT(DISTINCT subject_id) AS n_patients,\n  ROUND(AVG(los_days), 2) AS avg_los_days,\n  SUM(hospital_expire_flag) AS n_in_hospital_deaths,\n  ROUND(100.0 * SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)), 2) AS in_hospital_mortality_percent\nFROM final_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

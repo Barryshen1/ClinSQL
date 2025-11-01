@@ -1,0 +1,22 @@
+{
+  "query": "For a 55-year-old male: among male patients 50\u201360 admitted with chest pain or AMI whose initial hs\u2011TnT > ULN (0.014 ng/mL), report patient and admission counts, mean, median, IQR.",
+  "final_sql": "WITH chest_pain_ami_admissions AS (\n  -- Get admissions for males age 50-60 with chest pain or AMI\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    JOIN physionet-data.mimiciv_3_1_hosp.patients p\n      ON a.subject_id = p.subject_id\n    JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      ON a.hadm_id = d.hadm_id\n    JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n      ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND (\n      -- Chest pain ICD codes\n      (d.icd_version = 9 AND d.icd_code IN ('78650','78651','78652','78659'))\n      OR (d.icd_version = 10 AND d.icd_code IN ('R079','R072','R071','R0789'))\n      -- AMI ICD codes\n      OR (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'))\n    )\n),\n\nhs_tnt_itemids AS (\n  -- Get itemid for hs-TnT\n  SELECT itemid\n  FROM physionet-data.mimiciv_3_1_hosp.d_labitems\n  WHERE LOWER(label) LIKE '%troponin%' AND LOWER(label) LIKE '%high sensitivity%'\n),\n\ninitial_hs_tnt AS (\n  -- For each admission, get the first hs-TnT value\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum\n  FROM\n    physionet-data.mimiciv_3_1_hosp.labevents l\n    JOIN hs_tnt_itemids tnt ON l.itemid = tnt.itemid\n    JOIN chest_pain_ami_admissions cpa ON l.subject_id = cpa.subject_id AND l.hadm_id = cpa.hadm_id\n  WHERE\n    l.valuenum IS NOT NULL\n),\nfirst_hs_tnt_per_admission AS (\n  -- Get the earliest hs-TnT per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    charttime,\n    valuenum AS initial_hs_tnt\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      charttime,\n      valuenum,\n      ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n    FROM initial_hs_tnt\n  )\n  WHERE rn = 1\n    AND valuenum > 0.014 -- ULN\n)\n\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(DISTINCT hadm_id) AS admission_count,\n  ROUND(AVG(initial_hs_tnt), 4) AS mean_initial_hs_tnt,\n  ROUND(APPROX_QUANTILES(initial_hs_tnt, 2)[OFFSET(1)], 4) AS median_initial_hs_tnt,\n  ROUND(APPROX_QUANTILES(initial_hs_tnt, 4)[OFFSET(1)], 4) AS hs_tnt_25th_percentile,\n  ROUND(APPROX_QUANTILES(initial_hs_tnt, 4)[OFFSET(3)], 4) AS hs_tnt_75th_percentile,\n  ROUND(APPROX_QUANTILES(initial_hs_tnt, 4)[OFFSET(3)] - APPROX_QUANTILES(initial_hs_tnt, 4)[OFFSET(1)], 4) AS hs_tnt_IQR\nFROM first_hs_tnt_per_admission;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: initial_hs_tnt at [65:9]; reason: invalidQuery, location: query, message: Unrecognized name: initial_hs_tnt at [65:9]\n\nLocation: US\nJob ID: 10cb001b-3d99-4f87-9fd6-5eacf72fb6f8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

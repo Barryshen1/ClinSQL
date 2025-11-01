@@ -1,0 +1,23 @@
+{
+  "query": "I have a 48\u2011year\u2011old man. Among male patients aged 43\u201353 admitted with ACS and initial hs\u2011Troponin T >99th percentile (ULN), what are the median and IQR of initial values in ng/mL?",
+  "final_sql": "WITH patient_age AS (\n     SELECT \n        p.subject_id,\n        a.hadm_id,\n        a.admittime,\n        p.anchor_year,\n        p.anchor_age,\n        EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n     FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n     INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n        ON p.subject_id = a.subject_id\n     WHERE p.gender = 'M'\n   ),\n   acs_admissions AS (\n     SELECT DISTINCT\n        hadm_id\n     FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n     WHERE d.icd_version = 10\n        AND (d.icd_code LIKE 'I20%' OR d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I24.0%')\n   ),\n   troponin_labs AS (\n     SELECT \n        l.subject_id,\n        l.hadm_id,\n        l.labevent_id,\n        l.charttime,\n        l.valuenum,\n        l.valueuom,\n        l.ref_range_upper,\n        d.label\n     FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n     INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d \n        ON l.itemid = d.itemid\n     WHERE (d.label LIKE '%hs-Troponin T%')\n        AND l.valuenum IS NOT NULL\n   ),\n   first_troponin_per_admission AS (\n     SELECT \n        subject_id,\n        hadm_id,\n        charttime,\n        valuenum,\n        valueuom,\n        ref_range_upper\n     FROM (\n        SELECT \n           t.*,\n           ROW_NUMBER() OVER (PARTITION BY t.subject_id, t.hadm_id ORDER BY t.charttime, t.labevent_id) AS rn\n        FROM troponin_labs t\n     ) \n     WHERE rn = 1\n   ),\n   troponin_values AS (\n     SELECT \n        subject_id,\n        hadm_id,\n        valuenum,\n        valueuom,\n        ref_range_upper,\n        -- Convert value to ng/mL\n        CASE \n            WHEN valueuom = 'ng/mL' THEN valuenum\n            WHEN valueuom = 'ng/L' THEN valuenum / 1000.0\n            ELSE NULL \n        END AS value_ngml,\n        -- Convert ULN to ng/mL if available, else use fixed 0.014 ng/mL\n        CASE \n            WHEN ref_range_upper IS NOT NULL THEN \n                CASE \n                    WHEN valueuom = 'ng/mL' THEN ref_range_upper\n                    WHEN valueuom = 'ng/L' THEN ref_range_upper / 1000.0\n                    ELSE NULL \n                END\n            ELSE 0.014 \n        END AS uln_ngml\n     FROM first_troponin_per_admission\n   ),\n   qualifying_admissions AS (\n     SELECT \n        pa.subject_id,\n        pa.hadm_id,\n        tv.value_ngml\n     FROM patient_age pa\n     INNER JOIN acs_admissions a \n        ON pa.hadm_id = a.hadm_id\n     INNER JOIN troponin_values tv \n        ON pa.hadm_id = tv.hadm_id\n     WHERE pa.age_at_admission BETWEEN 43 AND 53\n        AND tv.value_ngml > tv.uln_ngml\n   )\n   SELECT \n      APPROX_QUANTILES(value_ngml, 1000)[OFFSET(500)] AS median,\n      APPROX_QUANTILES(value_ngml, 1000)[OFFSET(750)] - APPROX_QUANTILES(value_ngml, 1000)[OFFSET(250)] AS iqr\n   FROM qualifying_admissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name loinc_code not found inside d at [35:49]; reason: invalidQuery, location: query, message: Name loinc_code not found inside d at [35:49]\n\nLocation: US\nJob ID: 73d30d81-6f0c-4af0-a0d4-a922943e1823\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 53-year-old male with sepsis (no shock), among men 48\u201358, give patient counts and mean ultrasounds/admission by LOS (1\u20134 vs 5\u20138 days), stratified by ICU vs no ICU.",
+  "final_sql": "WITH\n  -- Step 1: Define the base patient cohort (males, aged 48-58)\n  patient_base AS (\n    SELECT\n      subject_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE\n      gender = 'M'\n      AND anchor_age BETWEEN 48 AND 58\n  ),\n  -- Step 2: Identify admissions with a sepsis diagnosis\n  sepsis_admissions AS (\n    SELECT DISTINCT\n      hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n      icd_code IN (\n        SELECT\n          icd_code\n        FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n        WHERE\n          LOWER(long_title) LIKE '%sepsis%'\n      )\n  ),\n  -- Step 3: Identify admissions with a septic shock diagnosis (for exclusion)\n  shock_admissions AS (\n    SELECT DISTINCT\n      hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n      icd_code IN (\n        SELECT\n          icd_code\n        FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n        WHERE\n          LOWER(long_title) LIKE '%septic shock%'\n      )\n  ),\n  -- Step 4: Count ultrasound procedures per admission\n  ultrasound_counts AS (\n    SELECT\n      p.hadm_id,\n      COUNT(p.icd_code) AS ultrasound_count\n    FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS p\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` AS d\n      ON p.icd_code = d.icd_code\n      AND p.icd_version = d.icd_version\n    WHERE\n      LOWER(d.long_title) LIKE '%ultrasound%' OR LOWER(d.long_title) LIKE '%echocardiogram%'\n    GROUP BY\n      p.hadm_id\n  ),\n  -- Step 5: Identify all admissions that include an ICU stay\n  icu_admissions AS (\n    SELECT DISTINCT\n      hadm_id\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ),\n  -- Step 6: Assemble the final cohort by combining the above criteria\n  final_cohort AS (\n    SELECT\n      adm.subject_id,\n      adm.hadm_id,\n      CASE\n        WHEN DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 4\n          THEN '1-4 days'\n        ELSE '5-8 days'\n      END AS los_group,\n      CASE\n        WHEN icu.hadm_id IS NOT NULL\n          THEN 'ICU'\n        ELSE 'No ICU'\n      END AS icu_status,\n      COALESCE(uc.ultrasound_count, 0) AS num_ultrasounds\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    -- Join to get ultrasound counts\n    LEFT JOIN\n      ultrasound_counts AS uc\n      ON adm.hadm_id = uc.hadm_id\n    -- Join to check for an ICU stay\n    LEFT JOIN\n      icu_admissions AS icu\n      ON adm.hadm_id = icu.hadm_id\n    -- Filter the admissions based on the defined criteria\n    WHERE\n      adm.subject_id IN (\n        SELECT subject_id FROM patient_base\n      )\n      AND adm.hadm_id IN (\n        SELECT hadm_id FROM sepsis_admissions\n      )\n      AND adm.hadm_id NOT IN (\n        SELECT hadm_id FROM shock_admissions\n      )\n      AND DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 8\n  )\n-- Step 7: Aggregate the results to get the final output\nSELECT\n  icu_status,\n  los_group,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  AVG(num_ultrasounds) AS mean_ultrasounds_per_admission\nFROM final_cohort\nGROUP BY\n  icu_status,\n  los_group\nORDER BY\n  icu_status DESC,\n  los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword ALL at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword ALL at [1:6]\n\nLocation: US\nJob ID: 2145a475-59b0-4458-b2e6-f8ba4266b0a3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

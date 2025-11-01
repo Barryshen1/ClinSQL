@@ -1,0 +1,16 @@
+{
+  "query": "I have an 81-year-old man. Among male ICU patients aged 76\u201386 with acute myocardial infarction, stratified by quartiles of distinct procedures in the first 24 hours, report mean procedure count, mean ICU LOS, and hospital mortality (%) for each quartile.",
+  "final_sql": "WITH amicu_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_icu.icustays i\n    ON p.subject_id = i.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON i.hadm_id = a.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON p.subject_id = d.subject_id AND i.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND (\n      d.icd_code LIKE 'I21%'   -- ICD-10 AMI codes\n      OR d.icd_code LIKE 'I22%'\n      OR d.icd_code LIKE 'I23%'\n      OR d.icd_code LIKE '410%' -- ICD-9 AMI codes\n    )\n),\nproc_count_24h AS (\n  SELECT\n    ac.stay_id,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedure_count\n  FROM amicu_patients ac\n  INNER JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON ac.stay_id = pe.stay_id\n  WHERE pe.starttime >= ac.intime\n    AND pe.starttime < ac.intime + INTERVAL '24' HOUR\n  GROUP BY ac.stay_id\n),\nquartiles AS (\n  SELECT\n    ac.subject_id,\n    ac.stay_id,\n    ac.los,\n    ac.hospital_expire_flag,\n    COALESCE(pc.distinct_procedure_count, 0) AS distinct_procedure_count,\n    NTILE(4) OVER (ORDER BY COALESCE(pc.distinct_procedure_count, 0)) AS procedure_quartile\n  FROM amicu_patients ac\n  LEFT JOIN proc_count_24h pc\n    ON ac.stay_id = pc.stay_id\n)\nSELECT\n  procedure_quartile,\n  AVG(distinct_procedure_count) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS hospital_mortality_percent\nFROM quartiles\nGROUP BY procedure_quartile\nORDER BY procedure_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

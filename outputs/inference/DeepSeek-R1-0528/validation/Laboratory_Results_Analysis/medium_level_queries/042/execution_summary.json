@@ -1,0 +1,16 @@
+{
+  "query": "I have an 89-year-old female patient. Among female patients aged 84\u201394 admitted with chest pain, what's the distribution of first troponin T (normal/borderline/elevated) with counts, percentages, and in-hospital mortality?",
+  "final_sql": "WITH chest_pain_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%chest pain%'\n), \ntroponin_t_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\ncohort AS (\n  SELECT \n    p.subject_id, \n    p.anchor_age,\n    a.hadm_id,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F' \n    AND p.anchor_age BETWEEN 84 AND 94\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      INNER JOIN chest_pain_codes cpc\n        ON di.icd_code = cpc.icd_code\n        AND di.icd_version = cpc.icd_version\n    )\n),\nfirst_troponin_t AS (\n  SELECT \n    c.hadm_id,\n    c.hospital_expire_flag,\n    le.flag,\n    ROW_NUMBER() OVER (\n      PARTITION BY c.hadm_id \n      ORDER BY le.charttime\n    ) AS troponin_priority\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.hadm_id = le.hadm_id\n    AND c.subject_id = le.subject_id\n  INNER JOIN troponin_t_items tti\n    ON le.itemid = tti.itemid\n),\nclassified_troponin AS (\n  SELECT \n    hadm_id,\n    hospital_expire_flag,\n    CASE \n      WHEN flag IN ('Normal', 'Low') THEN 'normal'\n      WHEN flag = 'Borderline' THEN 'borderline'\n      WHEN flag IN ('High', 'Abnormal') THEN 'elevated'\n      ELSE 'unclassified'\n    END AS troponin_category\n  FROM first_troponin_t\n  WHERE troponin_priority = 1  -- Keep only the first troponin test\n),\naggregated AS (\n  SELECT \n    troponin_category,\n    COUNT(*) AS count,\n    SUM(hospital_expire_flag) AS in_hospital_deaths\n  FROM classified_troponin\n  WHERE troponin_category != 'unclassified'  -- Exclude unclassified results\n  GROUP BY troponin_category\n)\nSELECT \n  troponin_category,\n  count,\n  ROUND(count * 100.0 / SUM(count) OVER (), 2) AS percentage,\n  in_hospital_deaths,\n  ROUND(in_hospital_deaths * 100.0 / count, 2) AS mortality_percentage\nFROM aggregated\nORDER BY \n  CASE troponin_category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'elevated' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

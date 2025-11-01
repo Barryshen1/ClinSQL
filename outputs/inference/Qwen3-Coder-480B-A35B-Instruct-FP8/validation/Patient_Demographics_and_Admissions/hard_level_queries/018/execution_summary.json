@@ -1,0 +1,22 @@
+{
+  "query": "I have a 63-year-old female. Among female Medicare patients aged 58\u201368 admitted via the ED with a principal femoral neck fracture, what is the 30-day readmission rate, median index LOS for readmitted versus non\u2011readmitted, and percent of initial stays >8 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_location,\n    a.insurance,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND a.insurance = 'Medicare'\n    AND a.admission_location LIKE '%EMERGENCY%'\n    AND d.seq_num = 1\n    AND (\n      LOWER(dd.long_title) LIKE '%femoral neck fracture%'\n      OR d.icd_code IN ('S72001A', 'S72002A', 'S72009A')\n    )\n    AND a.hospital_expire_flag = 0\n),\n\nindex_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n  FROM cohort\n),\n\nindex_only AS (\n  SELECT *\n  FROM index_admissions\n  WHERE rn = 1\n),\n\nreadmissions AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id AS index_hadm_id,\n    i.los_days AS index_los,\n    CASE WHEN r.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS is_readmitted\n  FROM index_only i\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` r\n    ON i.subject_id = r.subject_id\n    AND r.admittime > i.dischtime\n    AND DATETIME_DIFF(r.admittime, i.dischtime, DAY) <= 30\n    AND r.hospital_expire_flag = 0\n    AND r.hadm_id <> i.hadm_id\n)\n\nSELECT\n  AVG(is_readmitted) AS readmission_rate,\n  APPROX_QUANTILES(CASE WHEN is_readmitted = 1 THEN index_los ELSE NULL END, 2)[OFFSET(1)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN is_readmitted = 0 THEN index_los ELSE NULL END, 2)[OFFSET(1)] AS median_los_not_readmitted,\n  AVG(CASE WHEN index_los > 8 THEN 1 ELSE 0 END) AS pct_stays_over_8_days\nFROM readmissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"admissions\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: admissions, message: Table \"admissions\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: 0be6368e-c8dc-4a6d-b9fb-0220f3af7274\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

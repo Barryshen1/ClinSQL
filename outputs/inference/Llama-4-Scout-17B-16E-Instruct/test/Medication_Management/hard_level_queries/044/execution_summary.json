@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH \n-- Identify patients with PE\npe_patients AS (\n  SELECT DISTINCT \n    d.subject_id, \n    d.hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE \n    d.icd_code LIKE 'I26%' \n    AND d.icd_version = 9\n),\n\n-- Filter patients by age and gender\nfiltered_patients AS (\n  SELECT \n    p.subject_id, \n    p.anchor_age, \n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE \n    p.gender = 'F' \n    AND p.anchor_age BETWEEN 64 AND 74\n),\n\n-- Combine PE patients with age and gender filter\npe_filtered_patients AS (\n  SELECT \n    pp.subject_id, \n    pp.hadm_id, \n    fp.anchor_age, \n    fp.gender\n  FROM \n    pe_patients pp\n  JOIN \n    filtered_patients fp \n      ON pp.subject_id = fp.subject_id\n),\n\n-- Medication administration within first 24 hours\nmedications AS (\n  SELECT \n    pfp.hadm_id, \n    COUNT(DISTINCT p.drug) AS distinct_meds\n  FROM \n    pe_filtered_patients pfp\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p \n      ON pfp.hadm_id = p.hadm_id\n  WHERE \n    p.starttime BETWEEN (SELECT admittime FROM `physionet-data.mimiciv_3_1_hosp.admissions` a WHERE a.hadm_id = pfp.hadm_id)\n    AND TIMESTAMP_ADD((SELECT admittime FROM `physionet-data.mimiciv_3_1_hosp.admissions` a WHERE a.hadm_id = pfp.hadm_id), INTERVAL 1 DAY)\n  GROUP BY \n    pfp.hadm_id\n),\n\n-- Calculate tertiles of medication complexity\nmedication_tertiles AS (\n  SELECT \n    hadm_id, \n    distinct_meds,\n    NTILE(3) OVER (ORDER BY distinct_meds) AS med_tertile\n  FROM \n    medications\n),\n\n-- Calculate LOS, mortality, and 30-day readmission\noutcomes AS (\n  SELECT \n    mt.hadm_id, \n    mt.med_tertile,\n    mt.distinct_meds,\n    a.dischtime - a.admittime AS los,\n    CASE \n      WHEN a.hospital_expire_flag = 1 THEN 1 \n      ELSE 0 \n    END AS mortality,\n    CASE \n      WHEN EXISTS (\n        SELECT \n          1 \n        FROM \n          `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE \n          a2.subject_id = a.subject_id \n          AND a2.admittime BETWEEN a.dischtime + INTERVAL 1 DAY \n          AND a.dischtime + INTERVAL 31 DAY\n      ) THEN 1 \n      ELSE 0 \n    END AS readmitted\n  FROM \n    medication_tertiles mt\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON mt.hadm_id = a.hadm_id\n)\n\n-- Final aggregation\nSELECT \n  med_tertile,\n  COUNT(DISTINCT hadm_id) AS admissions,\n  MIN(distinct_meds) AS min_meds,\n  MAX(distinct_meds) AS max_meds,\n  AVG(los) AS avg_los,\n  SUM(mortality) / COUNT(DISTINCT hadm_id) AS mortality_rate,\n  SUM(readmitted) / COUNT(DISTINCT hadm_id) AS readmission_rate\nFROM \n  outcomes\nGROUP BY \n  med_tertile\nORDER BY \n  med_tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside pfp at [31:9]; reason: invalidQuery, location: query, message: Name hadm_id not found inside pfp at [31:9]\n\nLocation: US\nJob ID: f0d129ad-6961-43d2-8a11-846ebf907840\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [76:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [76:7]\n\nLocation: US\nJob ID: 49bf5a8d-4de8-49ed-b509-3b6c1542350d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I’m evaluating a 73‑year‑old woman with multi‑trauma. For female inpatients 68–78 with multi‑trauma, report first‑24h medication complexity quartiles, average complexity percentile, LOS and mortality for those with serotonergic interaction risk versus other multi‑trauma patients, and LOS/mortality for top quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.admission_type\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND a.admission_type = 'trauma'\n),\n\nprescriptions_24h AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    p.drug,\n    p.starttime\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n  WHERE\n    p.starttime BETWEEN c.admittime AND c.admittime + INTERVAL '24' HOUR\n),\n\nmedication_complexity AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    COUNT(DISTINCT drug) AS complexity_count,\n    MAX(CASE WHEN drug IN (\n      'sertraline', 'fluoxetine', 'citalopram', 'escitalopram', 'paroxetine',\n      'venlafaxine', 'duloxetine', 'clomipramine', 'trazodone', 'mirtazapine',\n      'tramadol', 'fentanyl', 'meperidine', 'methadone', 'dextromethorphan',\n      'linezolid', 'methylene blue'\n    ) THEN 1 ELSE 0 END) AS serotonergic_risk\n  FROM\n    prescriptions_24h\n  GROUP BY\n    subject_id, hadm_id\n),\n\ncomplexity_with_quartiles AS (\n  SELECT\n    mc.subject_id,\n    mc.hadm_id,\n    mc.complexity_count,\n    mc.serotonergic_risk,\n    EXTRACT(DAY FROM (c.dischtime - c.admittime)) AS los_days,\n    c.hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY mc.complexity_count) AS complexity_quartile,\n    PERCENT_RANK() OVER (ORDER BY mc.complexity_count) AS complexity_percentile\n  FROM\n    medication_complexity mc\n  JOIN\n    cohort c\n    ON mc.subject_id = c.subject_id AND mc.hadm_id = c.hadm_id\n)\n\nSELECT\n  'serotonergic' AS group_type,\n  AVG(complexity_count) AS avg_complexity,\n  AVG(complexity_percentile) AS avg_complexity_percentile,\n  AVG(los_days) AS avg_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM\n  complexity_with_quartiles\nWHERE\n  serotonergic_risk = 1\n\nUNION ALL\n\nSELECT\n  'non-serotonergic' AS group_type,\n  AVG(complexity_count) AS avg_complexity,\n  AVG(complexity_percentile) AS avg_complexity_percentile,\n  AVG(los_days) AS avg_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM\n  complexity_with_quartiles\nWHERE\n  serotonergic_risk = 0\n\nUNION ALL\n\nSELECT\n  'top_quartile' AS group_type,\n  NULL AS avg_complexity,\n  NULL AS avg_complexity_percentile,\n  AVG(los_days) AS avg_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM\n  complexity_with_quartiles\nWHERE\n  complexity_quartile = 4;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "qwen3-next-80b-a3b-thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "query": "For my 80-year-old female inpatient: among women aged 75\u201385 with diabetes and acute heart failure (admissions \u226536h), what percent had injectable GLP\u20111s started in first 24h versus final 12h? Report percentages only.",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT \n    p.subject_id,  -- Fixed: qualified with table alias to resolve ambiguity\n    anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F'\n    AND anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) BETWEEN 75 AND 85\n),\n\nsufficient_duration AS (\n  SELECT \n    hadm_id,\n    admittime,\n    dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions\n  WHERE \n    TIMESTAMP_DIFF(dischtime, admittime, HOUR) >= 36\n),\n\ndiabetes_diagnoses AS (\n  SELECT DISTINCT\n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '250%')\n    OR (icd_version = 10 AND (\n      icd_code LIKE 'E08%' OR \n      icd_code LIKE 'E09%' OR \n      icd_code LIKE 'E10%' OR \n      icd_code LIKE 'E11%' OR \n      icd_code LIKE 'E13%' OR \n      icd_code LIKE 'E14%'\n    ))\n),\n\nacute_heart_failure_diagnoses AS (\n  SELECT DISTINCT\n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n  WHERE \n    icd_version = 10 AND \n    icd_code IN ('I5021', 'I5022', 'I5023', 'I5031', 'I5032', 'I5033', 'I5041', 'I50811')\n),\n\nbase_population AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN eligible_patients ep\n    ON a.subject_id = ep.subject_id\n  INNER JOIN sufficient_duration sd\n    ON a.hadm_id = sd.hadm_id\n  INNER JOIN diabetes_diagnoses dd\n    ON a.hadm_id = dd.hadm_id\n  INNER JOIN acute_heart_failure_diagnoses ahf\n    ON a.hadm_id = ahf.hadm_id\n),\n\nglp1_prescriptions AS (\n  SELECT \n    p.hadm_id,\n    p.starttime,\n    a.admittime,\n    a.dischtime,\n    ROW_NUMBER() OVER (PARTITION BY p.hadm_id ORDER BY p.starttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions p\n  INNER JOIN base_population a\n    ON p.hadm_id = a.hadm_id\n  WHERE \n    (LOWER(p.drug) LIKE '%liraglutide%' OR\n     LOWER(p.drug) LIKE '%semaglutide%' OR\n     LOWER(p.drug) LIKE '%dulaglutide%' OR\n     LOWER(p.drug) LIKE '%exenatide%') AND\n    (LOWER(p.route) LIKE '%subcut%' OR \n     LOWER(p.route) = 'sc' OR\n     LOWER(p.route) LIKE '%sub q%')\n),\n\nfirst_glp1_prescription AS (\n  SELECT \n    hadm_id,\n    CASE WHEN starttime < TIMESTAMP_ADD(admittime, INTERVAL 24 HOUR) \n         THEN 1 ELSE 0 END AS first_24h_flag,\n    CASE WHEN starttime >= TIMESTAMP_SUB(dischtime, INTERVAL 12 HOUR) \n         THEN 1 ELSE 0 END AS final_12h_flag\n  FROM glp1_prescriptions\n  WHERE rn = 1\n),\n\ncounts AS (\n  SELECT \n    COUNT(*) AS total_patients,\n    SUM(COALESCE(first_24h_flag, 0)) AS first_24h_count,\n    SUM(COALESCE(final_12h_flag, 0)) AS final_12h_count\n  FROM base_population bp\n  LEFT JOIN first_glp1_prescription fgp\n    ON bp.hadm_id = fgp.hadm_id\n)\n\nSELECT \n  ROUND((first_24h_count * 100.0 / total_patients), 2) AS percent_first_24h,\n  ROUND((final_12h_count * 100.0 / total_patients), 2) AS percent_final_12h\nFROM counts;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: 4616bcf8-9896-45ea-b18e-2004643b9e6b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [3:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [3:5]\n\nLocation: US\nJob ID: 604aaf19-271c-417c-9f73-b65e9ea16b85\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

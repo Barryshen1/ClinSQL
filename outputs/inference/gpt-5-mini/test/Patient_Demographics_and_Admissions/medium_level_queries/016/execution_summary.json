@@ -1,0 +1,16 @@
+{
+  "query": "I have a 49-year-old male inpatient; among males 44\u201354 on general wards, report LOS p50/p75/p90/p95 and the percentile rank of a 7\u2011day stay, stratified by discharge home/hospice/death.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    -- LOS in fractional days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days,\n    LOWER(COALESCE(a.discharge_location, '')) AS discharge_location,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.dischtime >= a.admittime\n    -- Exclude admissions that have any ICU stay (so we focus on general-ward admissions)\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n      WHERE i.hadm_id = a.hadm_id\n    )\n)\n\nSELECT\n  discharge_dest,\n  COUNT(*) AS n_admissions,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS p50_days,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(75)], 2) AS p75_days,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(90)], 2) AS p90_days,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(95)], 2) AS p95_days,\n  -- Percentile rank of a 7-day stay: percent of admissions with LOS <= 7 days\n  ROUND(100.0 * SUM(CASE WHEN los_days <= 7 THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_rank_7day\nFROM (\n  SELECT\n    *,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'death'\n      WHEN discharge_location LIKE '%hospice%' THEN 'hospice'\n      WHEN discharge_location LIKE '%home%' THEN 'home'\n      ELSE 'other'\n    END AS discharge_dest\n  FROM cohort\n)\nWHERE discharge_dest IN ('home', 'hospice', 'death')\nGROUP BY discharge_dest\nORDER BY discharge_dest;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

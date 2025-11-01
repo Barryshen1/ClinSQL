@@ -1,0 +1,29 @@
+{
+  "query": "I'm evaluating a 94\u2011year\u2011old woman. In female inpatients aged 89\u201399 with septic shock, within the first 48 hours what are the instability score Q1, median, Q3 and IQR? Also compare abnormal lab frequency to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH septic_shock_cohort AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 89 AND 99\n    AND (\n      (di.icd_version = 9 AND di.icd_code = '785.52')\n      OR (di.icd_version = 10 AND di.icd_code = 'R65.21')\n    )\n),\nchartevents_48h AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.itemid,\n    c.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN septic_shock_cohort s\n    ON c.subject_id = s.subject_id AND c.hadm_id = s.hadm_id\n  WHERE c.charttime BETWEEN s.admittime AND DATETIME_ADD(s.admittime, INTERVAL 48 HOUR)\n    AND c.itemid IN (220210, 220050, 220739)\n),\nqsofa_flags AS (\n  SELECT \n    s.subject_id,\n    s.hadm_id,\n    MAX(CASE WHEN c.itemid = 220210 AND c.valuenum >= 22 THEN 1 ELSE 0 END) AS rr_flag,\n    MAX(CASE WHEN c.itemid = 220050 AND c.valuenum <= 100 THEN 1 ELSE 0 END) AS sbp_flag,\n    MAX(CASE WHEN c.itemid = 220739 AND c.valuenum < 15 THEN 1 ELSE 0 END) AS gcs_flag\n  FROM septic_shock_cohort s\n  LEFT JOIN chartevents_48h c\n    ON s.subject_id = c.subject_id AND s.hadm_id = c.hadm_id\n  GROUP BY s.subject_id, s.hadm_id\n),\nqsofa_scores AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    (rr_flag + sbp_flag + gcs_flag) AS qsofa_score\n  FROM qsofa_flags\n),\nlactate_septic AS (\n  SELECT \n    COUNTIF(lactate_val > 2) AS abnormal_count,\n    COUNT(*) AS total_count\n  FROM (\n    SELECT \n      s.subject_id,\n      s.hadm_id,\n      MAX(CASE WHEN le.itemid = 50813 THEN le.valuenum END) AS lactate_val\n    FROM septic_shock_cohort s\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON s.subject_id = le.subject_id AND s.hadm_id = le.hadm_id\n      AND le.charttime BETWEEN s.admittime AND DATETIME_ADD(s.admittime, INTERVAL 48 HOUR)\n    GROUP BY s.subject_id, s.hadm_id\n  ) AS subquery\n),\nlactate_general AS (\n  SELECT \n    COUNTIF(lactate_val > 2) AS abnormal_count,\n    COUNT(*) AS total_count\n  FROM (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      MAX(CASE WHEN le.itemid = 50813 THEN le.valuenum END) AS lactate_val\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON a.subject_id = le.subject_id AND a.hadm_id = le.hadm_id\n      AND le.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 48 HOUR)\n    GROUP BY a.subject_id, a.hadm_id\n  ) AS subquery\n),\ncohort_stats AS (\n  SELECT \n    AVG(DATETIME_DIFF(dischtime, admittime, HOUR)/24.0) AS avg_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM septic_shock_cohort\n)\nSELECT \n  'qsofa_q1' AS metric,\n  PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY qsofa_score) AS value\nFROM qsofa_scores\nUNION ALL\nSELECT \n  'qsofa_median',\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qsofa_score)\nFROM qsofa_scores\nUNION ALL\nSELECT \n  'qsofa_q3',\n  PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY qsofa_score)\nFROM qsofa_scores\nUNION ALL\nSELECT \n  'qsofa_iqr',\n  PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY qsofa_score) - PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY qsofa_score)\nFROM qsofa_scores\nUNION ALL\nSELECT \n  'lactate_septic',\n  abnormal_count / total_count\nFROM lactate_septic\nUNION ALL\nSELECT \n  'lactate_general',\n  abnormal_count / total_count\nFROM lactate_general\nUNION ALL\nSELECT \n  'los',\n  avg_los\nFROM cohort_stats\nUNION ALL\nSELECT \n  'mortality',\n  mortality_rate\nFROM cohort_stats;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got keyword WITHIN at [94:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [94:25]\n\nLocation: US\nJob ID: df1db003-d667-438c-9bc8-904486b94aab\n",
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [92:38]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [92:38]\n\nLocation: US\nJob ID: 71a7bc01-8eb0-4cfc-9163-2960b43081c4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [94:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [94:25]\n\nLocation: US\nJob ID: 177e0a3f-16a1-4fae-aa0d-e275ccc770f0\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [94:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [94:25]\n\nLocation: US\nJob ID: df1db003-d667-438c-9bc8-904486b94aab\n"
+    }
+  ]
+}

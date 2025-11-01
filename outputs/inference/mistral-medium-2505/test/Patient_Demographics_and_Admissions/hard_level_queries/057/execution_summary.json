@@ -1,0 +1,22 @@
+{
+  "query": "I have a 65-year-old male. Among male Medicare patients 60\u201370 admitted via the ED with a principal UTI, what is the 30-day readmission rate? Report median index LOS for readmitted vs non\u2011readmitted and percent with LOS>9 days.",
+  "final_sql": "WITH\n-- Define UTI ICD-10 codes\nuti_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_version = 10\n  AND icd_code IN ('N39.0', 'N10', 'N30.00', 'N30.01', 'N30.10', 'N30.11', 'N30.20', 'N30.21', 'N30.80', 'N30.81', 'N30.90', 'N30.91')\n),\n\n-- Get qualifying patients (male, 60-70, Medicare, admitted via ED)\nqualifying_patients AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 60 AND 70\n    AND a.insurance = 'Medicare'\n    AND a.admission_type = 'EMERGENCY'\n    AND a.hospital_expire_flag = 0  -- Exclude patients who died during admission\n),\n\n-- Get UTI principal diagnoses\nuti_admissions AS (\n  SELECT\n    q.subject_id,\n    q.hadm_id,\n    q.admittime,\n    q.dischtime,\n    q.hospital_expire_flag\n  FROM qualifying_patients q\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON q.hadm_id = d.hadm_id\n  JOIN uti_codes u\n    ON d.icd_code = u.icd_code\n  WHERE d.seq_num = 1  -- Principal diagnosis\n),\n\n-- Get first qualifying admission per patient (index admission)\nindex_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) as admission_rank\n  FROM uti_admissions\n),\n\n-- Calculate readmissions\npatient_readmissions AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.admittime,\n    i.dischtime,\n    TIMESTAMP_DIFF(i.dischtime, i.admittime, DAY) AS los,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = i.subject_id\n        AND a2.hadm_id != i.hadm_id\n        AND a2.admittime > i.dischtime\n        AND TIMESTAMP_DIFF(a2.admittime, i.dischtime, DAY) <= 30\n    ) AS readmitted\n  FROM index_admissions i\n  WHERE i.admission_rank = 1  -- Only first qualifying admission per patient\n)\n\nSELECT\n  -- Readmission rate\n  COALESCE(COUNT(DISTINCT CASE WHEN readmitted THEN subject_id END) * 100.0 /\n    NULLIF(COUNT(DISTINCT subject_id), 0), 0) AS readmission_rate,\n\n  -- Median LOS for readmitted vs non-readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted THEN los ELSE NULL END, 2)[OFFSET(1)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN NOT readmitted THEN los ELSE NULL END, 2)[OFFSET(1)] AS median_los_non_readmitted,\n\n  -- Percent with LOS > 9 days\n  COALESCE(COUNT(DISTINCT CASE WHEN readmitted AND los > 9 THEN subject_id END) * 100.0 /\n    NULLIF(COUNT(DISTINCT CASE WHEN readmitted THEN subject_id END), 0), 0) AS percent_los_gt9_readmitted,\n  COALESCE(COUNT(DISTINCT CASE WHEN NOT readmitted AND los > 9 THEN subject_id END) * 100.0 /\n    NULLIF(COUNT(DISTINCT CASE WHEN NOT readmitted THEN subject_id END), 0), 0) AS percent_los_gt9_non_readmitted\n\nFROM patient_readmissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: ce0101f3-cf73-41af-88a2-f3acbab908bc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

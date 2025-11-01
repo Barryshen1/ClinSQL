@@ -1,0 +1,28 @@
+{
+  "query": "For a 45-year-old woman: among female inpatients aged 40–50 with ARDS, what is the 75th-percentile laboratory-instability score (first 72 h)? For patients at/above this threshold, report mortality, mean LOS, and compare average critical lab events per patient to age-matched non-ARDS inpatients.",
+  "final_sql": "WITH initial_cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age - (p.anchor_year - EXTRACT(YEAR FROM a.admittime))) BETWEEN 40 AND 50\n),\nards_cohort AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n  WHERE icd_version = 10 AND icd_code = 'J80'\n),\nards_patients AS (\n  SELECT ic.*\n  FROM initial_cohort ic\n  INNER JOIN ards_cohort ac\n    ON ic.hadm_id = ac.hadm_id\n),\nnon_ards_patients AS (\n  SELECT ic.*\n  FROM initial_cohort ic\n  LEFT JOIN ards_cohort ac\n    ON ic.hadm_id = ac.hadm_id\n  WHERE ac.hadm_id IS NULL\n),\nards_lab_instability AS (\n  SELECT \n    ap.hadm_id,\n    COUNT(*) AS lab_instability_score\n  FROM ards_patients ap\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.labevents l\n    ON ap.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN ap.admittime AND ap.admittime + INTERVAL 72 HOUR\n  WHERE l.flag = 'abnormal'\n  GROUP BY ap.hadm_id\n),\np75_threshold AS (\n  SELECT \n    COALESCE(APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(75)], 0) AS threshold\n  FROM ards_lab_instability\n),\nards_high AS (\n  SELECT \n    ap.*,\n    COALESCE(ali.lab_instability_score, 0) AS lab_instability_score\n  FROM ards_patients ap\n  LEFT JOIN ards_lab_instability ali\n    ON ap.hadm_id = ali.hadm_id\n  CROSS JOIN p75_threshold p\n  WHERE COALESCE(ali.lab_instability_score, 0) >= p.threshold\n),\nnon_ards_lab AS (\n  SELECT \n    np.hadm_id,\n    COUNT(*) AS critical_lab_count\n  FROM non_ards_patients np\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.labevents l\n    ON np.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN np.admittime AND np.admittime + INTERVAL 72 HOUR\n  WHERE l.flag = 'abnormal'\n  GROUP BY np.hadm_id\n),\nnon_ards_avg AS (\n  SELECT \n    AVG(critical_lab_count) AS avg_critical_labs\n  FROM non_ards_lab\n)\nSELECT \n  (SELECT AVG(hospital_expire_flag) FROM ards_high) AS mortality_rate,\n  (SELECT AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) FROM ards_high) AS mean_los_days,\n  (SELECT AVG(lab_instability_score) FROM ards_high) AS ards_high_avg_critical_labs,\n  (SELECT avg_critical_labs FROM non_ards_avg) AS non_ards_avg_critical_labs;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "qwen3-235b-a22b-thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [45:36]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [45:36]\n\nLocation: US\nJob ID: 26a1803e-5f60-4554-9536-4c24ce0a0a52\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [45:14]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [45:14]\n\nLocation: US\nJob ID: 4de80d44-ddc9-4a9a-b9e8-a21bd2b6e9dc\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

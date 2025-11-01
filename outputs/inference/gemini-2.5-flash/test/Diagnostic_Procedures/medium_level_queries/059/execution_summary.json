@@ -1,0 +1,28 @@
+{
+  "query": "I have a 72\u2011yo man. Among men 67\u201377 with heart failure, what are p25/p50/p75 numbers of imaging studies per admission, by LOS 1\u20134 vs 5\u20137 days and primary vs secondary HF?",
+  "final_sql": "WITH Admissions_Cohort AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        pat.gender,\n        pat.anchor_age,\n        DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 67 AND 77\n        AND DATE_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 7 -- Filter for LOS 1-7 days\n),\n-- Identify all Heart Failure ICD-10 diagnoses\nHeart_Failure_Diagnoses AS (\n    SELECT\n        d.subject_id,\n        d.hadm_id,\n        d.seq_num\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    WHERE\n        d.icd_version = 10 -- Assuming ICD-10 for HF codes\n        AND d.icd_code LIKE 'I50%' -- ICD-10 code for heart failure\n),\n-- Classify each admission in the cohort as Primary HF or Secondary HF\nAdmission_HF_Type AS (\n    SELECT\n        ac.subject_id,\n        ac.hadm_id,\n        ac.los_days,\n        CASE\n            WHEN MAX(CASE WHEN hfd.seq_num = 1 THEN 1 ELSE 0 END) = 1 THEN 'Primary HF'\n            WHEN MAX(CASE WHEN hfd.seq_num > 1 THEN 1 ELSE 0 END) = 1 THEN 'Secondary HF'\n            ELSE NULL -- Exclude admissions without 'I50%' diagnoses or not fitting criteria\n        END AS hf_type\n    FROM\n        Admissions_Cohort AS ac\n    INNER JOIN\n        Heart_Failure_Diagnoses AS hfd\n        ON ac.subject_id = hfd.subject_id AND ac.hadm_id = hfd.hadm_id\n    GROUP BY\n        ac.subject_id, ac.hadm_id, ac.los_days\n    HAVING\n        hf_type IS NOT NULL\n),\n-- Count imaging procedures per admission for the cohort\nImaging_Counts AS (\n    SELECT\n        proc.subject_id,\n        proc.hadm_id,\n        COUNT(*) AS num_imaging_studies\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n    WHERE\n        proc.icd_version = 10\n        AND proc.icd_code LIKE 'B%' -- ICD-10-PCS range for Diagnostic Imaging procedures\n    GROUP BY\n        proc.subject_id, proc.hadm_id\n),\n-- Combine HF type, LOS, and imaging counts\nCombined_Data AS (\n    SELECT\n        ahft.subject_id,\n        ahft.hadm_id,\n        ahft.los_days,\n        ahft.hf_type,\n        CASE\n            WHEN ahft.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n            WHEN ahft.los_days BETWEEN 5 AND 7 THEN '5-7 days'\n            ELSE NULL -- Should not happen due to initial filter in Admissions_Cohort\n        END AS los_category,\n        COALESCE(ic.num_imaging_studies, 0) AS num_imaging_studies -- Handle cases with no imaging\n    FROM\n        Admission_HF_Type AS ahft\n    LEFT JOIN\n        Imaging_Counts AS ic\n        ON ahft.subject_id = ic.subject_id AND ahft.hadm_id = ic.hadm_id\n)\n-- Calculate percentiles of imaging studies\nSELECT\n    cd.los_category,\n    cd.hf_type,\n    CAST(PERCENTILE_CONT(cd.num_imaging_studies, 0.25) AS INT64) AS p25_imaging_studies,\n    CAST(PERCENTILE_CONT(cd.num_imaging_studies, 0.50) AS INT64) AS p50_imaging_studies,\n    CAST(PERCENTILE_CONT(cd.num_imaging_studies, 0.75) AS INT64) AS p75_imaging_studies\nFROM\n    Combined_Data AS cd\nWHERE\n    cd.los_category IS NOT NULL -- Ensure only desired LOS categories are included\nGROUP BY\n    cd.los_category,\n    cd.hf_type\nORDER BY\n    cd.los_category,\n    cd.hf_type;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 0b256fcb-516e-43f0-ac8b-f40b878c8f2a\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [55:5]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [55:5]\n\nLocation: US\nJob ID: c389494d-d248-4d6e-9730-4107a700a083\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword WITHIN at [88:32]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword WITHIN at [88:32]\n\nLocation: US\nJob ID: 6c6f9a28-cc25-4697-8815-1b53c703b2be\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 0b256fcb-516e-43f0-ac8b-f40b878c8f2a\n"
+    }
+  ]
+}

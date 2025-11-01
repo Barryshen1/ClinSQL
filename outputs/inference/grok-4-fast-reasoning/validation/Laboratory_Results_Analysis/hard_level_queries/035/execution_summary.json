@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83-year-old female inpatient. Among female patients aged 78\u201388 with acute ischemic stroke, what was the minimum 72-hour laboratory instability score? Also compare cohort average critical lab events to general inpatients and report cohort LOS and in-hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND FLOOR(p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 78 AND 88\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 9 AND di.icd_code IN ('43310', '43311', '43321', '43331', '43391', '43401', '43411', '43491', '436'))\n          OR (di.icd_version = 10 AND di.icd_code LIKE 'I63%')\n        )\n    )\n),\ncohort_abnormal_labs AS (\n  SELECT \n    le.hadm_id,\n    COUNT(*) AS count_abnormal\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN cohort c ON le.hadm_id = c.hadm_id\n  WHERE le.flag IN ('L', 'H', 'abnormal')\n    AND le.charttime >= c.admittime\n    AND le.charttime < c.admittime + INTERVAL 72 HOUR\n  GROUP BY le.hadm_id\n),\ncohort_metrics AS (\n  SELECT \n    c.hadm_id,\n    COALESCE(cal.count_abnormal, 0) AS instability_score,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR) / 24.0 AS los_days,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN cohort_abnormal_labs cal ON c.hadm_id = cal.hadm_id\n),\nall_admissions AS (\n  SELECT \n    hadm_id,\n    admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE hadm_id IS NOT NULL\n),\nall_abnormal_labs AS (\n  SELECT \n    le.hadm_id,\n    COUNT(*) AS count_abnormal\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN all_admissions aa ON le.hadm_id = aa.hadm_id\n  WHERE le.flag IN ('L', 'H', 'abnormal')\n    AND le.charttime >= aa.admittime\n    AND le.charttime < aa.admittime + INTERVAL 72 HOUR\n  GROUP BY le.hadm_id\n),\ngeneral_metrics AS (\n  SELECT \n    aa.hadm_id,\n    COALESCE(aal.count_abnormal, 0) AS instability_score\n  FROM all_admissions aa\n  LEFT JOIN all_abnormal_labs aal ON aa.hadm_id = aal.hadm_id\n)\nSELECT \n  MIN(instability_score) AS minimum_72_hour_laboratory_instability_score,\n  AVG(instability_score) AS cohort_average_critical_lab_events,\n  (SELECT AVG(instability_score) FROM general_metrics) AS general_average_critical_lab_events,\n  AVG(los_days) AS cohort_average_los_days,\n  (SUM(hospital_expire_flag) / COUNT(*) * 100) AS cohort_in_hospital_mortality_percentage\nFROM cohort_metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:12]\n\nLocation: US\nJob ID: dddd8779-2135-4437-abf2-4b9b6a8829b2\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

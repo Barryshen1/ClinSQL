@@ -1,0 +1,22 @@
+{
+  "query": "For my 48\u2011year\u2011old male with heart failure, among male patients aged 43\u201353 with HF, what is in\u2011hospital mortality (%) stratified by LOS quartiles (Q1\u2013Q4) and comorbidity burden (low/medium/high)?",
+  "final_sql": "WITH \n  -- Patient data with age and gender\n  patient_data AS (\n    SELECT \n      p.subject_id,\n      p.gender,\n      p.anchor_age,\n      a.hadm_id,\n      a.admittime,\n      a.dischtime,\n      a.deathtime,\n      a.hospital_expire_flag\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON \n      p.subject_id = a.subject_id\n    WHERE \n      p.gender = 'M' AND \n      p.anchor_age BETWEEN 43 AND 53\n  ),\n  \n  -- Diagnosis data for heart failure and comorbidity count\n  diagnosis_data AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      COUNT(DISTINCT icd_code) AS comorbidity_count\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    GROUP BY \n      subject_id, hadm_id\n  ),\n  \n  -- Heart failure diagnosis\n  heart_failure AS (\n    SELECT \n      subject_id,\n      hadm_id\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      icd_code IN ('428.0', '428.1', '428.2', '428.3', '428.4', '428.5', '428.6', '428.7', '428.8', '428.9', \n                    'I50.0', 'I50.1', 'I50.2', 'I50.3', 'I50.4', 'I50.5', 'I50.6', 'I50.7', 'I50.8', 'I50.9')\n  ),\n  \n  -- ICU stay data\n  icu_stay AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      outtime,\n      los\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays`\n  ),\n  \n  -- Combine data\n  combined_data AS (\n    SELECT \n      pd.subject_id,\n      pd.hadm_id,\n      pd.admittime,\n      pd.dischtime,\n      pd.deathtime,\n      pd.hospital_expire_flag,\n      dd.comorbidity_count,\n      COALESCE(icu.los, 0) AS los  -- Use COALESCE to handle NULL los values\n    FROM \n      patient_data pd\n    JOIN \n      heart_failure hf\n    ON \n      pd.subject_id = hf.subject_id AND pd.hadm_id = hf.hadm_id\n    JOIN \n      diagnosis_data dd\n    ON \n      pd.subject_id = dd.subject_id AND pd.hadm_id = dd.hadm_id\n    LEFT JOIN \n      icu_stay icu\n    ON \n      pd.subject_id = icu.subject_id AND pd.hadm_id = icu.hadm_id\n  ),\n\n  -- Categorize data\n  categorized_data AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      hospital_expire_flag,\n      deathtime,\n      comorbidity_count,\n      los,\n      NTILE(4) OVER (ORDER BY los) AS los_quartile,\n      CASE \n        WHEN comorbidity_count <= 5 THEN 'low'\n        WHEN comorbidity_count BETWEEN 6 AND 10 THEN 'medium'\n        ELSE 'high'\n      END AS comorbidity_burden\n    FROM \n      combined_data\n  )\n\n-- Calculate mortality by LOS quartiles and comorbidity burden\nSELECT \n  los_quartile,\n  comorbidity_burden,\n  COUNT(CASE WHEN hospital_expire_flag = 1 OR deathtime IS NOT NULL THEN 1 END) AS deaths,\n  COUNT(*) AS total_patients,\n  COUNT(CASE WHEN hospital_expire_flag = 1 OR deathtime IS NOT NULL THEN 1 END) * 100.0 / COUNT(*) AS mortality_rate\nFROM \n  categorized_data\nGROUP BY \n  los_quartile,\n  comorbidity_burden\nORDER BY \n  los_quartile, \n  comorbidity_burden;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in GROUP BY at [102:3]; reason: invalidQuery, location: query, message: Analytic function not allowed in GROUP BY at [102:3]\n\nLocation: US\nJob ID: 51c6763e-2e7b-43a5-8422-abd3077c78b6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

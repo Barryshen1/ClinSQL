@@ -1,0 +1,22 @@
+{
+  "query": "I have an 82\u2011year\u2011old man. Among male HF admissions aged 77\u201387, by day\u20111 ICU (ICU vs non\u2011ICU) and LOS 1\u20133/4\u20137/\u22658 days, give in\u2011hospital mortality (%), median LOS, and CKD/diabetes prevalence.",
+  "final_sql": "WITH hf_admissions AS (\n  -- Identify HF admissions\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    (dd.icd_code LIKE '428%' OR dd.icd_code LIKE 'I50%')\n    OR LOWER(dd.long_title) LIKE '%heart failure%'\n),\n\neligible_patients AS (\n  -- Filter patients: male, age 77\u201387\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 77 AND 87\n),\n\nadmissions_with_comorbidities AS (\n  -- Add CKD and Diabetes flags\n  SELECT\n    hf.*,\n    MAX(CASE WHEN d.icd_code LIKE '585%' OR d.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS ckd,\n    MAX(CASE WHEN d.icd_code LIKE '250%' OR d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E13%' OR d.icd_code LIKE 'E14%' THEN 1 ELSE 0 END) AS diabetes\n  FROM\n    hf_admissions hf\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON hf.hadm_id = d.hadm_id\n  GROUP BY\n    hf.subject_id, hf.hadm_id, hf.admittime, hf.dischtime, hf.hospital_expire_flag, hf.los_days\n),\n\nadmissions_with_icu_flag AS (\n  -- Determine if patient was in ICU on day 1\n  SELECT\n    a.*,\n    MAX(CASE\n      WHEN i.intime <= DATETIME_ADD(a.admittime, INTERVAL 1 DAY)\n       AND i.outtime >= a.admittime THEN 1\n      ELSE 0\n    END) AS day1_icu\n  FROM\n    admissions_with_comorbidities a\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, a.los_days, a.ckd, a.diabetes\n),\n\nfinal_cohort AS (\n  SELECT\n    *,\n    CASE\n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n      WHEN los_days >= 8 THEN '>=8'\n      ELSE 'other'\n    END AS los_category\n  FROM\n    admissions_with_icu_flag\n  WHERE\n    los_days >= 1 AND los_days <= 7 OR los_days >= 8\n)\n\nSELECT\n  day1_icu,\n  los_category,\n  COUNT(*) AS n,\n  AVG(hospital_expire_flag) * 100 AS in_hosp_mortality_pct,\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los,\n  AVG(ckd) * 100 AS ckd_prevalence_pct,\n  AVG(diabetes) * 100 AS diabetes_prevalence_pct\nFROM\n  final_cohort\nWHERE\n  los_category IN ('1-3', '4-7', '>=8')\nGROUP BY\n  day1_icu, los_category\nORDER BY\n  day1_icu, los_category;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_category at [81:5]; reason: invalidQuery, location: query, message: Unrecognized name: los_category at [81:5]\n\nLocation: US\nJob ID: 333f635f-d207-4828-8643-38666f9ee5cc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

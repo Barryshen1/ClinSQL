@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 48\u2011year\u2011old woman. Among female patients aged 43\u201353 admitted with suspected ACS, what are counts, percentages, and average hospital LOS for initial Troponin T: Normal, Borderline, Elevated?",
+  "final_sql": "WITH acs_admissions AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddx\n    ON dx.icd_code = ddx.icd_code\n    AND dx.icd_version = ddx.icd_version\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 43 AND 53\n    AND (\n      LOWER(ddx.long_title) LIKE '%acute coronary%'\n      OR LOWER(ddx.long_title) LIKE '%myocardial infarction%'\n      OR LOWER(ddx.long_title) LIKE '%angina%'\n    )\n),\ntroponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\nfirst_troponin AS (\n  SELECT \n    la.subject_id,\n    la.hadm_id,\n    la.valuenum,\n    la.valueuom,\n    la.charttime\n  FROM (\n    SELECT \n      l.subject_id,\n      l.hadm_id,\n      l.valuenum,\n      l.valueuom,\n      l.charttime,\n      ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n    JOIN troponin_items ti\n      ON l.itemid = ti.itemid\n    WHERE l.valuenum IS NOT NULL\n      AND LOWER(l.valueuom) = 'ng/ml'\n  ) la\n  WHERE la.rn = 1\n),\ncombined AS (\n  SELECT \n    acs.subject_id,\n    acs.hadm_id,\n    acs.admittime,\n    acs.dischtime,\n    ft.valuenum,\n    CASE\n      WHEN ft.valuenum <= 0.03 THEN 'Normal'\n      WHEN ft.valuenum > 0.03 AND ft.valuenum <= 0.10 THEN 'Borderline'\n      WHEN ft.valuenum > 0.10 THEN 'Elevated'\n      ELSE 'Unknown'\n    END AS troponin_category\n  FROM acs_admissions acs\n  JOIN first_troponin ft\n    ON acs.hadm_id = ft.hadm_id\n)\nSELECT \n  troponin_category,\n  COUNT(*) AS admission_count,\n  ROUND( COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(DATETIME_DIFF(dischtime, admittime, DAY)), 2) AS avg_los_days\nFROM combined\nGROUP BY troponin_category\nORDER BY troponin_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

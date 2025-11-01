@@ -1,0 +1,22 @@
+{
+  "query": "I have a 43\u2011year\u2011old woman. Among female inpatients aged 38\u201348 with AMI, calculate a 72\u2011hour lab instability score, stratify AMI patients into quartiles, and report LOS and in\u2011hospital mortality for each quartile. Compare overall critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH\n  patients AS (\n    SELECT subject_id, gender, anchor_age, anchor_year\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  ),\n  ami_admissions AS (\n    SELECT\n      adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime,\n      adm.hospital_expire_flag,\n      p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admission\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN patients p\n      ON adm.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n      AND adm.hadm_id IN (\n        SELECT hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n        WHERE\n          (icd_version = 9 AND icd_code LIKE '410%') OR\n          (icd_version = 10 AND icd_code LIKE 'I21%')\n      )\n  ),\n  control_admissions AS (\n    SELECT\n      adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime,\n      adm.hospital_expire_flag,\n      p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admission\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN patients p\n      ON adm.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n      AND adm.hadm_id NOT IN (\n        SELECT hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n        WHERE\n          (icd_version = 9 AND icd_code LIKE '410%') OR\n          (icd_version = 10 AND icd_code LIKE 'I21%')\n      )\n  ),\n  ami_with_labs AS (\n    SELECT\n      a.subject_id, a.hadm_id, a.admittime, a.dischtime,\n      a.hospital_expire_flag, a.age_at_admission,\n      COUNT(le.labevent_id) AS critical_lab_count\n    FROM ami_admissions a\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON a.hadm_id = le.hadm_id\n      AND le.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n      AND le.flag = 'panic'\n    WHERE a.age_at_admission BETWEEN 38 AND 48\n    GROUP BY 1, 2, 3, 4, 5, 6\n  ),\n  control_with_labs AS (\n    SELECT\n      c.subject_id, c.hadm_id, c.admittime, c.dischtime,\n      c.hospital_expire_flag, c.age_at_admission,\n      COUNT(le.labevent_id) AS critical_lab_count\n    FROM control_admissions c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON c.hadm_id = le.hadm_id\n      AND le.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n      AND le.flag = 'panic'\n    WHERE c.age_at_admission BETWEEN 38 AND 48\n    GROUP BY 1, 2, 3, 4, 5, 6\n  ),\n  ami_quartiles AS (\n    SELECT\n      *,\n      NTILE(4) OVER (ORDER BY critical_lab_count) AS quartile\n    FROM ami_with_labs\n  ),\n  quartile_summary AS (\n    SELECT\n      quartile,\n      COUNT(*) AS num_patients,\n      AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS avg_los,\n      AVG(hospital_expire_flag) * 100 AS mortality_rate\n    FROM ami_quartiles\n    GROUP BY quartile\n  ),\n  overall_rates AS (\n    SELECT 'AMI' AS cohort_group, AVG(critical_lab_count) AS avg_critical_labs\n    FROM ami_with_labs\n    UNION ALL\n    SELECT 'Control' AS cohort_group, AVG(critical_lab_count) AS avg_critical_labs\n    FROM control_with_labs\n  )\nSELECT\n  quartile,\n  num_patients,\n  ROUND(avg_los, 2) AS avg_los,\n  ROUND(mortality_rate, 2) AS mortality_rate,\n  NULL AS cohort_group,\n  NULL AS avg_critical_labs\nFROM quartile_summary\nUNION ALL\nSELECT\n  NULL AS quartile,\n  NULL AS num_patients,\n  NULL AS avg_los,\n  NULL AS mortality_rate,\n  cohort_group,\n  ROUND(avg_critical_labs, 2) AS avg_critical_labs\nFROM overall_rates\nORDER BY quartile, cohort_group;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [82:21]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [82:21]\n\nLocation: US\nJob ID: 66e2fe31-757b-424a-a73b-e51e3c182e19\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

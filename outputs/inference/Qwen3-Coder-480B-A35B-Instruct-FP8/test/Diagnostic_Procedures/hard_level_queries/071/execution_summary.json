@@ -1,0 +1,28 @@
+{
+  "query": "I have a 55-year-old female with intracranial hemorrhage. In female ICU patients aged 50\u201360 with ICH, what are the 25th, 50th, 90th percentiles and maximum procedure burden in initial 72 hours? Compare hospital LOS and in-hospital mortality to general ICU.",
+  "final_sql": "WITH target_cohort AS (\n  SELECT DISTINCT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) AS hospital_los,\n    adm.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients pat\n    ON icu.subject_id = pat.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_dx\n    ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 50 AND 60\n    AND (\n      (d_dx.icd_version = 9 AND d_dx.icd_code = '431')\n      OR\n      (d_dx.icd_version = 10 AND d_dx.icd_code LIKE 'I61%')\n    )\n),\n\nprocedure_counts_target AS (\n  SELECT\n    tc.stay_id,\n    tc.hospital_los,\n    tc.hospital_expire_flag,\n    COUNT(proc.stay_id) AS proc_count\n  FROM\n    target_cohort tc\n  LEFT JOIN\n    physionet-data.mimiciv_3_1_icu.procedureevents proc\n    ON tc.stay_id = proc.stay_id\n    AND proc.starttime >= tc.intime\n    AND proc.starttime <= DATETIME_ADD(tc.intime, INTERVAL 72 HOUR)\n  GROUP BY\n    tc.stay_id, tc.hospital_los, tc.hospital_expire_flag\n),\n\ntarget_stats AS (\n  SELECT\n    'Target (Female 50-60 with ICH)' AS cohort,\n    APPROX_QUANTILES(proc_count, 100)[OFFSET(25)] AS proc_25th,\n    APPROX_QUANTILES(proc_count, 100)[OFFSET(50)] AS proc_median,\n    APPROX_QUANTILES(proc_count, 100)[OFFSET(90)] AS proc_90th,\n    MAX(proc_count) AS proc_max,\n    AVG(hospital_los) AS avg_hosp_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM\n    procedure_counts_target\n),\n\nicu_times AS (\n  SELECT\n    stay_id,\n    intime\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays\n),\n\ngeneral_icu AS (\n  SELECT\n    icu.stay_id,\n    icu.intime,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) AS hospital_los,\n    adm.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n),\n\nprocedure_counts_general AS (\n  SELECT\n    gi.stay_id,\n    gi.hospital_los,\n    gi.hospital_expire_flag,\n    COUNT(proc.stay_id) AS proc_count\n  FROM\n    general_icu gi\n  LEFT JOIN\n    icu_times icu_t\n    ON gi.stay_id = icu_t.stay_id\n  LEFT JOIN\n    physionet-data.mimiciv_3_1_icu.procedureevents proc\n    ON gi.stay_id = proc.stay_id\n    AND proc.starttime >= icu_t.intime\n    AND proc.starttime <= DATETIME_ADD(icu_t.intime, INTERVAL 72 HOUR)\n  GROUP BY\n    gi.stay_id, gi.hospital_los, gi.hospital_expire_flag\n),\n\ngeneral_stats AS (\n  SELECT\n    'General ICU' AS cohort,\n    APPROX_QUANTILES(proc_count, 100)[OFFSET(25)] AS proc_25th,\n    APPROX_QUANTILES(proc_count, 100)[OFFSET(50)] AS proc_median,\n    APPROX_QUANTILES(proc_count, 100)[OFFSET(90)] AS proc_90th,\n    MAX(proc_count) AS proc_max,\n    AVG(hospital_los) AS avg_hosp_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM\n    procedure_counts_general\n)\n\nSELECT * FROM target_stats\nUNION ALL\nSELECT * FROM general_stats;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside adm at [8:9]; reason: invalidQuery, location: query, message: Name los not found inside adm at [8:9]\n\nLocation: US\nJob ID: 349ce72d-9294-4b14-82b0-51d347dbd5db\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unsupported subquery with table in join predicate.; reason: invalidQuery, location: query, message: Unsupported subquery with table in join predicate.\n\nLocation: US\nJob ID: 55f0498e-7c1d-4226-ad49-daac27f87249\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

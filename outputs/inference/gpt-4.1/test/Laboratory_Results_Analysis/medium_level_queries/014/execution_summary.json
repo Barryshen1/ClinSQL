@@ -1,0 +1,16 @@
+{
+  "query": "For my 84-year-old male, among male patients aged 79\u201389 admitted with ACS, what are counts and percentages of the initial Troponin T categorized as Normal, Borderline, and Elevated?",
+  "final_sql": "WITH acs_icd_codes AS (\n  -- List of ACS ICD codes (ICD-9 and ICD-10)\n  SELECT '410' AS icd_code, 9 AS icd_version UNION ALL\n  SELECT '411', 9 UNION ALL\n  SELECT '413', 9 UNION ALL\n  SELECT 'I20', 10 UNION ALL\n  SELECT 'I21', 10 UNION ALL\n  SELECT 'I22', 10 UNION ALL\n  SELECT 'I24', 10\n),\nacs_admissions AS (\n  -- Admissions for male patients aged 79-89 with ACS\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.admissions adm\n  JOIN physionet-data.mimiciv_3_1_hosp.patients pat\n    ON adm.subject_id = pat.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN acs_icd_codes acs\n    ON diag.icd_code = acs.icd_code AND diag.icd_version = acs.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 79 AND 89\n),\ntroponin_t_items AS (\n  -- Find itemids for Troponin T\n  SELECT itemid\n  FROM physionet-data.mimiciv_3_1_hosp.d_labitems\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\ninitial_troponin_t AS (\n  -- For each ACS admission, get the first Troponin T value\n  SELECT\n    la.subject_id,\n    la.hadm_id,\n    la.charttime,\n    la.valuenum\n  FROM physionet-data.mimiciv_3_1_hosp.labevents la\n  JOIN troponin_t_items tti\n    ON la.itemid = tti.itemid\n  JOIN acs_admissions acs\n    ON la.subject_id = acs.subject_id AND la.hadm_id = acs.hadm_id\n  WHERE la.valuenum IS NOT NULL\n    -- Only keep the earliest Troponin T per admission\n    AND la.charttime = (\n      SELECT MIN(charttime)\n      FROM physionet-data.mimiciv_3_1_hosp.labevents la2\n      WHERE la2.subject_id = la.subject_id\n        AND la2.hadm_id = la.hadm_id\n        AND la2.itemid = la.itemid\n        AND la2.valuenum IS NOT NULL\n    )\n),\ncategorized_troponin AS (\n  -- Categorize initial Troponin T\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum,\n    CASE\n      WHEN valuenum < 0.01 THEN 'Normal'\n      WHEN valuenum >= 0.01 AND valuenum <= 0.03 THEN 'Borderline'\n      WHEN valuenum > 0.03 THEN 'Elevated'\n      ELSE 'Unknown'\n    END AS troponin_category\n  FROM initial_troponin_t\n)\nSELECT\n  troponin_category AS category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage\nFROM categorized_troponin\nWHERE troponin_category IN ('Normal', 'Borderline', 'Elevated')\nGROUP BY troponin_category\nORDER BY\n  CASE troponin_category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Elevated' THEN 3\n    ELSE 4\n  END\n;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

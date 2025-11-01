@@ -1,0 +1,22 @@
+{
+  "query": "For 91-year-old woman, among female ICU patients aged 86\u201396, what's the 75th percentile temperature in first 24 hours (\u00b0F)?",
+  "final_sql": "WITH TargetPatients AS (\n    -- Step 1: Identify female patients aged 86-96\n    SELECT\n        p.subject_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 86 AND 96\n),\nICUStaysFiltered AS (\n    -- Step 2: Get ICU stay start times for these patients\n    SELECT\n        tpa.subject_id,\n        ics.hadm_id,\n        ics.stay_id,\n        ics.intime\n    FROM\n        TargetPatients tpa\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` ics\n        ON tpa.subject_id = ics.subject_id\n),\nRawTemperatureEvents AS (\n    -- Step 3 & 4: Retrieve temperature measurements within the first 24 hours\n    -- Filter by d_items label and category, and ensure valuenum is not NULL\n    SELECT\n        isf.subject_id,\n        isf.hadm_id,\n        isf.stay_id,\n        ce.charttime,\n        ce.valuenum,\n        di.label AS item_label\n    FROM\n        ICUStaysFiltered isf\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n            ON isf.subject_id = ce.subject_id\n            AND isf.hadm_id = ce.hadm_id\n            AND isf.stay_id = ce.stay_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.d_items` di\n            ON ce.itemid = di.itemid\n    WHERE\n        ce.valuenum IS NOT NULL\n        AND di.category = 'Routine Vital Signs' -- Focus on vital sign temperature items\n        AND (\n                LOWER(di.label) LIKE '%temperature f%'\n            OR  LOWER(di.label) LIKE '%temperature c%'\n        )\n        AND ce.charttime >= isf.intime\n        AND ce.charttime <= DATETIME_ADD(isf.intime, INTERVAL 24 HOUR)\n),\nProcessedTemperatures AS (\n    -- Step 5: Convert temperatures to Fahrenheit and apply physiological range filter\n    SELECT\n        CASE\n            WHEN LOWER(rte.item_label) LIKE '%temperature c%' THEN (rte.valuenum * 9/5) + 32\n            ELSE rte.valuenum -- Assume it's already Fahrenheit if not specified as Celsius\n        END AS temperature_f\n    FROM\n        RawTemperatureEvents rte\n    WHERE\n        -- Filter out physiologically implausible temperature values regardless of original unit\n        -- Convert to Celsius for a consistent range check (15C to 45C roughly covers 59F to 113F)\n        CASE\n            WHEN LOWER(rte.item_label) LIKE '%temperature c%' THEN rte.valuenum BETWEEN 15.0 AND 45.0\n            WHEN LOWER(rte.item_label) LIKE '%temperature f%' THEN (rte.valuenum - 32) * 5/9 BETWEEN 15.0 AND 45.0\n            ELSE FALSE -- Exclude any other unexpected labels if they exist\n        END\n)\n-- Step 6: Calculate the 75th percentile of all valid Fahrenheit temperatures\nSELECT\n    PERCENTILE_CONT(temperature_f, 0.75) OVER() AS temperature_75th_percentile_f\nFROM\n    ProcessedTemperatures\nWHERE temperature_f IS NOT NULL; -- Ensure no NULLs before percentile calculation;",
+  "execution_success": true,
+  "row_count": 27845,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [75:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [75:1]\n\nLocation: US\nJob ID: 62766958-fc62-4d17-a9ac-764dbfa4fc7c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 27845,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 58-year-old woman. For females 53\u201363 admitted with upper GI bleeding (1\u20138 day stays), what are p25, p50, p75 diagnostic procedures per admission for 1\u20134 vs 5\u20138 days?",
+  "final_sql": "WITH\n  -- Step 1: Identify all admissions for female patients aged 53-63 with a 1-8 day stay\n  cohort_admissions AS (\n    SELECT\n      a.hadm_id,\n      a.dischtime,\n      a.admittime,\n      -- Calculate age at admission\n      (\n        EXTRACT(\n          YEAR\n          FROM a.admittime\n        ) - p.anchor_year\n      ) + p.anchor_age AS age_at_admission,\n      -- Calculate length of stay in days\n      DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n    WHERE\n      p.gender = 'F'\n      AND DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 8\n      AND (\n        (\n          EXTRACT(\n            YEAR\n            FROM a.admittime\n          ) - p.anchor_year\n        ) + p.anchor_age\n      ) BETWEEN 53 AND 63\n  ),\n  -- Step 2: Filter the cohort for admissions with an Upper GI Bleed diagnosis\n  ugib_cohort AS (\n    SELECT DISTINCT\n      c.hadm_id,\n      c.los_days\n    FROM cohort_admissions AS c\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      ON c.hadm_id = d.hadm_id\n    WHERE\n      d.icd_code IN (\n        -- ICD-9 codes for UGIB\n        '53100', '53120', '53140', '53160', '53200', '53220', '53240',\n        '53260', '53300', '53320', '53340', '53360', '53400', '53420',\n        '53440', '53460', '5780', '5781', '5789',\n        -- ICD-10 codes for UGIB\n        'K250', 'K251', 'K252', 'K254', 'K255', 'K256', 'K260', 'K261',\n        'K262', 'K264', 'K265', 'K266', 'K270', 'K271', 'K272', 'K274',\n        'K275', 'K276', 'K280', 'K281', 'K282', 'K284', 'K285', 'K286',\n        'K920', 'K921', 'K922'\n      )\n  ),\n  -- Step 3: Count procedures for each admission in the UGIB cohort.\n  -- Use a LEFT JOIN to include admissions with zero procedures.\n  admission_proc_counts AS (\n    SELECT\n      ugib.hadm_id,\n      ugib.los_days,\n      COUNT(proc.icd_code) AS num_procedures\n    FROM ugib_cohort AS ugib\n    LEFT JOIN\n      `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n      ON ugib.hadm_id = proc.hadm_id\n    GROUP BY\n      ugib.hadm_id,\n      ugib.los_days\n  )\n-- Final Step: Stratify by LOS and calculate p25, p50, p75 of procedure counts\nSELECT\n  CASE\n    WHEN los_days BETWEEN 1 AND 4\n    THEN '1-4 days'\n    WHEN los_days BETWEEN 5 AND 8\n    THEN '5-8 days'\n  END AS los_category,\n  APPROX_QUANTILES(num_procedures, 100) [\nOFFSET\n  (25)] AS p25_procedures,\n  APPROX_QUANTILES(num_procedures, 100) [\nOFFSET\n  (50)] AS p50_procedures,\n  APPROX_QUANTILES(num_procedures, 100) [\nOFFSET\n  (75)] AS p75_procedures\nFROM admission_proc_counts\nGROUP BY\n  los_category\nORDER BY\n  los_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

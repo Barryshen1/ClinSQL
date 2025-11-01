@@ -1,0 +1,16 @@
+{
+  "query": "42-year-old male with pneumonia: among male ICU patients aged 37\u201347 in their first ICU stay, stratify distinct procedures in the first 48 hours into quintiles and report mean procedure count, mean ICU LOS (days), and hospital mortality by quintile.",
+  "final_sql": "WITH pneumonia_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    -- ICD-9: 480-486, 487.0\n    (icd_version = 9 AND (\n        REGEXP_CONTAINS(icd_code, r'^(480|481|482|483|484|485|486)') OR \n        icd_code IN ('4870', '487.0')\n    )) OR \n    -- ICD-10: J12-J18, J10.0, J11.0\n    (icd_version = 10 AND (\n        REGEXP_CONTAINS(icd_code, r'^J1[012345678]') OR \n        icd_code IN ('J100', 'J110', 'J10.0', 'J11.0')\n    ))\n),\nfirst_icu_stay AS (\n  SELECT \n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ie.los,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  WHERE ie.stay_id = (\n    SELECT MIN(stay_id)\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` ie2\n    WHERE ie2.subject_id = ie.subject_id\n  )\n),\ncohort AS (\n  SELECT \n    fis.subject_id, \n    fis.hadm_id, \n    fis.stay_id,\n    fis.intime,\n    fis.los\n  FROM first_icu_stay fis\n  INNER JOIN pneumonia_patients pp\n    ON fis.hadm_id = pp.hadm_id\n  WHERE \n    fis.gender = 'M'\n    AND (fis.anchor_age + (EXTRACT(YEAR FROM fis.intime) - fis.anchor_year)) \n        BETWEEN 37 AND 47\n),\nprocedure_counts AS (\n  SELECT \n    c.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN c.intime \n        AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY c.stay_id\n),\ncohort_with_outcomes AS (\n  SELECT \n    c.stay_id,\n    COALESCE(pc.procedure_count, 0) AS procedure_count,\n    c.los,\n    adm.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN procedure_counts pc\n    ON c.stay_id = pc.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON c.hadm_id = adm.hadm_id\n),\nquintiles AS (\n  SELECT \n    stay_id,\n    procedure_count,\n    los,\n    hospital_expire_flag,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM cohort_with_outcomes\n)\nSELECT \n  quintile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los,\n  AVG(hospital_expire_flag) AS hospital_mortality\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

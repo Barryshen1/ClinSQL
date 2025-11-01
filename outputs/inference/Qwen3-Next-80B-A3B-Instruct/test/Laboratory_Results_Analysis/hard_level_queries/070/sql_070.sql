@@ -1,0 +1,1 @@
+SELECT 'summary' AS metric_type, group_type;

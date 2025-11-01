@@ -1,0 +1,22 @@
+{
+  "query": "For a 53-year-old male inpatient: among males 48\u201358 with type 2 diabetes and heart failure, what percent received GLP\u20111 receptor agonists within the first 12h versus the final 12h, and net change?",
+  "final_sql": "WITH diabetes_heart_flags AS (\n  -- Flag admissions that have both type 2 diabetes and heart failure\n  SELECT di.subject_id, di.hadm_id,\n         MAX(CASE WHEN LOWER(ddi.long_title) LIKE '%type 2 diabetes%' THEN 1 ELSE 0 END) AS has_diabetes_type2,\n         MAX(CASE WHEN LOWER(ddi.long_title) LIKE '%heart failure%' THEN 1 ELSE 0 END) AS has_heart_failure\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddi\n    ON di.icd_code = ddi.icd_code\n   AND di.icd_version = ddi.icd_version\n  GROUP BY di.subject_id, di.hadm_id\n),\n\ncohort_admissions AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN diabetes_heart_flags AS f\n    ON f.subject_id = a.subject_id\n   AND f.hadm_id = a.hadm_id\n  WHERE (p.gender = 'M' OR LOWER(p.gender) = 'male')\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 48 AND 58\n    AND f.has_diabetes_type2 = 1\n    AND f.has_heart_failure = 1\n),\n\nglp1_overlap AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n      WHERE pr.subject_id = c.subject_id\n        AND pr.hadm_id = c.hadm_id\n        AND (\n          LOWER(pr.drug) LIKE '%liraglutide%' OR\n          LOWER(pr.drug) LIKE '%dulaglutide%' OR\n          LOWER(pr.drug) LIKE '%exenatide%' OR\n          LOWER(pr.drug) LIKE '%lixisenatide%' OR\n          LOWER(pr.drug) LIKE '%semaglutide%' OR\n          LOWER(pr.drug) LIKE '%albiglutide%'\n        )\n        AND pr.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 12 HOUR)\n        AND (pr.stoptime IS NULL OR pr.stoptime > c.admittime)\n    ) AS first12h_exposed,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n      WHERE pr.subject_id = c.subject_id\n        AND pr.hadm_id = c.hadm_id\n        AND (\n          LOWER(pr.drug) LIKE '%liraglutide%' OR\n          LOWER(pr.drug) LIKE '%dulaglutide%' OR\n          LOWER(pr.drug) LIKE '%exenatide%' OR\n          LOWER(pr.drug) LIKE '%lixisenatide%' OR\n          LOWER(pr.drug) LIKE '%semaglutide%' OR\n          LOWER(pr.drug) LIKE '%albiglutide%'\n        )\n        AND pr.starttime < c.dischtime\n        AND pr.stoptime > TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR)\n    ) AS last12h_exposed\n  FROM cohort_admissions AS c\n)\n\nSELECT\n  COUNT(*) AS cohort_size,\n  ROUND(100 * SUM(CASE WHEN first12h_exposed THEN 1 ELSE 0 END) / COUNT(*), 2) AS percent_first12h,\n  ROUND(100 * SUM(CASE WHEN last12h_exposed THEN 1 ELSE 0 END) / COUNT(*), 2) AS percent_final12h,\n  ROUND(\n    (100 * SUM(CASE WHEN last12h_exposed THEN 1 ELSE 0 END) / COUNT(*))\n    - (100 * SUM(CASE WHEN first12h_exposed THEN 1 ELSE 0 END) / COUNT(*)),\n    2\n  ) AS net_change\nFROM glp1_overlap;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]\n\nLocation: US\nJob ID: c163250e-4ee5-4c34-b0b4-40a56a4d9d36\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

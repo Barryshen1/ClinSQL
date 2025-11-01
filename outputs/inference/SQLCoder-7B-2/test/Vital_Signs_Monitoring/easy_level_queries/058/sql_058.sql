@@ -1,0 +1,3 @@
+SELECT p.subject_id, s.stay_id, AVG(l.value) AS average_temperature FROM patients p JOIN icustays s ON p.subject_id = s.subject_id JOIN labevents l ON s.stay_id = l.subject_id AND l.lab_code = 'T' -- 'T' stands for temperature
+WHERE p.gender = 'M' AND EXTRACT(YEAR FROM p.dob) = 1979 AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dob)) BETWEEN 74 AND 84 -- Assuming 'dob' is a DATE column
+GROUP BY p.subject_id, s.stay_id ORDER BY p.subject_id, s.stay_id NULLS LAST;

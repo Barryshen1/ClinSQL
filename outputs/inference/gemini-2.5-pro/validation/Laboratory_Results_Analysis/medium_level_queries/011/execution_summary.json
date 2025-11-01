@@ -1,0 +1,16 @@
+{
+  "query": "I have a 66-year-old man with chest pain. Among male patients aged 61\u201371 admitted for chest pain, what's the percent distribution of initial hs\u2011TnT: normal, borderline, myocardial injury?",
+  "final_sql": "WITH cohort AS (\n  -- Step 1: Identify the cohort of male patients aged 61-71 admitted for chest pain\n  SELECT DISTINCT\n    adm.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON pat.subject_id = adm.subject_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    ON adm.hadm_id = dx.hadm_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx\n    ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND (pat.anchor_age + EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) BETWEEN 61 AND 71\n    AND LOWER(d_dx.long_title) LIKE '%chest pain%'\n),\nfirst_hs_tnt AS (\n  -- Step 2: Find the first hs-TnT measurement for each hospital admission\n  SELECT\n    hadm_id,\n    valuenum\n  FROM (\n    SELECT\n      hadm_id,\n      charttime,\n      valuenum,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.labevents`\n    WHERE\n      itemid = 52559 -- itemid for 'Troponin T, High Sensitivity'\n      AND valuenum IS NOT NULL\n  )\n  WHERE\n    rn = 1\n),\ncategory_counts AS (\n  -- Step 3: Join cohort with lab results, categorize, and count\n  SELECT\n    CASE\n      WHEN tnt.valuenum < 14 THEN 'Normal'\n      WHEN tnt.valuenum BETWEEN 14 AND 52 THEN 'Borderline'\n      WHEN tnt.valuenum > 52 THEN 'Myocardial Injury'\n      ELSE NULL\n    END AS tnt_category,\n    COUNT(tnt.hadm_id) AS number_of_patients\n  FROM\n    cohort\n  INNER JOIN\n    first_hs_tnt AS tnt\n    ON cohort.hadm_id = tnt.hadm_id\n  WHERE\n    CASE\n      WHEN tnt.valuenum < 14 THEN 'Normal'\n      WHEN tnt.valuenum BETWEEN 14 AND 52 THEN 'Borderline'\n      WHEN tnt.valuenum > 52 THEN 'Myocardial Injury'\n      ELSE NULL\n    END IS NOT NULL\n  GROUP BY\n    tnt_category\n)\n-- Step 4: Calculate the final percentage distribution\nSELECT\n  tnt_category,\n  number_of_patients,\n  (number_of_patients * 100.0) / SUM(number_of_patients) OVER () AS percentage_distribution\nFROM\n  category_counts\nORDER BY\n  -- Order logically by severity\n  CASE tnt_category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Myocardial Injury' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

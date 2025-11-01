@@ -1,0 +1,28 @@
+{
+  "query": "I have a 54-year-old female with ACS. Among female ICU patients aged 49\u201359, what percentile is a first-24h composite vital instability score of 70? Also report ICU length of stay (mean days) and hospital mortality (%) for the top decile.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    i.stay_id, \n    i.subject_id, \n    i.hadm_id, \n    i.los, \n    i.intime,\n    p.gender, \n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON i.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON i.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 49 AND 59\n),\nvitals AS (\n  SELECT \n    ce.stay_id,\n    MIN(CASE WHEN ce.itemid IN (51, 442, 455, 6701, 220179, 225309) \n             THEN ce.valuenum END) AS min_sbp,\n    MAX(CASE WHEN ce.itemid IN (211, 220045) \n             THEN ce.valuenum END) AS max_hr\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN cohort c \n    ON ce.stay_id = c.stay_id\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime < TIMESTAMP_ADD(c.intime, INTERVAL 1 DAY)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY ce.stay_id\n),\nscored AS (\n  SELECT \n    c.stay_id,\n    c.los,\n    c.hospital_expire_flag,\n    v.min_sbp,\n    v.max_hr,\n    (CASE \n       WHEN v.min_sbp IS NOT NULL AND v.min_sbp < 90 \n       THEN 90 - v.min_sbp \n       ELSE 0 \n     END +\n     CASE \n       WHEN v.max_hr IS NOT NULL AND v.max_hr > 100 \n       THEN v.max_hr - 100 \n       ELSE 0 \n     END) AS instability_score\n  FROM cohort c\n  LEFT JOIN vitals v \n    ON c.stay_id = v.stay_id\n  WHERE v.min_sbp IS NOT NULL OR v.max_hr IS NOT NULL  -- At least one vital measured\n),\nquantiles AS (\n  SELECT \n    COUNTIF(instability_score <= 70) * 100.0 / COUNT(*) AS percentile_for_70,\n    APPROX_QUANTILES(instability_score, 10)[OFFSET(9)] AS score_p90\n  FROM scored\n),\ntop_decile AS (\n  SELECT \n    s.los,\n    s.hospital_expire_flag\n  FROM scored s\n  CROSS JOIN quantiles q\n  WHERE s.instability_score >= q.score_p90\n)\nSELECT \n  q.percentile_for_70,\n  AVG(td.los) AS mean_los_days_top_decile,\n  AVG(CAST(td.hospital_expire_flag AS FLOAT64)) * 100 AS mortality_pct_top_decile\nFROM quantiles q\nCROSS JOIN top_decile td;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references q.percentile_for_70 which is neither grouped nor aggregated at [71:3]; reason: invalidQuery, location: query, message: SELECT list expression references q.percentile_for_70 which is neither grouped nor aggregated at [71:3]\n\nLocation: US\nJob ID: 7c666d63-d9d7-4aa5-9e62-b8310463649f\n",
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \"(\" at [59:51]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \"(\" at [59:51]\n\nLocation: US\nJob ID: db3777af-1e6f-4a22-a8fa-64da03fa9867\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [73:39]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [73:39]\n\nLocation: US\nJob ID: 411f1fd8-6e3c-42f1-8bf9-868280aff42c\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references q.percentile_for_70 which is neither grouped nor aggregated at [71:3]; reason: invalidQuery, location: query, message: SELECT list expression references q.percentile_for_70 which is neither grouped nor aggregated at [71:3]\n\nLocation: US\nJob ID: 7c666d63-d9d7-4aa5-9e62-b8310463649f\n"
+    }
+  ]
+}

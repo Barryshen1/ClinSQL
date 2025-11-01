@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 45\u2011year\u2011old man with heart failure. In male inpatients aged 40\u201350 with HF, stratified by quintiles of a 7\u2011day medication complexity score, report patient counts, score ranges, mean LOS (days), in\u2011hospital mortality, and 30\u2011day readmission.",
+  "final_sql": "WITH \n-- Get patient demographics and admission data\npatient_data AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    p.anchor_age, \n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n),\n\n-- Get medication data\nmedication_data AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    COUNT(DISTINCT drug) AS num_drugs\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  GROUP BY \n    subject_id, \n    hadm_id\n),\n\n-- Calculate medication complexity score (proxy: number of unique drugs)\ncomplexity_score AS (\n  SELECT \n    pd.subject_id, \n    pd.hadm_id, \n    md.num_drugs\n  FROM \n    patient_data pd\n  JOIN \n    medication_data md \n      ON pd.subject_id = md.subject_id AND pd.hadm_id = md.hadm_id\n  WHERE \n    pd.gender = 'M' \n    AND pd.anchor_age BETWEEN 40 AND 50\n    AND pd.hadm_id IN (\n      SELECT \n        hadm_id \n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE \n        icd_code LIKE '428%'\n    )\n),\n\n-- Calculate LOS\nlos_data AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM \n    patient_data\n),\n\n-- Combine data\ncombined_data AS (\n  SELECT \n    cs.subject_id, \n    cs.hadm_id, \n    cs.num_drugs,\n    ld.los_days,\n    CASE \n      WHEN pd.deathtime IS NOT NULL OR pd.hospital_expire_flag = 1 THEN 1 \n      ELSE 0 \n    END AS in_hospital_death\n  FROM \n    complexity_score cs\n  JOIN \n    los_data ld \n      ON cs.subject_id = ld.subject_id AND cs.hadm_id = ld.hadm_id\n  JOIN \n    patient_data pd \n      ON cs.subject_id = pd.subject_id AND cs.hadm_id = pd.hadm_id\n),\n\n-- Calculate 30-day readmission\nreadmission_data AS (\n  SELECT \n    subject_id, \n    hadm_id,\n    MIN(CASE \n        WHEN TIMESTAMP_DIFF(a.admittime, pd.dischtime, DAY) BETWEEN 0 AND 30 THEN 1 \n        ELSE 0 \n      END) OVER (PARTITION BY pd.subject_id) AS readmitted_within_30_days\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    patient_data pd \n      ON a.subject_id = pd.subject_id\n  WHERE \n    a.admittime > pd.dischtime\n)\n\n-- Final calculation\nSELECT \n  quintile,\n  patient_count,\n  MIN_score,\n  MAX_score,\n  AVG(mean_los_days) AS mean_los_days,\n  AVG(in_hospital_mortality) AS in_hospital_mortality,\n  AVG(thirty_day_readmission) AS thirty_day_readmission\nFROM (\n  SELECT \n    NTILE(5) OVER (ORDER BY num_drugs) AS quintile,\n    COUNT(*) AS patient_count,\n    MIN(num_drugs) AS MIN_score,\n    MAX(num_drugs) AS MAX_score,\n    AVG(los_days) AS mean_los_days,\n    SUM(in_hospital_death) / COUNT(*) AS in_hospital_mortality,\n    COALESCE(SUM(CASE WHEN readmitted_within_30_days = 1 THEN 1 ELSE 0 END) / COUNT(*), 0) AS thirty_day_readmission\n  FROM \n    combined_data cd\n  LEFT JOIN \n    readmission_data rd \n      ON cd.subject_id = rd.subject_id\n  GROUP BY \n    NTILE(5) OVER (ORDER BY num_drugs),\n    patient_count,\n    MIN_score,\n    MAX_score,\n    mean_los_days,\n    in_hospital_mortality,\n    thirty_day_readmission\n) \nGROUP BY \n  quintile, \n  patient_count, \n  MIN_score, \n  MAX_score\nORDER BY \n  quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Column name subject_id is ambiguous at [91:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [91:5]\n\nLocation: US\nJob ID: f86d9c03-a4bd-4a5c-9f80-02c99c51b69f\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [62:5]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [62:5]\n\nLocation: US\nJob ID: ab503854-9f54-40e8-b8ae-cef2fa70b863\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [91:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [91:5]\n\nLocation: US\nJob ID: 971ab5c2-51b5-4c38-b71d-a61b10c380f2\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [91:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [91:5]\n\nLocation: US\nJob ID: f86d9c03-a4bd-4a5c-9f80-02c99c51b69f\n"
+    }
+  ]
+}

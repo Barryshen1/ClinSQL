@@ -1,0 +1,28 @@
+{
+  "query": "For a 45-year-old woman: among female inpatients aged 40\u201350 with ARDS, what is the 75th-percentile laboratory-instability score (first 72 h)? For patients at/above this threshold, report mortality, mean LOS, and compare average critical lab events per patient to age-matched non-ARDS inpatients.",
+  "final_sql": "WITH patients_age_gender AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.admittime, DATETIME(p.anchor_year, 1, 1, 0, 0, 0), YEAR) + p.anchor_age AS age_at_admit\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.admissions a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND DATETIME_DIFF(a.admittime, DATETIME(p.anchor_year, 1, 1, 0, 0, 0), YEAR) + p.anchor_age BETWEEN 40 AND 50\n),\n-- Identify ARDS diagnoses (ICD-10: J80, ICD-9: 518.82)\nards_codes AS (\n  SELECT 'J80' AS icd_code, 10 AS icd_version\n  UNION ALL\n  SELECT '518.82', 9\n),\nards_hadm AS (\n  SELECT DISTINCT\n    pa.hadm_id\n  FROM\n    patients_age_gender pa\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  ON\n    pa.hadm_id = di.hadm_id\n  INNER JOIN\n    ards_codes ac\n  ON\n    di.icd_code = ac.icd_code AND di.icd_version = ac.icd_version\n),\n-- Lab events in first 72 hours, abnormal values\nlab_abnormal AS (\n  SELECT\n    le.hadm_id,\n    COUNT(*) AS abnormal_lab_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN\n    patients_age_gender pa\n  ON\n    le.hadm_id = pa.hadm_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.d_labitems dlab\n  ON\n    le.itemid = dlab.itemid\n  WHERE\n    le.charttime >= pa.admittime\n    AND le.charttime <= DATETIME_ADD(pa.admittime, INTERVAL 72 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND (le.ref_range_lower IS NOT NULL OR le.ref_range_upper IS NOT NULL)\n    AND (\n      (le.valuenum < le.ref_range_lower AND le.ref_range_lower IS NOT NULL)\n      OR (le.valuenum > le.ref_range_upper AND le.ref_range_upper IS NOT NULL)\n    )\n  GROUP BY\n    le.hadm_id\n),\n-- Combine with ARDS status and abnormal count\ncohort_with_abnormal AS (\n  SELECT\n    pa.hadm_id,\n    pa.age_at_admit,\n    pa.admittime,\n    pa.dischtime,\n    pa.hospital_expire_flag,\n    pa.deathtime,\n    CASE WHEN ards.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_ards,\n    COALESCE(lab.abnormal_lab_count, 0) AS abnormal_lab_count\n  FROM\n    patients_age_gender pa\n  LEFT JOIN\n    ards_hadm ards\n  ON\n    pa.hadm_id = ards.hadm_id\n  LEFT JOIN\n    lab_abnormal lab\n  ON\n    pa.hadm_id = lab.hadm_id\n),\n-- Compute 75th percentile of abnormal lab count among ARDS patients\nards_stats AS (\n  SELECT\n    APPROX_QUANTILES(abnormal_lab_count, 1000)[OFFSET(750)] AS p75_abnormal_count\n  FROM\n    cohort_with_abnormal\n  WHERE\n    has_ards = 1\n),\n-- High instability ARDS group: has_ards = 1 AND abnormal_lab_count >= p75\np75_val AS (\n  SELECT p75_abnormal_count FROM ards_stats\n),\nhigh_instability_ards AS (\n  SELECT\n    'ARDS High Instability' AS cohort,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(DATETIME_DIFF(dischtime, admittime, SECOND) / 3600.0 / 24.0) AS mean_los_days,\n    AVG(abnormal_lab_count) AS avg_critical_labs_per_patient\n  FROM\n    cohort_with_abnormal,\n    p75_val\n  WHERE\n    has_ards = 1\n    AND abnormal_lab_count >= p75_abnormal_count\n),\n-- Non-ARDS group: same age/gender, no ARDS, compute same metrics\nnon_ards AS (\n  SELECT\n    'Non-ARDS' AS cohort,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(DATETIME_DIFF(dischtime, admittime, SECOND) / 3600.0 / 24.0) AS mean_los_days,\n    AVG(abnormal_lab_count) AS avg_critical_labs_per_patient\n  FROM\n    cohort_with_abnormal\n  WHERE\n    has_ards = 0\n)\n-- Combine results\nSELECT\n  cohort,\n  ROUND(mortality_rate, 4) AS mortality_rate,\n  ROUND(mean_los_days, 2) AS mean_los_days,\n  ROUND(avg_critical_labs_per_patient, 2) AS avg_critical_labs_per_patient\nFROM\n  high_instability_ards\nUNION ALL\nSELECT\n  cohort,\n  ROUND(mortality_rate, 4) AS mortality_rate,\n  ROUND(mean_los_days, 2) AS mean_los_days,\n  ROUND(avg_critical_labs_per_patient, 2) AS avg_critical_labs_per_patient\nFROM\n  non_ards;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword TO at [1:24]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword TO at [1:24]\n\nLocation: US\nJob ID: da91fc6e-ec63-45b9-b65e-48fe98c2a013\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dlab at [60:15]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dlab at [60:15]\n\nLocation: US\nJob ID: 0fb3999c-dac8-4e10-a3dc-3d12f9a156e3\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

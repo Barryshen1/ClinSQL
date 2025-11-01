@@ -1,0 +1,16 @@
+{
+  "query": "For my 56-year-old female, what's the 25th percentile of the first respiratory rate recorded at ICU/step-down admission (age 51\u201361)?",
+  "final_sql": "WITH resp_items AS (\n  -- respiratory rate itemids: use common label patterns (case-insensitive)\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    LOWER(label) LIKE '%respiratory rate%' OR\n    LOWER(label) LIKE '%resp rate%' OR\n    LOWER(label) LIKE '%respiratory%' AND LOWER(label) LIKE '%rate%'\n),\n\nfirst_rr_per_stay AS (\n  -- pick the first respiratory rate charted at or after ICU intime for each stay\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    CAST(c.valuenum AS FLOAT64) AS rr,\n    c.charttime,\n    ROW_NUMBER() OVER (PARTITION BY i.stay_id ORDER BY c.charttime, c.storetime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON i.subject_id = c.subject_id\n   AND i.hadm_id = c.hadm_id\n   AND i.stay_id = c.stay_id\n  JOIN resp_items r\n    ON c.itemid = r.itemid\n  WHERE\n    c.charttime IS NOT NULL\n    AND c.charttime >= i.intime\n    AND c.valuenum IS NOT NULL\n    -- keep plausible respiratory rates to reduce noise\n    AND c.valuenum BETWEEN 5 AND 60\n),\n\nfirst_rr_filtered AS (\n  -- keep only the first RR per ICU stay\n  SELECT subject_id, hadm_id, stay_id, rr, charttime\n  FROM first_rr_per_stay\n  WHERE rn = 1\n)\n\nSELECT\n  -- approximate 25th percentile (quartile) of the first respiratory rates\n  APPROX_QUANTILES(rr, 100)[OFFSET(25)] AS rr_25th_percentile,\n  COUNT(*) AS n_first_rr_in_cohort\nFROM first_rr_filtered f\nJOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON f.subject_id = p.subject_id\nWHERE\n  p.gender = 'F'\n  AND p.anchor_age BETWEEN 51 AND 61;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

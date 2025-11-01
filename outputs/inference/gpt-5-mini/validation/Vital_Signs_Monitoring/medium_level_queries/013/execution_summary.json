@@ -1,0 +1,16 @@
+{
+  "query": "I have a 56\u2011year\u2011old male in the ICU. Among male ICU patients aged 51\u201361, categorize first\u201148\u2011hour per\u2011stay average SpO2 (<90, 90\u201392, 93\u201395, >95) and report patient counts and AKI rates.",
+  "final_sql": "WITH spo2_items AS (\n  -- identify SpO2 / oxygen saturation related itemids in ICU d_items\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%spo2%'\n     OR LOWER(label) LIKE '%o2sat%'\n     OR LOWER(label) LIKE '%oxygen saturation%'\n     OR LOWER(label) LIKE '%oxy sat%'\n),\n\naki_hadms AS (\n  -- admissions with AKI diagnosis (text-based matching on diagnosis description)\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%acute kidney%'\n     OR LOWER(d.long_title) LIKE '%acute renal%'\n),\n\nstay_spo2 AS (\n  -- per-ICU-stay average SpO2 in the first 48 hours of the ICU stay\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    AVG(ce.valuenum) AS avg_spo2,\n    COUNT(1) AS n_spo2_measurements\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.subject_id = icu.subject_id\n   AND ce.stay_id = icu.stay_id\n  JOIN spo2_items si\n    ON ce.itemid = si.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.valuenum BETWEEN 0 AND 100\n    AND ce.charttime >= icu.intime\n    AND ce.charttime <= TIMESTAMP_ADD(icu.intime, INTERVAL 48 HOUR)\n  GROUP BY icu.subject_id, icu.hadm_id, icu.stay_id\n),\n\nfiltered_stays AS (\n  -- restrict to male patients aged 51-61 and categorize avg_spo2\n  SELECT\n    s.*,\n    CASE\n      WHEN s.avg_spo2 < 90 THEN '<90'\n      WHEN s.avg_spo2 BETWEEN 90 AND 92 THEN '90-92'\n      WHEN s.avg_spo2 BETWEEN 93 AND 95 THEN '93-95'\n      ELSE '>95'\n    END AS spo2_category\n  FROM stay_spo2 s\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 51 AND 61\n)\n\nSELECT\n  fs.spo2_category,\n  COUNT(1) AS n_stays,\n  SUM(CASE WHEN a.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS n_aki,\n  ROUND(SAFE_DIVIDE(SUM(CASE WHEN a.hadm_id IS NOT NULL THEN 1 ELSE 0 END), COUNT(1)), 4) AS aki_rate\nFROM filtered_stays fs\nLEFT JOIN aki_hadms a\n  ON fs.hadm_id = a.hadm_id\nGROUP BY fs.spo2_category\nORDER BY\n  -- put categories in clinically meaningful order\n  CASE fs.spo2_category\n    WHEN '<90' THEN 1\n    WHEN '90-92' THEN 2\n    WHEN '93-95' THEN 3\n    WHEN '>95' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

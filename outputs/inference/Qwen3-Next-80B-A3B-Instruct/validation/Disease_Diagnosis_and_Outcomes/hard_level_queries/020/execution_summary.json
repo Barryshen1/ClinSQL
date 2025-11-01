@@ -1,0 +1,28 @@
+{
+  "query": "I have a 51-year-old male inpatient. Among male inpatients 46\u201356 with acute myocardial infarction, stratify by the composite risk score (age plus major complications) into quintiles and report in-hospital mortality%, major complication%, and median survivor LOS per quintile.",
+  "final_sql": "WITH ami_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 46 AND 56\n    AND (\n      LOWER(dicd.long_title) LIKE '%acute myocardial infarction%'\n      OR d.icd_code LIKE '410%'  -- ICD-9\n      OR d.icd_code LIKE 'I21%'  -- ICD-10\n    )\n),\ncomplications AS (\n  SELECT\n    d.hadm_id,\n    COUNT(*) AS complication_count\n  FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE d.hadm_id IN (SELECT hadm_id FROM ami_patients)\n    AND (\n      LOWER(dicd.long_title) LIKE '%cardiogenic shock%'\n      OR LOWER(dicd.long_title) LIKE '%cardiac arrest%'\n      OR LOWER(dicd.long_title) LIKE '%ventricular fibrillation%'\n      OR LOWER(dicd.long_title) LIKE '%ventricular tachycardia%'\n      OR LOWER(dicd.long_title) LIKE '%heart failure%'\n      OR LOWER(dicd.long_title) LIKE '%acute kidney injury%'\n      OR LOWER(dicd.long_title) LIKE '%respiratory failure%'\n      OR LOWER(dicd.long_title) LIKE '%stroke%'\n      OR LOWER(dicd.long_title) LIKE '%intracranial hemorrhage%'\n      OR LOWER(dicd.long_title) LIKE '%pulmonary embolism%'\n    )\n  GROUP BY d.hadm_id\n),\nrisk_scores AS (\n  SELECT\n    ap.subject_id,\n    ap.hadm_id,\n    ap.anchor_age,\n    ap.hospital_expire_flag,\n    ap.admittime,\n    ap.dischtime,\n    COALESCE(c.complication_count, 0) AS complication_count,\n    ap.anchor_age + COALESCE(c.complication_count, 0) AS risk_score\n  FROM ami_patients ap\n  LEFT JOIN complications c ON ap.hadm_id = c.hadm_id\n),\nquintiles AS (\n  SELECT *,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM risk_scores\n)\nSELECT DISTINCT\n  risk_quintile,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_pct,\n  AVG(CASE WHEN complication_count > 0 THEN 1 ELSE 0 END) * 100 AS major_complication_pct,\n  PERCENTILE_CONT(TIMESTAMP_DIFF(dischtime, admittime, DAY), 0.5) OVER (PARTITION BY risk_quintile) AS median_survivor_los_days\nFROM quintiles\nWHERE hospital_expire_flag = 0 OR hospital_expire_flag IS NOT NULL\nORDER BY risk_quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column risk_quintile which is neither grouped nor aggregated at [65:3]; reason: invalidQuery, location: query, message: SELECT list expression references column risk_quintile which is neither grouped nor aggregated at [65:3]\n\nLocation: US\nJob ID: 3f7a0d0b-fc79-4817-b74f-09d294dbfc00\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got identifier \"ILIKE\" at [19:23]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got identifier \"ILIKE\" at [19:23]\n\nLocation: US\nJob ID: a1ab4466-5e1c-40c6-8c84-94f75c93be96\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f3333799-f8d8-4aef-999b-4eeafc62aa5f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column risk_quintile which is neither grouped nor aggregated at [65:3]; reason: invalidQuery, location: query, message: SELECT list expression references column risk_quintile which is neither grouped nor aggregated at [65:3]\n\nLocation: US\nJob ID: 3f7a0d0b-fc79-4817-b74f-09d294dbfc00\n"
+    }
+  ]
+}

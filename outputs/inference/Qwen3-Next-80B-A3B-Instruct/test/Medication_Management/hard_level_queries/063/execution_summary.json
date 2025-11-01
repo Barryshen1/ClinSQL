@@ -1,0 +1,28 @@
+{
+  "query": "For a 53\u2011year\u2011old male with pneumonia: among male inpatients 48\u201358, using meds in the first 24 hours, report medication complexity distribution (mean, p25/p50/p75) and compare overall LOS and mortality for serotonergic\u2011interaction risk versus ICU patients; report top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND LOWER(did.long_title) LIKE '%pneumonia%'\n),\n\nmeds_first24 AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    p.drug,\n    p.starttime,\n    CASE \n      WHEN LOWER(p.drug) LIKE '%sertraline%'\n        OR LOWER(p.drug) LIKE '%fluoxetine%'\n        OR LOWER(p.drug) LIKE '%citalopram%'\n        OR LOWER(p.drug) LIKE '%escitalopram%'\n        OR LOWER(p.drug) LIKE '%paroxetine%'\n        OR LOWER(p.drug) LIKE '%venlafaxine%'\n        OR LOWER(p.drug) LIKE '%duloxetine%'\n        OR LOWER(p.drug) LIKE '%phenelzine%'\n        OR LOWER(p.drug) LIKE '%tranylcypromine%'\n        OR LOWER(p.drug) LIKE '%sumatriptan%'\n        OR LOWER(p.drug) LIKE '%rizatriptan%'\n        OR LOWER(p.drug) LIKE '%tramadol%'\n        OR LOWER(p.drug) LIKE '%dextromethorphan%'\n        OR LOWER(p.drug) LIKE '%linezolid%'\n        OR LOWER(p.drug) LIKE '%methylene blue%'\n        OR LOWER(p.drug) LIKE '%clomipramine%'\n        OR LOWER(p.drug) LIKE '%amitriptyline%'\n        OR LOWER(p.drug) LIKE '%nortriptyline%'\n        OR LOWER(p.drug) LIKE '%protriptyline%'\n        OR LOWER(p.drug) LIKE '%maprotiline%'\n        OR LOWER(p.drug) LIKE '%bupropion%'\n        OR LOWER(p.drug) LIKE '%trazodone%'\n        OR LOWER(p.drug) LIKE '%mirtazapine%'\n        OR LOWER(p.drug) LIKE '%pethidine%'\n        OR LOWER(p.drug) LIKE '%fentanyl%'\n        OR LOWER(p.drug) LIKE '%meperidine%'\n      THEN 1\n      ELSE 0\n    END AS has_serotonergic_drug\n  FROM cohort c\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.prescriptions p\n    ON c.hadm_id = p.hadm_id\n  WHERE p.starttime >= c.admittime\n    AND p.starttime <= c.admittime + INTERVAL '24 hours'\n    AND p.drug IS NOT NULL\n    AND TRIM(p.drug) != ''\n),\n\npatient_med_complexity AS (\n  SELECT \n    subject_id,\n    COUNT(DISTINCT drug) AS num_distinct_meds\n  FROM meds_first24\n  GROUP BY subject_id\n),\n\nlos_mortality AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    EXTRACT(EPOCH FROM (c.dischtime - c.admittime)) / 3600 / 24 AS los_days,\n    c.hospital_expire_flag\n  FROM cohort c\n),\n\nsero_group AS (\n  SELECT \n    l.subject_id,\n    l.los_days,\n    l.hospital_expire_flag,\n    COALESCE(MAX(m.has_serotonergic_drug), 0) AS has_serotonergic_drug\n  FROM los_mortality l\n  LEFT JOIN meds_first24 m ON l.subject_id = m.subject_id\n  GROUP BY l.subject_id, l.los_days, l.hospital_expire_flag\n),\n\ncomplexity_stats AS (\n  SELECT \n    AVG(num_distinct_meds) AS mean_med_complexity,\n    PERCENTILE_CONT(num_distinct_meds, 0.25) AS p25_med_complexity,\n    PERCENTILE_CONT(num_distinct_meds, 0.50) AS p50_med_complexity,\n    PERCENTILE_CONT(num_distinct_meds, 0.75) AS p75_med_complexity\n  FROM patient_med_complexity\n),\n\ngrouped_outcomes AS (\n  SELECT \n    has_serotonergic_drug,\n    AVG(los_days) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM sero_group\n  GROUP BY has_serotonergic_drug\n),\n\ntop_quartile_los AS (\n  SELECT \n    PERCENTILE_CONT(los_days, 0.75) AS p75_los,\n    AVG(CASE WHEN los_days >= PERCENTILE_CONT(los_days, 0.75) THEN hospital_expire_flag ELSE NULL END) AS mortality_in_top_quartile\n  FROM los_mortality\n)\n\nSELECT \n  c.mean_med_complexity,\n  c.p25_med_complexity,\n  c.p50_med_complexity,\n  c.p75_med_complexity,\n  g.has_serotonergic_drug,\n  g.mean_los,\n  g.mortality_rate,\n  t.p75_los,\n  t.mortality_in_top_quartile\nFROM complexity_stats c\nCROSS JOIN grouped_outcomes g\nCROSS JOIN top_quartile_los t;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected \")\" at [64:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \")\" at [64:1]\n\nLocation: US\nJob ID: bbc6c06f-bb5d-4faf-9597-105a9b217df2\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:15]\n\nLocation: US\nJob ID: ec5bea57-d1e0-4657-b97b-f4db3be7dbc5\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \")\" at [64:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \")\" at [64:1]\n\nLocation: US\nJob ID: c99cd8c7-b2e7-47b2-b761-38ee14594661\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \")\" at [64:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \")\" at [64:1]\n\nLocation: US\nJob ID: bbc6c06f-bb5d-4faf-9597-105a9b217df2\n"
+    }
+  ]
+}

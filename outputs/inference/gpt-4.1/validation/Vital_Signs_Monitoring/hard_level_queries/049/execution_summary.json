@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating an 83-year-old man with sepsis. Among male ICU patients aged 78\u201388 with sepsis, what percentile rank does an instability score of 85 in the first 24 hours have? Also report mean ICU LOS and hospital mortality for quartile 4.",
+  "final_sql": "WITH sepsis_icd_codes AS (\n  -- ICD-9 and ICD-10 codes for sepsis\n  SELECT '99591' AS icd_code, 9 AS icd_version UNION ALL\n  SELECT '99592', 9 UNION ALL\n  SELECT '038', 9 UNION ALL\n  SELECT 'A40', 10 UNION ALL\n  SELECT 'A41', 10\n),\nsepsis_patients AS (\n  -- Identify ICU stays with sepsis diagnosis\n  SELECT DISTINCT icu.subject_id, icu.hadm_id, icu.stay_id, icu.intime, icu.outtime, icu.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN sepsis_icd_codes s\n    ON dx.icd_version = s.icd_version\n    AND (\n      dx.icd_code = s.icd_code\n      OR dx.icd_code LIKE CONCAT(s.icd_code, '%') -- for codes like 038.xx\n    )\n),\ncohort AS (\n  -- Restrict to male, age 78-88\n  SELECT sp.*, p.gender, p.anchor_age\n  FROM sepsis_patients sp\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON sp.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 78 AND 88\n),\ninstability_itemids AS (\n  -- Find itemids for 'Instability Score'\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%instability score%'\n),\ninstability_scores AS (\n  -- Get max instability score in first 24h for each ICU stay\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    MAX(ce.valuenum) AS instability_score\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.subject_id = ce.subject_id\n    AND c.hadm_id = ce.hadm_id\n    AND c.stay_id = ce.stay_id\n  JOIN instability_itemids ii\n    ON ce.itemid = ii.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.charttime >= c.intime\n    AND ce.charttime < DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.stay_id\n),\nfinal_cohort AS (\n  -- Add LOS and hospital mortality\n  SELECT\n    iscore.subject_id,\n    iscore.hadm_id,\n    iscore.stay_id,\n    iscore.instability_score,\n    c.los,\n    a.hospital_expire_flag\n  FROM instability_scores iscore\n  JOIN cohort c\n    ON iscore.subject_id = c.subject_id\n    AND iscore.hadm_id = c.hadm_id\n    AND iscore.stay_id = c.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON iscore.hadm_id = a.hadm_id\n),\npercentile_rank AS (\n  -- Calculate percentile rank for score 85\n  SELECT\n    COUNTIF(instability_score <= 85) / CAST(COUNT(*) AS FLOAT64) * 100 AS percentile_rank_85\n  FROM final_cohort\n),\nquartiles AS (\n  -- Calculate 75th percentile cutoff\n  SELECT\n    APPROX_QUANTILES(instability_score, 4)[OFFSET(3)] AS q4_cutoff\n  FROM final_cohort\n),\nquartile4 AS (\n  -- Select quartile 4 patients\n  SELECT\n    fc.*\n  FROM final_cohort fc\n  JOIN quartiles q\n    ON fc.instability_score >= q.q4_cutoff\n)\nSELECT\n  pr.percentile_rank_85 AS percentile_rank_for_85,\n  q.q4_cutoff AS quartile4_cutoff,\n  COUNT(*) AS quartile4_n,\n  AVG(q4.los) AS quartile4_mean_icu_los,\n  AVG(SAFE_CAST(q4.hospital_expire_flag AS FLOAT64)) AS quartile4_hospital_mortality\nFROM quartile4 q4\nCROSS JOIN percentile_rank pr\nCROSS JOIN quartiles q\n;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references pr.percentile_rank_85 which is neither grouped nor aggregated at [94:3]; reason: invalidQuery, location: query, message: SELECT list expression references pr.percentile_rank_85 which is neither grouped nor aggregated at [94:3]\n\nLocation: US\nJob ID: 6b309ae5-ede3-404b-84cb-7136bcbee962\n",
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 INNER JOIN must have an immediately following ON or USING clause at [101:1]; reason: invalidQuery, location: query, message: INNER JOIN must have an immediately following ON or USING clause at [101:1]\n\nLocation: US\nJob ID: f9686eda-6262-4f17-9c9a-e6c2fc2e52e3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references pr.percentile_rank_85 which is neither grouped nor aggregated at [94:3]; reason: invalidQuery, location: query, message: SELECT list expression references pr.percentile_rank_85 which is neither grouped nor aggregated at [94:3]\n\nLocation: US\nJob ID: f114c93a-cbb2-4fc5-8d53-77289f927e78\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references pr.percentile_rank_85 which is neither grouped nor aggregated at [94:3]; reason: invalidQuery, location: query, message: SELECT list expression references pr.percentile_rank_85 which is neither grouped nor aggregated at [94:3]\n\nLocation: US\nJob ID: 6b309ae5-ede3-404b-84cb-7136bcbee962\n"
+    }
+  ]
+}

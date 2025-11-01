@@ -1,0 +1,16 @@
+{
+  "query": "For my 89-year-old male patient: among hospitalized men aged 84\u201394, what is the maximum single inpatient DAPT prescription duration?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 84 AND 94\n),\n\naspirin_presc AS (\n  SELECT\n    pr.subject_id,\n    pr.hadm_id,\n    pr.drug,\n    -- interval clipped to the admission\n    GREATEST(COALESCE(pr.starttime, c.admittime), c.admittime) AS int_start,\n    LEAST(COALESCE(pr.stoptime, c.dischtime), c.dischtime) AS int_end\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  JOIN cohort c\n    ON pr.subject_id = c.subject_id\n    AND pr.hadm_id = c.hadm_id\n  WHERE LOWER(pr.drug) LIKE '%aspirin%'\n),\n\np2y12_presc AS (\n  SELECT\n    pr.subject_id,\n    pr.hadm_id,\n    pr.drug,\n    GREATEST(COALESCE(pr.starttime, c.admittime), c.admittime) AS int_start,\n    LEAST(COALESCE(pr.stoptime, c.dischtime), c.dischtime) AS int_end\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  JOIN cohort c\n    ON pr.subject_id = c.subject_id\n    AND pr.hadm_id = c.hadm_id\n  WHERE (\n    LOWER(pr.drug) LIKE '%clopidogrel%' OR LOWER(pr.drug) LIKE '%plavix%'\n    OR LOWER(pr.drug) LIKE '%prasugrel%'  OR LOWER(pr.drug) LIKE '%effient%'\n    OR LOWER(pr.drug) LIKE '%ticagrelor%' OR LOWER(pr.drug) LIKE '%brilinta%'\n    OR LOWER(pr.drug) LIKE '%ticlopidine%' OR LOWER(pr.drug) LIKE '%ticlid%'\n  )\n),\n\n-- keep only intervals that actually overlap the admission (positive length)\naspirin_intervals AS (\n  SELECT * FROM aspirin_presc\n  WHERE int_end > int_start\n),\n\np2y12_intervals AS (\n  SELECT * FROM p2y12_presc\n  WHERE int_end > int_start\n)\n\nSELECT\n  a.subject_id,\n  a.hadm_id,\n  a.drug AS aspirin_drug,\n  p.drug AS p2y12_drug,\n  GREATEST(a.int_start, p.int_start) AS overlap_start,\n  LEAST(a.int_end, p.int_end) AS overlap_end,\n  TIMESTAMP_DIFF(LEAST(a.int_end, p.int_end), GREATEST(a.int_start, p.int_start), SECOND) AS overlap_seconds,\n  ROUND(TIMESTAMP_DIFF(LEAST(a.int_end, p.int_end), GREATEST(a.int_start, p.int_start), SECOND) / 86400.0, 2) AS overlap_days\nFROM aspirin_intervals a\nJOIN p2y12_intervals p\n  ON a.hadm_id = p.hadm_id\n  -- require a positive overlap between the two prescription intervals\n  AND TIMESTAMP_DIFF(LEAST(a.int_end, p.int_end), GREATEST(a.int_start, p.int_start), SECOND) > 0\nORDER BY overlap_seconds DESC\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

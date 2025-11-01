@@ -1,0 +1,28 @@
+{
+  "query": "For benchmarking my 70-year-old female ICU patient: among female ICU stays age 65\u201375, summarize per-measurement systolic BP in first 24h by categories (<140; 140\u2013159; \u2265160) giving mean, median, IQR.",
+  "final_sql": "WITH systolic_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%systolic%'\n    AND LOWER(category) LIKE '%blood pressure%'\n),\nicu_demo AS (\n  SELECT \n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    p.gender,\n    p.anchor_age + EXTRACT(YEAR FROM icu.intime) - p.anchor_year AS age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n)\n, first24h_bp AS (\n  SELECT\n    icu_demo.stay_id,\n    ce.valuenum\n  FROM icu_demo\n  JOIN systolic_items si\n    ON TRUE\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON icu_demo.stay_id = ce.stay_id\n    AND ce.itemid = si.itemid\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n    AND ce.charttime BETWEEN icu_demo.intime \n                         AND TIMESTAMP_ADD(icu_demo.intime, INTERVAL 24 HOUR)\n  WHERE icu_demo.age BETWEEN 65 AND 75\n)\n, grouped AS (\n  SELECT\n    CASE\n      WHEN valuenum < 140 THEN '<140'\n      WHEN valuenum BETWEEN 140 AND 159 THEN '140-159'\n      ELSE '>=160'\n    END AS sbp_category,\n    COUNT(*) AS n_measurements,\n    AVG(valuenum) AS mean_sbp,\n    APPROX_QUANTILES(valuenum, 4) AS quants\n  FROM first24h_bp\n  GROUP BY sbp_category\n)\nSELECT\n  sbp_category,\n  n_measurements,\n  mean_sbp,\n  quants[OFFSET(2)] AS median_sbp,\n  quants[OFFSET(1)] AS q1_sbp,\n  quants[OFFSET(3)] AS q3_sbp,\n  quants[OFFSET(3)] - quants[OFFSET(1)] AS iqr_sbp\nFROM grouped\nORDER BY sbp_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column valuenum which is neither grouped nor aggregated at [46:19]; reason: invalidQuery, location: query, message: SELECT list expression references column valuenum which is neither grouped nor aggregated at [46:19]\n\nLocation: US\nJob ID: 21cb006d-d8e8-428e-bbad-a1e242bdf719\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6a693470-2bfe-4eac-bfb1-a2301be10cb6\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

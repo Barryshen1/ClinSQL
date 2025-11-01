@@ -1,0 +1,22 @@
+{
+  "query": "I have an 89-year-old female patient. Among female patients aged 84\u201394 admitted with chest pain, what's the distribution of first troponin T (normal/borderline/elevated) with counts, percentages, and in-hospital mortality?",
+  "final_sql": "WITH admissions_filtered_by_age_gender AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.hospital_expire_flag,\n        CAST(EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age AS INT64) AS age_at_admission\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'F'\n        AND CAST(EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age AS INT64) BETWEEN 84 AND 94\n),\nchest_pain_admissions AS (\n    -- Filter admissions based on the presence of chest pain diagnoses\n    SELECT\n        afag.subject_id,\n        afag.hadm_id,\n        afag.hospital_expire_flag\n    FROM\n        admissions_filtered_by_age_gender AS afag\n    WHERE EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n        WHERE afag.subject_id = di.subject_id\n          AND afag.hadm_id = di.hadm_id\n          AND (\n                (di.icd_version = 9 AND di.icd_code LIKE '786.5%') -- ICD-9 for chest pain\n                OR\n                (di.icd_version = 10 AND di.icd_code LIKE 'R07%') -- ICD-10 for chest pain\n          )\n    )\n),\ntroponin_t_measurements AS (\n    -- Get all Troponin T measurements for the target population\n    SELECT\n        cpa.subject_id,\n        cpa.hadm_id,\n        cpa.hospital_expire_flag,\n        le.charttime,\n        le.valuenum\n    FROM\n        chest_pain_admissions AS cpa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n        ON cpa.subject_id = le.subject_id AND cpa.hadm_id = le.hadm_id\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_labitems` AS li\n        ON le.itemid = li.itemid\n    WHERE\n        li.label LIKE '%Troponin T%' -- Identify Troponin T measurements\n        AND le.valuenum IS NOT NULL\n        AND le.valuenum >= 0 -- Ensure valid numeric values\n),\nfirst_troponin_t AS (\n    -- Rank and select the first Troponin T measurement for each admission\n    SELECT\n        subject_id,\n        hadm_id,\n        hospital_expire_flag,\n        charttime,\n        valuenum,\n        ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime) AS rn\n    FROM\n        troponin_t_measurements\n),\nclassified_troponin AS (\n    -- Classify the first Troponin T measurement into categories\n    SELECT\n        subject_id,\n        hadm_id,\n        hospital_expire_flag,\n        CASE\n            WHEN valuenum < 0.01 THEN 'Normal (<0.01)'\n            WHEN valuenum >= 0.01 AND valuenum < 0.03 THEN 'Borderline (0.01-0.03)'\n            WHEN valuenum >= 0.03 THEN 'Elevated (>=0.03)'\n            ELSE 'Unknown' -- Should ideally not be reached with prior filtering\n        END AS troponin_category\n    FROM\n        first_troponin_t\n    WHERE\n        rn = 1 -- Select only the first measurement\n)\n-- Final aggregation to calculate counts, percentages, and mortality\nSELECT\n    ct.troponin_category,\n    COUNT(ct.hadm_id) AS total_admissions,\n    ROUND(COUNT(ct.hadm_id) * 100.0 / SUM(COUNT(ct.hadm_id)) OVER (), 2) AS percentage_of_admissions,\n    ROUND(SUM(CASE WHEN ct.hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(ct.hadm_id), 2) AS in_hospital_mortality_percentage\nFROM\n    classified_troponin AS ct\nGROUP BY\n    ct.troponin_category\nORDER BY\n    CASE ct.troponin_category\n        WHEN 'Normal (<0.01)' THEN 1\n        WHEN 'Borderline (0.01-0.03)' THEN 2\n        WHEN 'Elevated (>=0.03)' THEN 3\n        ELSE 4\n    END\n;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"classified\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"classified\" at [1:10]\n\nLocation: US\nJob ID: 50d792d4-bcc1-4f34-9158-9b75e1a7a962\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

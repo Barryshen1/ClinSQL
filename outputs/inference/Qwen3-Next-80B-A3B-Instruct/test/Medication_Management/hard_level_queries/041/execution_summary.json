@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 45\u2011year\u2011old man with heart failure. In male inpatients aged 40\u201350 with HF, stratified by quintiles of a 7\u2011day medication complexity score, report patient counts, score ranges, mean LOS (days), in\u2011hospital mortality, and 30\u2011day readmission.",
+  "final_sql": "WITH hf_patients AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS length_of_stay_days\n  FROM \n    physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN \n    physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN \n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN \n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND dicd.long_title LIKE '%heart failure%'\n),\nmedication_complexity AS (\n  SELECT \n    hp.subject_id,\n    hp.hadm_id,\n    COUNT(DISTINCT pr.drug) AS med_count_7day\n  FROM \n    hf_patients hp\n  INNER JOIN \n    physionet-data.mimiciv_3_1_hosp.prescriptions pr\n    ON hp.subject_id = pr.subject_id\n  WHERE \n    pr.starttime >= hp.admittime - INTERVAL 7 DAY\n    AND pr.starttime <= hp.admittime\n  GROUP BY \n    hp.subject_id, hp.hadm_id\n),\nquintiles AS (\n  SELECT \n    mc.subject_id,\n    mc.hadm_id,\n    mc.med_count_7day,\n    NTILE(5) OVER (ORDER BY mc.med_count_7day) AS quintile\n  FROM \n    medication_complexity mc\n),\nreadmission AS (\n  SELECT \n    a1.subject_id,\n    a1.hadm_id,\n    CASE \n      WHEN a2.hadm_id IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS readmission_30d\n  FROM \n    hf_patients a1\n  LEFT JOIN \n    physionet-data.mimiciv_3_1_hosp.admissions a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND a2.admittime <= a1.dischtime + INTERVAL 30 DAY\n),\nfinal_analysis AS (\n  SELECT \n    q.quintile,\n    COUNT(*) AS patient_count,\n    MIN(q.med_count_7day) AS min_score,\n    MAX(q.med_count_7day) AS max_score,\n    AVG(h.length_of_stay_days) AS mean_los_days,\n    AVG(CAST(h.hospital_expire_flag AS FLOAT64)) AS in_hospital_mortality,\n    AVG(CAST(r.readmission_30d AS FLOAT64)) AS thirty_day_readmission\n  FROM \n    quintiles q\n  INNER JOIN \n    hf_patients h\n    ON q.subject_id = h.subject_id AND q.hadm_id = h.hadm_id\n  INNER JOIN \n    readmission r\n    ON q.subject_id = r.subject_id AND q.hadm_id = r.hadm_id\n  GROUP BY \n    q.quintile\n  ORDER BY \n    q.quintile\n)\nSELECT \n  quintile,\n  patient_count,\n  min_score,\n  max_score,\n  ROUND(mean_los_days, 2) AS mean_los_days,\n  ROUND(in_hospital_mortality, 4) AS in_hospital_mortality,\n  ROUND(thirty_day_readmission, 4) AS thirty_day_readmission\nFROM \n  final_analysis;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword WHERE at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword WHERE at [1:1]\n\nLocation: US\nJob ID: 5459092c-47c7-4e16-8840-2145414fd030\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [39:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [39:3]\n\nLocation: US\nJob ID: 38a22a39-0ff7-46d8-a7f3-e11d3b5a2e21\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

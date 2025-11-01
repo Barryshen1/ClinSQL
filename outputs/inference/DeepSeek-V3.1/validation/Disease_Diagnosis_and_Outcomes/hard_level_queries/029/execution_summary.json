@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating an 87-year-old woman admitted with pneumonia. Among female inpatients aged 82\u201392 with pneumonia, stratified into quintiles by the study\u2019s composite risk score, report for each quintile: 30\u2011day mortality, cardiovascular and neurologic complication rates, and median LOS among survivors.",
+  "final_sql": "WITH pneumonia_cohort AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age, \n    p.dod,\n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    -- Count distinct non-pneumonia ICD-10 diagnoses as risk score\n    COUNT(DISTINCT CASE WHEN di.icd_code NOT LIKE 'J18%' THEN di.icd_code ELSE NULL END) AS risk_score\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 82 AND 92\n    AND di.icd_code LIKE 'J18%'  -- pneumonia codes\n    AND di.icd_version = 10\n  GROUP BY p.subject_id, p.gender, p.anchor_age, p.dod, a.hadm_id, a.admittime, a.dischtime\n),\nquintiles AS (\n  SELECT *,\n    NTILE(5) OVER (ORDER BY risk_score) AS quintile\n  FROM pneumonia_cohort\n),\ncomplications AS (\n  SELECT \n    q.hadm_id,\n    -- Cardiovascular complication: any cardiovascular ICD code\n    MAX(CASE WHEN card.icd_code IS NOT NULL THEN 1 ELSE 0 END) AS cardiovascular_complication,\n    -- Neurologic complication: any neurologic ICD code\n    MAX(CASE WHEN neuro.icd_code IS NOT NULL THEN 1 ELSE 0 END) AS neurologic_complication\n  FROM quintiles q\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON q.hadm_id = di.hadm_id\n  LEFT JOIN (SELECT DISTINCT icd_code FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` \n             WHERE icd_code LIKE 'I21%' OR icd_code LIKE 'I22%' OR icd_code LIKE 'I50%' \n                OR icd_code LIKE 'I48%' OR icd_code LIKE 'I44%' OR icd_code LIKE 'I45%' \n                OR icd_code LIKE 'I46%' OR icd_code LIKE 'I47%' OR icd_code LIKE 'I49%') card\n    ON di.icd_code = card.icd_code\n  LEFT JOIN (SELECT DISTINCT icd_code FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` \n             WHERE icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%' \n                OR icd_code LIKE 'I63%' OR icd_code LIKE 'I64%' OR icd_code LIKE 'G40%' \n                OR icd_code LIKE 'G41%' OR icd_code LIKE 'G93.1' OR icd_code LIKE 'G93.4') neuro\n    ON di.icd_code = neuro.icd_code\n  GROUP BY q.hadm_id\n),\noutcomes AS (\n  SELECT \n    q.*,\n    -- 30-day mortality: death within 30 days of admission\n    CASE WHEN q.dod IS NOT NULL AND DATE_DIFF(DATE(q.dod), DATE(q.admittime), DAY) <= 30 THEN 1 ELSE 0 END AS mortality_30d,\n    c.cardiovascular_complication,\n    c.neurologic_complication,\n    -- LOS in days for survivors (if not died within 30 days)\n    CASE WHEN (q.dod IS NULL OR DATE_DIFF(DATE(q.dod), DATE(q.admittime), DAY) > 30) \n         THEN DATE_DIFF(DATE(q.dischtime), DATE(q.admittime), DAY) \n         ELSE NULL END AS los_survivors\n  FROM quintiles q\n  LEFT JOIN complications c\n    ON q.hadm_id = c.hadm_id\n)\nSELECT \n  quintile,\n  COUNT(*) AS n_patients,\n  ROUND(100 * AVG(mortality_30d), 2) AS mortality_30d_percent,\n  ROUND(100 * AVG(cardiovascular_complication), 2) AS cardiovascular_complication_percent,\n  ROUND(100 * AVG(neurologic_complication), 2) AS neurologic_complication_percent,\n  APPROX_QUANTILES(los_survivors, 100)[OFFSET(50)] AS median_los_survivors\nFROM outcomes\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e1b142c5-6934-4a4c-b20d-b6a629dec96e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [71:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [71:3]\n\nLocation: US\nJob ID: 3c0265a3-27f9-4944-89f9-d6a5389b2516\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

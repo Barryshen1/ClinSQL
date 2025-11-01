@@ -1,0 +1,16 @@
+{
+  "query": "I have a 45-year-old man. Among male ICU patients aged 40\u201350, comparing those with hemorrhagic stroke versus other males 40\u201350, what is the 90th percentile of diagnostic procedures in the first 72 hours, and associated ICU LOS and in-hospital mortality?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    p.gender,\n    p.anchor_age,\n    ie.intime,\n    ie.los,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n),\nstroke_flags AS (\n  SELECT\n    hadm_id,\n    MAX(\n      CASE\n        WHEN (icd_version = 9 AND (\n              icd_code LIKE '430%' OR icd_code LIKE '431%' OR icd_code LIKE '432%'))\n          OR (icd_version = 10 AND (\n              icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%'))\n        THEN 1 ELSE 0 END\n    ) AS has_hemorrhagic_stroke\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nproc_in_72h AS (\n  SELECT\n    c.stay_id,\n    COUNT(*) AS proc_count_72h\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n    ON c.hadm_id = pr.hadm_id\n  WHERE pr.chartdate >= DATE(c.intime)\n    AND pr.chartdate <= DATE(DATETIME_ADD(c.intime, INTERVAL 72 HOUR))\n  GROUP BY c.stay_id\n),\ncohort_with_flags AS (\n  SELECT\n    c.*,\n    COALESCE(s.has_hemorrhagic_stroke, 0) AS has_hemorrhagic_stroke,\n    COALESCE(p72.proc_count_72h, 0) AS proc_count_72h\n  FROM cohort c\n  LEFT JOIN stroke_flags s\n    ON c.hadm_id = s.hadm_id\n  LEFT JOIN proc_in_72h p72\n    ON c.stay_id = p72.stay_id\n)\nSELECT\n  CASE WHEN has_hemorrhagic_stroke = 1 THEN 'Hemorrhagic stroke' ELSE 'Other' END AS group_label,\n  PERCENTILE_CONT(proc_count_72h, 0.9) OVER (PARTITION BY has_hemorrhagic_stroke) AS pct90_proc_72h,\n  AVG(los) OVER (PARTITION BY has_hemorrhagic_stroke) AS avg_icu_los_days,\n  100.0 * AVG(hospital_expire_flag) OVER (PARTITION BY has_hemorrhagic_stroke) AS mortality_rate_percent\nFROM cohort_with_flags\nGROUP BY has_hemorrhagic_stroke, proc_count_72h, los, hospital_expire_flag;",
+  "execution_success": true,
+  "row_count": 5977,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5977,
+      "error": null
+    }
+  ]
+}

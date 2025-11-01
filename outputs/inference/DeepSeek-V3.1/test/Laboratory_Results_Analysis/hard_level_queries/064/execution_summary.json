@@ -1,0 +1,28 @@
+{
+  "query": "I have a 70\u2011year\u2011old female with acute pancreatitis. Among female inpatients 65\u201375 with acute pancreatitis, stratify first\u201148\u2011hour lab instability scores into quintiles and report count, mean instability, mean LOS, mortality per quintile, and % with critical labs versus age\u2011matched inpatients.",
+  "final_sql": "WITH base_cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.hospital_expire_flag,\n        DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR)/24.0 AS los_days,\n        pat.anchor_age,\n        -- Flag for acute pancreatitis: ICD-9 '5770' or ICD-10 starting with 'K85'\n        MAX(CASE WHEN (diag.icd_version = 9 AND diag.icd_code = '5770') \n                  OR (diag.icd_version = 10 AND diag.icd_code LIKE 'K85%') \n                 THEN 1 ELSE 0 END) AS has_pancreatitis\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    WHERE pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 65 AND 75\n    GROUP BY adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.hospital_expire_flag, pat.anchor_age\n),\n\n-- Get labs in first 48 hours\nlabs AS (\n    SELECT \n        lab.subject_id,\n        lab.hadm_id,\n        lab.itemid,\n        lab.valuenum,\n        lab.charttime,\n        lab.ref_range_lower,\n        lab.ref_range_upper\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` lab\n    INNER JOIN base_cohort coh\n        ON lab.hadm_id = coh.hadm_id\n    WHERE lab.charttime BETWEEN coh.admittime AND DATETIME_ADD(coh.admittime, INTERVAL 48 HOUR)\n        AND lab.valuenum IS NOT NULL\n        AND lab.ref_range_lower IS NOT NULL\n        AND lab.ref_range_upper IS NOT NULL\n),\n\n-- For each patient, check if any value is critical\ncritical_labs AS (\n    SELECT \n        hadm_id,\n        MAX(CASE WHEN valuenum < ref_range_lower OR valuenum > ref_range_upper THEN 1 ELSE 0 END) AS is_critical\n    FROM labs\n    GROUP BY hadm_id\n),\n\n-- Compute instability score per patient (number of distinct lab types with critical value)\ninstability_scores AS (\n    SELECT \n        labs.hadm_id,\n        COUNT(DISTINCT labs.itemid) AS instability_score\n    FROM labs\n    WHERE labs.valuenum < labs.ref_range_lower OR labs.valuenum > labs.ref_range_upper\n    GROUP BY labs.hadm_id\n),\n\n-- Combine with base cohort\ncohort_with_scores AS (\n    SELECT\n        coh.*,\n        COALESCE(isc.instability_score, 0) AS instability_score,\n        COALESCE(cl.is_critical, 0) AS has_critical_labs\n    FROM base_cohort coh\n    LEFT JOIN instability_scores isc\n        ON coh.hadm_id = isc.hadm_id\n    LEFT JOIN critical_labs cl\n        ON coh.hadm_id = cl.hadm_id\n),\n\n-- For pancreatitis cases only, compute quintiles of instability score\ncases_with_quintiles AS (\n    SELECT\n        *,\n        NTILE(5) OVER (ORDER BY instability_score) AS quintile\n    FROM cohort_with_scores\n    WHERE has_pancreatitis = 1\n),\n\n-- Aggregate by quintile for cases\nquintile_summary AS (\n    SELECT\n        quintile,\n        COUNT(*) AS count,\n        AVG(instability_score) AS mean_instability,\n        AVG(los_days) AS mean_los,\n        AVG(hospital_expire_flag) AS mortality_rate\n    FROM cases_with_quintiles\n    GROUP BY quintile\n),\n\n-- Overall % with critical labs for cases (pancreatitis)\ncases_critical_percent AS (\n    SELECT\n        AVG(has_critical_labs) * 100 AS cases_critical_pct\n    FROM cohort_with_scores\n    WHERE has_pancreatitis = 1\n),\n\n-- For non-pancreatitis controls: % with critical labs\ncontrols_critical_percent AS (\n    SELECT\n        AVG(has_critical_labs) * 100 AS controls_critical_pct\n    FROM cohort_with_scores\n    WHERE has_pancreatitis = 0\n)\n\n-- Final output\nSELECT\n    q.quintile,\n    q.count,\n    q.mean_instability,\n    q.mean_los,\n    q.mortality_rate,\n    c1.cases_critical_pct AS pancreatitis_critical_pct,\n    c2.controls_critical_pct AS control_critical_pct\nFROM quintile_summary q\nCROSS JOIN cases_critical_percent c1\nCROSS JOIN controls_critical_percent c2\nORDER BY q.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"cases_critical_percent\" at [94:5]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"cases_critical_percent\" at [94:5]\n\nLocation: US\nJob ID: d041ea45-3e12-4645-8263-7596e33f29d3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dlab at [41:18]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dlab at [41:18]\n\nLocation: US\nJob ID: cc898284-a2fd-4e8c-b256-5c7526475e70\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

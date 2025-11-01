@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating a 74\u2011year\u2011old female with intracranial hemorrhage. For female inpatients aged 69\u201379 with ICH, stratify admissions into quintiles by the composite risk score and report, per quintile: n, 30\u2011day mortality %, major complication %, and median survivor LOS.",
+  "final_sql": "with intracranial hemorrhage (ICH)\nWITH patients_ich AS (\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.deathtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON a.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag \n    ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 69 AND 79\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code IN ('430', '431'))\n      OR (diag.icd_version = 10 AND diag.icd_code IN ('I60', 'I61', 'I621'))\n    )\n    AND a.admission_type NOT IN ('AMBULATORY OBSERVATION', 'OBSERVATION')\n),\n-- Count abnormal lab events in the first 24 hours of admission\nabnormal_labs AS (\n  SELECT le.hadm_id, COUNT(*) AS abnormal_lab_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN patients_ich p ON le.hadm_id = p.hadm_id\n  WHERE le.charttime >= p.admittime \n    AND le.charttime < DATETIME_ADD(p.admittime, INTERVAL 1 DAY)\n    AND le.flag = 'abnormal'\n  GROUP BY le.hadm_id\n),\n-- Identify major complications: mechanical ventilation, vasopressors, dialysis\ncomplications AS (\n  -- Mechanical ventilation from procedureevents\n  SELECT DISTINCT pe.hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON pe.itemid = di.itemid\n  JOIN patients_ich p ON pe.hadm_id = p.hadm_id\n  WHERE LOWER(di.label) LIKE '%ventilator%'\n    AND pe.starttime >= p.admittime \n    AND pe.starttime < COALESCE(p.dischtime, '9999-12-31')\n  UNION DISTINCT\n  -- Vasopressors: norepinephrine, epinephrine, dopamine, vasopressin\n  SELECT DISTINCT ie.hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.inputevents` ie\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ie.itemid = di.itemid\n  JOIN patients_ich p ON ie.hadm_id = p.hadm_id\n  WHERE LOWER(di.label) IN ('norepinephrine', 'epinephrine', 'dopamine', 'vasopressin')\n    AND ie.starttime >= p.admittime \n    AND ie.starttime < COALESCE(p.dischtime, '9999-12-31')\n  UNION DISTINCT\n  -- Dialysis from procedureevents\n  SELECT DISTINCT pe.hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON pe.itemid = di.itemid\n  JOIN patients_ich p ON pe.hadm_id = p.hadm_id\n  WHERE LOWER(di.label) LIKE '%dialysis%'\n    AND pe.starttime >= p.admittime \n    AND pe.starttime < COALESCE(p.dischtime, '9999-12-31')\n),\n-- Combine data: add risk score, complications, and mortality\ncohort AS (\n  SELECT \n    p.hadm_id,\n    COALESCE(al.abnormal_lab_count, 0) AS risk_score,\n    CASE WHEN c.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS had_complication,\n    CASE WHEN p.deathtime IS NOT NULL AND DATETIME_DIFF(p.deathtime, p.admittime, DAY) <= 30 THEN 1 ELSE 0 END AS died_within_30d,\n    DATETIME_DIFF(p.dischtime, p.admittime, HOUR) / 24.0 AS los_days\n  FROM patients_ich p\n  LEFT JOIN abnormal_labs al ON p.hadm_id = al.hadm_id\n  LEFT JOIN complications c ON p.hadm_id = c.hadm_id\n),\n-- Assign quintiles based on risk score\nquintiles AS (\n  SELECT *,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM cohort\n)\n-- Final aggregation by quintile\nSELECT\n  risk_quintile,\n  COUNT(*) AS n,\n  ROUND(AVG(died_within_30d) * 100, 2) AS mortality_30d_pct,\n  ROUND(AVG(had_complication) * 100, 2) AS major_complication_pct,\n  ROUND(APPROX_QUANTILES(CASE WHEN died_within_30d = 0 THEN los_days END, 2)[OFFSET(1)], 2) AS median_survivor_los_days\nFROM quintiles\nGROUP BY risk_quintile\nORDER BY risk_quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]\n\nLocation: US\nJob ID: 4702e063-32ed-4395-be1e-63937543d1c6\n",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword TO at [1:24]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword TO at [1:24]\n\nLocation: US\nJob ID: 7eaa8bcb-2004-4904-bc71-e514f1ca8304\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]\n\nLocation: US\nJob ID: 4f3d0d36-b959-4bae-9e5a-88c8eafbc03c\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]\n\nLocation: US\nJob ID: 4702e063-32ed-4395-be1e-63937543d1c6\n"
+    }
+  ]
+}

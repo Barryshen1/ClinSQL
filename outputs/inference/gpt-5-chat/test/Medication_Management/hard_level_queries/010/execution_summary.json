@@ -1,0 +1,16 @@
+{
+  "query": "I'm managing a 66\u2011year\u2011old man hospitalized with hemorrhagic stroke. For male inpatients aged 61\u201371, stratified into quintiles by first\u201124\u2011hour medication complexity score, report per quintile: number of patients, mean complexity score, average LOS, in\u2011hospital mortality, and 30\u2011day readmission rate.",
+  "final_sql": "WITH hemorrhagic_stroke_cohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, pat.anchor_age, pat.gender,\n                  adm.admittime, adm.dischtime, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dxd\n    ON dx.icd_code = dxd.icd_code\n    AND dx.icd_version = dxd.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 61 AND 71\n    AND dx.icd_version = 10\n    AND (dx.icd_code LIKE 'I60%' OR dx.icd_code LIKE 'I61%' OR dx.icd_code LIKE 'I62%')\n),\ncomplexity AS (\n  SELECT c.subject_id, c.hadm_id,\n         COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM hemorrhagic_stroke_cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.hadm_id = pr.hadm_id\n    AND pr.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR)\n  GROUP BY c.subject_id, c.hadm_id\n),\nlos_calc AS (\n  SELECT subject_id, hadm_id,\n         TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM hemorrhagic_stroke_cohort\n),\nreadmission_flag AS (\n  SELECT a.subject_id, a.hadm_id,\n         CASE WHEN MIN(b.admittime) IS NOT NULL THEN 1 ELSE 0 END AS readmit_30d\n  FROM hemorrhagic_stroke_cohort a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` b\n    ON a.subject_id = b.subject_id\n    AND b.hadm_id != a.hadm_id\n    AND b.admittime > a.dischtime\n    AND b.admittime <= TIMESTAMP_ADD(a.dischtime, INTERVAL 30 DAY)\n  GROUP BY a.subject_id, a.hadm_id\n),\nall_metrics AS (\n  SELECT c.subject_id, c.hadm_id,\n         complexity.complexity_score,\n         los_calc.los_days,\n         c.hospital_expire_flag,\n         readmission_flag.readmit_30d\n  FROM hemorrhagic_stroke_cohort c\n  JOIN complexity\n    ON c.subject_id = complexity.subject_id AND c.hadm_id = complexity.hadm_id\n  JOIN los_calc\n    ON c.subject_id = los_calc.subject_id AND c.hadm_id = los_calc.hadm_id\n  JOIN readmission_flag\n    ON c.subject_id = readmission_flag.subject_id AND c.hadm_id = readmission_flag.hadm_id\n),\nwith_quintile AS (\n  SELECT *,\n         NTILE(5) OVER (ORDER BY complexity_score) AS quintile\n  FROM all_metrics\n)\nSELECT quintile,\n       COUNT(DISTINCT subject_id) AS num_patients,\n       AVG(complexity_score) AS mean_complexity_score,\n       AVG(los_days) AS avg_los_days,\n       AVG(hospital_expire_flag) AS in_hosp_mortality_rate,\n       AVG(readmit_30d) AS readmit_30d_rate\nFROM with_quintile\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

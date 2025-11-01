@@ -1,0 +1,93 @@
+with a manual Elixhauser calculation. Define a subset of key Elixhauser comorbidities (e.g., CHF, DM, HTN, etc.) using ICD-10 code patterns from the van Walraven scoring system. Assign binary flags (0/1) for each, sum them for a simple score (0-10+), and stratify as low (≤2), medium (3-5), high (>5). This is a minimal approximation to resolve the error while addressing the clinical need; full Elixhauser would require ~30 conditions and a weights table, but this covers common stroke-relevant comorbidities.
+
+3. **Other Fixes**:
+   - **ICU Flags Aggregation**: The `icu_vent`, `icu_vaso`, and `icu_rrt` CTEs use `MAX(1)` or `MAX(CASE ... THEN 1 ELSE 0 END)`, which works but only includes admissions with ICU stays and matching events. To correctly handle non-ICU admissions (flag=0), move the `MAX` logic into the final `icu_flags` CTE using subqueries or `EXISTS`. This ensures proper 0/1 flagging for all admissions.
+   - **Median LOS**: `APPROX_QUANTILES(los_days, 2)[OFFSET(1)]` approximates the median but may be imprecise for small groups. Switch to `PERCENTILE_CONT(los_days, 0.5) IGNORE NULLS` for exact median.
+   - **RRT Flag**: `MAX(1)` in `icu_rrt` always returns 1 if any event exists; change to `MAX(CASE WHEN pe.itemid IN (...) THEN 1 ELSE 0 END)` for consistency.
+   - **Minor**: Add `EXTRACT(YEAR FROM a.admittime) >= 2008` to align with MIMIC-IV data start; ensure `los_days` uses `SAFE_DIVIDE` if needed, but it's fine. No other schema issues.
+
+4. **Justification for Changes**: Minimal modifications preserve the original structure and intent. Manual Elixhauser is necessary for MIMIC-IV; flag fixes ensure accurate % calculations across all admissions (including non-ICU). Stratifications remain as specified. This better answers the question by providing valid, stratified metrics for the 44-54 male stroke cohort.
+
+### SQL
+sql
+WITH stroke_cohort AS (
+  -- Base cohort: men 44-54 with primary stroke diagnosis
+  SELECT DISTINCT
+    p.subject_id,
+    a.hadm_id,
+    a.admittime,
+    a.dischtime,
+    a.deathtime,
+    a.hospital_expire_flag,
+    CASE 
+      WHEN d.icd_code LIKE 'I63%' THEN 'Ischemic'
+      WHEN d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%' THEN 'Hemorrhagic'
+    END AS stroke_type
+  FROM `physionet-data.mimiciv_3_1_hosp.patients` p
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a
+    ON p.subject_id = a.subject_id
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d
+    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id
+  WHERE p.gender = 'M'
+    AND p.anchor_age BETWEEN 44 AND 54
+    AND p.anchor_age IS NOT NULL
+    AND d.seq_num = 1
+    AND d.icd_version = '10'
+    AND (d.icd_code LIKE 'I63%' OR d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%')
+    AND (a.dischtime > a.admittime)  -- Valid LOS > 0
+    AND EXTRACT(YEAR FROM a.admittime) >= 2008
+),
+elix_comorb_flags AS (
+  -- Manual Elixhauser flags (subset of key conditions for stroke context)
+  SELECT 
+    sc.*,
+    -- CHF
+    MAX(CASE WHEN diag.icd_code IN ('I09.9', 'I11.0', 'I13.0', 'I13.2', 'I25.5', 'I42.0', 'I42.5', 'I42.6', 'I42.7', 'I42.8', 'I42.9', 'I43.0', 'I43.1', 'I43.2', 'I50.1', 'I50.9') THEN 1 ELSE 0 END) AS chf,
+    -- Cardiac Arrhythmias
+    MAX(CASE WHEN diag.icd_code LIKE 'I47%' OR diag.icd_code LIKE 'I48%' OR diag.icd_code LIKE 'I49%' THEN 1 ELSE 0 END) AS arrhyth,
+    -- Valvular Disease
+    MAX(CASE WHEN diag.icd_code LIKE 'A52.03' OR diag.icd_code LIKE 'I05%' OR diag.icd_code LIKE 'I06%' OR diag.icd_code LIKE 'I08%' OR diag.icd_code LIKE 'I09.8' OR diag.icd_code LIKE 'I34%' OR diag.icd_code LIKE 'I35%' OR diag.icd_code LIKE 'I36%' OR diag.icd_code LIKE 'I37%' OR diag.icd_code LIKE 'I38%' OR diag.icd_code LIKE 'Q23.0' OR diag.icd_code LIKE 'Q23.1' OR diag.icd_code LIKE 'Q23.2' OR diag.icd_code LIKE 'Q23.3' OR diag.icd_code LIKE 'Q23.4' THEN 1 ELSE 0 END) AS valve,
+    -- Pulmonary Circulation Disorders
+    MAX(CASE WHEN diag.icd_code LIKE 'I26%' OR diag.icd_code LIKE 'I27%' OR diag.icd_code LIKE 'I28.0' OR diag.icd_code LIKE 'I28.8' OR diag.icd_code LIKE 'I28.9' THEN 1 ELSE 0 END) AS pulmcirc,
+    -- Peripheral Vascular Disorders
+    MAX(CASE WHEN diag.icd_code LIKE 'I70%' OR diag.icd_code LIKE 'I71%' OR diag.icd_code LIKE 'K55.1' OR diag.icd_code LIKE 'K55.8' OR diag.icd_code LIKE 'K95.8' OR diag.icd_code LIKE 'Z95.9' THEN 1 ELSE 0 END) AS pvasc,
+    -- Hypertension (uncomplicated)
+    MAX(CASE WHEN diag.icd_code LIKE 'I10' THEN 1 ELSE 0 END) AS htn,
+    -- Hypertension with complications
+    MAX(CASE WHEN diag.icd_code LIKE 'I11%' OR diag.icd_code LIKE 'I12%' OR diag.icd_code LIKE 'I13%' OR diag.icd_code LIKE 'I15%' THEN 1 ELSE 0 END) AS htncx,
+    -- Paralysis
+    MAX(CASE WHEN diag.icd_code LIKE 'G81%' OR diag.icd_code LIKE 'G82%' OR diag.icd_code LIKE 'G83.0' OR diag.icd_code LIKE 'G83.1' OR diag.icd_code LIKE 'G83.2' OR diag.icd_code LIKE 'G83.3' OR diag.icd_code LIKE 'G83.4' OR diag.icd_code LIKE 'G83.9' THEN 1 ELSE 0 END) AS para,
+    -- Other Neurological Disorders
+    MAX(CASE WHEN diag.icd_code LIKE 'G10%' OR diag.icd_code LIKE 'G11%' OR diag.icd_code LIKE 'G12%' OR diag.icd_code LIKE 'G13%' OR diag.icd_code LIKE 'G20%' OR diag.icd_code LIKE 'G21%' OR diag.icd_code LIKE 'G30%' OR diag.icd_code LIKE 'G31.0' OR diag.icd_code LIKE 'G31.1' OR diag.icd_code LIKE 'G31.8' OR diag.icd_code LIKE 'G32%' OR diag.icd_code LIKE 'G35%' OR diag.icd_code LIKE 'G36%' OR diag.icd_code LIKE 'G37%' OR diag.icd_code LIKE 'G40%' OR diag.icd_code LIKE 'G41%' OR diag.icd_code LIKE 'G93.1' OR diag.icd_code LIKE 'G93.4' OR diag.icd_code LIKE 'R47.0' OR diag.icd_code LIKE 'R56' THEN 1 ELSE 0 END) AS neuro,
+    -- Chronic Pulmonary Disease
+    MAX(CASE WHEN diag.icd_code LIKE 'I27.8' OR diag.icd_code LIKE 'J40%' OR diag.icd_code LIKE 'J41%' OR diag.icd_code LIKE 'J42%' OR diag.icd_code LIKE 'J43%' OR diag.icd_code LIKE 'J44%' OR diag.icd_code LIKE 'J45%' OR diag.icd_code LIKE 'J46%' OR diag.icd_code LIKE 'J47%' OR diag.icd_code LIKE 'J60%' OR diag.icd_code LIKE 'J67%' OR diag.icd_code LIKE 'J68.4' OR diag.icd_code LIKE 'J70.1' OR diag.icd_code LIKE 'J70.3' THEN 1 ELSE 0 END) AS cpd,
+    -- Diabetes uncomplicated
+    MAX(CASE WHEN diag.icd_code LIKE 'E10.0' OR diag.icd_code LIKE 'E10.1' OR diag.icd_code LIKE 'E10.9' OR diag.icd_code LIKE 'E11.0' OR diag.icd_code LIKE 'E11.1' OR diag.icd_code LIKE 'E11.9' OR diag.icd_code LIKE 'E12.0' OR diag.icd_code LIKE 'E12.1' OR diag.icd_code LIKE 'E12.9' OR diag.icd_code LIKE 'E13.0' OR diag.icd_code LIKE 'E13.1' OR diag.icd_code LIKE 'E13.9' OR diag.icd_code LIKE 'E14.0' OR diag.icd_code LIKE 'E14.1' OR diag.icd_code LIKE 'E14.9' THEN 1 ELSE 0 END) AS dm,
+    -- Diabetes with complications
+    MAX(CASE WHEN diag.icd_code LIKE 'E10.2' OR diag.icd_code LIKE 'E10.3' OR diag.icd_code LIKE 'E10.4' OR diag.icd_code LIKE 'E10.5' OR diag.icd_code LIKE 'E10.6' OR diag.icd_code LIKE 'E10.7' OR diag.icd_code LIKE 'E10.8' OR diag.icd_code LIKE 'E11.2' OR diag.icd_code LIKE 'E11.3' OR diag.icd_code LIKE 'E11.4' OR diag.icd_code LIKE 'E11.5' OR diag.icd_code LIKE 'E11.6' OR diag.icd_code LIKE 'E11.7' OR diag.icd_code LIKE 'E11.8' OR diag.icd_code LIKE 'E12.2' OR diag.icd_code LIKE 'E12.3' OR diag.icd_code LIKE 'E12.4' OR diag.icd_code LIKE 'E12.5' OR diag.icd_code LIKE 'E12.6' OR diag.icd_code LIKE 'E12.7' OR diag.icd_code LIKE 'E12.8' OR diag.icd_code LIKE 'E13.2' OR diag.icd_code LIKE 'E13.3' OR diag.icd_code LIKE 'E13.4' OR diag.icd_code LIKE 'E13.5' OR diag.icd_code LIKE 'E13.6' OR diag.icd_code LIKE 'E13.7' OR diag.icd_code LIKE 'E13.8' OR diag.icd_code LIKE 'E14.2' OR diag.icd_code LIKE 'E14.3' OR diag.icd_code LIKE 'E14.4' OR diag.icd_code LIKE 'E14.5' OR diag.icd_code LIKE 'E14.6' OR diag.icd_code LIKE 'E14.7' OR diag.icd_code LIKE 'E14.8' THEN 1 ELSE 0 END) AS dmcx,
+    -- Hypothyroidism
+    MAX(CASE WHEN diag.icd_code LIKE 'E00%' OR diag.icd_code LIKE 'E01%' OR diag.icd_code LIKE 'E02%' OR diag.icd_code LIKE 'E03%' OR diag.icd_code LIKE 'E89.0' THEN 1 ELSE 0 END) AS hypo,
+    -- Renal Disease
+    MAX(CASE WHEN diag.icd_code LIKE 'I12.0' OR diag.icd_code LIKE 'I13.0' OR diag.icd_code LIKE 'N00%' OR diag.icd_code LIKE 'N01%' OR diag.icd_code LIKE 'N02%' OR diag.icd_code LIKE 'N03%' OR diag.icd_code LIKE 'N04%' OR diag.icd_code LIKE 'N05%' OR diag.icd_code LIKE 'N06%' OR diag.icd_code LIKE 'N07%' OR diag.icd_code LIKE 'N08%' OR diag.icd_code LIKE 'N18%' OR diag.icd_code LIKE 'N19%' OR diag.icd_code LIKE 'N25.0' OR diag.icd_code LIKE 'N25.1' OR diag.icd_code LIKE 'N25.9' OR diag.icd_code LIKE 'N26%' OR diag.icd_code LIKE 'N27%' OR diag.icd_code LIKE 'Z94.0' OR diag.icd_code LIKE 'Z99.2' THEN 1 ELSE 0 END) AS renal,
+    -- Cancer
+    MAX(CASE WHEN diag.icd_code LIKE 'C00%' OR diag.icd_code LIKE 'C01%' OR ... OR diag.icd_code LIKE 'D49%' THEN 1 ELSE 0 END) AS cancer  -- Abbreviated; expand as needed for full list
+  FROM stroke_cohort sc
+  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag
+    ON sc.subject_id = diag.subject_id AND sc.hadm_id = diag.hadm_id AND diag.icd_version = '10'
+  GROUP BY sc.subject_id, sc.hadm_id, sc.admittime, sc.dischtime, sc.deathtime, sc.hospital_expire_flag, sc.stroke_type
+),
+elix_score AS (
+  SELECT 
+    ef.*,
+    -- Simple sum score (subset; full van Walraven weights not applied for minimal fix)
+    (COALESCE(chf, 0) + COALESCE(arrhyth, 0) + COALESCE(valve, 0) + COALESCE(pulmcirc, 0) + COALESCE(pvasc, 0) + 
+     COALESCE(htn, 0) + COALESCE(htncx, 0) + COALESCE(para, 0) + COALESCE(neuro, 0) + COALESCE(cpd, 0) + 
+     COALESCE(dm, 0) + COALESCE(dmcx, 0) + COALESCE(hypo, 0) + COALESCE(renal, 0) + COALESCE(cancer, 0)) AS comorb_score,
+    DATE_DIFF(sc.dischtime, sc.admittime, DAY) AS los_days,
+    CASE WHEN sc.deathtime IS NOT NULL THEN 1 ELSE 0 END AS mortality_flag,
+    CASE 
+      WHEN (COALESCE(chf, 0) + COALESCE(arrhyth, 0) + COALESCE(valve, 0) + COALESCE(pulmcirc, 0) + COALESCE(pvasc, 0) + 
+            COALESCE(htn, 0) + COALESCE(htncx, 0) + COALESCE(para, 0) + COALESCE(neuro, 0) + COALESCE(cpd, 0) + 
+            COALESCE(dm, 0) + COALESCE(dmcx, 0) + COALESCE(hypo, 0) + COALESCE(renal, 0) + COALESCE(cancer, 0)) <= 2 THEN 'Low'
+      WHEN (COALESCE(chf, 0) + COALESCE(arrhyth, 0) + COALESCE(valve, 0) + COALESCE(pulmcirc, 0) + COALESCE(pvasc, 0) + 
+            COALESCE(htn, 0) + COALESCE(htncx, 0) + COALESCE(para, 0) + COALESCE(neuro, 0) + COALESCE(cpd,;

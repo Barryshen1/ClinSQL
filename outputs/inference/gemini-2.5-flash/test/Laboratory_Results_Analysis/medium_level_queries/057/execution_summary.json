@@ -1,0 +1,16 @@
+{
+  "query": "For my 84-year-old male, among male patients aged 79\u201389 admitted with ACS, what are the admission counts of index troponin T (first draw) categorized as normal (\u22640.04), borderline (>0.04\u20130.1), and elevated (>0.1)?",
+  "final_sql": "WITH PatientAdmissions AS (\n    -- Select male patients aged 79-89 years\n    SELECT\n        p.subject_id,\n        ad.hadm_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON p.subject_id = ad.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 79 AND 89\n),\nACSAdmissions AS (\n    -- Filter for admissions with an Acute Coronary Syndrome (ACS) diagnosis\n    SELECT DISTINCT\n        pa.hadm_id\n    FROM\n        PatientAdmissions pa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON pa.hadm_id = di.hadm_id\n    WHERE\n        (di.icd_version = 9 AND (di.icd_code LIKE '410%' OR di.icd_code = '4111')) -- ICD-9: Acute MI (410.x), Unstable Angina (411.1)\n        OR\n        (di.icd_version = 10 AND (di.icd_code LIKE 'I20%' OR di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%' OR di.icd_code LIKE 'I24%')) -- ICD-10: Angina (I20.x, incl. unstable I20.0), MI (I21.x, I22.x), Other acute ischemic heart diseases (I24.x)\n),\nTroponinT_Labs AS (\n    -- Get all Troponin T lab events for the identified ACS admissions\n    SELECT\n        acs.hadm_id,\n        le.charttime,\n        le.valuenum\n    FROM\n        ACSAdmissions acs\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON acs.hadm_id = le.hadm_id\n    WHERE\n        le.itemid = 51003 -- ItemID for Troponin T (Quant)\n        AND le.valuenum IS NOT NULL -- Ensure a valid numeric value exists\n),\nIndexTroponinT AS (\n    -- Find the first (index) Troponin T measurement for each admission\n    SELECT\n        hadm_id,\n        valuenum AS first_troponin_t_value,\n        ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC) as rn\n    FROM\n        TroponinT_Labs\n)\n-- Categorize the index Troponin T values and count admissions\nSELECT\n    CASE\n        WHEN itt.first_troponin_t_value <= 0.04 THEN 'Normal (<= 0.04)'\n        WHEN itt.first_troponin_t_value > 0.04 AND itt.first_troponin_t_value <= 0.1 THEN 'Borderline (> 0.04 - 0.1)'\n        WHEN itt.first_troponin_t_value > 0.1 THEN 'Elevated (> 0.1)'\n        ELSE 'Undetermined' -- Should ideally not be reached given prior filters, but good for completeness\n    END AS troponin_t_category,\n    COUNT(itt.hadm_id) AS admission_count\nFROM\n    IndexTroponinT itt\nWHERE\n    itt.rn = 1 -- Select only the first Troponin T measurement for each admission\nGROUP BY\n    troponin_t_category\nORDER BY\n    CASE troponin_t_category\n        WHEN 'Normal (<= 0.04)' THEN 1\n        WHEN 'Borderline (> 0.04 - 0.1)' THEN 2\n        WHEN 'Elevated (> 0.1)' THEN 3\n        ELSE 4\n    END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

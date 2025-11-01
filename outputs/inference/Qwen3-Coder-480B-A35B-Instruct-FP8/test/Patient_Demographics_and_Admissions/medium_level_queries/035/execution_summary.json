@@ -1,0 +1,16 @@
+{
+  "query": "For my 48-year-old female patient: among female inpatients 43\u201353 admitted from the ED, report median LOS, IQR, and percentile rank of a 14\u2011day stay by discharge outcome (home, facility, death).",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND a.admission_location = 'EMERGENCY ROOM'\n),\n\ndischarge_groups AS (\n  SELECT\n    *,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'Death'\n      WHEN discharge_location LIKE '%HOME%' THEN 'Home'\n      WHEN discharge_location IN (\n        ' skilled NURSING FACILITY', 'REHAB', 'LONG TERM CARE HOSPITAL',\n        'HOSPICE', 'AGAINST ADVICE', 'PSYCH FACILITY'\n      ) THEN 'Facility'\n      ELSE 'Other'\n    END AS discharge_outcome\n  FROM\n    cohort\n  WHERE\n    discharge_location IS NOT NULL\n),\n\nstats AS (\n  SELECT\n    discharge_outcome,\n    APPROX_QUANTILES(los, 4) AS quartiles,\n    COUNT(*) AS n\n  FROM\n    discharge_groups\n  GROUP BY\n    discharge_outcome\n),\n\npercentile_ranks AS (\n  SELECT\n    discharge_outcome,\n    los,\n    PERCENT_RANK() OVER (PARTITION BY discharge_outcome ORDER BY los) AS pct_rank\n  FROM\n    discharge_groups\n),\n\npct_14_days AS (\n  SELECT\n    discharge_outcome,\n    MAX(CASE WHEN los <= 14 THEN pct_rank ELSE NULL END) AS pct_rank_14\n  FROM\n    percentile_ranks\n  GROUP BY\n    discharge_outcome\n)\n\nSELECT\n  s.discharge_outcome,\n  ROUND(s.quartiles[ORDINAL(3)], 2) AS median_los,\n  ROUND(s.quartiles[ORDINAL(4)] - s.quartiles[ORDINAL(2)], 2) AS los_iqr,\n  ROUND(p.pct_rank_14 * 100, 2) AS percentile_rank_14_days\nFROM\n  stats s\nJOIN\n  pct_14_days p\nON\n  s.discharge_outcome = p.discharge_outcome\nORDER BY\n  s.discharge_outcome;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "For my 46\u2011year\u2011old male: among male patients aged 41\u201351 admitted with chest pain or AMI, report counts, percentages, and mean, median, IQR of initial Troponin T by category (normal/borderline/elevated).",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 41 AND 51\n),\nprimary_diagnosis AS (\n  SELECT \n    di.hadm_id,\n    di.icd_code,\n    di.icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  WHERE di.seq_num = 1\n    AND (\n      (di.icd_version = 9 AND (di.icd_code LIKE '410%' OR di.icd_code LIKE '7865%'))\n      OR (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%' OR di.icd_code LIKE 'R07%'))\n    )\n),\ntroponin_first AS (\n  SELECT \n    le.hadm_id,\n    le.valuenum,\n    le.ref_range_upper,\n    ROW_NUMBER() OVER (\n      PARTITION BY le.hadm_id \n      ORDER BY le.charttime\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n    ON le.itemid = dli.itemid\n  WHERE dli.label = 'Troponin T'\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n)\nSELECT\n  CASE\n    WHEN valuenum <= ref_range_upper THEN 'normal'\n    WHEN valuenum > ref_range_upper AND valuenum <= ref_range_upper * 3 THEN 'borderline'\n    WHEN valuenum > ref_range_upper * 3 THEN 'elevated'\n  END AS category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(valuenum), 2) AS mean_valuenum,\n  ROUND(APPROX_QUANTILES(valuenum, 100)[OFFSET(50)], 2) AS median,\n  ROUND(APPROX_QUANTILES(valuenum, 100)[OFFSET(75)] - APPROX_QUANTILES(valuenum, 100)[OFFSET(25)], 2) AS iqr\nFROM troponin_first tf\nINNER JOIN cohort c ON tf.hadm_id = c.hadm_id\nINNER JOIN primary_diagnosis pd ON tf.hadm_id = pd.hadm_id\nWHERE tf.rn = 1\nGROUP BY category\nORDER BY \n  CASE category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'elevated' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]\n\nLocation: US\nJob ID: fcf45f6b-6f06-4d14-9400-55efc11c9941\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

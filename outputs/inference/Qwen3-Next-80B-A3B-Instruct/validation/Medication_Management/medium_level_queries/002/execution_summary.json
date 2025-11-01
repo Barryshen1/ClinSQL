@@ -1,0 +1,28 @@
+{
+  "query": "My 64-year-old female inpatient has T2DM and heart failure. Among female inpatients 59\u201369 (\u226548h), report prevalence of injectable GLP\u20111 use in first 48h vs final 12h and absolute pp difference.",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT DISTINCT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON i.subject_id = p.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d1\n    ON i.subject_id = d1.subject_id AND i.hadm_id = d1.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d2\n    ON i.subject_id = d2.subject_id AND i.hadm_id = d2.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND d1.icd_version = 10 AND d1.icd_code LIKE 'E11%'  -- T2DM\n    AND d2.icd_version = 10 AND d2.icd_code LIKE 'I50%'  -- Heart Failure\n    AND i.los >= 2  -- \u226548 hours\n),\n\n-- Identify GLP-1 medications in pharmacy table that occurred during ICU stay\nglp1_medication AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.hadm_id,\n    p.entertime,\n    LOWER(p.medication) AS medication_lower\n  FROM physionet-data.mimiciv_3_1_hosp.pharmacy p\n  INNER JOIN eligible_patients ep\n    ON p.subject_id = ep.subject_id AND p.hadm_id = ep.hadm_id\n  WHERE LOWER(p.medication) LIKE '%exenatide%'\n     OR LOWER(p.medication) LIKE '%liraglutide%'\n     OR LOWER(p.medication) LIKE '%semaglutide%'\n     OR LOWER(p.medication) LIKE '%dulaglutide%'\n     OR LOWER(p.medication) LIKE '%lixisenatide%'\n     OR LOWER(p.medication) LIKE '%albiglutide%'\n),\n\n-- Flag if GLP-1 was administered in first 48h or last 12h of ICU stay\nflagged_patients AS (\n  SELECT\n    ep.subject_id,\n    ep.stay_id,\n    MAX(CASE WHEN gm.entertime BETWEEN ep.intime AND TIMESTAMP_ADD(ep.intime, INTERVAL 48 HOUR) THEN 1 ELSE 0 END) AS glp1_first_48h,\n    MAX(CASE WHEN gm.entertime BETWEEN TIMESTAMP_SUB(ep.outtime, INTERVAL 12 HOUR) AND ep.outtime THEN 1 ELSE 0 END) AS glp1_final_12h\n  FROM eligible_patients ep\n  LEFT JOIN glp1_medication gm\n    ON ep.subject_id = gm.subject_id AND ep.hadm_id = gm.hadm_id\n  GROUP BY ep.subject_id, ep.stay_id\n)\n\n-- Compute prevalence and absolute difference\nSELECT\n  AVG(glp1_first_48h) AS prevalence_first_48h,\n  AVG(glp1_final_12h) AS prevalence_final_12h,\n  AVG(glp1_first_48h) - AVG(glp1_final_12h) AS absolute_prevalence_difference\nFROM flagged_patients;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:11]\n\nLocation: US\nJob ID: cc5cd32b-e5b8-4820-8508-56975a1293da\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside ep at [30:56]; reason: invalidQuery, location: query, message: Name hadm_id not found inside ep at [30:56]\n\nLocation: US\nJob ID: f860137e-481c-430c-95de-d149963b9d6a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

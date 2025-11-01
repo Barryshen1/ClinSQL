@@ -1,0 +1,28 @@
+{
+  "query": "For my 69\u2011year\u2011old man inpatient with diabetes and acute HF, among men aged 64\u201374 report initiation percentages by antidiabetic class (insulin, metformin, sulfonylureas, DPP\u20114, SGLT2, GLP\u20111, TZDs) first 12h vs final 48h.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE\n    LOWER(p.gender) IN ('m', 'male', 'man')\n    -- age at admission\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 64 AND 74\n    -- Must have diabetes on this admission\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n        ON dd.icd_code = di.icd_code AND dd.icd_version = di.icd_version\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%diabetes%'\n    )\n    -- Must have acute HF on this admission\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di2\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd2\n        ON dd2.icd_code = di2.icd_code AND dd2.icd_version = di2.icd_version\n      WHERE di2.subject_id = a.subject_id\n        AND di2.hadm_id = a.hadm_id\n        AND LOWER(dd2.long_title) LIKE '%heart failure%'\n    )\n),\n\nclass_list AS (\n  SELECT 'INSULIN' AS class_label UNION ALL\n  SELECT 'METFORMIN' UNION ALL\n  SELECT 'SULFONYLUREA' UNION ALL\n  SELECT 'DPP-4' UNION ALL\n  SELECT 'SGLT2' UNION ALL\n  SELECT 'GLP-1' UNION ALL\n  SELECT 'TZD'\n),\n\ndrug_classification AS (\n  SELECT\n    sp.subject_id,\n    sp.hadm_id,\n    CASE\n      WHEN REGEXP_CONTAINS(LOWER(sp.drug), '(insulin)') THEN 'INSULIN'\n      WHEN REGEXP_CONTAINS(LOWER(sp.drug), '(metformin)') THEN 'METFORMIN'\n      WHEN REGEXP_CONTAINS(LOWER(sp.drug), '(glipizide|glyburide|glimepiride|glibenclamide)') THEN 'SULFONYLUREA'\n      WHEN REGEXP_CONTAINS(LOWER(sp.drug), '(sitagliptin|linagliptin|saxagliptin|alogliptin|vildagliptin)') THEN 'DPP-4'\n      WHEN REGEXP_CONTAINS(LOWER(sp.drug), '(dapagliflozin|empagliflozin|canagliflozin|ertugliflozin)') THEN 'SGLT2'\n      WHEN REGEXP_CONTAINS(LOWER(sp.drug), '(liraglutide|dulaglutide|exenatide|lixisenatide|albiglutide|semaglutide)') THEN 'GLP-1'\n      WHEN REGEXP_CONTAINS(LOWER(sp.drug), '(pioglitazone|rosiglitazone)') THEN 'TZD'\n      ELSE NULL\n    END AS drug_class,\n    sp.starttime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` AS sp\n  WHERE sp.starttime IS NOT NULL\n),\n\nper_adm_class AS (\n  SELECT\n    e.hadm_id,\n    cl.class_label,\n    MAX(IF(dc.drug_class = cl.class_label\n           AND TIMESTAMP_DIFF(dc.starttime, e.admittime, SECOND) >= 0\n           AND TIMESTAMP_DIFF(dc.starttime, e.admittime, SECOND) <= 12 * 3600,\n           1, 0)) AS first12h_flag,\n    MAX(IF(dc.drug_class = cl.class_label\n           AND TIMESTAMP_DIFF(e.dischtime, dc.starttime, SECOND) >= 0\n           AND TIMESTAMP_DIFF(e.dischtime, dc.starttime, SECOND) <= 48 * 3600,\n           1, 0)) AS final48h_flag\n  FROM eligible_admissions e\n  CROSS JOIN class_list cl\n  LEFT JOIN drug_classification dc\n    ON dc.subject_id = e.subject_id\n   AND dc.hadm_id = e.hadm_id\n  GROUP BY e.hadm_id, cl.class_label\n)\n\nSELECT\n  class_label,\n  SUM(first12h_flag) / COUNT(*) AS first12h_pct,\n  SUM(final48h_flag) / COUNT(*) AS final48h_pct\nFROM per_adm_class\nGROUP BY class_label\nORDER BY class_label;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: 1159d24a-9702-44ff-aae7-419ed0adec85\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: 840847ec-996b-467f-836a-f9ae05f200ce\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

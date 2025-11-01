@@ -1,0 +1,22 @@
+{
+  "query": "I have a 95-year-old man admitted with chest pain. Among male patients aged 90\u2013100 with chest pain and an initially elevated Troponin I, report p25, p50, p75 and range.",
+  "final_sql": "WITH base AS (\n  SELECT \n    p.subject_id, \n    p.anchor_age, \n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    -- Calculate real age at admission\n    (IF(p.anchor_age < 300, p.anchor_age, p.anchor_age - 300 + 90)) \n    + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n),\nfiltered_admissions AS (\n  SELECT b.*\n  FROM base b\n  WHERE \n    age_at_admission BETWEEN 90 AND 100\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE \n        d.hadm_id = b.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '786.5%') \n          OR (d.icd_version = 10 AND d.icd_code LIKE 'R07%')\n        )\n    )\n),\ntroponin_events AS (\n  SELECT \n    l.hadm_id,\n    l.valuenum,\n    l.ref_range_upper,\n    l.flag,\n    ROW_NUMBER() OVER (\n      PARTITION BY l.hadm_id \n      ORDER BY l.charttime\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN filtered_admissions fa\n    ON l.hadm_id = fa.hadm_id\n  WHERE l.itemid IN (51002, 51002)  -- Troponin I (51002, 51003)\n),\nelevated_troponin AS (\n  SELECT \n    hadm_id,\n    valuenum AS initial_troponin_value\n  FROM troponin_events\n  WHERE \n    rn = 1  -- First measurement per admission\n    AND ( \n      (\n        SAFE_CAST(ref_range_upper AS FLOAT64) IS NOT NULL \n        AND valuenum > SAFE_CAST(ref_range_upper AS FLOAT64)\n      )\n      OR (flag = 'High')\n    )\n),\npercentiles AS (\n  SELECT \n    APPROX_QUANTILES(initial_troponin_value, 100) AS p\n  FROM elevated_troponin\n)\nSELECT \n  p[OFFSET(25)] AS p25,\n  p[OFFSET(50)] AS p50,\n  p[OFFSET(75)] AS p75,\n  p[OFFSET(0)] AS min_value,\n  p[OFFSET(100)] AS max_value\nFROM percentiles;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [63:2]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [63:2]\n\nLocation: US\nJob ID: 39a380e0-bef9-47a4-8425-9d23fbf47ad6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

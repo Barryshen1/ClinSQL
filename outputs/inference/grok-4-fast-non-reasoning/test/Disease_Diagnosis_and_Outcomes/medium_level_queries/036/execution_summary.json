@@ -1,0 +1,28 @@
+{
+  "query": "My 44-year-old female with heart failure: among females 39\u201349 with HF, report in-hospital mortality (%) and N by LOS (\u22645 vs >5) and comorbidity tertiles (Low/Med/High); include CKD and diabetes prevalence.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: female admissions aged 39-49 with HF diagnosis\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    -- CKD and diabetes flags (index admission only)\n    MAX(CASE WHEN di.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN di.icd_code LIKE 'E1[0-4]%' THEN 1 ELSE 0 END) AS has_diabetes\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND EXTRACT(YEAR FROM a.admittime) >= p.anchor_year\n    AND di.icd_version = 10\n    AND di.icd_code LIKE 'I50%'  -- Heart failure\n  GROUP BY \n    a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, p.gender, p.anchor_age\n),\n\ncomorb_counts AS (\n  -- Patient-level chronic comorbidity count (historical, excluding HF)\n  SELECT \n    subject_id,\n    COUNT(DISTINCT comorb_group) AS num_comorb\n  FROM (\n    SELECT DISTINCT\n      d.subject_id,\n      CASE \n        WHEN d.icd_code LIKE 'I10%' OR d.icd_code LIKE 'I1[1-6]%' THEN 'HTN'\n        WHEN d.icd_code LIKE 'E1[0-4]%' THEN 'DM'\n        WHEN d.icd_code LIKE 'N18%' THEN 'CKD'\n        WHEN d.icd_code LIKE 'J4[0-7]%' THEN 'COPD'\n        WHEN d.icd_code LIKE 'I2[0-5]%' THEN 'CAD'\n        WHEN d.icd_code LIKE 'I6[0-9]%' THEN 'STROKE'\n        WHEN d.icd_code LIKE 'C[0-9][0-9]%' OR d.icd_code LIKE 'D[0-4][0-9]%' THEN 'CANCER'\n        WHEN d.icd_code LIKE 'F0[1-3]%' THEN 'DEMENTIA'\n        ELSE NULL\n      END AS comorb_group\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE \n      d.icd_version = 10\n      AND d.icd_code NOT LIKE 'I50%'  -- Exclude HF itself\n      AND CASE \n        WHEN d.icd_code LIKE 'I10%' OR d.icd_code LIKE 'I1[1-6]%' THEN 'HTN'\n        WHEN d.icd_code LIKE 'E1[0-4]%' THEN 'DM'\n        WHEN d.icd_code LIKE 'N18%' THEN 'CKD'\n        WHEN d.icd_code LIKE 'J4[0-7]%' THEN 'COPD'\n        WHEN d.icd_code LIKE 'I2[0-5]%' THEN 'CAD'\n        WHEN d.icd_code LIKE 'I6[0-9]%' THEN 'STROKE'\n        WHEN d.icd_code LIKE 'C[0-9][0-9]%' OR d.icd_code LIKE 'D[0-4][0-9]%' THEN 'CANCER'\n        WHEN d.icd_code LIKE 'F0[1-3]%' THEN 'DEMENTIA'\n        ELSE NULL\n      END IS NOT NULL\n  )\n  GROUP BY subject_id\n),\n\nstratified AS (\n  SELECT \n    c.*,\n    COALESCE(cc.num_comorb, 0) AS num_comorb,\n    DATE_DIFF(c.dischtime, c.admittime, DAY) AS los_days,\n    CASE \n      WHEN DATE_DIFF(c.dischtime, c.admittime, DAY) <= 5 THEN '\u22645'\n      ELSE '>5'\n    END AS los_group,\n    NTILE(3) OVER (ORDER BY COALESCE(cc.num_comorb, 0)) AS comorb_tertile_num\n  FROM \n    cohort c\n  LEFT JOIN \n    comorb_counts cc\n    ON c.subject_id = cc.subject_id\n)\n\nSELECT \n  los_group,\n  CASE \n    WHEN comorb_tertile_num = 1 THEN 'Low'\n    WHEN comorb_tertile_num = 2 THEN 'Med'\n    ELSE 'High'\n  END AS comorb_tertile,\n  COUNT(hadm_id) AS N,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct,\n  ROUND(AVG(has_ckd) * 100, 2) AS ckd_prevalence_pct,\n  ROUND(AVG(has_diabetes) * 100, 2) AS diabetes_prevalence_pct\nFROM \n  stratified\nGROUP BY \n  los_group, comorb_tertile_num\nORDER BY \n  los_group, comorb_tertile_num;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [26:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [26:9]\n\nLocation: US\nJob ID: 287f9c7f-bc1f-490c-a29a-3eb6c3f3be06\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [26:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [26:9]\n\nLocation: US\nJob ID: 1dbf91db-446c-405e-8e18-0b99dcb56258\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

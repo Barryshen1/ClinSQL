@@ -1,0 +1,28 @@
+{
+  "query": "I have a 70-year-old male patient. Among male Medicare patients aged 65\u201375 admitted from the ED with a principal diagnosis of acute respiratory failure, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent LOS >9 days?",
+  "final_sql": "WITH\n-- Get male Medicare patients aged 65-75\neligible_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 65 AND 75\n),\n\n-- Get their admissions from ED with Medicare\ned_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_location,\n    a.insurance,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    eligible_patients p ON a.subject_id = p.subject_id\n  WHERE\n    a.admission_location = 'EMERGENCY ROOM ADMIT'\n    AND a.insurance = 'Medicare'\n),\n\n-- Get principal diagnosis of acute respiratory failure\narf_diagnoses AS (\n  SELECT\n    d.subject_id,\n    d.hadm_id,\n    d.seq_num,\n    d.icd_code,\n    d.icd_version,\n    di.long_title\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    (d.icd_code = '518.81' AND d.icd_version = 9) OR\n    (d.icd_code = 'J96.00' AND d.icd_version = 10)\n    AND d.seq_num = 1  -- Principal diagnosis\n),\n\n-- Combine to get index admissions\nindex_admissions AS (\n  SELECT\n    ea.subject_id,\n    ea.hadm_id,\n    ea.admittime,\n    ea.dischtime,\n    ea.los_days,\n    ea.hospital_expire_flag,\n    arf.long_title AS principal_diagnosis\n  FROM\n    ed_admissions ea\n  JOIN\n    arf_diagnoses arf ON ea.subject_id = arf.subject_id AND ea.hadm_id = arf.hadm_id\n),\n\n-- Get all subsequent admissions within 30 days for each patient\nreadmissions AS (\n  SELECT\n    ia.subject_id,\n    ia.hadm_id AS index_hadm_id,\n    ia.admittime AS index_admittime,\n    ia.dischtime AS index_dischtime,\n    ia.los_days AS index_los,\n    a.hadm_id AS readmit_hadm_id,\n    a.admittime AS readmit_admittime,\n    TIMESTAMP_DIFF(a.admittime, ia.dischtime, DAY) AS days_to_readmit\n  FROM\n    index_admissions ia\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ia.subject_id = a.subject_id\n  WHERE\n    a.admittime > ia.dischtime\n    AND TIMESTAMP_DIFF(a.admittime, ia.dischtime, DAY) <= 30\n    AND a.hadm_id != ia.hadm_id\n),\n\n-- Flag patients with readmissions\nreadmission_flags AS (\n  SELECT\n    ia.subject_id,\n    ia.hadm_id,\n    ia.los_days,\n    ia.hospital_expire_flag,\n    CASE WHEN r.subject_id IS NOT NULL THEN 1 ELSE 0 END AS has_readmission\n  FROM\n    index_admissions ia\n  LEFT JOIN\n    readmissions r ON ia.subject_id = r.subject_id AND ia.hadm_id = r.index_hadm_id\n),\n\n-- Calculate statistics\nreadmission_stats AS (\n  SELECT\n    COUNT(*) AS total_index_admissions,\n    SUM(has_readmission) AS readmitted_count,\n    ROUND(SUM(has_readmission) * 100.0 / COUNT(*), 2) AS readmission_rate,\n    ROUND(AVG(CASE WHEN has_readmission = 1 THEN los_days ELSE NULL END), 2) AS avg_los_readmitted,\n    ROUND(AVG(CASE WHEN has_readmission = 0 THEN los_days ELSE NULL END), 2) AS avg_los_not_readmitted,\n    ROUND(PERCENTILE_CONT(CASE WHEN has_readmission = 1 THEN los_days ELSE NULL END, 0.5), 2) AS median_los_readmitted,\n    ROUND(PERCENTILE_CONT(CASE WHEN has_readmission = 0 THEN los_days ELSE NULL END, 0.5), 2) AS median_los_not_readmitted,\n    ROUND(SUM(CASE WHEN has_readmission = 1 AND los_days > 9 THEN 1 ELSE 0 END) * 100.0 /\n          NULLIF(SUM(CASE WHEN has_readmission = 1 THEN 1 ELSE 0 END), 0), 2) AS pct_los_gt9_readmitted,\n    ROUND(SUM(CASE WHEN has_readmission = 0 AND los_days > 9 THEN 1 ELSE 0 END) * 100.0 /\n          NULLIF(SUM(CASE WHEN has_readmission = 0 THEN 1 ELSE 0 END), 0), 2) AS pct_los_gt9_not_readmitted\n  FROM\n    readmission_flags\n)\n\nSELECT * FROM readmission_stats;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 13b530ca-82f4-4830-acfb-eb78875f8a1a\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [116:11]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [116:11]\n\nLocation: US\nJob ID: 8ca3b059-76f3-4931-9690-bd8b25d9346b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic functions cannot be arguments to aggregate functions at [116:11]; reason: invalidQuery, location: query, message: Analytic functions cannot be arguments to aggregate functions at [116:11]\n\nLocation: US\nJob ID: b8ccf6f4-a07f-45d1-933c-a2b91fcf699f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 13b530ca-82f4-4830-acfb-eb78875f8a1a\n"
+    }
+  ]
+}

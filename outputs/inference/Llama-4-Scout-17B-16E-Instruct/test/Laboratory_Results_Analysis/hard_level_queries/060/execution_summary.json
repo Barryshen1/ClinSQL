@@ -1,0 +1,28 @@
+{
+  "query": "I have a 57-year-old female post\u2013cardiac arrest inpatient. Among females 52\u201362 with post\u2013cardiac arrest, in the first 48 h what is the instability score IQR (Q1, median)? Compare critical lab events/admission to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH \n-- Identify cohort of interest: females aged 52-62 with post-cardiac arrest\ncohort AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    p.anchor_age,\n    p.gender,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F' \n    AND p.anchor_age BETWEEN 52 AND 62\n    AND a.admission_type = 'Cardiac Arrest'\n),\n\n-- ICU stays for cohort\ncohort_icu AS (\n  SELECT \n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    TIMESTAMP_DIFF(i.outtime, i.intime, HOUR) AS los\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN \n    cohort c ON i.hadm_id = c.hadm_id\n),\n\n-- Critical lab events in first 48h\nlab_events AS (\n  SELECT \n    ce.stay_id,\n    ce.charttime,\n    ce.itemid,\n    ce.valuenum,\n    ce.valueuom\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN \n    cohort_icu ci ON ce.stay_id = ci.stay_id\n  WHERE \n    ce.charttime BETWEEN ci.intime AND TIMESTAMP_ADD(ci.intime, INTERVAL 48 HOUR)\n    AND ce.itemid IN ( -- example critical lab events, adjust as needed\n      220050,  -- Heart Rate\n      220179,  -- Respiratory Rate\n      220052   -- Blood Pressure\n    )\n)\n\n-- Final query\nSELECT \n  APPROX_QUANTILES(l.valuenum, 4)[OFFSET(1)] AS Q1,\n  APPROX_QUANTILES(l.valuenum, 4)[OFFSET(2)] AS median,\n  AVG(ci.los) AS avg_los,\n  SUM(CASE WHEN c.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(c.hadm_id) AS mortality_rate\nFROM \n  cohort c\nJOIN \n  cohort_icu ci ON c.hadm_id = ci.hadm_id\nJOIN \n  lab_events l ON ci.stay_id = l.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [58:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [58:27]\n\nLocation: US\nJob ID: 9687f6b0-9a9e-41dd-acee-e7a7ec5a8850\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: FLOAT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [62:3]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: FLOAT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [62:3]\n\nLocation: US\nJob ID: c08e1b12-bd58-43c2-af96-396d797aa4ee\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 49-year-old man with AMI. In male inpatients aged 44\u201354 with AMI, what is the 75th percentile of the first 72\u2011hour lab instability score? Also compare critical lab frequency to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH amicohort AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND LOWER(dicd.long_title) LIKE '%acute myocardial infarction%'\n),\n\ngeneralcohort AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd \n        ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND LOWER(dicd.long_title) LIKE '%acute myocardial infarction%'\n    )\n),\n\nlab_critical AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    COUNT(CASE \n      WHEN le.valuenum IS NOT NULL \n        AND le.ref_range_lower IS NOT NULL \n        AND le.ref_range_upper IS NOT NULL \n        AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n        AND le.charttime >= c.admittime \n        AND le.charttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n      THEN 1 \n    END) AS critical_lab_count_72h\n  FROM (\n    SELECT subject_id, hadm_id, admittime FROM amicohort\n    UNION ALL\n    SELECT subject_id, hadm_id, admittime FROM generalcohort\n  ) c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le \n    ON c.subject_id = le.subject_id AND c.hadm_id = le.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl \n    ON le.itemid = dl.itemid\n  WHERE le.charttime IS NOT NULL\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n  GROUP BY c.subject_id, c.hadm_id, c.admittime\n),\n\ncohort_stats AS (\n  SELECT \n    CASE \n      WHEN ac.subject_id IS NOT NULL THEN 'AMI'\n      ELSE 'General'\n    END AS cohort,\n    AVG(lc.critical_lab_count_72h) AS mean_critical_labs,\n    PERCENTILE_CONT(lc.critical_lab_count_72h, 0.75) WITHIN GROUP (ORDER BY lc.critical_lab_count_72h) AS p75_lab_instability,\n    PERCENTILE_CONT(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0, 0.5) WITHIN GROUP (ORDER BY TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0) AS median_los_days,\n    AVG(a.hospital_expire_flag) AS mortality_rate\n  FROM (\n    SELECT subject_id, hadm_id, admittime, dischtime, hospital_expire_flag FROM amicohort\n    UNION ALL\n    SELECT subject_id, hadm_id, admittime, dischtime, hospital_expire_flag FROM generalcohort\n  ) a\n  LEFT JOIN lab_critical lc ON a.subject_id = lc.subject_id AND a.hadm_id = lc.hadm_id\n  LEFT JOIN amicohort ac ON a.subject_id = ac.subject_id AND a.hadm_id = ac.hadm_id\n  GROUP BY cohort\n)\n\nSELECT \n  MAX(CASE WHEN cohort = 'AMI' THEN p75_lab_instability END) AS p75_lab_instability_ami,\n  MAX(CASE WHEN cohort = 'AMI' THEN mean_critical_labs END) AS mean_critical_labs_ami,\n  MAX(CASE WHEN cohort = 'General' THEN mean_critical_labs END) AS mean_critical_labs_general,\n  MAX(CASE WHEN cohort = 'AMI' THEN median_los_days END) AS median_los_days_ami,\n  MAX(CASE WHEN cohort = 'General' THEN median_los_days END) AS median_los_days_general,\n  MAX(CASE WHEN cohort = 'AMI' THEN mortality_rate END) AS mortality_rate_ami,\n  MAX(CASE WHEN cohort = 'General' THEN mortality_rate END) AS mortality_rate_general\nFROM cohort_stats;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [65:54]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [65:54]\n\nLocation: US\nJob ID: c075ee10-b7ec-492c-a882-9dadf0108326\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"the\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"the\" at [1:16]\n\nLocation: US\nJob ID: 79f3fe7c-ada3-4b7c-92f6-5c64c62e33d2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f30fe66e-8978-41ba-be1f-6fb804c1bb22\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [65:54]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [65:54]\n\nLocation: US\nJob ID: c075ee10-b7ec-492c-a882-9dadf0108326\n"
+    }
+  ]
+}

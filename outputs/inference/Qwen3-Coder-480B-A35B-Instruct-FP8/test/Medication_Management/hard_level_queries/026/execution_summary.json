@@ -1,0 +1,16 @@
+{
+  "query": "I have an 81\u2011year\u2011old woman with pneumonia. Among female inpatients aged 76\u201386 with pneumonia, stratify admissions into tertiles by medication complexity (unique drugs in first 7 hospital days) and report counts, min/avg/max score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND (\n      dd.icd_code LIKE 'J18%' OR\n      dd.icd_code LIKE 'J15%' OR\n      dd.icd_code LIKE 'J12%' OR\n      dd.icd_code LIKE 'J13%' OR\n      dd.icd_code LIKE 'J14%' OR\n      dd.icd_code LIKE 'J15%' OR\n      dd.icd_code LIKE 'J16%' OR\n      dd.icd_code LIKE 'J17%'\n    )\n),\n\nmeds_first7d AS (\n  SELECT\n    e.hadm_id,\n    COUNT(DISTINCT e.medication) AS med_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.emar` e\n  JOIN\n    cohort c\n  ON\n    e.hadm_id = c.hadm_id\n  WHERE\n    e.charttime >= c.admittime\n    AND e.charttime <= DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY\n    e.hadm_id\n),\n\ntertiles AS (\n  SELECT\n    c.*,\n    m.med_count,\n    NTILE(3) OVER (ORDER BY m.med_count) AS med_tertile\n  FROM\n    cohort c\n  JOIN\n    meds_first7d m\n  ON\n    c.hadm_id = m.hadm_id\n),\n\nreadmissions AS (\n  SELECT\n    t1.hadm_id,\n    CASE\n      WHEN t2.hadm_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS readmit_30\n  FROM\n    tertiles t1\n  LEFT JOIN\n    tertiles t2\n  ON\n    t1.subject_id = t2.subject_id\n    AND t2.admittime > t1.dischtime\n    AND DATETIME_DIFF(t2.admittime, t1.dischtime, DAY) <= 30\n  QUALIFY\n    ROW_NUMBER() OVER (PARTITION BY t1.hadm_id ORDER BY t2.admittime) = 1\n)\n\nSELECT\n  med_tertile,\n  COUNT(*) AS admission_count,\n  MIN(med_count) AS min_med_count,\n  AVG(med_count) AS avg_med_count,\n  MAX(med_count) AS max_med_count,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) * 100 AS in_hosp_mortality_pct,\n  AVG(readmit_30) * 100 AS readmit_30_pct\nFROM\n  tertiles t\nJOIN\n  readmissions r\nON\n  t.hadm_id = r.hadm_id\nGROUP BY\n  med_tertile\nORDER BY\n  med_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

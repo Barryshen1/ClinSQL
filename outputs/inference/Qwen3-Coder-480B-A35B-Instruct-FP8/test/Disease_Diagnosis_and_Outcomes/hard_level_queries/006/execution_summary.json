@@ -1,0 +1,28 @@
+{
+  "query": "Considering a 75\u2011year\u2011old female: among female inpatients aged 70\u201380 hospitalized for lower GI bleeding, stratified into quintiles by a composite complication-based risk score, report for each quintile N, 90\u2011day mortality rate, major complication rate, and median LOS among 90\u2011day survivors.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.dod,\n    p.anchor_age,\n    DATETIME_DIFF(a.admittime, DATETIME(p.anchor_year, 1, 1, 0, 0, 0), YEAR) + p.anchor_age AS age_at_admit\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND DATETIME_DIFF(a.admittime, DATETIME(p.anchor_year, 1, 1, 0, 0, 0), YEAR) + p.anchor_age BETWEEN 70 AND 80\n),\n\nlower_gi_bleed AS (\n  SELECT DISTINCT\n    c.*\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  ON\n    c.hadm_id = di.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n  ON\n    di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    d.icd_code = 'K922' AND d.icd_version = 10\n),\n\ncomplications AS (\n  SELECT\n    lgb.hadm_id,\n    COUNT(DISTINCT icu.stay_id) AS icu_flag,\n    MAX(CASE WHEN mv.itemid IS NOT NULL THEN 1 ELSE 0 END) AS mech_vent_flag,\n    MAX(CASE WHEN vaso.itemid IS NOT NULL THEN 1 ELSE 0 END) AS vaso_flag,\n    MAX(CASE WHEN dial.itemid IS NOT NULL THEN 1 ELSE 0 END) AS dialysis_flag\n  FROM\n    lower_gi_bleed lgb\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  ON\n    lgb.hadm_id = icu.hadm_id\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` mv\n  ON\n    icu.stay_id = mv.stay_id\n    AND mv.itemid IN (\n      SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items`\n      WHERE LOWER(label) LIKE '%ventilation%'\n    )\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.inputevents` vaso\n  ON\n    icu.stay_id = vaso.stay_id\n    AND vaso.itemid IN (\n      SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items`\n      WHERE LOWER(label) LIKE '%norepinephrine%' OR LOWER(label) LIKE '%epinephrine%' OR LOWER(label) LIKE '%vasopressin%'\n    )\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` dial\n  ON\n    icu.stay_id = dial.stay_id\n    AND dial.itemid IN (\n      SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items`\n      WHERE LOWER(label) LIKE '%dialysis%'\n    )\n  GROUP BY\n    lgb.hadm_id\n),\n\nrisk_score AS (\n  SELECT\n    lgb.*,\n    COALESCE(c.icu_flag, 0) +\n    COALESCE(c.mech_vent_flag, 0) +\n    COALESCE(c.vaso_flag, 0) +\n    COALESCE(c.dialysis_flag, 0) AS risk_score\n  FROM\n    lower_gi_bleed lgb\n  LEFT JOIN\n    complications c\n  ON\n    lgb.hadm_id = c.hadm_id\n),\n\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM\n    risk_score\n),\n\noutcomes AS (\n  SELECT\n    risk_quintile,\n    COUNT(*) AS n,\n    AVG(CASE\n      WHEN dod IS NOT NULL AND dod <= DATETIME_ADD(admittime, INTERVAL 90 DAY) THEN 1\n      ELSE 0\n    END) AS mortality_90d,\n    AVG(CASE WHEN risk_score > 0 THEN 1 ELSE 0 END) AS major_complication_rate,\n    (PERCENTILE_CONT(\n      CASE\n        WHEN (dod IS NULL OR dod > DATETIME_ADD(admittime, INTERVAL 90 DAY)) THEN DATETIME_DIFF(dischtime, admittime, DAY)\n        ELSE NULL\n      END, 0.5) OVER (PARTITION BY risk_quintile)).value AS median_los_90d_survivors\n  FROM\n    quintiles\n  GROUP BY\n    risk_quintile\n)\n\nSELECT\n  risk_quintile,\n  n,\n  ROUND(mortality_90d, 4) AS mortality_90d_rate,\n  ROUND(major_complication_rate, 4) AS major_complication_rate,\n  median_los_90d_survivors\nFROM\n  outcomes\nORDER BY\n  risk_quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Ordering by expressions of type STRUCT is not allowed at [98:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [98:29]\n\nLocation: US\nJob ID: cf9de882-6040-4ef6-b0c3-93c3338b6a7f\n",
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [98:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [98:29]\n\nLocation: US\nJob ID: de6aba3b-2065-4175-ad00-67b7e4b18477\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [98:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [98:29]\n\nLocation: US\nJob ID: bde40aaa-f378-4f94-b45d-5b521b3871b8\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [98:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [98:29]\n\nLocation: US\nJob ID: cf9de882-6040-4ef6-b0c3-93c3338b6a7f\n"
+    }
+  ]
+}

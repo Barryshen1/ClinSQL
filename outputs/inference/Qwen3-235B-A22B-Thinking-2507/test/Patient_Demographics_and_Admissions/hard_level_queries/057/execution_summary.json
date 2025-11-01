@@ -1,0 +1,16 @@
+{
+  "query": "I have a 65-year-old male. Among male Medicare patients 60–70 admitted via the ED with a principal UTI, what is the 30-day readmission rate? Report median index LOS for readmitted vs non‑readmitted and percent with LOS>9 days.",
+  "final_sql": "WITH index_admissions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year AS age,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id AND d.seq_num = 1\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE \n    p.gender = 'M'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 60 AND 70\n    AND a.admission_location = 'EMERGENCY ROOM ADMIT'\n    AND LOWER(a.insurance) LIKE '%medicare%'\n    AND a.dischtime IS NOT NULL\n    AND (\n      LOWER(dd.long_title) LIKE '%urinary tract infection%'\n      OR LOWER(dd.long_title) LIKE '%cystitis%'\n      OR LOWER(dd.long_title) LIKE '%pyelonephritis%'\n    )\n),\nindex_with_readmission AS (\n  SELECT \n    ia.*,\n    IF(EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n      WHERE \n        a.subject_id = ia.subject_id\n        AND a.admittime > ia.dischtime\n        AND a.admittime <= ia.dischtime + INTERVAL '30' DAY\n        AND a.hadm_id != ia.hadm_id\n    ), 1, 0) AS readmitted_30d\n  FROM index_admissions ia\n),\noverall AS (\n  SELECT \n    COUNT(*) AS total,\n    SUM(readmitted_30d) AS readmitted_count\n  FROM index_with_readmission\n),\nbreakdown AS (\n  SELECT\n    readmitted_30d,\n    COUNT(*) AS n,\n    APPROX_QUANTILES(los, 100)[OFFSET(50)] AS median_los,\n    SUM(CASE WHEN los > 9 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS percent_los_gt9\n  FROM index_with_readmission\n  GROUP BY readmitted_30d\n)\nSELECT \n  (SELECT readmitted_count * 1.0 / total FROM overall) AS readmission_rate,\n  readmitted_30d,\n  median_los,\n  percent_los_gt9\nFROM breakdown;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "qwen3-235b-a22b-thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

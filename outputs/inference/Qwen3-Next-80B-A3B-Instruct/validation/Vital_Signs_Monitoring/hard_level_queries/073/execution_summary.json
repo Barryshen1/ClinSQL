@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating a 52-year-old woman with intracranial hemorrhage. Among female ICU patients aged 47\u201357 with ICH, what percentile does a first\u201172\u2011hour vital\u2011sign instability score of 75 represent? Also report average ICU length of stay and mortality for the top decile.",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON p.subject_id = i.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON p.subject_id = d.subject_id AND i.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 47 AND 57\n    AND (LOWER(did.long_title) LIKE '%intracranial hemorrhage%'\n         OR LOWER(did.long_title) LIKE '%subarachnoid hemorrhage%'\n         OR LOWER(did.long_title) LIKE '%intracerebral hemorrhage%')\n),\n\nvital_signs AS (\n  SELECT\n    ep.subject_id,\n    ep.stay_id,\n    ce.charttime,\n    ce.itemid,\n    ce.valuenum,\n    di.label\n  FROM eligible_patients ep\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON ep.stay_id = ce.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  WHERE ce.charttime >= ep.intime\n    AND ce.charttime <= TIMESTAMP_ADD(ep.intime, INTERVAL 72 HOUR)\n    AND di.label IN (\n      'Heart Rate',\n      'Systolic BP',\n      'Diastolic BP',\n      'Mean BP',\n      'Respiratory Rate',\n      'Temperature',\n      'SpO2'\n    )\n    AND ce.valuenum IS NOT NULL\n),\n\nabnormal_vitals AS (\n  SELECT\n    subject_id,\n    stay_id,\n    COUNT(*) AS instability_score\n  FROM vital_signs\n  WHERE (\n    (label = 'Heart Rate' AND (valuenum < 40 OR valuenum > 120))\n    OR (label = 'Systolic BP' AND (valuenum < 90 OR valuenum > 180))\n    OR (label = 'Diastolic BP' AND (valuenum < 50 OR valuenum > 110))\n    OR (label = 'Mean BP' AND (valuenum < 60 OR valuenum > 130))\n    OR (label = 'Respiratory Rate' AND (valuenum < 8 OR valuenum > 30))\n    OR (label = 'Temperature' AND (valuenum < 35 OR valuenum > 39))\n    OR (label = 'SpO2' AND valuenum < 90)\n  )\n  GROUP BY subject_id, stay_id\n),\n\nall_scores AS (\n  SELECT\n    ep.subject_id,\n    ep.stay_id,\n    ep.los,\n    ep.hospital_expire_flag,\n    COALESCE(av.instability_score, 0) AS instability_score\n  FROM eligible_patients ep\n  LEFT JOIN abnormal_vitals av ON ep.stay_id = av.stay_id\n),\n\np90_threshold AS (\n  SELECT PERCENTILE_CONT(instability_score, 0.9) AS p90_threshold\n  FROM all_scores\n),\n\ntop_decile AS (\n  SELECT\n    AVG(los) AS avg_icu_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM all_scores\n  WHERE instability_score >= (SELECT p90_threshold FROM p90_threshold)\n)\n\nSELECT\n  (SELECT SUM(CASE WHEN instability_score <= 75 THEN 1 ELSE 0 END) * 1.0 / COUNT(*) FROM all_scores) AS percentile_of_75,\n  td.avg_icu_los,\n  td.mortality_rate\nFROM top_decile td\nLIMIT 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for operator >= for argument types: INT64, STRUCT<p90_threshold FLOAT64>\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRUCT<p90_threshold DOUBLE>} at [86:9]; reason: invalidQuery, location: query, message: No matching signature for operator >= for argument types: INT64, STRUCT<p90_threshold FLOAT64>\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRUCT<p90_threshold DOUBLE>} at [86:9]\n\nLocation: US\nJob ID: cf6070cc-36ed-487c-90ef-00f5a4db9c9c\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"a\" at [1:17]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"a\" at [1:17]\n\nLocation: US\nJob ID: 3a53a2c2-aacd-4113-83b4-3c9c27d0e29d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \")\" at [45:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \")\" at [45:1]\n\nLocation: US\nJob ID: 6aaa5066-4a33-4f67-bf15-393878d9e7a0\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator >= for argument types: INT64, STRUCT<p90_threshold FLOAT64>\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRUCT<p90_threshold DOUBLE>} at [86:9]; reason: invalidQuery, location: query, message: No matching signature for operator >= for argument types: INT64, STRUCT<p90_threshold FLOAT64>\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRUCT<p90_threshold DOUBLE>} at [86:9]\n\nLocation: US\nJob ID: cf6070cc-36ed-487c-90ef-00f5a4db9c9c\n"
+    }
+  ]
+}

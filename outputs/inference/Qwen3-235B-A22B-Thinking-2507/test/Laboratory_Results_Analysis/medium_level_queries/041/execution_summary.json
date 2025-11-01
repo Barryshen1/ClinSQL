@@ -1,0 +1,16 @@
+{
+  "query": "I have a 48‑year‑old man. Among male patients aged 43–53 admitted with ACS and initial hs‑Troponin T >99th percentile (ULN), what are the median and IQR of initial values in ng/mL?",
+  "final_sql": "WITH \npatients_filtered AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 43 AND 53\n),\nacs_admissions AS (\n  SELECT \n    df.hadm_id\n  FROM patients_filtered df\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON df.hadm_id = diag.hadm_id AND df.subject_id = diag.subject_id\n  WHERE diag.seq_num = 1\n    AND diag.icd_code IN (\n      'I200', 'I210', 'I211', 'I212', 'I213', 'I214',\n      'I220', 'I221', 'I222', 'I228', 'I229',\n      'I240', 'I241', 'I248', 'I249'\n    )\n),\nadmission_period AS (\n  SELECT \n    hadm_id,\n    COALESCE(edregtime, admittime) AS admission_start,\n    dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\ninitial_troponin AS (\n  SELECT \n    le.hadm_id,\n    le.valuenum,\n    le.valueuom,\n    ROW_NUMBER() OVER (\n      PARTITION BY le.hadm_id \n      ORDER BY le.charttime ASC\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n    ON le.itemid = dli.itemid\n  INNER JOIN admission_period ap\n    ON le.hadm_id = ap.hadm_id\n  WHERE dli.label = 'Troponin T, high sensitivity'\n    AND le.valuenum IS NOT NULL\n    AND le.charttime >= ap.admission_start\n    AND le.charttime <= ap.dischtime\n),\ntroponin_ngmL AS (\n  SELECT \n    hadm_id,\n    CASE \n      WHEN valueuom = 'ng/L' THEN valuenum / 1000.0\n      WHEN valueuom = 'ng/mL' THEN valuenum\n      ELSE NULL \n    END AS value_ngmL\n  FROM initial_troponin\n  WHERE rn = 1\n    AND valueuom IN ('ng/L', 'ng/mL')\n),\nfiltered_values AS (\n  SELECT \n    value_ngmL\n  FROM acs_admissions aa\n  INNER JOIN troponin_ngmL tn\n    ON aa.hadm_id = tn.hadm_id\n  WHERE tn.value_ngmL > 0.014  -- ULN = 0.014 ng/mL\n)\nSELECT \n  APPROX_QUANTILES(value_ngmL, 1000)[OFFSET(500)] AS median,\n  APPROX_QUANTILES(value_ngmL, 1000)[OFFSET(750)] - APPROX_QUANTILES(value_ngmL, 1000)[OFFSET(250)] AS iqr\nFROM filtered_values;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "qwen3-235b-a22b-thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

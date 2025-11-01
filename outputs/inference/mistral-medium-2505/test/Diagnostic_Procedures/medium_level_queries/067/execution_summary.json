@@ -1,0 +1,22 @@
+{
+  "query": "44-year-old male. In male patients 39\u201349 with ACS and LOS 1\u20137 days, report p25, p50, p75 of ultrasounds (incl. echo) per admission, stratified 1\u20134 vs 5\u20137 stays and primary vs secondary ACS.",
+  "final_sql": "WITH\n-- Get male patients aged 39-49 at admission\npatient_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admission,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 39 AND 49\n),\n\n-- Identify ACS admissions (primary and secondary)\nacs_admissions AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.age_at_admission,\n    pa.los_days,\n    CASE WHEN d.seq_num = 1 THEN 'Primary' ELSE 'Secondary' END AS acs_type\n  FROM\n    patient_admissions pa\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    pa.hadm_id = d.hadm_id\n  WHERE\n    -- ACS ICD-9 codes (410.xx) and ICD-10 codes (I21.x)\n    (d.icd_version = 9 AND d.icd_code LIKE '410.%')\n    OR (d.icd_version = 10 AND d.icd_code LIKE 'I21.%')\n    AND pa.los_days BETWEEN 1 AND 7\n),\n\n-- Count ultrasounds/echos per admission\nultrasound_counts AS (\n  SELECT\n    aa.hadm_id,\n    COUNT(DISTINCT\n      CASE\n        WHEN h.hcpcs_cd IN ('76700', '76705', '76770', '76775', '76776', '93306', '93307', '93308')\n        THEN CONCAT(h.hadm_id, h.hcpcs_cd, h.seq_num)\n        ELSE NULL\n      END\n    ) AS ultrasound_count\n  FROM\n    acs_admissions aa\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  ON\n    aa.hadm_id = h.hadm_id\n  GROUP BY\n    aa.hadm_id\n),\n\n-- Compute percentiles\npercentiles AS (\n  SELECT\n    CASE\n      WHEN aa.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      ELSE '5-7 days'\n    END AS los_group,\n    aa.acs_type,\n    PERCENTILE_CONT(uc.ultrasound_count, 0.25) OVER(PARTITION BY\n      CASE\n        WHEN aa.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n        ELSE '5-7 days'\n      END,\n      aa.acs_type\n    ) AS p25,\n    PERCENTILE_CONT(uc.ultrasound_count, 0.5) OVER(PARTITION BY\n      CASE\n        WHEN aa.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n        ELSE '5-7 days'\n      END,\n      aa.acs_type\n    ) AS p50,\n    PERCENTILE_CONT(uc.ultrasound_count, 0.75) OVER(PARTITION BY\n      CASE\n        WHEN aa.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n        ELSE '5-7 days'\n      END,\n      aa.acs_type\n    ) AS p75\n  FROM\n    acs_admissions aa\n  LEFT JOIN\n    ultrasound_counts uc\n  ON\n    aa.hadm_id = uc.hadm_id\n)\n\n-- Final aggregation\nSELECT DISTINCT\n  los_group,\n  acs_type,\n  p25,\n  p50,\n  p75\nFROM\n  percentiles\nORDER BY\n  los_group,\n  acs_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_group at [72:64]; reason: invalidQuery, location: query, message: Unrecognized name: los_group at [72:64]\n\nLocation: US\nJob ID: 1de32518-83bd-482d-913a-910515002fb7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

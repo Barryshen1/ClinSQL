@@ -1,0 +1,17 @@
+{
+  "query": "For a 40-year-old man, among male patients aged 35\u201345 admitted with chest pain or AMI, what are counts of first high-sensitivity troponin T categorized as normal, borderline, or myocardial injury?",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.hadm_id,\n    COALESCE(a.edregtime, a.admittime) AS start_time,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  -- Filter males aged 35-45 at admission\n  WHERE p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 35 AND 45\n    -- Primary diagnosis: chest pain (R07%/786.5) or AMI (I21%/410%)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.seq_num = 1\n        AND (\n          (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'R07%'))\n          OR (d.icd_version = 9 AND (d.icd_code LIKE '410%' OR d.icd_code = '786.5'))\n        )\n    )\n),\nfirst_troponin AS (\n  SELECT\n    l.hadm_id,\n    l.valuenum,\n    ROW_NUMBER() OVER (\n      PARTITION BY l.hadm_id \n      ORDER BY l.charttime\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN eligible_admissions e\n    ON l.hadm_id = e.hadm_id\n  WHERE l.itemid = 50189  -- High-sensitivity troponin T\n    AND l.valuenum IS NOT NULL\n    AND l.valueuom = 'ng/L'\n    AND l.charttime >= e.start_time\n    AND l.charttime <= e.dischtime\n)\nSELECT\n  CASE\n    WHEN valuenum < 14 THEN 'normal'\n    WHEN valuenum < 60 THEN 'borderline'  -- 14 <= valuenum < 60\n    ELSE 'myocardial_injury'\n  END AS category,\n  COUNT(*) AS count\nFROM first_troponin\nWHERE rn = 1  -- First measurement per admission\nGROUP BY category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

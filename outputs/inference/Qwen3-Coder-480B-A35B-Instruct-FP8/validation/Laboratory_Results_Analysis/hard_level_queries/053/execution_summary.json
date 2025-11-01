@@ -1,0 +1,22 @@
+{
+  "query": "My 73\u2011year\u2011old man with lower GI bleeding: among male inpatients aged 68\u201378, what is the 90th\u2011percentile 72\u2011h lab\u2011instability score? For top\u2011tier patients, report mortality, average LOS, and compare critical rates for Cr, K, platelets, Hgb, whole\u2011blood K, and WBC versus all inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n),\n\nlab_items_of_interest AS (\n  SELECT\n    itemid,\n    LOWER(label) AS label\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE\n    LOWER(label) IN (\n      'creatinine',\n      'potassium',\n      'platelets',\n      'hemoglobin',\n      'potassium, whole blood',\n      'wbc'\n    )\n),\n\nlabevents_72h AS (\n  SELECT\n    l.hadm_id,\n    l.itemid,\n    l.valuenum,\n    l.flag,\n    l.ref_range_lower,\n    l.ref_range_upper\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    cohort c\n  ON\n    l.hadm_id = c.hadm_id\n  JOIN\n    lab_items_of_interest li\n  ON\n    l.itemid = li.itemid\n  WHERE\n    l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n    AND l.valuenum IS NOT NULL\n),\n\nabnormal_labs AS (\n  SELECT\n    hadm_id,\n    itemid,\n    CASE\n      WHEN flag = 'abnormal' THEN 1\n      WHEN valuenum < ref_range_lower OR valuenum > ref_range_upper THEN 1\n      ELSE 0\n    END AS is_abnormal\n  FROM\n    labevents_72h\n),\n\ninstability_scores AS (\n  SELECT\n    hadm_id,\n    SUM(is_abnormal) AS instability_score\n  FROM\n    abnormal_labs\n  GROUP BY\n    hadm_id\n),\n\npercentile_90 AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS p90_score\n  FROM\n    instability_scores\n),\n\ntop_tier AS (\n  SELECT\n    i.hadm_id\n  FROM\n    instability_scores i\n  CROSS JOIN\n    percentile_90 p\n  WHERE\n    i.instability_score >= p.p90_score\n),\n\ntop_tier_summary AS (\n  SELECT\n    AVG(c.los) AS avg_los,\n    AVG(c.hospital_expire_flag) AS mortality_rate\n  FROM\n    top_tier t\n  JOIN\n    cohort c\n  ON\n    t.hadm_id = c.hadm_id\n),\n\nlab_critical_rates_top AS (\n  SELECT\n    li.label,\n    AVG(a.is_abnormal) AS critical_rate\n  FROM\n    abnormal_labs a\n  JOIN\n    top_tier t\n  ON\n    a.hadm_id = t.hadm_id\n  JOIN\n    lab_items_of_interest li\n  ON\n    a.itemid = li.itemid\n  GROUP BY\n    li.label\n),\n\nlab_critical_rates_all AS (\n  SELECT\n    li.label,\n    AVG(a.is_abnormal) AS critical_rate\n  FROM\n    abnormal_labs a\n  JOIN\n    lab_items_of_interest li\n  ON\n    a.itemid = li.itemid\n  GROUP BY\n    li.label\n)\n\nSELECT\n  (SELECT p90_score FROM percentile_90) AS p90_instability_score,\n  t.avg_los,\n  t.mortality_rate,\n  c.label,\n  c.critical_rate AS top_tier_critical_rate,\n  a.critical_rate AS all_patients_critical_rate\nFROM\n  top_tier_summary t\nCROSS JOIN\n  lab_critical_rates_top c\nJOIN\n  lab_critical_rates_all a\nON\n  c.label = a.label\nORDER BY\n  c.label;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [8:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [8:7]\n\nLocation: US\nJob ID: df711a98-64b7-4596-b7cd-f27383ea4b32\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

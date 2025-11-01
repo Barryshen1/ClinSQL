@@ -1,0 +1,17 @@
+{
+  "query": "For a 63\u2011year\u2011old male patient: among male inpatients 58\u201368 with T2DM and heart failure (admissions \u226572h), report % started on GLP\u20111 agonists in first 72h versus final 12h and absolute difference (pp).",
+  "final_sql": "WITH eligible_admissions AS (\n    SELECT \n        a.hadm_id,\n        a.subject_id,\n        a.admittime,\n        a.dischtime,\n        -- Calculate age at admission: anchor_age + (admission_year - anchor_year)\n        p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n        ON a.subject_id = p.subject_id\n    WHERE \n        p.gender = 'M'\n        AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n        AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 58 AND 68\n),\ndiagnoses AS (\n    SELECT \n        d1.hadm_id,\n        MAX(CASE WHEN d1.icd_code LIKE 'E11%' THEN 1 ELSE 0 END) AS has_t2dm,\n        MAX(CASE WHEN d2.icd_code LIKE 'I50%' THEN 1 ELSE 0 END) AS has_hf\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d1\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2 \n        ON d1.hadm_id = d2.hadm_id\n    WHERE \n        d1.icd_version = 10\n        AND d2.icd_version = 10\n        AND d1.hadm_id IN (SELECT hadm_id FROM eligible_admissions)\n    GROUP BY d1.hadm_id\n    HAVING has_t2dm = 1 AND has_hf = 1\n),\nglp1_prescriptions AS (\n    SELECT \n        p.hadm_id,\n        p.starttime,\n        -- Check for GLP-1 agonist drugs using common names\n        CASE WHEN LOWER(p.drug) LIKE '%glp-1%' \n             OR LOWER(p.drug) LIKE '%semaglutide%' \n             OR LOWER(p.drug) LIKE '%liraglutide%' \n             OR LOWER(p.drug) LIKE '%dulaglutide%' \n             OR LOWER(p.drug) LIKE '%exenatide%' \n             OR LOWER(p.drug) LIKE '%lixisenatide%' \n             OR LOWER(p.drug) LIKE '%albiglutide%' \n             THEN 1 \n             ELSE 0 \n        END AS is_glp1\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    WHERE p.hadm_id IN (SELECT hadm_id FROM diagnoses)\n),\nadmission_windows AS (\n    SELECT \n        e.hadm_id,\n        e.admittime,\n        e.dischtime,\n        TIMESTAMP_ADD(e.admittime, INTERVAL 72 HOUR) AS first72h_end,\n        TIMESTAMP_SUB(e.dischtime, INTERVAL 12 HOUR) AS final12h_start\n    FROM eligible_admissions e\n    INNER JOIN diagnoses d ON e.hadm_id = d.hadm_id\n),\nglp1_in_windows AS (\n    SELECT \n        w.hadm_id,\n        MAX(CASE WHEN g.starttime BETWEEN w.admittime AND w.first72h_end THEN 1 ELSE 0 END) AS glp1_first72h,\n        MAX(CASE WHEN g.starttime BETWEEN w.final12h_start AND w.dischtime THEN 1 ELSE 0 END) AS glp1_final12h\n    FROM admission_windows w\n    LEFT JOIN glp1_prescriptions g \n        ON w.hadm_id = g.hadm_id\n    GROUP BY w.hadm_id\n)\nSELECT \n    (SUM(glp1_first72h) * 100.0 / COUNT(*)) AS percent_first72h,\n    (SUM(glp1_final12h) * 100.0 / COUNT(*)) AS percent_final12h,\n    ABS((SUM(glp1_first72h) * 100.0 / COUNT(*)) - (SUM(glp1_final12h) * 100.0 / COUNT(*))) AS abs_diff\nFROM glp1_in_windows;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

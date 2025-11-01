@@ -1,0 +1,1 @@
+SELECT MIN(DISTINCT p.procedure_id) AS min_procedure_id FROM physionet-data.mimiciv_3_1_hosp.procedures_icd p WHERE p.subject_id IN (SELECT s.subject_id FROM physionet-data.mimiciv_3_1_hosp.patients s WHERE s.gender = 'M' AND CAST(s.anchor_age AS INT) BETWEEN 82 AND 92);

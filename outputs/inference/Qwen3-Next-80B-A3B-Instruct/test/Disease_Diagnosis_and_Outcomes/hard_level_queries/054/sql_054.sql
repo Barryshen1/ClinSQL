@@ -1,0 +1,43 @@
+with an invalid CTE (Common Table Expression) declaration. The syntax `cci_codes AS (;` is malformed — it has an opening parenthesis but no closing one, and no SELECT statement follows. This is not valid BigQuery SQL.
+
+Additionally, the clinical question is complex and requires multiple steps:
+1. Identify female inpatients aged 59–69 with pulmonary embolism (PE) and high comorbidity burden.
+2. Compute mean comorbidity risk score (likely using Charlson Comorbidity Index or Elixhauser) and 30-day mortality for this group.
+3. Compare cardio/neurologic complication rates and survivor length of stay (LOS) to age-matched controls (female 59–69 without PE).
+4. State matched profile percentile vs controls — this implies a comparison distribution (e.g., percentile rank of comorbidity score in controls).
+
+Key considerations:
+- PE diagnosis: Use `diagnoses_icd` with ICD codes for PE (e.g., I26.0, I26.9 from ICD-9/10).
+- Comorbidity burden: Use Elixhauser or Charlson comorbidity indices. MIMIC-IV does not have precomputed scores, so we must derive Elixhauser from `diagnoses_icd` and `d_icd_diagnoses`.
+- Age: Use `patients.anchor_age` and filter for 59–69, female (`gender = 'F'`).
+- 30-day mortality: Join `admissions` with `patients.dod` (date of death) and check if death occurred within 30 days of discharge or admission.
+- Controls: Female 59–69 without PE.
+- LOS: Use `admissions.los` (length of stay) from `admissions` table, but only for survivors.
+- Percentile: Use `PERCENT_RANK()` or `NTILE()` to compute percentile of comorbidity score within control group.
+
+We must:
+- Fix the malformed CTE.
+- Use correct tables: `physionet-data.mimiciv_3_1_hosp.admissions`, `patients`, `diagnoses_icd`, `d_icd_diagnoses`.
+- Compute Elixhauser comorbidity index (commonly used in MIMIC) from ICD codes.
+- Join appropriately to compute outcomes.
+- Avoid invalid syntax and use standard BigQuery SQL.
+
+We'll structure the query with:
+1. CTE for PE patients (case group)
+2. CTE for control group (no PE, same age/gender)
+3. CTE to compute Elixhauser scores for both
+4. Final aggregation with comparisons
+
+Note: Elixhauser comorbidity is derived from 30+ ICD codes. We'll use a standard mapping from published MIMIC-IV literature.
+
+sql
+WITH elixhauser_codes AS (
+  SELECT icd_code, icd_version,
+    CASE 
+      WHEN icd_code IN ('410.00','410.01','410.10','410.11','410.20','410.21','410.30','410.31','410.40','410.41','410.50','410.51','410.60','410.61','410.70','410.71','410.80','410.81','410.90','410.91','I21.0','I21.1','I21.2','I21.3','I21.4','I21.9','I22.0','I22.1','I22.2','I22.8','I22.9','I23.0','I23.1','I23.2','I23.3','I23.4','I23.5','I23.6','I23.7','I23.8','I23.9','I24.0','I24.1','I24.8','I24.9','I25.0','I25.1','I25.2','I25.3','I25.4','I25.5','I25.6','I25.7','I25.8','I25.9','I26.0','I26.9') THEN 1 ELSE 0 END AS myocardial_infarction,
+    CASE WHEN icd_code IN ('428.0','428.1','428.2','428.3','428.4','428.9','I50.0','I50.1','I50.2','I50.3','I50.4','I50.9') THEN 1 ELSE 0 END AS heart_failure,
+    CASE WHEN icd_code IN ('427.31','427.32','427.4','427.5','427.6','427.8','427.9','I47.0','I47.1','I47.2','I48.0','I48.1','I48.2','I48.3','I48.4','I48.9','I49.0','I49.1','I49.2','I49.3','I49.4','I49.5','I49.6','I49.8','I49.9') THEN 1 ELSE 0 END AS arrhythmia,
+    CASE WHEN icd_code IN ('430','431','432.0','432.1','432.2','432.3','432.8','432.9','I60.0','I60.1','I60.2','I60.3','I60.4','I60.5','I60.6','I60.7','I60.8','I60.9','I61.0','I61.1','I61.2','I61.3','I61.4','I61.5','I61.6','I61.7','I61.8','I61.9','I62.0','I62.1','I62.8','I62.9') THEN 1 ELSE 0 END AS hemorrhagic_stroke,
+    CASE WHEN icd_code IN ('433.01','433.10','433.11','433.21','433.31','433.81','433.91','434.00','434.01','434.10','434.11','434.90','434.91','I63.0','I63.1','I63.2','I63.3','I63.4','I63.5','I63.6','I63.7','I63.8','I63.9','I64') THEN 1 ELSE 0 END AS ischemic_stroke,
+    CASE WHEN icd_code IN ('440.0','440.1','440.2','440.3','440.4','440.5','440.8','440.9','I70.0','I70.1','I70.2','I70.3','I70.4','I70.5','I70.6','I70.7','I70.8','I70.9') THEN 1 ELSE 0 END AS peripheral_vascular_disease,
+    CASE WHEN icd_code IN ('490','491.0','491.1','491.2','491.8','491.9','492','493.0','493.1','493.2','493.8','493.9','J40','J41.0','J41.1','J41.8','J42','J43.0','J43.1','J43.2','J43.8','J43.9','J44.0','J44.1','J44.8','J44.9','J45.0','J45.1','J45.2','J45.3','J45.4','J45.5','J45.6','J45.7','J45.8','J45.9','J46','J47') THEN 1 ELSE 0 END AS copd,;

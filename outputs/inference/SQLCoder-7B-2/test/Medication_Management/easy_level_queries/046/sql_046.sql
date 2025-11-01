@@ -1,0 +1,1 @@
+SELECT (SELECT AVG(p.duration) FROM prescriptions p JOIN patients pt ON p.subject_id = pt.subject_id WHERE pt.gender = 'M' AND pt.age >= 90 AND pt.age <= 100 AND p.drug IN ('spironolactone', 'eplerenone')) AS average_duration_for_patients_90_to_100_years_old_male_with_spironolactone_or_eplerenone_prescriptions;

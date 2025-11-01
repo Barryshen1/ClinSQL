@@ -1,0 +1,23 @@
+{
+  "query": "I\u2019m evaluating a 78\u2011year\u2011old male with pneumonia and high comorbidity. In male patients 73\u201383 with pneumonia and top\u2011quartile comorbidity, what is his composite risk percentile? Provide cohort in\u2011hospital mortality %, major complication %, and median survival days.",
+  "final_sql": "WITH patients_of_interest AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 73 AND 83\n),\n\npneumonia_patients AS (\n  SELECT DISTINCT\n    poi.*\n  FROM patients_of_interest poi\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON poi.hadm_id = d.hadm_id\n  WHERE d.icd_version = 10\n    AND (\n      d.icd_code LIKE 'J09%' OR\n      d.icd_code LIKE 'J10.0%' OR\n      d.icd_code LIKE 'J11.0%' OR\n      d.icd_code LIKE 'J12%' OR\n      d.icd_code LIKE 'J13%' OR\n      d.icd_code LIKE 'J14%' OR\n      d.icd_code LIKE 'J15%' OR\n      d.icd_code LIKE 'J16%' OR\n      d.icd_code LIKE 'J17%' OR\n      d.icd_code LIKE 'J18%' OR\n      d.icd_code LIKE 'J69.0%'\n    )\n),\n\ncomorbidity AS (\n  SELECT\n    pp.hadm_id,\n    COUNT(*) AS comorbidity_count\n  FROM pneumonia_patients pp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON pp.hadm_id = d.hadm_id\n  WHERE d.icd_version = 10\n    AND NOT (\n      d.icd_code LIKE 'J09%' OR\n      d.icd_code LIKE 'J10.0%' OR\n      d.icd_code LIKE 'J11.0%' OR\n      d.icd_code LIKE 'J12%' OR\n      d.icd_code LIKE 'J13%' OR\n      d.icd_code LIKE 'J14%' OR\n      d.icd_code LIKE 'J15%' OR\n      d.icd_code LIKE 'J16%' OR\n      d.icd_code LIKE 'J17%' OR\n      d.icd_code LIKE 'J18%' OR\n      d.icd_code LIKE 'J69.0%'\n    )\n  GROUP BY pp.hadm_id\n),\n\ntop_comorbidity AS (\n  SELECT\n    pp.*,\n    c.comorbidity_count,\n    NTILE(4) OVER (ORDER BY c.comorbidity_count DESC) AS comorbidity_quartile\n  FROM pneumonia_patients pp\n  INNER JOIN comorbidity c\n    ON pp.hadm_id = c.hadm_id\n),\nfinal_cohort AS (\n  SELECT *\n  FROM top_comorbidity\n  WHERE comorbidity_quartile = 4\n),\n\ncomplications AS (\n  SELECT DISTINCT\n    fc.hadm_id\n  FROM final_cohort fc\n  WHERE \n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n      WHERE pe.hadm_id = fc.hadm_id\n        AND pe.itemid IN (225468, 225442)  -- Verified vent itemids\n    )\n    OR EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = fc.hadm_id\n        AND d.icd_version = 10\n        AND (d.icd_code LIKE 'A40%' OR d.icd_code LIKE 'A41%' OR d.icd_code LIKE 'J96%')\n    )\n)\n\nSELECT\n  (SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)) AS mortality_pct,\n  (SUM(CASE WHEN c.hadm_id IS NOT NULL THEN 1 ELSE 0 END) * 100.0 / COUNT(*)) AS complication_pct,\n  APPROX_QUANTILES(\n    CASE\n      WHEN deathtime IS NOT NULL THEN DATETIME_DIFF(deathtime, admittime, DAY)\n      ELSE DATETIME_DIFF(dischtime, admittime, DAY)\n    END,\n    100\n  )[OFFSET(50)] AS median_survival_days\nFROM final_cohort fc\nLEFT JOIN complications c ON fc.hadm_id = c.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:16]\n\nLocation: US\nJob ID: 78c32ab1-ddfb-4843-abd2-ae009c732fda\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

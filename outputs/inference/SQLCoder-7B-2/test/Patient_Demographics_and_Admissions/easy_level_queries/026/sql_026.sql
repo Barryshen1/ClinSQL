@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY p.dod) AS q25 FROM patients p JOIN admissions a ON p.subject_id = a.subject_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2018 AND 2020 AND p.anchor_age BETWEEN 48 AND 58 AND a.admission_type_code = 'CABG';

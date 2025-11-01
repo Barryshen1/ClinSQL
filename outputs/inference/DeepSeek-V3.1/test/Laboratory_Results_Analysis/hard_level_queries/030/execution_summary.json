@@ -1,0 +1,22 @@
+{
+  "query": "I have a 44-year-old female inpatient. Among female inpatients 39\u201349 with asthma exacerbation, what is the 75th\u2011percentile lab instability score in the first 48 hours? Compare critical\u2011lab events per admission to all inpatients and report cohort LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH asthma_cohort AS (\n  SELECT DISTINCT\n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days,\n    -- Calculate actual age at admission\n    DATETIME_DIFF(adm.admittime, \n                  DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), \n                  YEAR) + pat.anchor_age AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE pat.gender = 'F'\n    AND (\n      (diag.icd_version = 10 AND diag.icd_code LIKE 'J45%') OR\n      (diag.icd_version = 9 AND diag.icd_code LIKE '493%')\n    )\n    -- Filter by calculated age at admission\n    AND DATETIME_DIFF(adm.admittime, \n                      DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), \n                      YEAR) + pat.anchor_age BETWEEN 39 AND 49\n),\n\ncohort_lab_events AS (\n  SELECT \n    ac.hadm_id,\n    COUNT(*) AS critical_lab_count\n  FROM asthma_cohort ac\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ac.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN ac.admittime AND DATETIME_ADD(ac.admittime, INTERVAL 48 HOUR)\n  WHERE le.flag = 'abnormal'\n  GROUP BY ac.hadm_id\n),\n\nall_admissions_lab_events AS (\n  SELECT \n    adm.hadm_id,\n    COUNT(*) AS critical_lab_count\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON adm.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN adm.admittime AND DATETIME_ADD(adm.admittime, INTERVAL 48 HOUR)\n  WHERE le.flag = 'abnormal'\n  GROUP BY adm.hadm_id\n)\n\nSELECT \n  (SELECT APPROX_QUANTILES(critical_lab_count, 100)[OFFSET(75)]\n   FROM cohort_lab_events) AS percentile_75_lab_instability_score,\n\n  (SELECT AVG(critical_lab_count) \n   FROM cohort_lab_events) AS avg_lab_instability_cohort,\n\n  (SELECT AVG(critical_lab_count) \n   FROM all_admissions_lab_events) AS avg_lab_instability_all,\n\n  (SELECT AVG(los_days) \n   FROM asthma_cohort) AS avg_los_days_cohort,\n\n  (SELECT AVG(CAST(hospital_expire_flag AS INT)) * 100 \n   FROM asthma_cohort) AS in_hospital_mortality_percent_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 133bafa1-4df6-4036-96f0-d06692f6870c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

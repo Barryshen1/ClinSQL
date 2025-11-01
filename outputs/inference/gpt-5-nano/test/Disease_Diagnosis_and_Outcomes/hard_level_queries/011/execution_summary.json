@@ -1,0 +1,28 @@
+{
+  "query": "For my 93-year-old female with AMI who had an ICU stay, among female inpatients 88\u201398 with AMI post-ICU, what is the average composite risk percentile? Report cohort 30\u2011day mortality, AKI and ARDS rates, and median survival of decedents.",
+  "final_sql": "WITH cohort_base AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.deathtime,\n    p.anchor_age,\n    p.gender,\n    -- age bucket: 88\u201389 -> 1, 90\u201391 -> 2, 92\u201393 -> 3, 94\u201395 -> 4, >=96 -> 5\n    CASE\n      WHEN p.anchor_age BETWEEN 88 AND 89 THEN 1\n      WHEN p.anchor_age BETWEEN 90 AND 91 THEN 2\n      WHEN p.anchor_age BETWEEN 92 AND 93 THEN 3\n      WHEN p.anchor_age BETWEEN 94 AND 95 THEN 4\n      WHEN p.anchor_age >= 96 THEN 5\n    END AS age_bucket,\n    -- AKI flag: acute kidney injury\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%acute kidney%'\n    ) THEN 1 ELSE 0 END AS aki_flag,\n    -- ARDS flag: acute respiratory distress syndrome\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%acute respiratory distress syndrome%'\n    ) THEN 1 ELSE 0 END AS ards_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 88 AND 98\n    -- AMI requirement: AMI diagnosis for this admission\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%acute myocardial infarction%'\n    )\n    -- Post-ICU: ensure an ICU stay occurred for this admission\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n      WHERE i.subject_id = a.subject_id\n        AND i.hadm_id = a.hadm_id\n    )\n),\ncohort_calc AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    deathtime,\n    anchor_age,\n    gender,\n    age_bucket,\n    aki_flag,\n    ards_flag,\n    -- simple composite risk score\n    CAST(age_bucket AS FLOAT64) + 2.0 * aki_flag + 2.0 * ards_flag AS risk_score,\n    CASE\n      WHEN deathtime IS NOT NULL\n           AND TIMESTAMP_DIFF(deathtime, admittime, DAY) >= 0\n           AND TIMESTAMP_DIFF(deathtime, admittime, DAY) <= 30\n      THEN 1 ELSE 0\n    END AS death_30d\n  FROM cohort_base\n),\ncohort_with_percentile AS (\n  SELECT\n    *,\n    PERCENT_RANK() OVER (ORDER BY risk_score) AS percentile\n  FROM cohort_calc\n)\nSELECT\n  AVG(percentile) AS avg_composite_risk_percentile,\n  -- 30-day mortality rate (as percentage)\n  AVG(CAST(death_30d AS FLOAT64)) * 100.0 AS cohort_30_day_mortality_rate,\n  -- AKI rate\n  AVG(CAST(aki_flag AS FLOAT64)) * 100.0 AS aki_rate,\n  -- ARDS rate\n  AVG(CAST(ards_flag AS FLOAT64)) * 100.0 AS ards_rate,\n  -- median survival days of decedents\n  (SELECT APPROX_MEDIAN(TIMESTAMP_DIFF(deathtime, admittime, DAY))\n     FROM cohort_with_percentile\n     WHERE deathtime IS NOT NULL) AS median_survival_days\nFROM cohort_with_percentile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: APPROX_MEDIAN at [96:11]; reason: invalidQuery, location: query, message: Function not found: APPROX_MEDIAN at [96:11]\n\nLocation: US\nJob ID: 9adefcf6-6944-4246-9d09-007acf7a1a51\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [97:11]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [97:11]\n\nLocation: US\nJob ID: e384abdc-c19d-48ad-9cf2-9af7a26c9159\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [96:11]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [96:11]\n\nLocation: US\nJob ID: 9792172c-4648-46b0-9fbe-b494bafbe51b\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_MEDIAN at [96:11]; reason: invalidQuery, location: query, message: Function not found: APPROX_MEDIAN at [96:11]\n\nLocation: US\nJob ID: 9adefcf6-6944-4246-9d09-007acf7a1a51\n"
+    }
+  ]
+}

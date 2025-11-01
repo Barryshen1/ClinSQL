@@ -1,0 +1,17 @@
+{
+  "query": "Considering my 90-year-old male, among ICU males aged 85\u201395 what is the standard deviation of first-24-hour mean arterial pressure?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON p.subject_id = icu.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 85 AND 95\n),\nbp_data AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.charttime,\n    c.valuenum AS bp_value,\n    d.itemid,\n    d.label,\n    d.unitname\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON c.itemid = d.itemid\n  INNER JOIN cohort\n    ON c.subject_id = cohort.subject_id\n    AND c.hadm_id = cohort.hadm_id\n    AND c.stay_id = cohort.stay_id\n  WHERE c.valuenum IS NOT NULL\n    AND d.category = 'Vital Signs'\n    AND d.unitname = 'mmHg'\n    AND d.itemid IN (442, 443, 456, 457)  -- systolic: 442,456; diastolic:443,457\n    AND c.charttime BETWEEN cohort.intime AND cohort.intime + INTERVAL 24 HOUR\n    AND c.valuenum BETWEEN 40 AND 300  -- reasonable BP range\n),\nsystolic AS (\n  SELECT * FROM bp_data WHERE itemid IN (442, 456)\n),\ndiastolic AS (\n  SELECT * FROM bp_data WHERE itemid IN (443, 457)\n),\nmatched_bp AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.charttime AS systolic_time,\n    s.bp_value AS systolic,\n    d.charttime AS diastolic_time,\n    d.bp_value AS diastolic,\n    ABS(TIMESTAMP_DIFF(s.charttime, d.charttime, MINUTE)) AS time_diff\n  FROM systolic s\n  LEFT JOIN diastolic d\n    ON s.subject_id = d.subject_id\n    AND s.hadm_id = d.hadm_id\n    AND s.stay_id = d.stay_id\n    AND ABS(TIMESTAMP_DIFF(s.charttime, d.charttime, MINUTE)) <= 5\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY s.subject_id, s.hadm_id, s.stay_id, s.charttime ORDER BY time_diff) = 1\n),\nmap_values AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    systolic_time AS charttime,\n    (systolic + 2 * diastolic) / 3 AS map\n  FROM matched_bp\n  WHERE diastolic IS NOT NULL\n),\nfirst24h_map AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    AVG(map) AS mean_map_24h\n  FROM map_values\n  GROUP BY subject_id, hadm_id, stay_id\n)\nSELECT STDDEV(mean_map_24h) AS std_dev\nFROM first24h_map;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

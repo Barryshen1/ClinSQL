@@ -1,0 +1,28 @@
+{
+  "query": "For my 71-year-old male inpatient, among male admissions aged 66\u201376 with diabetes and heart failure (\u226572\u2011h), report percentages only for each antidiabetic class in first 72h vs final 24h.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.gender\n  FROM \n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN \n    physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 66 AND 76\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\ndiabetes_hf AS (\n  SELECT DISTINCT\n    c.subject_id,\n    c.hadm_id\n  FROM \n    cohort c\n  JOIN \n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON c.hadm_id = d.hadm_id\n  JOIN \n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE \n    (dicd.icd_code LIKE 'E10%' OR dicd.icd_code LIKE 'E11%' OR dicd.icd_code LIKE 'E12%' OR dicd.icd_code LIKE 'E13%' OR dicd.icd_code LIKE 'E14%') -- diabetes\n    OR dicd.long_title LIKE '%heart failure%' OR dicd.long_title LIKE '%congestive heart failure%'\n),\nprescriptions_filtered AS (\n  SELECT \n    p.hadm_id,\n    p.starttime,\n    p.drug,\n    p.dose_val_rx,\n    p.dose_unit_rx\n  FROM \n    physionet-data.mimiciv_3_1_hosp.prescriptions p\n  INNER JOIN \n    diabetes_hf dh\n    ON p.hadm_id = dh.hadm_id\n  WHERE \n    p.starttime IS NOT NULL\n    AND p.drug IS NOT NULL\n),\nantidiabetic_classes AS (\n  SELECT \n    pf.hadm_id,\n    pf.starttime,\n    CASE \n      WHEN LOWER(pf.drug) LIKE '%metformin%' THEN 'Metformin'\n      WHEN LOWER(pf.drug) LIKE '%sulfonylurea%' OR LOWER(pf.drug) LIKE '%glipizide%' OR LOWER(pf.drug) LIKE '%glyburide%' OR LOWER(pf.drug) LIKE '%gliclazide%' THEN 'Sulfonylurea'\n      WHEN LOWER(pf.drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN LOWER(pf.drug) LIKE '%dpp-4%' OR LOWER(pf.drug) LIKE '%sitagliptin%' OR LOWER(pf.drug) LIKE '%saxagliptin%' OR LOWER(pf.drug) LIKE '%linagliptin%' OR LOWER(pf.drug) LIKE '%alogliptin%' THEN 'DPP-4 Inhibitor'\n      WHEN LOWER(pf.drug) LIKE '%glp-1%' OR LOWER(pf.drug) LIKE '%exenatide%' OR LOWER(pf.drug) LIKE '%liraglutide%' OR LOWER(pf.drug) LIKE '%semaglutide%' OR LOWER(pf.drug) LIKE '%dulaglutide%' THEN 'GLP-1 RA'\n      WHEN LOWER(pf.drug) LIKE '%sglt2%' OR LOWER(pf.drug) LIKE '%empagliflozin%' OR LOWER(pf.drug) LIKE '%canagliflozin%' OR LOWER(pf.drug) LIKE '%dapagliflozin%' THEN 'SGLT2 Inhibitor'\n      WHEN LOWER(pf.drug) LIKE '%thiazolidinedione%' OR LOWER(pf.drug) LIKE '%pioglitazone%' OR LOWER(pf.drug) LIKE '%rosiglitazone%' THEN 'Thiazolidinedione'\n      WHEN LOWER(pf.drug) LIKE '%meglitinide%' OR LOWER(pf.drug) LIKE '%repaglinide%' OR LOWER(pf.drug) LIKE '%nateglinide%' THEN 'Meglitinide'\n      ELSE 'Other'\n    END AS antidiabetic_class\n  FROM \n    prescriptions_filtered pf\n),\nfirst_72h AS (\n  SELECT \n    antidiabetic_class,\n    COUNT(*) AS count\n  FROM \n    antidiabetic_classes\n  WHERE \n    starttime BETWEEN admittime AND TIMESTAMP_ADD(admittime, INTERVAL 72 HOUR)\n  GROUP BY \n    antidiabetic_class\n),\nfinal_24h AS (\n  SELECT \n    antidiabetic_class,\n    COUNT(*) AS count\n  FROM \n    antidiabetic_classes\n  WHERE \n    starttime BETWEEN TIMESTAMP_SUB(dischtime, INTERVAL 24 HOUR) AND dischtime\n  GROUP BY \n    antidiabetic_class\n),\ntotal_first_72h AS (\n  SELECT SUM(count) AS total FROM first_72h\n),\ntotal_final_24h AS (\n  SELECT SUM(count) AS total FROM final_24h\n)\nSELECT \n  'First 72h' AS period,\n  f.antidiabetic_class,\n  ROUND(100.0 * f.count / t.total, 2) AS percentage\nFROM \n  first_72h f\nCROSS JOIN \n  total_first_72h t\nWHERE \n  f.antidiabetic_class != 'Other'\nUNION ALL\nSELECT \n  'Final 24h' AS period,\n  f.antidiabetic_class,\n  ROUND(100.0 * f.count / t.total, 2) AS percentage\nFROM \n  final_24h f\nCROSS JOIN \n  total_final_24h t\nWHERE \n  f.antidiabetic_class != 'Other'\nORDER BY \n  period, percentage DESC;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: admittime at [78:23]; reason: invalidQuery, location: query, message: Unrecognized name: admittime at [78:23]\n\nLocation: US\nJob ID: d374494b-f16e-470b-bd50-851f066c3d48\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: 5730605b-aca2-46cf-82d4-a7b9b6eedbd1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: a7d62108-fc78-47ef-9b4b-cc60d6026d1b\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: admittime at [78:23]; reason: invalidQuery, location: query, message: Unrecognized name: admittime at [78:23]\n\nLocation: US\nJob ID: d374494b-f16e-470b-bd50-851f066c3d48\n"
+    }
+  ]
+}

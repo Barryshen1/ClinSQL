@@ -1,0 +1,16 @@
+{
+  "query": "I have an 81-year-old man. Among male ICU patients aged 76\u201386 with acute myocardial infarction, stratified by quartiles of distinct procedures in the first 24 hours, report mean procedure count, mean ICU LOS, and hospital mortality (%) for each quartile.",
+  "final_sql": "WITH ami_admissions AS (\n  -- Identify admissions with AMI diagnosis (ICD-9 410.x or ICD-10 I21.x/I22.x)\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE (\n    (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^410'))\n    OR\n    (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^I21|^I22'))\n  )\n),\ncohort AS (\n  -- Join patients, admissions, icustays, filter for male, age 76-86, AMI, and get ICU stay info\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    pat.anchor_age,\n    pat.gender,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  INNER JOIN ami_admissions ami\n    ON icu.subject_id = ami.subject_id AND icu.hadm_id = ami.hadm_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 76 AND 86\n),\nproc_counts AS (\n  -- Count distinct procedures in first 24h of ICU stay\n  SELECT\n    c.stay_id,\n    c.subject_id,\n    c.hadm_id,\n    c.intime,\n    c.outtime,\n    c.los,\n    c.anchor_age,\n    c.gender,\n    c.hospital_expire_flag,\n    COUNT(DISTINCT p.icd_code) AS procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    ON c.subject_id = p.subject_id\n    AND c.hadm_id = p.hadm_id\n    AND p.chartdate >= c.intime\n    AND p.chartdate < DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY\n    c.stay_id, c.subject_id, c.hadm_id, c.intime, c.outtime, c.los, c.anchor_age, c.gender, c.hospital_expire_flag\n),\nquartiles AS (\n  -- Assign quartiles based on procedure_count\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS procedure_quartile\n  FROM proc_counts\n)\nSELECT\n  procedure_quartile AS quartile,\n  COUNT(*) AS n_stays,\n  ROUND(AVG(procedure_count),2) AS mean_procedure_count,\n  ROUND(AVG(los),2) AS mean_icu_los,\n  ROUND(100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*),2) AS hospital_mortality_percent\nFROM quartiles\nGROUP BY procedure_quartile\nORDER BY procedure_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

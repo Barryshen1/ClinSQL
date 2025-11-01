@@ -1,0 +1,22 @@
+{
+  "query": "Among male patients 67\u201377 admitted with acute decompensated heart failure, report in-hospital mortality (%) and CKD and diabetes prevalence stratified by LOS (\u22647 vs >7 days) and day\u20111 ICU status.",
+  "final_sql": "WITH\n-- Get male patients aged 67-77\nmale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 67 AND 77\n),\n\n-- Get ADHF admissions (ICD-10 codes for acute decompensated heart failure)\nadhd_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM male_patients)\n    AND d.icd_code IN (\n      'I5021', 'I5022', 'I5023', 'I5031', 'I5032', 'I5033',\n      'I5041', 'I5042', 'I5043', 'I509'\n    )\n    AND d.seq_num = 1  -- Primary diagnosis\n),\n\n-- Get ICU status on day 1\nicu_day1_status AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    CASE WHEN TIMESTAMP_DIFF(i.intime, a.admittime, HOUR) <= 24 THEN 1 ELSE 0 END AS icu_day1\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN\n    adhd_admissions a ON i.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n),\n\n-- Get CKD and diabetes prevalence\ncomorbidities AS (\n  SELECT\n    d.subject_id,\n    d.hadm_id,\n    MAX(CASE WHEN d.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E13%' THEN 1 ELSE 0 END) AS has_diabetes\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE\n    d.hadm_id IN (SELECT hadm_id FROM adhd_admissions)\n  GROUP BY\n    d.subject_id, d.hadm_id\n)\n\n-- Final aggregation\nSELECT\n  CASE WHEN a.los_days <= 7 THEN '\u22647 days' ELSE '>7 days' END AS los_stratum,\n  CASE WHEN i.icu_day1 = 1 THEN 'Yes' ELSE 'No' END AS icu_day1_status,\n  COUNT(DISTINCT a.hadm_id) AS total_admissions,\n  SUM(a.hospital_expire_flag) AS deaths,\n  ROUND(100 * SUM(a.hospital_expire_flag) / COUNT(DISTINCT a.hadm_id), 2) AS mortality_rate,\n  SUM(c.has_ckd) AS ckd_cases,\n  ROUND(100 * SUM(c.has_ckd) / COUNT(DISTINCT a.hadm_id), 2) AS ckd_prevalence,\n  SUM(c.has_diabetes) AS diabetes_cases,\n  ROUND(100 * SUM(c.has_diabetes) / COUNT(DISTINCT a.hadm_id), 2) AS diabetes_prevalence\nFROM\n  adhd_admissions a\nLEFT JOIN\n  icu_day1_status i ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\nLEFT JOIN\n  comorbidities c ON a.subject_id = c.subject_id AND a.hadm_id = c.hadm_id\nGROUP BY\n  los_stratum, icu_day1_status\nORDER BY\n  los_stratum, icu_day1_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_icu.transfers was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_icu.transfers was not found in location US\n\nLocation: US\nJob ID: 4bb9d5d8-1417-4875-8995-c581b859b00a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

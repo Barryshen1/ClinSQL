@@ -1,0 +1,1 @@
+SELECT MIN(p.value) AS min_max_respiratory_rate FROM patients p JOIN icustays s ON p.subject_id = s.subject_id JOIN chartevents c ON s.stay_id = c.stay_id WHERE p.gender = 1 AND p.anchor_age = 40 AND s.first_careunit = 'ICU' AND c.itemid = 10175570 AND c.valueuom = 'bpm' AND p.subject_id IN (SELECT subject_id FROM patients WHERE gender = 1 AND anchor_age BETWEEN 35 AND 45);

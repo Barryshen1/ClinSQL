@@ -1,0 +1,28 @@
+{
+  "query": "I have a 54-year-old female with ACS. Among female ICU patients aged 49\u201359, what percentile is a first-24h composite vital instability score of 70? Also report ICU length of stay (mean days) and hospital mortality (%) for the top decile.",
+  "final_sql": "WITH\n-- Get female patients aged 49-59 at ICU admission\nfemale_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.los,\n    a.hospital_expire_flag,\n    -- Calculate age at ICU admission\n    p.anchor_age + EXTRACT(YEAR FROM s.intime) - p.anchor_year AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` s ON a.subject_id = s.subject_id AND a.hadm_id = s.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age + EXTRACT(YEAR FROM s.intime) - p.anchor_year BETWEEN 49 AND 59\n),\n\n-- Get vital signs in first 24 hours of ICU stay\nvital_signs AS (\n  SELECT\n    f.subject_id,\n    f.stay_id,\n    -- Heart rate (itemid 220045)\n    MAX(CASE WHEN ce.itemid = 220045 THEN ce.valuenum ELSE NULL END) AS heart_rate,\n    -- Systolic BP (itemid 220050)\n    MAX(CASE WHEN ce.itemid = 220050 THEN ce.valuenum ELSE NULL END) AS systolic_bp,\n    -- Respiratory rate (itemid 220210)\n    MAX(CASE WHEN ce.itemid = 220210 THEN ce.valuenum ELSE NULL END) AS respiratory_rate,\n    -- Oxygen saturation (itemid 220277)\n    MAX(CASE WHEN ce.itemid = 220277 THEN ce.valuenum ELSE NULL END) AS oxygen_saturation\n  FROM\n    female_patients f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce ON f.subject_id = ce.subject_id AND f.stay_id = ce.stay_id\n  WHERE\n    ce.charttime BETWEEN f.intime AND TIMESTAMP_ADD(f.intime, INTERVAL 24 HOUR)\n    AND ce.itemid IN (220045, 220050, 220210, 220277)\n  GROUP BY\n    f.subject_id, f.stay_id\n),\n\n-- Calculate composite instability score (simple average of normalized values)\ninstability_scores AS (\n  SELECT\n    v.subject_id,\n    v.stay_id,\n    -- Normalize each vital sign (assuming ranges)\n    (v.heart_rate - 60) / (100 - 60) AS normalized_hr,\n    (v.systolic_bp - 90) / (180 - 90) AS normalized_bp,\n    (v.respiratory_rate - 12) / (24 - 12) AS normalized_rr,\n    (100 - v.oxygen_saturation) / (100 - 90) AS normalized_spo2,\n    -- Composite score (average of normalized values)\n    ( (v.heart_rate - 60) / (100 - 60) +\n      (v.systolic_bp - 90) / (180 - 90) +\n      (v.respiratory_rate - 12) / (24 - 12) +\n      (100 - v.oxygen_saturation) / (100 - 90) ) / 4 AS composite_score\n  FROM\n    vital_signs v\n),\n\n-- Get the 90th percentile threshold for top decile\npercentile_threshold AS (\n  SELECT\n    PERCENTILE_CONT(composite_score, 0.9) OVER() AS threshold\n  FROM\n    instability_scores\n  LIMIT 1\n),\n\n-- Get top decile patients\ntop_decile AS (\n  SELECT\n    i.subject_id,\n    i.stay_id,\n    i.composite_score,\n    f.los,\n    f.hospital_expire_flag\n  FROM\n    instability_scores i\n  JOIN\n    female_patients f ON i.subject_id = f.subject_id AND i.stay_id = f.stay_id\n  CROSS JOIN\n    percentile_threshold p\n  WHERE\n    i.composite_score >= p.threshold\n)\n\n-- Final results\nSELECT\n  PERCENTILE_CONT(composite_score, 0.7) OVER() AS percentile_for_score_0_7,\n  AVG(los) AS mean_icu_los_top_decile,\n  SUM(hospital_expire_flag) * 100.0 / COUNT(*) AS hospital_mortality_percent_top_decile\nFROM\n  top_decile\nLIMIT 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column composite_score which is neither grouped nor aggregated at [98:19]; reason: invalidQuery, location: query, message: SELECT list expression references column composite_score which is neither grouped nor aggregated at [98:19]\n\nLocation: US\nJob ID: 8a222092-96e5-4b82-9212-9d3d90833920\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [101:55]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [101:55]\n\nLocation: US\nJob ID: af9ea802-616b-46ad-b5c7-91aadc691763\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Scalar subquery produced more than one element; reason: invalidQuery, location: query, message: Scalar subquery produced more than one element\n\nLocation: US\nJob ID: 5578c668-b3d7-4250-aad2-3ccba7fddcdd\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column composite_score which is neither grouped nor aggregated at [98:19]; reason: invalidQuery, location: query, message: SELECT list expression references column composite_score which is neither grouped nor aggregated at [98:19]\n\nLocation: US\nJob ID: 8a222092-96e5-4b82-9212-9d3d90833920\n"
+    }
+  ]
+}

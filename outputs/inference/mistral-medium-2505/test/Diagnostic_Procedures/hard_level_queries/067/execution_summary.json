@@ -1,0 +1,28 @@
+{
+  "query": "Male, 75, with heart failure: among male ICU patients 70\u201380 with heart failure, what is diagnostic intensity in first 72 ICU hours (mean, median, 75th and 95th percentiles)? Compare to general ICU population; report mean ICU LOS and hospital mortality.",
+  "final_sql": "WITH\n-- Define heart failure ICD codes (ICD-9 and ICD-10)\nheart_failure_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND icd_code LIKE '428.%')\n     OR (icd_version = 10 AND icd_code LIKE 'I50.%')\n),\n\n-- Get male patients 70-80 with heart failure\nhf_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON p.subject_id = d.subject_id\n  JOIN heart_failure_codes hf ON d.icd_code = hf.icd_code\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 70 AND 80\n),\n\n-- Get first ICU stay for each admission\nfirst_icu_stays AS (\n  SELECT *\n  FROM (\n    SELECT\n      s.subject_id,\n      s.hadm_id,\n      s.stay_id,\n      s.intime,\n      s.outtime,\n      s.los,\n      ROW_NUMBER() OVER (PARTITION BY s.subject_id, s.hadm_id ORDER BY s.intime) AS stay_seq\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  )\n  WHERE stay_seq = 1\n),\n\n-- Get diagnostic events in first 72 hours of ICU stay\ndiagnostic_events AS (\n  SELECT\n    f.subject_id,\n    f.stay_id,\n    COUNT(DISTINCT l.labevent_id) AS lab_tests,\n    COUNT(DISTINCT m.microevent_id) AS micro_tests,\n    COUNT(DISTINCT CASE WHEN h.short_description LIKE '%imaging%' THEN h.seq_num END) AS imaging_procedures\n  FROM first_icu_stays f\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON f.subject_id = l.subject_id\n    AND f.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN f.intime AND DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.microbiologyevents` m\n    ON f.subject_id = m.subject_id\n    AND f.hadm_id = m.hadm_id\n    AND m.charttime BETWEEN f.intime AND DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n    ON f.subject_id = h.subject_id\n    AND f.hadm_id = h.hadm_id\n    AND h.chartdate BETWEEN DATE(f.intime) AND DATE(DATETIME_ADD(f.intime, INTERVAL 72 HOUR))\n    AND h.short_description LIKE '%imaging%'\n  GROUP BY f.subject_id, f.stay_id\n),\n\n-- Combine diagnostic counts\ndiagnostic_intensity AS (\n  SELECT\n    d.subject_id,\n    d.stay_id,\n    COALESCE(d.lab_tests, 0) + COALESCE(d.micro_tests, 0) + COALESCE(d.imaging_procedures, 0) AS total_diagnostics,\n    f.los AS icu_los,\n    a.hospital_expire_flag\n  FROM diagnostic_events d\n  JOIN first_icu_stays f ON d.subject_id = f.subject_id AND d.stay_id = f.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON f.subject_id = a.subject_id AND f.hadm_id = a.hadm_id\n),\n\n-- Heart failure patient diagnostics\nhf_diagnostics AS (\n  SELECT\n    'Heart Failure Patients (Male 70-80)' AS cohort,\n    total_diagnostics,\n    icu_los,\n    hospital_expire_flag\n  FROM diagnostic_intensity d\n  JOIN hf_patients h ON d.subject_id = h.subject_id\n),\n\n-- General ICU population diagnostics\ngeneral_diagnostics AS (\n  SELECT\n    'General ICU Population' AS cohort,\n    total_diagnostics,\n    icu_los,\n    hospital_expire_flag\n  FROM diagnostic_intensity\n)\n\n-- Final results\nSELECT\n  cohort,\n  COUNT(*) AS patient_count,\n  AVG(total_diagnostics) AS mean_diagnostics,\n  PERCENTILE_CONT(total_diagnostics, 0.5) AS median_diagnostics,\n  PERCENTILE_CONT(total_diagnostics, 0.75) AS p75_diagnostics,\n  PERCENTILE_CONT(total_diagnostics, 0.95) AS p95_diagnostics,\n  AVG(icu_los) AS mean_icu_los,\n  SUM(hospital_expire_flag) / COUNT(*) AS hospital_mortality\nFROM (\n  SELECT * FROM hf_diagnostics\n  UNION ALL\n  SELECT * FROM general_diagnostics\n)\nGROUP BY cohort;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6d8cc701-cba4-4ff4-9e12-ba92b681645a\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: stay_seq; Did you mean stay_id? at [31:9]; reason: invalidQuery, location: query, message: Unrecognized name: stay_seq; Did you mean stay_id? at [31:9]\n\nLocation: US\nJob ID: 3e8cd4dc-044b-4a38-9cdf-dd0209d02135\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column total_diagnostics which is neither grouped nor aggregated at [99:19]; reason: invalidQuery, location: query, message: SELECT list expression references column total_diagnostics which is neither grouped nor aggregated at [99:19]\n\nLocation: US\nJob ID: f2c868c0-7bc1-4b51-8e51-7bfa1f32fbab\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6d8cc701-cba4-4ff4-9e12-ba92b681645a\n"
+    }
+  ]
+}

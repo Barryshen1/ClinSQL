@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH\n-- 1. Identify ACS admissions in 46-56 y/o females\nacs_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON p.subject_id = a.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON d.subject_id = a.subject_id\n      AND d.hadm_id = a.hadm_id\n      AND d.seq_num = 1\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n      ON ddi.icd_code = d.icd_code\n      AND ddi.icd_version = d.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 46 AND 56\n    -- ICD-10 codes for unstable angina and acute MI\n    AND (\n      d.icd_code = 'I20.0'\n      OR STARTS_WITH(d.icd_code, 'I21')\n      OR STARTS_WITH(d.icd_code, 'I22')\n    )\n),\n\n-- 2. Identify hs-TnT itemids\nhs_tnt_items AS (\n  SELECT\n    itemid\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE\n    LOWER(label) LIKE '%troponin%'\n    AND LOWER(label) LIKE '%hs%'\n),\n\n-- 3. First hs-TnT per admission\nfirst_hs_tnt AS (\n  SELECT\n    la.subject_id,\n    la.hadm_id,\n    la.valuenum,\n    la.charttime,\n    ROW_NUMBER() OVER (PARTITION BY la.hadm_id ORDER BY la.charttime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` la\n    JOIN hs_tnt_items hsi\n      ON la.itemid = hsi.itemid\n    JOIN acs_admissions aa\n      ON la.hadm_id = aa.hadm_id\n      AND la.subject_id = aa.subject_id\n  WHERE\n    la.charttime BETWEEN aa.admittime AND aa.dischtime\n    AND la.valuenum IS NOT NULL\n)\n\nSELECT\n  CASE\n    WHEN f.valuenum < 14 THEN 'Normal'\n    WHEN f.valuenum BETWEEN 14 AND 52 THEN 'Borderline'\n    ELSE 'Myocardial Injury'\n  END AS hs_tnt_category,\n  COUNT(1) AS count_admissions,\n  ROUND(100.0 * COUNT(1) / SUM(COUNT(1)) OVER (), 1) AS pct_of_cohort,\n  ROUND(AVG(\n    TIMESTAMP_DIFF(aa.dischtime, aa.admittime, DAY)\n  ), 1) AS mean_hospital_los_days\nFROM\n  first_hs_tnt f\n  JOIN acs_admissions aa\n    ON f.hadm_id = aa.hadm_id\n    AND f.subject_id = aa.subject_id\nWHERE\n  f.rn = 1\nGROUP BY\n  hs_tnt_category\nORDER BY\n  hs_tnt_category;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

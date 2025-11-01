@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating an 85\u2011year\u2011old female inpatient with hepatic failure. Among female inpatients aged 80\u201390 with hepatic failure, calculate a 7\u2011day medication complexity score, stratify cohort into tertiles, and report LOS, in\u2011hospital mortality and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH hepatic_hadms AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd \n    ON di.icd_code = dd.icd_code \n    AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%hepatic failure%'\n),\ncohort AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    p.gender, \n    p.anchor_age,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  JOIN hepatic_hadms hh \n    ON a.hadm_id = hh.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 80 AND 90\n),\nmed_scores AS (\n  SELECT \n    c.*,\n    COUNT(DISTINCT ph.medication) AS med_complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.pharmacy` ph \n    ON c.hadm_id = ph.hadm_id\n    AND ph.starttime >= c.admittime\n    AND ph.starttime < DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY \n    c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag, \n    c.gender, c.anchor_age, c.los_days\n),\ncohort_with_tertile AS (\n  SELECT *,\n    NTILE(3) OVER (ORDER BY med_complexity_score ASC) AS tertile\n  FROM med_scores\n)\nSELECT \n  tertile,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 1.0 / COUNT(*), 4) AS mortality_rate,\n  ROUND(\n    SUM(CASE WHEN hospital_expire_flag = 0 AND has_30d_readmit THEN 1 ELSE 0 END) * 1.0 / \n    SUM(CASE WHEN hospital_expire_flag = 0 THEN 1 ELSE 0 END), 4\n  ) AS readmit_30d_rate\nFROM (\n  SELECT \n    cwt.*,\n    CASE \n      WHEN cwt.hospital_expire_flag = 0 THEN\n        EXISTS (\n          SELECT 1 \n          FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n          WHERE a2.subject_id = cwt.subject_id\n            AND a2.hadm_id != cwt.hadm_id\n            AND a2.admittime > cwt.dischtime\n            AND a2.admittime <= DATETIME_ADD(cwt.dischtime, INTERVAL 30 DAY)\n        )\n      ELSE FALSE \n    END AS has_30d_readmit\n  FROM cohort_with_tertile cwt\n)\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

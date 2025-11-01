@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 94\u2011year\u2011old man admitted with hemorrhagic stroke. Among male inpatients aged 89\u201399 with hemorrhagic stroke, stratified into quintiles by medication complexity (unique drugs in first 7 hospital days), report LOS, inpatient mortality, and 30\u2011day readmission per quintile.",
+  "final_sql": "WITH\n-- Get male patients aged 89-99\neligible_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 89 AND 99\n),\n\n-- Get admissions with hemorrhagic stroke (ICD-10 I61.*)\nstroke_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    COUNT(DISTINCT d.icd_code) AS stroke_diagnoses\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    eligible_patients p ON a.subject_id = p.subject_id\n  WHERE\n    d.icd_code LIKE 'I61.%'\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  HAVING\n    COUNT(DISTINCT d.icd_code) > 0\n),\n\n-- Get medication complexity (unique drugs in first 7 days)\nmedication_complexity AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    COUNT(DISTINCT p.drug) AS unique_drugs\n  FROM\n    stroke_admissions s\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON s.subject_id = p.subject_id AND s.hadm_id = p.hadm_id\n  WHERE\n    p.starttime BETWEEN s.admittime AND DATETIME_ADD(s.admittime, INTERVAL 7 DAY)\n  GROUP BY\n    s.subject_id, s.hadm_id\n),\n\n-- Create quintiles based on medication complexity\nquintiles AS (\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.unique_drugs,\n    NTILE(5) OVER (ORDER BY m.unique_drugs) AS complexity_quintile\n  FROM\n    medication_complexity m\n),\n\n-- Calculate outcomes\noutcomes AS (\n  SELECT\n    q.complexity_quintile,\n    COUNT(DISTINCT q.subject_id) AS patient_count,\n    AVG(DATETIME_DIFF(s.dischtime, s.admittime, DAY)) AS avg_los,\n    SUM(CASE WHEN s.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS inpatient_deaths,\n    -- 30-day readmission calculation\n    COUNT(DISTINCT CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = q.subject_id\n        AND a2.admittime > s.dischtime\n        AND a2.admittime <= DATETIME_ADD(s.dischtime, INTERVAL 30 DAY)\n        AND a2.hadm_id != q.hadm_id\n      ) THEN q.subject_id\n    END) AS readmissions_30d\n  FROM\n    quintiles q\n  JOIN\n    stroke_admissions s ON q.subject_id = s.subject_id AND q.hadm_id = s.hadm_id\n  GROUP BY\n    q.complexity_quintile\n)\n\n-- Final results\nSELECT\n  complexity_quintile,\n  patient_count,\n  avg_los,\n  inpatient_deaths,\n  readmissions_30d,\n  ROUND(inpatient_deaths * 100.0 / patient_count, 2) AS mortality_rate,\n  ROUND(readmissions_30d * 100.0 / patient_count, 2) AS readmission_rate\nFROM\n  outcomes\nORDER BY\n  complexity_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

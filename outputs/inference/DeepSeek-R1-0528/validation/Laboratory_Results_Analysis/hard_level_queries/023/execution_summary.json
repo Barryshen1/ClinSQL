@@ -1,0 +1,28 @@
+{
+  "query": "I have a 95\u2011year\u2011old female inpatient with AMI. Among female AMI admissions aged 90\u2013100, what is the 75th\u2011percentile lab\u2011instability score in the first 48 hours? For \u2265P75 patients, report in\u2011hospital mortality, mean LOS, and critical lab rates versus all inpatients 90\u2013100.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    pt.gender,\n    pt.anchor_age,\n    pt.anchor_year,\n    pt.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pt.anchor_year) AS admission_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n    ON adm.subject_id = pt.subject_id\n  INNER JOIN (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      (icd_version = 9 AND icd_code LIKE '410%') OR \n      (icd_version = 10 AND (icd_code LIKE 'I21%' OR icd_code LIKE 'I22%'))\n  ) diag \n    ON adm.hadm_id = diag.hadm_id\n  WHERE \n    pt.gender = 'F' \n    AND (pt.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pt.anchor_year)) BETWEEN 90 AND 100\n),\n\nlab_abnormal AS (\n  SELECT \n    c.hadm_id,\n    COUNTIF(labe.flag = 'abnormal') AS abnormal_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` labe\n    ON c.hadm_id = labe.hadm_id\n    AND labe.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.hadm_id\n),\n\np75_value AS (\n  SELECT \n    APPROX_QUANTILES(abnormal_count, 100)[OFFSET(75)] AS p75\n  FROM lab_abnormal\n),\n\ncohort_with_score AS (\n  SELECT \n    c.*,\n    COALESCE(la.abnormal_count, 0) AS abnormal_count,\n    (SELECT p75 FROM p75_value) AS p75\n  FROM cohort c\n  LEFT JOIN lab_abnormal la\n    ON c.hadm_id = la.hadm_id\n),\n\ncohort_groups AS (\n  SELECT \n    hadm_id,\n    'Entire Cohort' AS group_name,\n    hospital_expire_flag,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days,\n    abnormal_count\n  FROM cohort_with_score\n  UNION ALL\n  SELECT \n    hadm_id,\n    'High Instability' AS group_name,\n    hospital_expire_flag,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days,\n    abnormal_count\n  FROM cohort_with_score\n  WHERE abnormal_count >= p75\n)\n\nSELECT \n  (SELECT p75 FROM p75_value) AS lab_instability_score_75th_percentile,\n  group_name,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_rate,\n  AVG(los_days) AS mean_los_days,\n  AVG(abnormal_count) AS critical_lab_rate\nFROM cohort_groups\nGROUP BY group_name\nORDER BY group_name DESC;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword SELECT but got keyword GROUPS at [65:1]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword SELECT but got keyword GROUPS at [65:1]\n\nLocation: US\nJob ID: cc193279-7975-464a-8cac-8fea2ef712a6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"c\" at [36:7]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"c\" at [36:7]\n\nLocation: US\nJob ID: 423f3d74-83c1-40b3-9e3b-9e3ebc943813\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

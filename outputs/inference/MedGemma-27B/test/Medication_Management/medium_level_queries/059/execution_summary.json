@@ -1,0 +1,17 @@
+{
+  "query": "I have a 65\u2011year\u2011old female. Among 60\u201370\u2011year\u2011old females with T2DM and HF, report initiation % and absolute difference (pp) for antidiabetics, beta\u2011blockers, ACEi/ARB/ARNI, loop diuretics: first 48h vs final 24h.",
+  "final_sql": "WITH PatientCohort AS (\n  -- Select subject_id for patients meeting the criteria\n  SELECT\n    p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d ON p.subject_id = d.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age = 65\n    AND d.icd_code IN ('E11', 'E11.9', 'E11.2', 'E11.3', 'E11.4', 'E11.5', 'E11.6', 'E11.7', 'E11.8') -- T2DM codes\n    AND d.icd_code IN ('I50', 'I50.9', 'I50.1', 'I50.2', 'I50.3', 'I50.4', 'I50.6', 'I50.7', 'I50.8') -- HF codes\n),\nMedicationInitiation AS (\n  -- Identify medication initiation events within the first 48 hours and final 24 hours\n  SELECT\n    p.subject_id,\n    m.medication,\n    m.charttime,\n    CASE\n      WHEN m.charttime BETWEEN (SELECT MIN(intime) FROM `physionet-data.mimiciv_3_1_icu.icustays` WHERE subject_id = p.subject_id) AND DATETIME_ADD((SELECT MIN(intime) FROM `physionet-data.mimiciv_3_1_icu.icustays` WHERE subject_id = p.subject_id), INTERVAL 48 HOUR) THEN 'First 48h'\n      WHEN m.charttime BETWEEN DATETIME_SUB((SELECT MAX(outtime) FROM `physionet-data.mimiciv_3_1_icu.icustays` WHERE subject_id = p.subject_id), INTERVAL 24 HOUR) AND (SELECT MAX(outtime) FROM `physionet-data.mimiciv_3_1_icu.icustays` WHERE subject_id = p.subject_id) THEN 'Final 24h'\n      ELSE NULL\n    END AS time_window,\n    ROW_NUMBER() OVER (PARTITION BY p.subject_id, m.medication ORDER BY m.charttime ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` AS m\n  JOIN PatientCohort AS p ON m.subject_id = p.subject_id\n  WHERE\n    m.medication IN ('Metformin', 'Sulfonylurea', 'Insulin', 'Beta-blocker', 'ACE inhibitor', 'ARB', 'ARNI', 'Loop diuretic') -- List of medications of interest\n    AND m.charttime IS NOT NULL\n),\nInitiationCounts AS (\n  -- Count the number of patients initiating each medication in each time window\n  SELECT\n    medication,\n    time_window,\n    COUNT(DISTINCT subject_id) AS patient_count\n  FROM MedicationInitiation\n  WHERE\n    rn = 1 -- Only consider the first initiation event\n  GROUP BY\n    medication,\n    time_window\n),\nTotalPatients AS (\n  -- Count the total number of patients in the cohort\n  SELECT\n    COUNT(DISTINCT subject_id) AS total_patients\n  FROM PatientCohort\n)\n-- Final result: Calculate initiation percentage and absolute difference\nSELECT\n  ic.medication,\n  ic.time_window,\n  (ic.patient_count / tp.total_patients) * 100 AS initiation_percentage,\n  ic.patient_count AS absolute_difference_pp\nFROM InitiationCounts AS ic\nCROSS JOIN TotalPatients AS tp\nORDER BY\n  ic.medication,\n  ic.time_window;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

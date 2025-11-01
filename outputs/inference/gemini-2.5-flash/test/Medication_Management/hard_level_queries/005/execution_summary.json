@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 48\u2011year\u2011old man. Among male inpatients aged 43\u201353 with hepatic failure, compute medication complexity score over the first 72 hours, stratify into quintiles, and report per quintile: n, min/max/mean score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cohort_admissions AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag,\n        pat.gender,\n        pat.anchor_age\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 43 AND 53\n        -- Filter for hepatic failure diagnosis\n        AND adm.hadm_id IN (\n            SELECT DISTINCT dia.hadm_id\n            FROM\n                `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dia\n            WHERE\n                (dia.icd_version = 9 AND dia.icd_code = '5722') -- 572.2 Hepatic coma (e.g. from chronic liver disease)\n                OR (dia.icd_version = 10 AND dia.icd_code LIKE 'K72%') -- K72 family: Hepatic failure, not elsewhere classified\n        )\n),\n-- Step 2: Calculate medication complexity score for the first 72 hours and LOS.\nmedication_scores AS (\n    SELECT\n        ca.subject_id,\n        ca.hadm_id,\n        ca.admittime,\n        ca.dischtime,\n        ca.hospital_expire_flag,\n        -- Count distinct medications from EMAR within the first 72 hours of admission\n        COALESCE(COUNT(DISTINCT emar.medication), 0) AS medication_complexity_score,\n        DATETIME_DIFF(ca.dischtime, ca.admittime, HOUR) / 24.0 AS los_days\n    FROM\n        cohort_admissions ca\n    LEFT JOIN -- Use LEFT JOIN to include patients with 0 medications in 72h\n        `physionet-data.mimiciv_3_1_hosp.emar` emar\n        ON ca.subject_id = emar.subject_id\n        AND ca.hadm_id = emar.hadm_id\n        AND emar.charttime BETWEEN ca.admittime AND TIMESTAMP_ADD(ca.admittime, INTERVAL 72 HOUR)\n    GROUP BY\n        ca.subject_id, ca.hadm_id, ca.admittime, ca.dischtime, ca.hospital_expire_flag\n),\n-- Step 3: Identify the next admission for each patient using window functions (corrected the LATERAL JOIN).\nadmissions_with_next_adm AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        admittime,\n        dischtime,\n        -- Use LEAD to get the admittime of the next admission for the same subject\n        LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions`\n),\n-- Step 4: Determine 30-day readmission status.\nreadmission_status AS (\n    SELECT\n        ms.subject_id,\n        ms.hadm_id,\n        ms.medication_complexity_score,\n        ms.los_days,\n        ms.hospital_expire_flag,\n        CASE\n            -- Check if there is a next admission within 30 days of the current discharge\n            WHEN ana.next_admittime IS NOT NULL\n                 AND ana.next_admittime <= TIMESTAMP_ADD(ms.dischtime, INTERVAL 30 DAY)\n                 THEN 1\n            ELSE 0\n        END AS readmitted_30day\n    FROM\n        medication_scores ms\n    LEFT JOIN\n        admissions_with_next_adm ana\n        ON ms.subject_id = ana.subject_id AND ms.hadm_id = ana.hadm_id\n),\n-- Step 5: Assign quintiles to each patient admission based on medication complexity score.\nranked_patients AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        medication_complexity_score,\n        los_days,\n        hospital_expire_flag,\n        readmitted_30day,\n        NTILE(5) OVER (ORDER BY medication_complexity_score ASC) AS complexity_quintile\n    FROM\n        readmission_status\n)\n-- Step 6: Final aggregation to compute requested statistics per quintile.\nSELECT\n    complexity_quintile,\n    COUNT(hadm_id) AS n,\n    MIN(medication_complexity_score) AS min_medication_complexity_score,\n    MAX(medication_complexity_score) AS max_medication_complexity_score,\n    ROUND(AVG(medication_complexity_score), 2) AS mean_medication_complexity_score,\n    ROUND(AVG(los_days), 2) AS mean_los_days,\n    ROUND(AVG(hospital_expire_flag) * 100, 2) AS in_hospital_mortality_percent,\n    ROUND(AVG(readmitted_30day) * 100, 2) AS readmission_30day_percent\nFROM\n    ranked_patients\nGROUP BY\n    complexity_quintile\nORDER BY\n    complexity_quintile ASC;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [81:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [81:1]\n\nLocation: US\nJob ID: 681792ac-67bb-4114-a3d1-6764d0f055f5\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 LATERAL join is not supported at [63:15]; reason: invalidQuery, location: query, message: LATERAL join is not supported at [63:15]\n\nLocation: US\nJob ID: 196f0a74-33b3-44dc-8ae9-31af4e1d1ba7\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

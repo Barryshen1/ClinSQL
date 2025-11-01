@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      USING (subject_id)\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 75 AND 85\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 36\n    -- Diabetes diagnosis E10\u2013E14\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND REGEXP_CONTAINS(d.icd_code, r'^E1[0-4]')\n    )\n    -- Acute heart failure, ICD-10 I50.2x\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        USING(icd_code, icd_version)\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND (\n          REGEXP_CONTAINS(d.icd_code, r'^I50\\.2')\n          OR LOWER(dd.long_title) LIKE '%acute heart failure%'\n        )\n    )\n),\nglp1_rx AS (\n  SELECT\n    p.hadm_id,\n    p.starttime\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n      ON p.hadm_id = c.hadm_id\n  WHERE\n    -- Common injectable GLP-1 drugs\n    REGEXP_CONTAINS(LOWER(p.drug), r'(exenatide|liraglutide|dulaglutide|semaglutide)')\n    -- Restrict to injectable routes\n    AND (\n      LOWER(p.route) LIKE '%sc%'\n      OR LOWER(p.route) LIKE '%subcutaneous%'\n    )\n    AND p.starttime IS NOT NULL\n),\nflags AS (\n  SELECT\n    c.hadm_id,\n    MAX(IF(TIMESTAMP_DIFF(r.starttime, c.admittime, HOUR) BETWEEN 0 AND 24, 1, 0)) AS started_first_24h,\n    MAX(IF(r.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR) AND c.dischtime, 1, 0)) AS started_last_12h\n  FROM\n    cohort c\n    LEFT JOIN glp1_rx r\n      ON r.hadm_id = c.hadm_id\n  GROUP BY\n    c.hadm_id\n),\nagg AS (\n  SELECT\n    COUNT(*) AS total_admissions,\n    SUM(started_first_24h) AS count_first_24h,\n    SUM(started_last_12h) AS count_last_12h\n  FROM\n    flags\n)\nSELECT\n  ROUND(100.0 * count_first_24h / total_admissions, 2) AS pct_started_first_24h,\n  ROUND(100.0 * count_last_12h / total_admissions, 2) AS pct_started_last_12h\nFROM\n  agg;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

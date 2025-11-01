@@ -1,0 +1,28 @@
+{
+  "query": "I have a 49\u2011year\u2011old female inpatient. Among female inpatients aged 44\u201354 with intracranial hemorrhage, what are median (IQR) risk score and 90\u2011day mortality? Compare major complication rate and median survivor LOS to female inpatients 44\u201354, and give matched risk percentile.",
+  "final_sql": "WITH \n-- Filter patients based on age and gender\nfiltered_patients AS (\n  SELECT p.subject_id, p.anchor_age, p.gender, a.hadm_id, a.admittime, a.dischtime, a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 44 AND 54\n),\n\n-- Identify patients with intracranial hemorrhage\nich_patients AS (\n  SELECT DISTINCT f.subject_id, f.hadm_id, f.admittime, f.dischtime, f.deathtime\n  FROM filtered_patients f\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON f.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Intracranial hemorrhage%'\n),\n\n-- Calculate risk score (for simplicity, let's assume we're using a basic risk score based on age and LOS)\nrisk_scores AS (\n  SELECT subject_id, hadm_id, \n         -- Simplified risk score calculation for demonstration\n         anchor_age + EXTRACT(DAY FROM (dischtime - admittime)) AS risk_score\n  FROM filtered_patients\n),\n\n-- Calculate 90-day mortality\nmortality_90d AS (\n  SELECT subject_id, hadm_id, \n         CASE WHEN deathtime IS NOT NULL AND deathtime <= TIMESTAMP_ADD(admittime, INTERVAL 90 DAY) THEN 1 ELSE 0 END AS died_90d\n  FROM ich_patients\n),\n\n-- Major complication rate (example: assuming a complication if LOS > 7 days)\ncomplications AS (\n  SELECT subject_id, hadm_id, \n         CASE WHEN EXTRACT(DAY FROM (dischtime - admittime)) > 7 THEN 1 ELSE 0 END AS major_complication\n  FROM ich_patients\n)\n\n-- Main query to calculate required statistics\nSELECT \n  -- Median (IQR) risk score for ICH patients\n  APPROX_QUANTILES(r.risk_score, 100)[OFFSET(50)] AS median_risk_score,\n  APPROX_QUANTILES(r.risk_score, 100)[OFFSET(25)] AS iqr1_risk_score,\n  APPROX_QUANTILES(r.risk_score, 100)[OFFSET(75)] AS iqr3_risk_score,\n  \n  -- 90-day mortality for ICH patients\n  AVG(m.died_90d) AS mortality_90d,\n  \n  -- Major complication rate for ICH patients\n  AVG(c.major_complication) AS major_complication_rate,\n  \n  -- Median survivor LOS for ICH patients\n  APPROX_QUANTILES(EXTRACT(DAY FROM (i.dischtime - i.admittime)), 100)[OFFSET(50)] AS median_survivor_los,\n  \n  -- Matched risk percentile (simplified, as actual calculation depends on the risk model used)\n  (SELECT COUNT(*) FROM risk_scores WHERE risk_score <= (SELECT risk_score FROM risk_scores WHERE hadm_id IN (SELECT hadm_id FROM ich_patients))) / (SELECT COUNT(*) FROM risk_scores) * 100 AS matched_risk_percentile\nFROM ich_patients i\nINNER JOIN risk_scores r ON i.hadm_id = r.hadm_id\nINNER JOIN mortality_90d m ON i.hadm_id = m.hadm_id\nINNER JOIN complications c ON i.hadm_id = c.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected end of statement at [1:46]; reason: invalidQuery, location: query, message: Syntax error: Unexpected end of statement at [1:46]\n\nLocation: US\nJob ID: 55117521-c004-41c3-b201-4dd4fffd07d6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name deathtime is ambiguous at [30:20]; reason: invalidQuery, location: query, message: Column name deathtime is ambiguous at [30:20]\n\nLocation: US\nJob ID: 6f19138d-f6d5-42f7-8222-9daa402b028d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

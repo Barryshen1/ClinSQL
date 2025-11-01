@@ -1,0 +1,28 @@
+{
+  "query": "I have a 64\u2011year\u2011old female inpatient. Among female inpatients 59\u201369 with PE and high comorbidity burden, state mean comorbidity risk score and 30\u2011day mortality; compare cardio/neurologic complication rates and survivor LOS to same\u2011age general inpatients, and state matched profile percentile vs controls.",
+  "final_sql": "WITH pe_patients AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE icd_code IN ('I260', 'I269') -- ICD-10 codes for PE\n        AND icd_version = 10\n    )\n),\n\n-- Approximate comorbidity score using DRG severity (1\u20134)\ncomorbidity_scores AS (\n  SELECT\n    pp.subject_id,\n    pp.hadm_id,\n    MAX(drg.drg_severity) AS comorbidity_score\n  FROM pe_patients pp\n  JOIN `physionet-data.mimiciv_3_1_hosp.drgcodes` drg\n    ON pp.hadm_id = drg.hadm_id\n  WHERE drg.drg_severity IS NOT NULL\n  GROUP BY pp.subject_id, pp.hadm_id\n),\n\n-- Complications: Cardiovascular or Neurologic\ncomplications AS (\n  SELECT\n    di.hadm_id,\n    MAX(CASE\n      WHEN di.icd_code IN ('I63', 'I64', 'G45') THEN 1 -- Stroke/TIA\n      WHEN di.icd_code IN ('I21', 'I22') THEN 1 -- MI\n      ELSE 0\n    END) AS has_complication\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  WHERE di.icd_version = 10\n    AND di.icd_code IN ('I63', 'I64', 'G45', 'I21', 'I22')\n  GROUP BY di.hadm_id\n),\n\n-- Final cohort with outcomes\nfinal_cohort AS (\n  SELECT\n    pp.*,\n    cs.comorbidity_score,\n    COALESCE(c.has_complication, 0) AS has_complication,\n    CASE\n      WHEN pp.deathtime IS NOT NULL\n        OR (pp.hospital_expire_flag = 1)\n        OR (DATETIME_DIFF(pp.dischtime, pp.admittime, DAY) <= 30\n            AND pp.deathtime IS NOT NULL)\n      THEN 1\n      ELSE 0\n    END AS mortality_30day\n  FROM pe_patients pp\n  JOIN comorbidity_scores cs\n    ON pp.hadm_id = cs.hadm_id\n  LEFT JOIN complications c\n    ON pp.hadm_id = c.hadm_id\n),\n\n-- General inpatients (same age/gender)\ngeneral_inpatients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n),\n\n-- Aggregated results\nresults AS (\n  SELECT\n    AVG(fc.comorbidity_score) AS mean_comorbidity_score,\n    AVG(fc.mortality_30day) AS mortality_30day_rate,\n    AVG(CASE WHEN fc.has_complication = 1 THEN 1.0 ELSE 0.0 END) AS complication_rate,\n    AVG(CASE WHEN fc.mortality_30day = 0 THEN fc.los_days ELSE NULL END) AS survivor_mean_los,\n    APPROX_QUANTILES(gi.los_days, 100)[OFFSET(50)] AS general_median_los\n  FROM final_cohort fc\n  CROSS JOIN general_inpatients gi\n)\n\nSELECT * FROM results;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"Embolism\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"Embolism\" at [1:16]\n\nLocation: US\nJob ID: ee4c7f5c-307a-4b55-b70a-98ff0e68dcb1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \".\" at [1:20]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \".\" at [1:20]\n\nLocation: US\nJob ID: 5f68d767-d050-4c1a-b616-b77673c9168d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

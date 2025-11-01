@@ -1,0 +1,22 @@
+{
+  "query": "I have a 56\u2011year\u2011old female postoperative patient. Among female surgical admissions aged 51\u201361, stratified by 24\u2011h medication complexity quartiles (unique drugs plus weighted high\u2011risk classes), report LOS, in\u2011hospital mortality (%) and 30\u2011day readmission (%) and counts by quartile for comparison.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: female surgical admissions aged 51-61\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 51 AND 61\n    AND a.admission_type = 'SURGICAL'\n    AND a.hadm_id IS NOT NULL\n),\n\nmed_complexity AS (\n  -- Calculate 24h medication complexity per admission\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    SUM(\n      CASE \n        WHEN LOWER(pr.drug) LIKE '%morphine%' OR LOWER(pr.drug) LIKE '%fentanyl%' OR LOWER(pr.drug) LIKE '%oxycodone%'  -- Opioids\n          OR LOWER(pr.drug) LIKE '%heparin%' OR LOWER(pr.drug) LIKE '%warfarin%' OR LOWER(pr.drug) LIKE '%enoxaparin%'  -- Anticoagulants\n          OR LOWER(pr.drug) LIKE '%midazolam%' OR LOWER(pr.drug) LIKE '%propofol%' OR LOWER(pr.drug) LIKE '%fentanyl%'  -- Sedatives (overlap noted)\n          OR LOWER(pr.drug) LIKE '%norepinephrine%' OR LOWER(pr.drug) LIKE '%dopamine%'  -- Vasopressors\n        THEN 2 \n        ELSE 1 \n      END\n    ) AS complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.subject_id = pr.subject_id\n    AND c.hadm_id = pr.hadm_id\n    AND pr.starttime >= c.admittime\n    AND pr.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 1 DAY)\n    AND pr.drug IS NOT NULL  -- Valid drugs only\n  GROUP BY c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag\n),\n\nreadmissions AS (\n  -- Flag 30-day readmissions for non-expired cases\n  SELECT \n    m.*,\n    CASE \n      WHEN m.hospital_expire_flag = 0 THEN\n        EXISTS (\n          SELECT 1\n          FROM `physionet-data.mimiciv_3_1_hosp.admissions` next_a\n          WHERE next_a.subject_id = m.subject_id\n            AND next_a.hadm_id != m.hadm_id\n            AND next_a.admittime > m.dischtime\n            AND next_a.admittime <= TIMESTAMP_ADD(m.dischtime, INTERVAL 30 DAY)\n        )\n      ELSE FALSE\n    END AS readmit_flag\n  FROM med_complexity m\n),\n\nquartiles AS (\n  -- Assign quartiles based on complexity score\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY complexity_score ASC) AS quartile\n  FROM readmissions\n)\n\n-- Aggregate outcomes by quartile\nSELECT \n  quartile,\n  COUNT(*) AS count_admissions,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS avg_los_days,\n  (SUM(CAST(hospital_expire_flag AS INT64)) * 100.0 / COUNT(*)) AS mortality_pct,\n  (SUM(CAST(readmit_flag AS INT64)) * 100.0 / SUM(CASE WHEN hospital_expire_flag = 0 THEN 1 ELSE 0 END)) AS readmission_pct\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile ASC;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXTRACT does not support arguments of type: INTERVAL at [78:28]; reason: invalidQuery, location: query, message: EXTRACT does not support arguments of type: INTERVAL at [78:28]\n\nLocation: US\nJob ID: 0b9a6f7a-54a4-4275-9b09-aeecfee44517\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

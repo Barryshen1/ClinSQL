@@ -1,0 +1,28 @@
+{
+  "query": "For a 45\u2011year\u2011old man: among male ICU patients 40\u201350 with respiratory failure, in first 48 hours what are SD and 25/50/75/95th percentiles of Vital Instability Index? Compare hypotensive (MAP<65) and tachycardic burden, ICU LOS and mortality to respiratory\u2011failure patients.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT a.subject_id, a.hadm_id, ie.stay_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie ON a.hadm_id = ie.hadm_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 40 AND 50\n),\n\n-- Step 2: Identify patients with respiratory failure (simplified example)\nrespiratory_failure AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_code IN ('J96.00', 'J96.01', 'J96.02', 'J96.90', 'J96.91', 'J96.92')  -- Example ICD codes for respiratory failure\n),\n\n-- Step 3: Extract relevant vital signs within the first 48 hours\nvital_signs AS (\n  SELECT c.stay_id, c.charttime, c.itemid, c.valuenum, \n         DATETIME_DIFF(c.charttime, ie.intime, HOUR) AS hours_since_icu_admit\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN cohort ON c.stay_id = cohort.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie ON c.stay_id = ie.stay_id\n  WHERE c.charttime BETWEEN ie.intime AND DATETIME_ADD(ie.intime, INTERVAL 48 HOUR)\n  AND c.itemid IN ( -- Example itemids for vital signs\n    220050,  -- Heart Rate\n    220179,  -- Non-Invasive Blood Pressure mean\n    220052   -- Temperature (not used but included for completeness)\n  )\n),\n\n-- Step 4: Calculate VII, hypotensive, and tachycardic burden\nvii_components AS (\n  SELECT stay_id, \n         AVG(CASE WHEN itemid = 220050 THEN valuenum END) AS avg_hr,\n         AVG(CASE WHEN itemid = 220179 THEN valuenum END) AS avg_map,\n         COUNT(CASE WHEN itemid = 220050 AND valuenum > 100 THEN 1 END) AS tachycardic_count,\n         COUNT(CASE WHEN itemid = 220179 AND valuenum < 65 THEN 1 END) AS hypotensive_count\n  FROM vital_signs\n  GROUP BY stay_id\n),\n\n-- Step 5: Calculate ICU LOS and mortality\noutcomes AS (\n  SELECT ie.stay_id, \n         DATETIME_DIFF(ie.outtime, ie.intime, HOUR) AS icu_los_hours,\n         ie.hadm_id IN (SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.admissions` WHERE deathtime IS NOT NULL) AS hospital_mortality\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  JOIN cohort ON ie.stay_id = cohort.stay_id\n)\n\n-- Final analysis\nSELECT \n  PERCENTILE_CONT(vii, 0.25) AS vii_25th,\n  PERCENTILE_CONT(vii, 0.5) AS vii_50th,\n  PERCENTILE_CONT(vii, 0.75) AS vii_75th,\n  PERCENTILE_CONT(vii, 0.95) AS vii_95th,\n  STDDEV(vii) AS vii_sd,\n  \n  AVG(CASE WHEN hypotensive_count > 0 THEN 1 ELSE 0 END) AS hypotensive_proportion,\n  AVG(CASE WHEN tachycardic_count > 0 THEN 1 ELSE 0 END) AS tachycardic_proportion,\n  \n  AVG(icu_los_hours) AS avg_icu_los,\n  AVG(CASE WHEN hospital_mortality THEN 1 ELSE 0 END) AS avg_hospital_mortality\nFROM (\n  SELECT vc.stay_id, \n         -- Simplified VII calculation for demonstration\n         vc.avg_hr + vc.avg_map AS vii,\n         vc.hypotensive_count,\n         vc.tachycardic_count,\n         o.icu_los_hours,\n         o.hospital_mortality\n  FROM vii_components vc\n  JOIN outcomes o ON vc.stay_id = o.stay_id\n  JOIN cohort c ON vc.stay_id = c.stay_id\n  WHERE c.hadm_id IN (SELECT hadm_id FROM respiratory_failure)\n) AS subquery;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: c8847356-879d-4612-aa71-84275fc2fc56\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside p at [4:26]; reason: invalidQuery, location: query, message: Name hadm_id not found inside p at [4:26]\n\nLocation: US\nJob ID: bb316eca-2b22-426a-9866-74c6c28cdf19\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column vii which is neither grouped nor aggregated at [56:19]; reason: invalidQuery, location: query, message: SELECT list expression references column vii which is neither grouped nor aggregated at [56:19]\n\nLocation: US\nJob ID: 22b54fc4-9089-495a-be79-b3117dee5a11\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: c8847356-879d-4612-aa71-84275fc2fc56\n"
+    }
+  ]
+}

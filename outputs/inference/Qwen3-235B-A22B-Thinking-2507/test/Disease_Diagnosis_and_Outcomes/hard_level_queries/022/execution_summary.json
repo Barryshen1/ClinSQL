@@ -1,0 +1,23 @@
+{
+  "query": "I am evaluating a 45\u2011year\u2011old woman with AKI. Among female inpatients 40\u201350 with AKI, stratify by composite risk (5\u00d7comorbidities +50 if ARDS) into quintiles and report per quintile: N; 30\u2011day post\u2011discharge mortality %; ARDS co\u2011occurrence %; median survivor LOS (days).",
+  "final_sql": "WITH population AS (\n  SELECT \n    a.hadm_id,\n    p.subject_id,\n    p.dod,\n    -- Calculate age at admission using MIMIC-IV standard approach\n    p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year AS age_at_admission,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year BETWEEN 40 AND 50\n    -- Filter for patients with AKI using standard ICD codes\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '584%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n        )\n    )\n),\n\naki_ards_data AS (\n  SELECT \n    p.*,\n    -- Count comorbidities (distinct diagnoses excluding AKI and ARDS)\n    (SELECT COUNT(DISTINCT icd_code)\n     FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n     WHERE d.hadm_id = p.hadm_id\n       AND NOT (\n         (d.icd_version = 9 AND d.icd_code LIKE '584%')\n         OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n       )\n       AND NOT (\n         (d.icd_version = 9 AND d.icd_code = '51881')\n         OR (d.icd_version = 10 AND d.icd_code = 'J80')\n       )\n    ) AS comorbidity_count,\n    -- Check for ARDS presence\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = p.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code = '51881')\n          OR (d.icd_version = 10 AND d.icd_code = 'J80')\n        )\n    ) AS has_ards\n  FROM population p\n),\n\nrisk_scores AS (\n  SELECT \n    *,\n    5 * comorbidity_count + IF(has_ards, 50, 0) AS risk_score\n  FROM aki_ards_data\n),\n\nmetrics AS (\n  SELECT \n    *,\n    -- 30-day post-discharge mortality flag\n    CASE \n      WHEN hospital_expire_flag = 0 \n        AND dod IS NOT NULL \n        AND dod > dischtime \n        AND dod <= dischtime + INTERVAL '30' DAY \n      THEN 1 \n      ELSE 0 \n    END AS died_30d,\n    -- LOS in days (for median calculation)\n    DATETIME_DIFF(CAST(dischtime AS DATETIME), CAST(admittime AS DATETIME), DAY) AS los_days\n  FROM risk_scores\n),\n\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM metrics\n)\n\nSELECT\n  risk_quintile,\n  COUNT(*) AS N,\n  -- 30-day post-discharge mortality %\n  ROUND(100.0 * SUM(died_30d) / COUNT(*), 2) AS mortality_30d_pct,\n  -- ARDS co-occurrence %\n  ROUND(100.0 * SUM(CASE WHEN has_ards THEN 1 ELSE 0 END) / COUNT(*), 2) AS ards_pct,\n  -- Median survivor LOS (days) - only for discharged alive patients\n  APPROX_QUANTILES(IF(hospital_expire_flag = 0, los_days, NULL), 100)[OFFSET(50)] AS median_survivor_los\nFROM quintiles\nGROUP BY risk_quintile\nORDER BY risk_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:9]\n\nLocation: US\nJob ID: 0ae84c94-59f5-4a71-b4a0-d9e1fa1eb00b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

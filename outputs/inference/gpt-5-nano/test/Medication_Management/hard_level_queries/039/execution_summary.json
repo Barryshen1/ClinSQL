@@ -1,0 +1,22 @@
+{
+  "query": "I'm caring for a 92\u2011year\u2011old woman with intracranial hemorrhage. In female inpatients aged 87\u201397 with ICH, stratify by medication complexity (unique drugs + routes in first 48 hours) into quartiles and report admissions, score ranges, LOS, mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH eligible AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- medication complexity score: count of unique drugs + unique routes within first 48 hours\n    COALESCE(COUNT(DISTINCT p.drug), 0) + COALESCE(COUNT(DISTINCT p.route), 0) AS score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    ON p.hadm_id = a.hadm_id\n   AND p.starttime >= a.admittime\n   AND p.starttime < TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON a.subject_id = pat.subject_id\n  WHERE pat.gender = 'Female'\n    AND pat.anchor_age BETWEEN 87 AND 97\n    -- ICH: ICD-9 431 or ICD-10 I61% (intracerebral hemorrhage)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND (\n              (di.icd_version = 9 AND di.icd_code = '431')\n              OR (di.icd_version = 10 AND di.icd_code LIKE 'I61%')\n            )\n    )\n  GROUP BY\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n),\n\nquartile_scores AS (\n  SELECT\n    e.hadm_id,\n    e.subject_id,\n    e.admittime,\n    e.dischtime,\n    e.hospital_expire_flag,\n    e.score,\n    NTILE(4) OVER (ORDER BY e.score ASC) AS quartile\n  FROM eligible AS e\n),\n\nreadmit AS (\n  SELECT\n    w.hadm_id,\n    w.subject_id,\n    w.admittime,\n    w.dischtime,\n    w.hospital_expire_flag,\n    w.score,\n    w.quartile,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n        WHERE a2.subject_id = w.subject_id\n          AND a2.hadm_id != w.hadm_id\n          AND a2.admittime > w.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(w.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 ELSE 0 END AS is_readmit_30\n  FROM quartile_scores AS w\n),\n\nquartile_list AS (\n  SELECT 1 AS quartile UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4\n),\n\nstats AS (\n  SELECT\n    q.quartile,\n    COUNT(*) AS admissions,\n    MIN(r.score) AS score_min,\n    MAX(r.score) AS score_max,\n    AVG(TIMESTAMP_DIFF(r.dischtime, r.admittime, SECOND) / 86400.0) AS avg_los_days,\n    100.0 * SUM(CASE WHEN r.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0) AS mortality_rate_pct,\n    100.0 * AVG(r.is_readmit_30) AS readmission_30d_rate_pct\n  FROM quartile_list AS q\n  LEFT JOIN readmit AS r\n    ON q.quartile = r.quartile\n  GROUP BY q.quartile\n)\n\nSELECT\n  q.quartile,\n  COALESCE(s.admissions, 0) AS admissions,\n  s.score_min,\n  s.score_max,\n  s.avg_los_days,\n  s.mortality_rate_pct,\n  s.readmission_30d_rate_pct\nFROM quartile_list AS q\nLEFT JOIN stats AS s\n  ON q.quartile = s.quartile\nORDER BY q.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"with_quart\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: with_quart, message: Table \"with_quart\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: a1e918dd-6b6b-4441-91ca-0bc3cfc08c2c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

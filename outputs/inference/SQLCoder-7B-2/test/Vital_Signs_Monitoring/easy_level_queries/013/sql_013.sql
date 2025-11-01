@@ -1,0 +1,1 @@
+SELECT MIN(value) AS min_heart_rate FROM omr JOIN patients ON omr.subject_id = patients.subject_id WHERE patients.gender = 'F' AND patients.anchor_age = 49 AND EXTRACT(YEAR FROM omr.chartdate) = EXTRACT(YEAR FROM CURRENT_DATE) - 5 AND EXTRACT(MONTH FROM omr.chartdate) = EXTRACT(MONTH FROM CURRENT_DATE) - 6 AND EXTRACT(DAY FROM omr.chartdate) <= 24 AND itemid = 15074700;

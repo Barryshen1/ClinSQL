@@ -1,0 +1,28 @@
+{
+  "query": "For my 80-year-old female inpatient: among women aged 75\u201385 with diabetes and acute heart failure (admissions \u226536h), what percent had injectable GLP\u20111s started in first 24h versus final 12h? Report percentages only.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 75 AND 85\n    AND a.dischtime - a.admittime >= INTERVAL 36 HOUR\n    AND a.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n      WHERE icd.long_title LIKE '%Diabetes mellitus%' \n    )\n    AND a.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n      WHERE icd.long_title LIKE '%Heart failure%' \n    )\n),\n\n-- Step 2: Identify patients with injectable GLP-1 receptor agonists\nglp1_administration AS (\n  SELECT c.subject_id, c.hadm_id, \n         MIN(TIMESTAMP_DIFF(em.charttime, c.admittime, HOUR)) AS first_glp1_hour,\n         MAX(TIMESTAMP_DIFF(em.charttime, c.admittime, HOUR)) AS last_glp1_hour\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.emar` em ON c.hadm_id = em.hadm_id\n  WHERE REGEXP_CONTAINS(LOWER(em.medication), r'glp-1|liraglutide|semaglutide|dulaglutide|exenatide')\n  GROUP BY c.subject_id, c.hadm_id\n),\n\n-- Step 3: Calculate the timing of GLP-1 administration relative to admission\nglp1_timing AS (\n  SELECT subject_id, hadm_id,\n         CASE \n           WHEN first_glp1_hour <= 24 THEN 'First 24 hours'\n           ELSE 'Not in first 24 hours'\n         END AS first_glp1_timing,\n         CASE \n           WHEN last_glp1_hour >= TIMESTAMP_DIFF(dischtime, admittime, HOUR) - 12 THEN 'Last 12 hours'\n           ELSE 'Not in last 12 hours'\n         END AS last_glp1_timing\n  FROM glp1_administration\n  JOIN cohort USING (subject_id, hadm_id)\n)\n\n-- Step 4: Calculate percentages\nSELECT \n  IFNULL(SAFE_DIVIDE(COUNTIF(first_glp1_timing = 'First 24 hours'), COUNT(*)) * 100, 0) AS percent_first_24h,\n  IFNULL(SAFE_DIVIDE(COUNTIF(last_glp1_timing = 'Last 12 hours'), COUNT(*)) * 100, 0) AS percent_last_12h\nFROM glp1_timing;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/84fd8a47-d0bf-4595-b413-23e8bb6d199d?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: 84fd8a47-d0bf-4595-b413-23e8bb6d199d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/b3b90457-74ba-42d5-ab04-18b129754361?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: b3b90457-74ba-42d5-ab04-18b129754361\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

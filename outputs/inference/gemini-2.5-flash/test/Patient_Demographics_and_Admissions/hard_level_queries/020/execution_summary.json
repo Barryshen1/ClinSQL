@@ -1,0 +1,28 @@
+{
+  "query": "For an 81\u2011year\u2011old female: among female Medicare patients aged 76\u201386 transferred from another hospital with principal AMI (ICD\u20119 410*/ICD\u201110 I21*), report 30\u2011day readmission rate; median index LOS for readmitted vs not; percent index stays >4 days.",
+  "final_sql": "with the next admission time\nWITH all_patient_admissions AS (\n    SELECT\n        pa.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime,\n        ad.admission_type,\n        ad.admission_location,\n        ad.insurance,\n        pa.gender,\n        pa.anchor_age,\n        -- Use LEAD window function to find the start time of the next admission for the same patient\n        LEAD(ad.admittime) OVER (PARTITION BY pa.subject_id ORDER BY ad.admittime) AS next_admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` pa\n        ON ad.subject_id = pa.subject_id\n),\n-- CTE to filter for the specific cohort and calculate readmission status and LOS\nfiltered_cohort AS (\n    SELECT\n        apa.subject_id,\n        apa.hadm_id,\n        apa.admittime,\n        apa.dischtime,\n        -- Calculate Length of Stay in days. Assumes dischtime is not null, enforced below.\n        DATE_DIFF(apa.dischtime, apa.admittime, DAY) AS los_days,\n        -- Determine if readmitted within 30 days.\n        -- dischtime and next_admittime must be non-null for a valid comparison.\n        CASE\n            WHEN apa.dischtime IS NOT NULL\n             AND apa.next_admittime IS NOT NULL\n             AND DATE_DIFF(apa.next_admittime, apa.dischtime, DAY) <= 30 THEN 1\n            ELSE 0\n        END AS readmitted_30d\n    FROM\n        all_patient_admissions apa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON apa.hadm_id = di.hadm_id AND apa.subject_id = di.subject_id\n    WHERE\n        apa.gender = 'F'\n        AND apa.anchor_age BETWEEN 76 AND 86\n        AND apa.insurance = 'Medicare'\n        AND apa.admission_location = 'TRANSFER FROM OTHER HOSPITAL'\n        AND di.seq_num = 1 -- Principal diagnosis only\n        AND (\n            -- ICD-9 for AMI: 410.xx codes\n            (di.icd_version = 9 AND di.icd_code LIKE '410%')\n            OR\n            -- ICD-10 for AMI: I21.xx codes\n            (di.icd_version = 10 AND di.icd_code LIKE 'I21%')\n        )\n        AND apa.dischtime IS NOT NULL -- Essential for accurate LOS and readmission calculation\n)\n-- Final SELECT statement to calculate the requested metrics from the filtered_cohort\nSELECT\n    -- 1. 30-day readmission rate as a percentage\n    ROUND(SAFE_DIVIDE(CAST(SUM(fc.readmitted_30d) AS NUMERIC), COUNT(fc.hadm_id)) * 100, 2) AS readmission_rate_30d_percent,\n\n    -- 2. Median index LOS for patients who were readmitted within 30 days\n    (SELECT PERCENTILE_CONT(los_days, 0.5) FROM filtered_cohort WHERE readmitted_30d = 1) AS median_los_readmitted_days,\n\n    -- 3. Median index LOS for patients who were NOT readmitted within 30 days\n    (SELECT PERCENTILE_CONT(los_days, 0.5) FROM filtered_cohort WHERE readmitted_30d = 0) AS median_los_not_readmitted_days,\n\n    -- 4. Percentage of index stays longer than 4 days\n    ROUND(SAFE_DIVIDE(CAST(COUNTIF(fc.los_days > 4) AS NUMERIC), COUNT(fc.hadm_id)) * 100, 2) AS percent_stays_gt_4_days\nFROM\n    filtered_cohort fc;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected keyword AS but got keyword NEXT at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword NEXT at [1:10]\n\nLocation: US\nJob ID: f6e284e4-7f55-4a61-b634-ed413df97bef\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier `IF` at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier `IF` at [1:18]\n\nLocation: US\nJob ID: 7ce95022-b182-4212-8771-4e4693ce46a4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [50:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [50:1]\n\nLocation: US\nJob ID: 691d2391-49cd-471b-97f0-6ef81d839382\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword NEXT at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword NEXT at [1:10]\n\nLocation: US\nJob ID: f6e284e4-7f55-4a61-b634-ed413df97bef\n"
+    }
+  ]
+}

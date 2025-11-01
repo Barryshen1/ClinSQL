@@ -1,0 +1,22 @@
+{
+  "query": "I have a 93-year-old man. Among male patients aged 88\u201398 on their first ICU stay with pneumonia, stratify first 72-hour diagnostic procedure counts into quintiles and report average procedure count, average ICU LOS (days), and in-hospital mortality% per quintile.",
+  "final_sql": "WITH pneumonia_codes AS (\n  SELECT DISTINCT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%pneumonia%'\n    AND icd_version = 10\n),\npatients_with_pneumonia AS (\n  SELECT DISTINCT di.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  INNER JOIN pneumonia_codes pc\n    ON di.icd_code = pc.icd_code AND di.icd_version = 10\n),\nfirst_icu_stay AS (\n  SELECT \n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ie.los AS icu_los,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hospital_expire_flag,\n    -- Calculate age at admission\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admit,\n    -- Rank ICU stays by intime per patient\n    RANK() OVER (PARTITION BY ie.subject_id ORDER BY ie.intime) AS icu_stay_rank\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ie.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  INNER JOIN patients_with_pneumonia pwp\n    ON ie.subject_id = pwp.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 88 AND 98\n),\ntarget_stays AS (\n  SELECT *\n  FROM first_icu_stay\n  WHERE icu_stay_rank = 1\n),\nprocedure_counts_72h AS (\n  SELECT \n    ts.stay_id,\n    ts.icu_los,\n    ts.hospital_expire_flag,\n    COUNT(pe.stay_id) AS procedure_count_72h\n  FROM target_stays ts\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON ts.stay_id = pe.stay_id\n    AND pe.starttime >= ts.intime\n    AND pe.starttime <= DATETIME_ADD(ts.intime, INTERVAL 72 HOUR)\n    AND pe.starttime IS NOT NULL\n  GROUP BY ts.stay_id, ts.icu_los, ts.hospital_expire_flag\n),\nquintiles AS (\n  SELECT \n    procedure_count_72h,\n    icu_los,\n    hospital_expire_flag,\n    NTILE(5) OVER (ORDER BY procedure_count_72h) AS quintile\n  FROM procedure_counts_72h\n)\nSELECT \n  quintile,\n  AVG(procedure_count_72h) AS avg_procedure_count,\n  AVG(icu_los) AS avg_icu_los_days,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_pct\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [53:12]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [53:12]\n\nLocation: US\nJob ID: cb3949f2-ab50-4493-91c3-9da76cf891d9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

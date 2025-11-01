@@ -1,0 +1,22 @@
+{
+  "query": "For my 43\u2011year\u2011old female with AKI: among female AKI admissions age 38\u201348, compare 1\u20134 vs 5\u20137 day stays, stratified by ICU use \u2014 mean, min, and max non\u2011invasive diagnostics per admission.",
+  "final_sql": "WITH\n-- 1. Identify the base cohort of female AKI patients aged 38-48.\naki_admissions AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        -- Calculate length of stay in days, rounding up to the nearest whole day.\n        CEIL(DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0) AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    -- Ensure the admission has an AKI diagnosis.\n    WHERE adm.hadm_id IN (\n        SELECT DISTINCT hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n        WHERE\n            -- ICD-10 codes for Acute Kidney Injury\n            icd_code LIKE 'N17%'\n            -- ICD-9 codes for Acute Kidney Failure\n            OR icd_code LIKE '584%'\n    )\n    AND pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 38 AND 48\n    -- Pre-filter to ensure dischtime is after admittime to calculate a valid LOS\n    AND adm.dischtime > adm.admittime\n),\n\n-- 2. Count non-invasive diagnostic procedures (defined as diagnostic radiology) for each admission.\ndiagnostic_counts AS (\n    SELECT\n        hcp.hadm_id,\n        COUNT(*) AS num_diagnostics\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.hcpcsevents` AS hcp\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_hcpcs` AS d_hcp\n        ON hcp.hcpcs_cd = d_hcp.code\n    WHERE\n        d_hcp.category = 2 -- '2' is the category for Diagnostic Radiology Services\n    GROUP BY\n        hcp.hadm_id\n),\n\n-- 3. Combine cohort with LOS, ICU status, and diagnostic counts.\nfinal_cohort AS (\n    SELECT\n        aki.hadm_id,\n        aki.los_days,\n        -- If an admission had no diagnostic procedures, its count will be 0.\n        COALESCE(diag.num_diagnostics, 0) AS num_diagnostics,\n        CASE\n            WHEN icu.hadm_id IS NOT NULL THEN 'ICU'\n            ELSE 'No ICU'\n        END AS icu_status,\n        CASE\n            WHEN aki.los_days BETWEEN 1 AND 4 THEN '1-4 day stay'\n            WHEN aki.los_days BETWEEN 5 AND 7 THEN '5-7 day stay'\n        END AS stay_length_group\n    FROM\n        aki_admissions AS aki\n    LEFT JOIN\n        diagnostic_counts AS diag\n        ON aki.hadm_id = diag.hadm_id\n    LEFT JOIN (\n        -- Get a unique list of admissions that had an ICU stay.\n        SELECT DISTINCT hadm_id FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    ) AS icu\n        ON aki.hadm_id = icu.hadm_id\n    -- Filter for the specific length of stay groups requested.\n    WHERE aki.los_days BETWEEN 1 AND 7\n)\n\n-- 4. Final aggregation to compute statistics for each stratum.\nSELECT\n    stay_length_group,\n    icu_status,\n    COUNT(hadm_id) AS number_of_admissions,\n    ROUND(AVG(num_diagnostics), 2) AS mean_diagnostics,\n    MIN(num_diagnostics) AS min_diagnostics,\n    MAX(num_diagnostics) AS max_diagnostics\nFROM\n    final_cohort\nGROUP BY\n    stay_length_group,\n    icu_status\nORDER BY\n    stay_length_group,\n    icu_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [41:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [41:9]\n\nLocation: US\nJob ID: d3fd2733-cd1a-410d-80e0-5fb50ca23c5c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

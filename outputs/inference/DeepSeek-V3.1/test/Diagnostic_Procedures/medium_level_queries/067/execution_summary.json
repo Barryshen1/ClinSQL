@@ -1,0 +1,16 @@
+{
+  "query": "44-year-old male. In male patients 39\u201349 with ACS and LOS 1\u20137 days, report p25, p50, p75 of ultrasounds (incl. echo) per admission, stratified 1\u20134 vs 5\u20137 stays and primary vs secondary ACS.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id,\n        adm.hadm_id,\n        pat.anchor_age,\n        DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS hosp_los,\n        MAX(CASE WHEN diag.seq_num = 1 THEN 1 ELSE 0 END) AS is_primary_acs,\n        MAX(icu.los) AS icu_los\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON adm.hadm_id = icu.hadm_id\n    WHERE \n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 39 AND 49\n        AND DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 7\n        AND diag.icd_version = 10\n        AND (diag.icd_code LIKE 'I21%' OR diag.icd_code LIKE 'I22%' OR diag.icd_code = 'I24.1')\n    GROUP BY adm.subject_id, adm.hadm_id, pat.anchor_age, hosp_los\n),\nultrasound_counts AS (\n    SELECT \n        c.hadm_id,\n        c.is_primary_acs,\n        CASE \n            WHEN c.icu_los BETWEEN 1 AND 4 THEN '1-4'\n            WHEN c.icu_los BETWEEN 5 AND 7 THEN '5-7'\n            ELSE 'Other' \n        END AS icu_stay_group,\n        COUNT(DISTINCT proc.procedure_id) AS ultrasound_count\n    FROM cohort c\n    LEFT JOIN (\n        -- ICD-10 procedures starting with 'B' (Imaging)\n        SELECT hadm_id, CAST(CONCAT(icd_code, icd_version) AS STRING) AS procedure_id\n        FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd`\n        WHERE icd_version = 10 AND icd_code LIKE 'B%'\n        UNION ALL\n        -- HCPCS codes for echo/ultrasound\n        SELECT hadm_id, CAST(CONCAT(hcpcs_cd, 'HCPCS') AS STRING) AS procedure_id\n        FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n        WHERE hcpcs_cd LIKE '93%' \n          AND (LOWER(short_description) LIKE '%echo%' OR LOWER(short_description) LIKE '%ultrasound%')\n    ) proc\n        ON c.hadm_id = proc.hadm_id\n    WHERE c.icu_los BETWEEN 1 AND 7  -- Only include admissions with ICU stay in 1-7 days\n    GROUP BY c.hadm_id, c.is_primary_acs, icu_stay_group\n)\nSELECT \n    is_primary_acs,\n    icu_stay_group,\n    APPROX_QUANTILES(ultrasound_count, 100)[OFFSET(25)] AS p25,\n    APPROX_QUANTILES(ultrasound_count, 100)[OFFSET(50)] AS p50,\n    APPROX_QUANTILES(ultrasound_count, 100)[OFFSET(75)] AS p75\nFROM ultrasound_counts\nGROUP BY is_primary_acs, icu_stay_group\nORDER BY is_primary_acs, icu_stay_group;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

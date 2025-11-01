@@ -1,0 +1,28 @@
+{
+  "query": "For my 64-year-old male inpatient, among male medicine-service admissions aged 59\u201369, provide LOS distribution (mean, 25th/50th/75th/90th percentiles) by discharge home, facility, and in-hospital death, and percent \u226410 days.",
+  "final_sql": "WITH med_service_admissions AS (\n    -- First, identify all hadm_id that involved a 'MED' service\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.services`\n    WHERE curr_service = 'MED'\n),\ncohort_admissions AS (\n    -- Select the relevant admissions and calculate LOS and discharge group\n    SELECT\n        a.hadm_id,\n        -- Calculate LOS in days\n        TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n        -- Categorize discharge outcome\n        CASE\n            WHEN a.hospital_expire_flag = 1 THEN 'In-Hospital Death'\n            WHEN a.discharge_location = 'HOME' THEN 'Discharged Home'\n            WHEN a.discharge_location IN ('SNF', 'REHAB', 'OTHER FACILITY', 'PSYCH', 'HOSPICE', 'Other Facility') THEN 'Discharged to Facility'\n            ELSE 'Other/Unknown' -- Catch any other discharge locations\n        END AS discharge_group\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON a.subject_id = p.subject_id\n    INNER JOIN\n        med_service_admissions AS msa\n        ON a.hadm_id = msa.hadm_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 59 AND 69 -- Admissions for males aged 59-69\n        AND a.admittime IS NOT NULL AND a.dischtime IS NOT NULL -- Ensure valid admission/discharge times\n        AND TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) > 0 -- Ensure positive LOS calculation\n)\nSELECT\n    discharge_group,\n    COUNT(DISTINCT hadm_id) AS num_admissions,\n    ROUND(AVG(los_days), 2) AS mean_los_days,\n    -- Use APPROX_QUANTILES with OFFSET for approximate percentiles\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(25)], 2) AS los_p25_days,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS los_p50_days, -- Median\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(75)], 2) AS los_p75_days,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(90)], 2) AS los_p90_days,\n    ROUND(COUNTIF(los_days <= 10) * 100.0 / COUNT(los_days), 2) AS percent_los_le_10_days\nFROM\n    cohort_admissions\nGROUP BY\n    discharge_group\nORDER BY\n    discharge_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [38:55]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [38:55]\n\nLocation: US\nJob ID: 8a9a207f-ec7e-4d96-8138-6d82421aa50f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: d297052e-13b5-442b-b1ec-dd793ab87b00\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

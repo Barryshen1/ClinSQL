@@ -1,0 +1,28 @@
+{
+  "query": "For an 86\u2011year\u2011old man: among male inpatients 81\u201391 with pulmonary embolism and high comorbidity (risk score >75th percentile), what are mean risk score and 90\u2011day mortality? Compare AKI/ARDS rates and LOS among survivors to all inpatients; give matched-profile risk percentile.",
+  "final_sql": "WITH \nselected_patients AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    dc.drg_severity AS risk_score  \n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.drgcodes` dc \n      ON a.subject_id = dc.subject_id AND a.hadm_id = dc.hadm_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 81 AND 91\n    AND a.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE icd_code IN (\n        SELECT icd_code \n        FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` \n        WHERE long_title LIKE '%Pulmonary Embolism%'\n      )\n    )\n),\nmortality AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    deathtime,\n    dischtime,\n    CASE \n      WHEN deathtime IS NOT NULL AND TIMESTAMP_ADD(dischtime, INTERVAL 90 DAY) < TIMESTAMP_CURRENT_TIMESTAMP() THEN 1 \n      ELSE 0 \n    END AS died_within_90_days\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions`\n),\naki_ards AS (\n  SELECT \n    ic.stay_id,\n    COUNT(DISTINCT CASE WHEN di.label LIKE '%Acute kidney failure%' THEN di.label END) AS aki_count,\n    COUNT(DISTINCT CASE WHEN di.label LIKE '%Acute respiratory distress syndrome%' THEN di.label END) AS ards_count\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` ic\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce \n      ON ic.stay_id = ce.stay_id\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` di \n      ON ce.itemid = di.itemid\n  GROUP BY \n    ic.stay_id\n),\nrisk_score_percentile AS (\n  SELECT \n    APPROX_QUANTILES(risk_score, 1000)[751] AS percentile_75\n  FROM (\n    SELECT drg_severity AS risk_score \n    FROM `physionet-data.mimiciv_3_1_hosp.drgcodes`\n  ) AS risk_scores\n),\nhigh_risk_patients AS (\n  SELECT \n    sp.*,\n    rsp.percentile_75\n  FROM \n    selected_patients sp\n  CROSS JOIN \n    risk_score_percentile rsp\n  WHERE \n    sp.risk_score > rsp.percentile_75\n)\n\nSELECT \n  AVG(hrp.risk_score) AS mean_risk_score,\n  AVG(m.died_within_90_days) AS ninety_day_mortality_rate,\n  AVG(CASE WHEN aki_count > 0 THEN 1 ELSE 0 END) AS aki_rate,\n  AVG(CASE WHEN ards_count > 0 THEN 1 ELSE 0 END) AS ards_rate,\n  AVG(DATEDIFF(a.dischtime, a.admittime)) AS los_days\nFROM \n  high_risk_patients hrp\nJOIN \n  mortality m \n    ON hrp.subject_id = m.subject_id AND hrp.hadm_id = m.hadm_id\nLEFT JOIN \n  aki_ards \n    ON hrp.hadm_id = ANY(SELECT hadm_id FROM `physionet-data.mimiciv_3_1_icu.icustays` WHERE stay_id = aki_ards.stay_id)\nJOIN \n  `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON hrp.subject_id = a.subject_id AND hrp.hadm_id = a.hadm_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword ANY at [92:22]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword ANY at [92:22]\n\nLocation: US\nJob ID: 0de396f5-89e4-4859-b81a-17983eb4fb6b\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [30:55]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [30:55]\n\nLocation: US\nJob ID: 188ea177-a53c-4f24-85cd-38a568fb54f2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"your_risk_score_table\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: your_risk_score_table, message: Table \"your_risk_score_table\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: e33ea0cc-a547-4f21-aaed-f6682470af80\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword ANY at [92:22]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword ANY at [92:22]\n\nLocation: US\nJob ID: 0de396f5-89e4-4859-b81a-17983eb4fb6b\n"
+    }
+  ]
+}

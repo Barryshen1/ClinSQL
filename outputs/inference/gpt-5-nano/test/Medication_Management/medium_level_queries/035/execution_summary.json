@@ -1,0 +1,22 @@
+{
+  "query": "For my 62\u2011year\u2011old female inpatient: among female inpatients 57\u201367 with diabetes and heart failure, compare prevalence (%) of GLP\u20111 RA prescriptions in first 48h versus final 12h pre\u2011discharge, with absolute and relative change.",
+  "final_sql": "WITH cohort_base AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 57 AND 67\n),\n\n-- Keep only admissions that have both a diabetes diagnosis and a heart failure diagnosis\ncohort_diag AS (\n  SELECT cb.subject_id,\n         cb.hadm_id,\n         cb.admittime,\n         cb.dischtime\n  FROM cohort_base AS cb\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = cb.subject_id\n   AND di.hadm_id = cb.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  GROUP BY cb.subject_id, cb.hadm_id, cb.admittime, cb.dischtime\n  HAVING\n    SUM(CASE WHEN LOWER(dd.long_title) LIKE '%diabetes%' THEN 1 ELSE 0 END) > 0\n    AND\n    SUM(CASE WHEN LOWER(dd.long_title) LIKE '%heart failure%' OR LOWER(dd.long_title) LIKE '%congestive heart failure%' THEN 1 ELSE 0 END) > 0\n),\n\n-- GLP-1 RA prescriptions in the first 48 hours after admission\nglp1_first48 AS (\n  SELECT\n    c.hadm_id,\n    MAX(CASE WHEN REGEXP_CONTAINS(LOWER(p.drug), '(liraglutide|exenatide|dulaglutide|lixisenatide|semaglutide|albiglutide)') THEN 1 ELSE 0 END) AS has_glp1_first48\n  FROM cohort_diag AS c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    ON p.subject_id = c.subject_id\n   AND p.hadm_id = c.hadm_id\n   AND p.starttime >= c.admittime\n   AND p.starttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.hadm_id\n),\n\n-- GLP-1 RA prescriptions in the final 12 hours before discharge\nglp1_final12 AS (\n  SELECT\n    c.hadm_id,\n    MAX(CASE WHEN REGEXP_CONTAINS(LOWER(p.drug), '(liraglutide|exenatide|dulaglutide|lixisenatide|semaglutide|albiglutide)') THEN 1 ELSE 0 END) AS has_glp1_final12\n  FROM cohort_diag AS c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    ON p.subject_id = c.subject_id\n   AND p.hadm_id = c.hadm_id\n   AND p.starttime >= TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR)\n   AND p.starttime <= c.dischtime\n  GROUP BY c.hadm_id\n),\n\nsummary AS (\n  SELECT\n    COUNT(*) AS total_inpatients,\n    SUM(COALESCE(f.has_glp1_first48, 0)) AS n_first48,\n    SUM(COALESCE(t.has_glp1_final12, 0)) AS n_final12\n  FROM cohort_diag AS c\n  LEFT JOIN glp1_first48 AS f ON f.hadm_id = c.hadm_id\n  LEFT JOIN glp1_final12 AS t ON t.hadm_id = c.hadm_id\n)\n\nSELECT\n  total_inpatients,\n  ROUND(100.0 * n_first48 / NULLIF(total_inpatients, 0), 2) AS prevalence_first48_percent,\n  ROUND(100.0 * n_final12 / NULLIF(total_inpatients, 0), 2) AS prevalence_final12_percent,\n  ROUND(100.0 * (n_final12 - n_first48) / NULLIF(total_inpatients, 0), 2) AS absolute_change_percent_points,\n  ROUND(\n        CASE\n          WHEN n_first48 > 0 THEN 100.0 * (n_final12 - n_first48) / NULLIF(n_first48, 0)\n          ELSE NULL\n        END, 2) AS relative_change_percent\nFROM summary;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: 77780f3f-073e-4cd2-b49f-0e5fab75ccf9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

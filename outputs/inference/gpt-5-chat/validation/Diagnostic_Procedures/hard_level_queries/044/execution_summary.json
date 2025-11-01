@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating an 87\u2011year\u2011old man. Among male ICU patients aged 82\u201392 with cardiogenic shock, stratify first\u201124\u2011hour procedure burden into quintiles and report for each quintile mean procedure count, mean hospital LOS in days, and in\u2011hospital mortality percentage.",
+  "final_sql": "WITH cardiogenic_shock_patients AS (\n  SELECT DISTINCT icu.subject_id, icu.hadm_id, icu.stay_id, icu.intime, icu.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.subject_id = adm.subject_id\n    AND icu.hadm_id = adm.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON icu.subject_id = dx.subject_id\n    AND icu.hadm_id = dx.hadm_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 82 AND 92\n    AND (\n      (dx.icd_version = 9 AND dx.icd_code = '78551') OR\n      (dx.icd_version = 10 AND dx.icd_code = 'R570')\n    )\n),\nprocedure_counts AS (\n  SELECT\n    csp.subject_id,\n    csp.hadm_id,\n    csp.stay_id,\n    csp.intime,\n    COUNT(pe.itemid) AS procedure_count\n  FROM cardiogenic_shock_patients csp\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON csp.stay_id = pe.stay_id\n    AND pe.starttime >= csp.intime\n    AND pe.starttime < TIMESTAMP_ADD(csp.intime, INTERVAL 24 HOUR)\n  GROUP BY csp.subject_id, csp.hadm_id, csp.stay_id, csp.intime\n),\nquintiled AS (\n  SELECT\n    pc.*,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    NTILE(5) OVER (ORDER BY pc.procedure_count) AS proc_quintile\n  FROM procedure_counts pc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON pc.subject_id = adm.subject_id AND pc.hadm_id = adm.hadm_id\n)\nSELECT\n  proc_quintile,\n  ROUND(AVG(procedure_count),2) AS mean_procedure_count,\n  ROUND(AVG(DATETIME_DIFF(adm_dischtime, adm_admittime, DAY)),2) AS mean_hosp_los_days,\n  ROUND(AVG(hospital_expire_flag)*100,2) AS in_hosp_mortality_pct\nFROM (\n  SELECT\n    proc_quintile,\n    procedure_count,\n    DATETIME(admittime) AS adm_admittime,\n    DATETIME(dischtime) AS adm_dischtime,\n    hospital_expire_flag\n  FROM quintiled\n) sub\nGROUP BY proc_quintile\nORDER BY proc_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH pe_patients AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON pat.subject_id = adm.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON diag.subject_id = adm.subject_id\n    AND diag.hadm_id = adm.hadm_id\n  -- Join to long titles for clarity (optional)\n  -- Filtering for Pulmonary Embolism ICD-9 or ICD-10\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 44 AND 54\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code LIKE '4151%')\n      OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I26%')\n    )\n),\nfirst_icu AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    ROW_NUMBER() OVER (PARTITION BY icu.subject_id, icu.hadm_id ORDER BY icu.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN pe_patients pe\n    ON pe.subject_id = icu.subject_id\n    AND pe.hadm_id = icu.hadm_id\n),\nfirst_icu_only AS (\n  SELECT *\n  FROM first_icu\n  WHERE rn = 1\n),\nproc_counts AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    COUNT(DISTINCT proc.itemid) AS proc_count\n  FROM first_icu_only icu\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` proc\n    ON proc.subject_id = icu.subject_id\n    AND proc.stay_id = icu.stay_id\n    AND proc.starttime >= icu.intime\n    AND proc.starttime < TIMESTAMP_ADD(icu.intime, INTERVAL 72 HOUR)\n  GROUP BY icu.subject_id, icu.hadm_id, icu.stay_id\n),\nwith_los_mort AS (\n  SELECT\n    pc.subject_id,\n    pc.hadm_id,\n    pc.stay_id,\n    pc.proc_count,\n    ROUND(TIMESTAMP_DIFF(adm.dischtime, adm.admittime, HOUR)/24, 2) AS hosp_los_days,\n    adm.hospital_expire_flag\n  FROM proc_counts pc\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON adm.subject_id = pc.subject_id\n    AND adm.hadm_id = pc.hadm_id\n),\nwith_quintile AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY proc_count) AS proc_quintile\n  FROM with_los_mort\n)\nSELECT\n  proc_quintile,\n  ROUND(AVG(proc_count),2) AS avg_proc_count,\n  ROUND(AVG(hosp_los_days),2) AS avg_hosp_los_days,\n  ROUND(AVG(hospital_expire_flag)*100,1) AS mortality_percent\nFROM with_quintile\nGROUP BY proc_quintile\nORDER BY proc_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

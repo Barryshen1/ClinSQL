@@ -1,0 +1,28 @@
+{
+  "query": "For my 93\u2011yo female with TIA: among women 88\u201398 with TIA, what's the median (IQR) CT/MRI studies per admission for 1\u20133 vs 4\u20137 day stays, stratified by ICU use?",
+  "final_sql": "WITH tia_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    EXTRACT(DAY FROM (a.dischtime - a.admittime)) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 88 AND 98\n    AND (\n      LOWER(d_icd.long_title) LIKE '%tia%'\n      OR LOWER(d_icd.long_title) LIKE '%transient ischemic attack%'\n      OR d_icd.icd_code IN ('435.9', 'G45.9')\n    )\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND EXTRACT(DAY FROM (a.dischtime - a.admittime)) BETWEEN 1 AND 7\n),\nicu_flag AS (\n  SELECT\n    t.hadm_id,\n    t.los_days,\n    CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END AS used_icu\n  FROM tia_patients t\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON t.hadm_id = i.hadm_id\n),\nct_mri_counts AS (\n  -- CT/MRI from ICU procedureevents\n  SELECT\n    a.hadm_id,\n    COUNT(*) AS ct_mri_count\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON a.hadm_id = pe.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON pe.itemid = di.itemid\n  WHERE (LOWER(di.label) LIKE '%ct%' OR LOWER(di.label) LIKE '%mri%')\n    AND di.linksto = 'procedureevents'\n  GROUP BY a.hadm_id\n\n  UNION ALL\n\n  -- CT/MRI from HOSP hcpcsevents\n  SELECT\n    a.hadm_id,\n    COUNT(*) AS ct_mri_count\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n    ON a.hadm_id = h.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh\n    ON h.hcpcs_cd = dh.code\n  WHERE LOWER(dh.short_description) LIKE '%ct%'\n     OR LOWER(dh.short_description) LIKE '%mri%'\n  GROUP BY a.hadm_id\n),\nct_mri_aggregated AS (\n  SELECT\n    hadm_id,\n    SUM(ct_mri_count) AS ct_mri_count\n  FROM ct_mri_counts\n  GROUP BY hadm_id\n),\nfinal_data AS (\n  SELECT\n    i.los_days,\n    i.used_icu,\n    COALESCE(c.ct_mri_count, 0) AS ct_mri_count\n  FROM icu_flag i\n  LEFT JOIN ct_mri_aggregated c\n    ON i.hadm_id = c.hadm_id\n  WHERE i.los_days BETWEEN 1 AND 7\n)\nSELECT\n  CASE \n    WHEN los_days BETWEEN 1 AND 3 THEN '1-3 days'\n    WHEN los_days BETWEEN 4 AND 7 THEN '4-7 days'\n  END AS los_group,\n  used_icu,\n  PERCENTILE_CONT(ct_mri_count, 0.5) AS median_ct_mri,\n  PERCENTILE_CONT(ct_mri_count, 0.25) AS q1_ct_mri,\n  PERCENTILE_CONT(ct_mri_count, 0.75) AS q3_ct_mri\nFROM final_data\nGROUP BY los_group, used_icu\nORDER BY los_group, used_icu;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: d914d294-bfd6-4e7a-b712-89d20b56e375\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column ct_mri_count which is neither grouped nor aggregated at [69:19]; reason: invalidQuery, location: query, message: SELECT list expression references column ct_mri_count which is neither grouped nor aggregated at [69:19]\n\nLocation: US\nJob ID: 1fe95180-a73a-46e0-beaa-5a31bca9d1a7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"inside\" at [1:21]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"inside\" at [1:21]\n\nLocation: US\nJob ID: 7b4ada35-1230-4629-9351-7a9477b07dd1\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: d914d294-bfd6-4e7a-b712-89d20b56e375\n"
+    }
+  ]
+}

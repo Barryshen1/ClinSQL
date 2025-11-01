@@ -1,0 +1,16 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH ich_cohort AS (\n  SELECT DISTINCT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.los,\n    adm.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients pat\n    ON icu.subject_id = pat.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_dx\n    ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 73 AND 83\n    AND LOWER(d_dx.long_title) LIKE '%intracranial hemorrhage%'\n),\n\nlab_scores AS (\n  SELECT\n    ich.stay_id,\n    COUNT(DISTINCT CASE WHEN lab.flag = 'abnormal' THEN lab.itemid END) AS instability_score\n  FROM\n    ich_cohort ich\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.labevents lab\n    ON ich.hadm_id = lab.hadm_id\n  WHERE\n    lab.flag IS NOT NULL\n    AND lab.charttime >= (\n      SELECT intime\n      FROM physionet-data.mimiciv_3_1_icu.icustays icu2\n      WHERE icu2.stay_id = ich.stay_id\n    )\n    AND lab.charttime <= DATETIME_ADD(\n      (\n        SELECT intime\n        FROM physionet-data.mimiciv_3_1_icu.icustays icu2\n        WHERE icu2.stay_id = ich.stay_id\n      ),\n      INTERVAL 48 HOUR\n    )\n  GROUP BY\n    ich.stay_id\n),\n\nquartiles AS (\n  SELECT\n    stay_id,\n    instability_score,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM\n    lab_scores\n),\n\nmetrics_per_quartile AS (\n  SELECT\n    q.quartile,\n    COUNT(*) AS patient_count,\n    AVG(ich.los) AS mean_los,\n    AVG(ich.hospital_expire_flag) AS mortality_rate\n  FROM\n    quartiles q\n  JOIN\n    ich_cohort ich\n    ON q.stay_id = ich.stay_id\n  GROUP BY\n    q.quartile\n),\n\nall_icu_metrics AS (\n  SELECT\n    COUNT(*) AS total_patients,\n    AVG(los) AS avg_los,\n    AVG(hospital_expire_flag) AS overall_mortality\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n)\n\nSELECT\n  m.quartile,\n  m.patient_count,\n  m.mean_los,\n  m.mortality_rate,\n  a.avg_los AS all_icu_mean_los,\n  a.overall_mortality AS all_icu_mortality\nFROM\n  metrics_per_quartile m\nCROSS JOIN\n  all_icu_metrics a\nORDER BY\n  m.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

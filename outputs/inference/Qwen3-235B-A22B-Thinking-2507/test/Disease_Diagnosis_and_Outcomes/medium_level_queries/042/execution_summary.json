@@ -1,0 +1,29 @@
+{
+  "query": "For a 74-year-old man with AMI: among men 69\u201379 without shock or respiratory failure, what's in-hospital mortality by LOS (1\u20133, 4\u20137, \u22658 days)? Provide mortality %, median LOS, discharge destinations.",
+  "final_sql": "WITH ami_cohort AS (\n  SELECT \n    a.hadm_id,\n    p.gender,\n    p.anchor_age - (p.anchor_year - EXTRACT(YEAR FROM a.admittime)) AS age_at_admission,\n    DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) AS los_days,\n    a.hospital_expire_flag,\n    a.discharge_location\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE d.hadm_id = a.hadm_id\n      AND d.icd_version = 10\n      AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%')\n  )\n  AND NOT EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE d.hadm_id = a.hadm_id\n      AND d.icd_version = 10\n      AND (d.icd_code LIKE 'R57%' OR d.icd_code LIKE 'J96%')\n  )\n  AND p.gender = 'M'\n  AND p.anchor_age - (p.anchor_year - EXTRACT(YEAR FROM a.admittime)) BETWEEN 69 AND 79\n),\ncohort_with_los_group AS (\n  SELECT\n    *,\n    CASE\n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n      WHEN los_days >= 8 THEN '>=8'\n      ELSE 'other'\n    END AS los_group\n  FROM ami_cohort\n  WHERE los_days > 0\n),\n-- Precompute discharge statistics per LOS group\ndischarge_stats AS (\n  SELECT\n    los_group,\n    discharge_location,\n    COUNT(*) AS cnt,\n    SUM(COUNT(*)) OVER (PARTITION BY los_group) AS total_in_group\n  FROM cohort_with_los_group\n  GROUP BY los_group, discharge_location\n),\nranked_discharge AS (\n  SELECT\n    los_group,\n    discharge_location,\n    cnt,\n    total_in_group,\n    ROW_NUMBER() OVER (PARTITION BY los_group ORDER BY cnt DESC) AS rn\n  FROM discharge_stats\n),\ntop3_discharge AS (\n  SELECT\n    los_group,\n    STRING_AGG(\n      discharge_location || ': ' || CAST(ROUND(100 * cnt / total_in_group, 1) AS STRING) || '%', \n      '; ' \n      ORDER BY cnt DESC\n    ) AS top_discharge_destinations\n  FROM ranked_discharge\n  WHERE rn <= 3\n  GROUP BY los_group\n),\n-- Main statistics calculation\ngroup_stats AS (\n  SELECT\n    los_group,\n    ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_pct,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los\n  FROM cohort_with_los_group\n  GROUP BY los_group\n)\n-- Final result with joined discharge stats\nSELECT\n  g.los_group,\n  g.mortality_pct,\n  g.median_los,\n  t.top_discharge_destinations\nFROM group_stats g\nLEFT JOIN top3_discharge t \n  ON g.los_group = t.los_group\nORDER BY \n  CASE g.los_group\n    WHEN '1-3' THEN 1\n    WHEN '4-7' THEN 2\n    WHEN '>=8' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \":\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \":\" at [1:9]\n\nLocation: US\nJob ID: 894a0b4a-2c17-460a-bf50-53e153cc6faf\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: da118e66-01ac-4f82-a823-ad35f690a829\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

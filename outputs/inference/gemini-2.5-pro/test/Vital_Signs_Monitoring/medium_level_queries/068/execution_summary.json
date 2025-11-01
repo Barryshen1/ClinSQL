@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46-year-old female in ICU. Among female ICU patients aged 41\u201351, what are patient counts and stroke rates for each per-measurement MAP category: <65, 65\u201374, 75\u201384, \u226585 mmHg?",
+  "final_sql": "WITH\n  -- 1. Identify the cohort of female ICU patients aged 41-51\n  icu_cohort AS (\n    SELECT\n      p.subject_id,\n      i.hadm_id,\n      i.stay_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_icu.icustays` AS i\n      ON p.subject_id = i.subject_id\n    WHERE\n      p.gender = 'F'\n      AND p.anchor_age BETWEEN 41 AND 51\n  ),\n  -- 2. Identify hospital admissions with a stroke diagnosis\n  stroke_admissions AS (\n    SELECT DISTINCT\n      hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n      -- ICD-9 codes for cerebrovascular disease / stroke\n      SUBSTR(icd_code, 1, 3) IN ('430', '431', '432', '433', '434', '436')\n      -- ICD-10 codes for cerebrovascular disease / stroke\n      OR SUBSTR(icd_code, 1, 3) IN ('I60', 'I61', 'I62', 'I63', 'I64')\n  ),\n  -- 3. Get all MAP measurements for the cohort and categorize them\n  categorized_map AS (\n    SELECT\n      icu.subject_id,\n      icu.hadm_id,\n      CASE\n        WHEN ce.valuenum < 65\n        THEN '<65'\n        WHEN ce.valuenum >= 65 AND ce.valuenum < 75\n        THEN '65-74'\n        WHEN ce.valuenum >= 75 AND ce.valuenum < 85\n        THEN '75-84'\n        WHEN ce.valuenum >= 85\n        THEN '>=85'\n        ELSE NULL\n      END AS map_category\n    FROM\n      `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    INNER JOIN\n      icu_cohort AS icu\n      ON ce.stay_id = icu.stay_id\n    WHERE\n      ce.itemid IN (\n        220052, -- Arterial Blood Pressure mean\n        220181, -- Non Invasive Blood Pressure mean\n        225312 -- ART BP mean\n      )\n      AND ce.valuenum IS NOT NULL\n      AND ce.valuenum > 0 AND ce.valuenum < 300 -- Sanity check for plausible values\n  )\n-- 4. Aggregate results by MAP category to count patients and calculate stroke rates\nSELECT\n  map.map_category,\n  COUNT(DISTINCT map.subject_id) AS patient_count,\n  COUNT(\n    DISTINCT CASE WHEN sa.hadm_id IS NOT NULL THEN map.subject_id END\n  ) AS stroke_patient_count,\n  SAFE_DIVIDE(\n    COUNT(\n      DISTINCT CASE WHEN sa.hadm_id IS NOT NULL THEN map.subject_id END\n    ),\n    COUNT(DISTINCT map.subject_id)\n  ) AS stroke_rate\nFROM\n  categorized_map AS map\nLEFT JOIN\n  stroke_admissions AS sa\n  ON map.hadm_id = sa.hadm_id\nWHERE\n  map.map_category IS NOT NULL\nGROUP BY\n  map.map_category\nORDER BY\n  CASE map.map_category\n    WHEN '<65'\n    THEN 1\n    WHEN '65-74'\n    THEN 2\n    WHEN '75-84'\n    THEN 3\n    WHEN '>=85'\n    THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

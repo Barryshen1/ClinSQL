@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND d.icd_code LIKE 'E11%'  -- Type 2 diabetes\n    )\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND d.icd_code LIKE 'I50%'  -- Heart failure\n    )\n),\nglp1_exposures AS (\n  SELECT\n    c.hadm_id,\n    MAX(CASE\n          WHEN pr.starttime BETWEEN c.admittime\n                               AND TIMESTAMP_ADD(c.admittime, INTERVAL 1 DAY)\n          THEN 1 ELSE 0\n        END) AS first24_flag,\n    MAX(CASE\n          WHEN pr.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 2 DAY)\n                               AND c.dischtime\n          THEN 1 ELSE 0\n        END) AS last48_flag\n  FROM\n    cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n      ON pr.hadm_id = c.hadm_id\n  WHERE\n    -- Filter to injectable GLP-1 analogues\n    LOWER(pr.drug) LIKE '%tide%'\n    AND (\n      LOWER(pr.route) LIKE '%subcut%' \n      OR LOWER(pr.route) LIKE '%sc%'\n    )\n  GROUP BY\n    c.hadm_id\n),\nmetrics AS (\n  SELECT\n    COUNT(*) AS cohort_n,\n    SUM(first24_flag) AS n_first24,\n    SUM(last48_flag) AS n_last48\n  FROM\n    glp1_exposures\n)\nSELECT\n  cohort_n,\n  n_first24,\n  ROUND(100.0 * n_first24 / cohort_n, 2) AS pct_first24,\n  n_last48,\n  ROUND(100.0 * n_last48 / cohort_n, 2) AS pct_last48,\n  ROUND(100.0 * (n_last48 - n_first24) / cohort_n, 2) AS abs_change_pct,\n  CASE\n    WHEN n_first24 = 0 THEN NULL\n    ELSE ROUND(( (n_last48 - n_first24) / n_first24 ) * 100.0, 2)\n  END AS rel_change_pct\nFROM\n  metrics;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

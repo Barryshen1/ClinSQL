@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating an 89-year-old woman. Among female patients aged 84\u201394 admitted with ACS whose initial Troponin I exceeded the 99th percentile ULN, report counts and mean, median, IQR.",
+  "final_sql": "WITH acs_admissions AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    ON adm.subject_id = dx.subject_id \n    AND adm.hadm_id = dx.hadm_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 84 AND 94\n    AND (\n      -- ICD-9 ACS\n      (dx.icd_version = 9 AND (\n        dx.icd_code LIKE '410%' OR  -- AMI\n        dx.icd_code IN ('4111','4118')  -- other ACS\n      ))\n      OR\n      -- ICD-10 ACS\n      (dx.icd_version = 10 AND (\n        dx.icd_code LIKE 'I21%' OR  -- AMI STEMI/NSTEMI\n        dx.icd_code LIKE 'I22%' OR  -- subsequent AMI\n        dx.icd_code = 'I200'        -- unstable angina\n      ))\n    )\n),\ntroponin_first AS (\n  SELECT le.subject_id, le.hadm_id,\n         le.charttime,\n         le.valuenum,\n         CAST(le.ref_range_upper AS FLOAT64) AS ul_normal\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS di\n    ON le.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%troponin i%'\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n),\nfirst_trop_per_adm AS (\n  SELECT subject_id, hadm_id,\n         valuenum, ul_normal\n  FROM (\n    SELECT tf.*,\n           ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n    FROM troponin_first tf\n  )\n  WHERE rn = 1\n    AND valuenum > ul_normal\n)\nSELECT \n  COUNT(*) AS n_patients,\n  AVG(valuenum) AS mean_troponin,\n  APPROX_QUANTILES(valuenum, 100)[OFFSET(50)] AS median_troponin,\n  APPROX_QUANTILES(valuenum, 100)[OFFSET(75)] \n    - APPROX_QUANTILES(valuenum, 100)[OFFSET(25)] AS iqr_troponin\nFROM first_trop_per_adm f\nJOIN acs_admissions a\n  ON f.subject_id = a.subject_id\n  AND f.hadm_id = a.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.9) within GROUP (ORDER BY vital_instability_score) AS ninety_percentile, percentile_cont(0.1) within GROUP (ORDER BY vital_instability_score) AS tenth_percentile FROM vital_instability_score WHERE subject_id IN (SELECT subject_id FROM male_icu_patients);

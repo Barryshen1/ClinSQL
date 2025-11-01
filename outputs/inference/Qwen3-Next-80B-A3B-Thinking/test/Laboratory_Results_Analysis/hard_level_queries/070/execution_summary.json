@@ -1,0 +1,23 @@
+{
+  "query": "I have a 45-year-old man. Among male inpatients 40\u201350 with hemorrhagic stroke, compute a 72\u2011hour lab instability score (count of unique abnormal labs), stratify into quartiles, and report LOS, mortality, and per\u2011lab abnormal rates versus general inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 40 AND 50\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%')\n    )\n),\n\nlab_score_cohort AS (\n  SELECT \n    l.hadm_id,\n    COUNT(DISTINCT l.itemid) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON l.itemid = d.itemid\n  JOIN cohort c ON l.hadm_id = c.hadm_id\n  WHERE l.charttime BETWEEN c.admittime AND c.admittime + INTERVAL 72 HOUR\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n    AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n  GROUP BY l.hadm_id\n),\n\nlab_score_general AS (\n  SELECT \n    l.hadm_id,\n    COUNT(DISTINCT l.itemid) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON l.itemid = d.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON l.hadm_id = a.hadm_id\n  WHERE l.charttime BETWEEN a.admittime AND a.admittime + INTERVAL 72 HOUR\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n    AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n  GROUP BY l.hadm_id\n),\n\nquartiles AS (\n  SELECT \n    NTILE(4) OVER (ORDER BY COALESCE(l.lab_instability_score, 0)) AS quartile,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    COALESCE(l.lab_instability_score, 0) AS lab_instability_score\n  FROM cohort c\n  LEFT JOIN lab_score_cohort l ON c.hadm_id = l.hadm_id\n)\n\nSELECT \n  'Cohort Quartile ' || CAST(quartile AS STRING) AS group_name,\n  AVG(DATE_DIFF(dischtime, admittime, DAY)) AS avg_los,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  AVG(lab_instability_score) AS avg_lab_score\nFROM quartiles\nGROUP BY quartile\n\nUNION ALL\n\nSELECT \n  'General Population' AS group_name,\n  AVG(DATE_DIFF(a.dischtime, a.admittime, DAY)) AS avg_los,\n  AVG(a.hospital_expire_flag) AS mortality_rate,\n  AVG(COALESCE(lg.lab_instability_score, 0)) AS avg_lab_score\nFROM `physionet-data.mimiciv_3_1_hosp.admissions` a\nLEFT JOIN lab_score_general lg ON a.hadm_id = lg.hadm_id;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside d at [31:11]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside d at [31:11]\n\nLocation: US\nJob ID: 0de6136c-7bac-450a-8264-729f05707618\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

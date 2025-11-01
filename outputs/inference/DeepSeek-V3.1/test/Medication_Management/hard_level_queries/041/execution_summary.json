@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 45\u2011year\u2011old man with heart failure. In male inpatients aged 40\u201350 with HF, stratified by quintiles of a 7\u2011day medication complexity score, report patient counts, score ranges, mean LOS (days), in\u2011hospital mortality, and 30\u2011day readmission.",
+  "final_sql": "WITH hf_admissions AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    pat.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE \n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 40 AND 50\n    AND diag.icd_code LIKE 'I50%'\n    AND diag.icd_version = 10\n    AND adm.dischtime IS NOT NULL  -- Exclude ongoing admissions\n),\n\nmed_score AS (\n  SELECT \n    pres.hadm_id,  -- Qualified to resolve ambiguity\n    COUNT(DISTINCT drug) AS complexity_score\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n  INNER JOIN hf_admissions adm\n    ON pres.hadm_id = adm.hadm_id\n  WHERE \n    DATETIME_DIFF(pres.starttime, adm.admittime, DAY) BETWEEN 0 AND 7\n  GROUP BY pres.hadm_id\n),\n\nquintiles AS (\n  SELECT \n    ms.hadm_id,\n    ms.complexity_score,\n    NTILE(5) OVER (ORDER BY ms.complexity_score) AS quintile\n  FROM med_score ms\n),\n\nreadmission_flag AS (\n  SELECT \n    adm1.hadm_id,\n    MAX(CASE WHEN adm2.admittime <= DATETIME_ADD(adm1.dischtime, INTERVAL 30 DAY) \n             AND adm2.admittime > adm1.dischtime THEN 1 ELSE 0 END) AS readmit_30d\n  FROM hf_admissions adm1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm2\n    ON adm1.subject_id = adm2.subject_id\n    AND adm2.admittime > adm1.dischtime  -- Removed redundant condition, added to CASE statement\n  GROUP BY adm1.hadm_id\n)\n\nSELECT \n  q.quintile,\n  COUNT(DISTINCT ha.hadm_id) AS patient_count,\n  MIN(q.complexity_score) AS min_score,\n  MAX(q.complexity_score) AS max_score,\n  ROUND(AVG(ha.los_days), 2) AS mean_los_days,\n  SUM(ha.hospital_expire_flag) AS in_hospital_mortality,\n  SUM(rf.readmit_30d) AS readmission_30d\nFROM hf_admissions ha\nINNER JOIN quintiles q ON ha.hadm_id = q.hadm_id\nLEFT JOIN readmission_flag rf ON ha.hadm_id = rf.hadm_id\nGROUP BY q.quintile\nORDER BY q.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [25:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [25:5]\n\nLocation: US\nJob ID: 964ba874-8ed7-4e05-a17f-96ddc169b1c2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [25:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [25:5]\n\nLocation: US\nJob ID: 044d5183-1157-433d-aa51-406bbb8f53b0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

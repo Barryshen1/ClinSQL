@@ -1,0 +1,28 @@
+{
+  "query": "For my 43-year-old female inpatient with T2D and heart failure, among females 38\u201348 with both diagnoses, report percentages initiated on insulin versus oral agents in first vs final 72h only.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    p.anchor_age,\n    p.anchor_age + EXTRACT(YEAR FROM a.admittime) - 2008 AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND a.hadm_id IS NOT NULL\n    AND a.admission_type != 'OBSERVATION'\n    AND a.dischtime > a.admittime  -- Valid stays only\n),\ncohort_with_dx AS (\n  SELECT \n    c.*,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n        WHERE d.hadm_id = c.hadm_id \n          AND (\n            (d.icd_version = 10 AND d.icd_code LIKE 'E11%') \n            OR (d.icd_version = 9 AND d.icd_code LIKE '250%')\n          )\n      ) THEN 1 ELSE 0 \n    END AS has_t2d,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n        WHERE d.hadm_id = c.hadm_id \n          AND (\n            (d.icd_version = 10 AND d.icd_code LIKE 'I50%') \n            OR (d.icd_version = 9 AND d.icd_code LIKE '428%')\n          )\n      ) THEN 1 ELSE 0 \n    END AS has_hf\n  FROM cohort c\n  WHERE c.age_at_admit BETWEEN 38 AND 48\n),\nfinal_cohort AS (\n  SELECT hadm_id, admittime, dischtime\n  FROM cohort_with_dx \n  WHERE has_t2d = 1 AND has_hf = 1\n),\ninsulin_starts AS (\n  SELECT \n    pr.hadm_id, \n    MIN(pr.starttime) AS min_start_insulin\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  INNER JOIN final_cohort fc ON pr.hadm_id = fc.hadm_id\n  WHERE LOWER(pr.drug) LIKE '%insulin%'\n    AND pr.starttime IS NOT NULL\n  GROUP BY pr.hadm_id\n),\noral_starts AS (\n  SELECT \n    pr.hadm_id, \n    MIN(pr.starttime) AS min_start_oral\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  INNER JOIN final_cohort fc ON pr.hadm_id = fc.hadm_id\n  WHERE pr.starttime IS NOT NULL\n    AND (\n      LOWER(pr.drug) LIKE '%metformin%' OR\n      LOWER(pr.drug) LIKE '%glipizide%' OR\n      LOWER(pr.drug) LIKE '%glyburide%' OR\n      LOWER(pr.drug) LIKE '%glimepiride%' OR\n      LOWER(pr.drug) LIKE '%pioglitazone%' OR\n      LOWER(pr.drug) LIKE '%rosiglitazone%' OR\n      LOWER(pr.drug) LIKE '%sitagliptin%' OR\n      LOWER(pr.drug) LIKE '%linagliptin%' OR\n      LOWER(pr.drug) LIKE '%saxagliptin%' OR\n      LOWER(pr.drug) LIKE '%alogliptin%' OR\n      LOWER(pr.drug) LIKE '%empagliflozin%' OR\n      LOWER(pr.drug) LIKE '%dapagliflozin%' OR\n      LOWER(pr.drug) LIKE '%canagliflozin%' OR\n      LOWER(pr.drug) LIKE '%ertugliflozin%' OR\n      LOWER(pr.drug) LIKE '%acarbose%' OR\n      LOWER(pr.drug) LIKE '%miglitol%' OR\n      LOWER(pr.drug) LIKE '%repaglinide%' OR\n      LOWER(pr.drug) LIKE '%nateglinide%' OR\n      LOWER(pr.drug) LIKE '%chlorpropamide%'\n    )\n  GROUP BY pr.hadm_id\n)\nSELECT \n  COUNT(*) AS total_patients,\n  ROUND(100.0 * COUNT(CASE \n    WHEN i.min_start_insulin >= fc.admittime \n      AND i.min_start_insulin < TIMESTAMP_ADD(fc.admittime, INTERVAL 72 HOUR) \n    THEN 1 \n  END) / NULLIF(COUNT(*), 0), 1) AS pct_insulin_first72,\n  ROUND(100.0 * COUNT(CASE \n    WHEN o.min_start_oral >= fc.admittime \n      AND o.min_start_oral < TIMESTAMP_ADD(fc.admittime, INTERVAL 72 HOUR) \n    THEN 1 \n  END) / NULLIF(COUNT(*), 0), 1) AS pct_oral_first72,\n  ROUND(100.0 * COUNT(CASE \n    WHEN i.min_start_insulin > TIMESTAMP_SUB(fc.dischtime, INTERVAL 72 HOUR) \n      AND i.min_start_insulin <= fc.dischtime \n    THEN 1 \n  END) / NULLIF(COUNT(*), 0), 1) AS pct_insulin_final72,\n  ROUND(100.0 * COUNT(CASE \n    WHEN o.min_start_oral > TIMESTAMP_SUB(fc.dischtime, INTERVAL 72 HOUR) \n      AND o.min_start_oral <= fc.dischtime \n    THEN 1 \n  END) / NULLIF(COUNT(*), 0), 1) AS pct_oral_final72\nFROM final_cohort fc\nLEFT JOIN insulin_starts i ON fc.hadm_id = i.hadm_id\nLEFT JOIN oral_starts o ON fc.hadm_id = o.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [27:14]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [27:14]\n\nLocation: US\nJob ID: 0b833659-073f-4802-9db5-bdae39ed4271\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/cec2eb17-ea8e-4d76-83e4-1afd78a17dbe?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: cec2eb17-ea8e-4d76-83e4-1afd78a17dbe\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 48\u2011year\u2011old female inpatient. In female admissions aged 43\u201353 with sepsis, what is the 25th\u2011percentile instability score (critical lab event count) in the first 72 hours? Report cohort and general mean critical events per admission, LOS, and mortality.",
+  "final_sql": "WITH sepsis_admissions AS (\n  -- female admissions aged 43-53 with any diagnosis whose long_title mentions \"sepsis\"\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id\n   AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dic\n    ON di.icd_code = dic.icd_code\n   AND di.icd_version = dic.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND LOWER(dic.long_title) LIKE '%sepsis%'\n),\n\nlab_counts AS (\n  -- count \"critical\" lab events (here: flagged labs) in first 72 hours per admission\n  SELECT\n    sa.hadm_id,\n    sa.subject_id,\n    sa.admittime,\n    sa.dischtime,\n    sa.hospital_expire_flag,\n    COUNT(l.labevent_id) AS critical_events\n  FROM sepsis_admissions sa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON l.hadm_id = sa.hadm_id\n   AND l.charttime BETWEEN sa.admittime AND TIMESTAMP_ADD(sa.admittime, INTERVAL 72 HOUR)\n   -- pragmatic \"critical\" definition: flagged lab values (flag is present and non-empty)\n   AND l.flag IS NOT NULL\n   AND TRIM(l.flag) != ''\n  GROUP BY\n    sa.hadm_id,\n    sa.subject_id,\n    sa.admittime,\n    sa.dischtime,\n    sa.hospital_expire_flag\n)\n\nSELECT\n  COUNT(*) AS cohort_size,\n  -- 25th percentile (approximate) of critical event counts across admissions\n  APPROX_QUANTILES(critical_events, 100)[OFFSET(25)] AS events_25th_percentile,\n  ROUND(AVG(critical_events), 3) AS mean_critical_events_per_admission,\n  ROUND(AVG(TIMESTAMP_DIFF(dischtime, admittime, MINUTE) / 1440.0), 3) AS mean_los_days,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)), 4) AS mortality_rate\nFROM lab_counts;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [52:16]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [52:16]\n\nLocation: US\nJob ID: 82f9fe44-eb9b-482b-8b05-48a5237e1b22\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

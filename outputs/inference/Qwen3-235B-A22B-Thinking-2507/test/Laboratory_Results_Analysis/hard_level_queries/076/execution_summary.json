@@ -1,0 +1,29 @@
+{
+  "query": "For a 92\u2011year\u2011old man with ACS: among male inpatients aged 87\u201397, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u2265P95 report mean LOS, in\u2011hospital mortality, and compare avg critical lab events per patient to general inpatients.",
+  "final_sql": "WITH admissions_with_age AS (\n  SELECT \n    a.*,\n    p.gender,  -- Added to include gender from patients table\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n)\n, cohort AS (\n  SELECT \n    hadm_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag\n  FROM admissions_with_age\n  WHERE gender = 'M'\n    AND age_at_admission BETWEEN 87 AND 97\n)\n, lab_instability AS (\n  SELECT\n    c.hadm_id,\n    SUM(CASE WHEN \n             (l.ref_range_lower IS NOT NULL AND l.ref_range_upper IS NOT NULL AND \n               (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n             )\n             OR \n             (l.flag IN ('abnormal', 'high', 'low'))\n           THEN 1 ELSE 0 END) AS critical_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n    AND l.charttime >= c.admittime\n    AND l.charttime <= DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n    AND l.valuenum IS NOT NULL\n  GROUP BY c.hadm_id\n)\n, p95_value AS (\n  SELECT \n    APPROX_QUANTILES(critical_count, 1000)[OFFSET(950)] AS p95\n  FROM lab_instability\n)\n, high_risk AS (\n  SELECT \n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    li.critical_count\n  FROM cohort c\n  INNER JOIN lab_instability li\n    ON c.hadm_id = li.hadm_id\n  WHERE li.critical_count >= (SELECT p95 FROM p95_value)\n)\n, high_risk_metrics AS (\n  SELECT \n    AVG(DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(critical_count) AS high_risk_avg_critical\n  FROM high_risk\n)\n, general_lab AS (\n  SELECT\n    a.hadm_id,\n    SUM(CASE WHEN \n             (l.ref_range_lower IS NOT NULL AND l.ref_range_upper IS NOT NULL AND \n               (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n             )\n             OR \n             (l.flag IN ('abnormal', 'high', 'low'))\n           THEN 1 ELSE 0 END) AS critical_count_general\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime >= a.admittime\n    AND l.charttime <= DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND l.valuenum IS NOT NULL\n  GROUP BY a.hadm_id\n)\n, general_avg AS (\n  SELECT AVG(critical_count_general) AS general_avg_critical\n  FROM general_lab\n)\nSELECT \n  hrm.mean_los,\n  hrm.mortality_rate,\n  hrm.high_risk_avg_critical,\n  ga.general_avg_critical\nFROM high_risk_metrics hrm\nCROSS JOIN general_avg ga;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 46417f57-ee6f-4ea4-abe1-85a8a30fc02e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: gender at [16:9]; reason: invalidQuery, location: query, message: Unrecognized name: gender at [16:9]\n\nLocation: US\nJob ID: 72431a6b-9b80-4180-82ff-cb9e588afe34\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

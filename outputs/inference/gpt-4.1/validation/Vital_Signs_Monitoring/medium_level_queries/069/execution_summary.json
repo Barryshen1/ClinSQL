@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46-year-old female ICU patient. Among female ICU patients 41\u201351, how many had per\u2011stay average RR <12, 12\u201320, 21\u201329, \u226530 in first 48h, and what were stroke rates?",
+  "final_sql": "WITH rr_itemids AS (\n  -- Get itemids for Respiratory Rate from d_items\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%respiratory rate%'\n),\n\nfemale_41_51_icu AS (\n  -- Get ICU stays for female patients aged 41-51\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 41 AND 51\n),\n\nrr_first_48h AS (\n  -- Get RR measurements in first 48h of each ICU stay\n  SELECT\n    f.stay_id,\n    f.hadm_id,\n    f.subject_id,\n    ce.charttime,\n    ce.valuenum\n  FROM female_41_51_icu f\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON f.stay_id = ce.stay_id\n  JOIN rr_itemids ri\n    ON ce.itemid = ri.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.charttime >= f.intime\n    AND ce.charttime < DATETIME_ADD(f.intime, INTERVAL 48 HOUR)\n),\n\navg_rr_per_stay AS (\n  -- Calculate per-stay average RR\n  SELECT\n    stay_id,\n    hadm_id,\n    subject_id,\n    AVG(valuenum) AS avg_rr\n  FROM rr_first_48h\n  GROUP BY stay_id, hadm_id, subject_id\n),\n\nstroke_admissions AS (\n  -- Identify admissions with stroke diagnosis\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE (\n    -- ICD-10: I60.x, I61.x, I63.x, I64.x\n    (d.icd_version = 10 AND (\n      REGEXP_CONTAINS(d.icd_code, r'^I60') OR\n      REGEXP_CONTAINS(d.icd_code, r'^I61') OR\n      REGEXP_CONTAINS(d.icd_code, r'^I63') OR\n      REGEXP_CONTAINS(d.icd_code, r'^I64')\n    ))\n    OR\n    -- ICD-9: 430.x, 431.x, 434.x, 436.x\n    (d.icd_version = 9 AND (\n      REGEXP_CONTAINS(d.icd_code, r'^430') OR\n      REGEXP_CONTAINS(d.icd_code, r'^431') OR\n      REGEXP_CONTAINS(d.icd_code, r'^434') OR\n      REGEXP_CONTAINS(d.icd_code, r'^436')\n    ))\n  )\n)\n\nSELECT\n  CASE\n    WHEN avg_rr < 12 THEN '<12'\n    WHEN avg_rr >= 12 AND avg_rr <= 20 THEN '12-20'\n    WHEN avg_rr >= 21 AND avg_rr <= 29 THEN '21-29'\n    WHEN avg_rr >= 30 THEN '>=30'\n    ELSE 'Unknown'\n  END AS rr_bin,\n  COUNT(*) AS n_stays,\n  SUM(CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS n_stroke,\n  ROUND(SAFE_DIVIDE(SUM(CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END), COUNT(*)) * 100, 1) AS stroke_rate_percent\nFROM avg_rr_per_stay a\nLEFT JOIN stroke_admissions s\n  ON a.hadm_id = s.hadm_id\nGROUP BY rr_bin\nORDER BY\n  CASE rr_bin\n    WHEN '<12' THEN 1\n    WHEN '12-20' THEN 2\n    WHEN '21-29' THEN 3\n    WHEN '>=30' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

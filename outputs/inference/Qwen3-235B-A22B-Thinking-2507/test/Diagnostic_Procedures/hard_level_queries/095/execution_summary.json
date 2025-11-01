@@ -1,0 +1,23 @@
+{
+  "query": "For an 84-year-old man: among male ICU patients aged 79\u201389 with pulmonary embolism, what is the 75th percentile of diagnostic utilization score in first 24h, and how do their ICU LOS and in\u2011hospital mortality compare to the general ICU population?",
+  "final_sql": "WITH cohort_base AS (\n  SELECT \n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.los AS icu_los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 79 AND 89\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 9 AND di.icd_code = '4151') \n          OR (di.icd_version = 10 AND di.icd_code LIKE 'I26%')\n        )\n    )\n),\nlab_counts AS (\n  SELECT \n    l.hadm_id,\n    COUNT(*) AS lab_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN cohort_base c \n    ON l.hadm_id = c.hadm_id\n  WHERE l.charttime BETWEEN c.intime AND c.intime + INTERVAL '24' HOUR\n  GROUP BY l.hadm_id\n),\nmicro_counts AS (\n  SELECT \n    m.hadm_id,\n    COUNT(*) AS micro_count\n  FROM `physionet-data.mimiciv_3_1_hosp.microbiologyevents` m\n  INNER JOIN cohort_base c \n    ON m.hadm_id = c.hadm_id\n  WHERE m.charttime BETWEEN c.intime AND c.intime + INTERVAL '24' HOUR\n  GROUP BY m.hadm_id\n),\ncohort_scores AS (\n  SELECT \n    c.stay_id,\n    c.hadm_id,\n    c.icu_los,\n    c.hospital_expire_flag,\n    COALESCE(lc.lab_count, 0) + COALESCE(mc.micro_count, 0) AS diag_score\n  FROM cohort_base c\n  LEFT JOIN lab_counts lc ON c.hadm_id = lc.hadm_id\n  LEFT JOIN micro_counts mc ON c.hadm_id = mc.hadm_id\n),\ngeneral_population AS (\n  SELECT \n    i.los AS icu_los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n),\ncohort_stats AS (\n  SELECT \n    APPROX_QUANTILES(diag_score, 1000)[OFFSET(750)] AS cohort_75th_percentile,\n    APPROX_QUANTILES(icu_los, 1000)[OFFSET(500)] AS cohort_median_los,\n    AVG(hospital_expire_flag) AS cohort_mortality_rate\n  FROM cohort_scores\n),\ngeneral_stats AS (\n  SELECT \n    APPROX_QUANTILES(icu_los, 1000)[OFFSET(500)] AS general_median_los,\n    AVG(hospital_expire_flag) AS general_mortality_rate\n  FROM general_population\n)\nSELECT \n  cs.cohort_75th_percentile,\n  cs.cohort_median_los,\n  gs.general_median_los,\n  cs.cohort_mortality_rate,\n  gs.general_mortality_rate\nFROM cohort_stats cs, general_stats gs;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 5f1e59d8-524f-4661-98fe-4484e3f26dfa\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 80\u2011year\u2011old female on invasive mechanical ventilation. In female ICU patients age 75\u201385 on ventilation, what's the 90th percentile of the 48\u2011hour composite instability score, and what are hypotension, tachycardia, ICU LOS, and mortality in the top 25%?",
+  "final_sql": "WITH vent_cohort AS (\n  SELECT DISTINCT\n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ie.los,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON ie.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON ie.stay_id = pe.stay_id\n      AND ie.subject_id = pe.subject_id\n      AND ie.hadm_id = pe.hadm_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 75 AND 85\n    AND pe.itemid IN (223848, 223849, 224385, 224387)\n    AND pe.starttime BETWEEN ie.intime AND DATETIME_ADD(ie.intime, INTERVAL 48 HOUR)\n),\n\nvitals AS (\n  SELECT \n    vc.stay_id,\n    MAX(CASE WHEN ce.itemid = 220179 AND ce.valuenum < 90 THEN 1 ELSE 0 END) AS hypotension_event,\n    MAX(CASE WHEN ce.itemid = 220045 AND ce.valuenum > 100 THEN 1 ELSE 0 END) AS tachycardia_event\n  FROM vent_cohort vc\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON vc.stay_id = ce.stay_id\n      AND vc.subject_id = ce.subject_id\n      AND vc.hadm_id = ce.hadm_id\n  WHERE ce.charttime BETWEEN vc.intime AND DATETIME_ADD(vc.intime, INTERVAL 48 HOUR)\n    AND ce.itemid IN (220179, 220045)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY vc.stay_id\n),\n\ncomposite_scores AS (\n  SELECT\n    vc.*,\n    v.hypotension_event,\n    v.tachycardia_event,\n    COALESCE(v.hypotension_event, 0) + COALESCE(v.tachycardia_event, 0) AS instability_score\n  FROM vent_cohort vc\n  LEFT JOIN vitals v\n    ON vc.stay_id = v.stay_id\n),\n\npercentiles AS (\n  SELECT DISTINCT\n    PERCENTILE_CONT(instability_score, 0.9) OVER() AS p90_score,\n    PERCENTILE_CONT(instability_score, 0.75) OVER() AS p75_score\n  FROM composite_scores\n)\n\nSELECT\n  -- 90th percentile for the entire cohort\n  (SELECT p90_score FROM percentiles) AS overall_90th_percentile_score,\n  -- For the top 25% most unstable\n  COUNT(*) AS top25_count,\n  SUM(cs.hypotension_event) AS hypotension_count,\n  SUM(cs.tachycardia_event) AS tachycardia_count,\n  AVG(cs.los) AS avg_icu_los,\n  SUM(cs.hospital_expire_flag) AS mortality_count,\n  ROUND(SUM(cs.hospital_expire_flag) / COUNT(*) * 100, 2) AS mortality_percent\nFROM composite_scores cs\nCROSS JOIN percentiles p\nWHERE cs.instability_score >= p.p75_score;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hypotension_event at [64:7]; reason: invalidQuery, location: query, message: Unrecognized name: hypotension_event at [64:7]\n\nLocation: US\nJob ID: bb38a6b7-596b-4c12-bd6a-0b5296cdc11f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hypotension_event not found inside cs at [63:10]; reason: invalidQuery, location: query, message: Name hypotension_event not found inside cs at [63:10]\n\nLocation: US\nJob ID: 5557a676-5247-401c-bb71-eddf727bd99c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

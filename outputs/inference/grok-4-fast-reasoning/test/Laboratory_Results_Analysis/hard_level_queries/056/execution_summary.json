@@ -1,0 +1,28 @@
+{
+  "query": "I have a 60\u2011year\u2011old female with asthma exacerbation. Among female inpatients aged 55\u201365, what is the 95th percentile of the lab instability score in the first 48 hours? For that top tier, report LOS, mortality, and critical lab rate versus general inpatients.",
+  "final_sql": "WITH asthma_diag AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 10 AND (icd_code LIKE 'J45%' OR icd_code LIKE 'J46%'))\n     OR (icd_version = 9 AND icd_code LIKE '493%')\n),\ngeneral_cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age >= 55\n    AND p.anchor_age <= 65\n),\nasthma_cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  INNER JOIN asthma_diag ad ON a.hadm_id = ad.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age >= 55\n    AND p.anchor_age <= 65\n),\nlabs_general AS (\n  SELECT \n    le.hadm_id,\n    COUNTIF(le.valuenum IS NOT NULL) AS total_labs,\n    COUNTIF(le.valuenum IS NOT NULL AND le.flag <> '') AS abnormal_labs\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN general_cohort c ON le.hadm_id = c.hadm_id\n  WHERE le.charttime >= c.admittime\n    AND le.charttime < DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY le.hadm_id\n),\nlabs_asthma AS (\n  SELECT \n    le.hadm_id,\n    COUNTIF(le.valuenum IS NOT NULL) AS total_labs,\n    COUNTIF(le.valuenum IS NOT NULL AND le.flag <> '') AS abnormal_labs\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN asthma_cohort c ON le.hadm_id = c.hadm_id\n  WHERE le.charttime >= c.admittime\n    AND le.charttime < DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY le.hadm_id\n),\ngeneral_scores AS (\n  SELECT \n    c.hadm_id, \n    DATETIME_DIFF(c.dischtime, c.admittime, HOUR) / 24.0 AS los_days,\n    c.hospital_expire_flag,\n    COALESCE(l.total_labs, 0) AS total_labs,\n    COALESCE(l.abnormal_labs, 0) AS score\n  FROM general_cohort c\n  LEFT JOIN labs_general l USING (hadm_id)\n),\nasthma_scores AS (\n  SELECT \n    c.hadm_id, \n    DATETIME_DIFF(c.dischtime, c.admittime, HOUR) / 24.0 AS los_days,\n    c.hospital_expire_flag,\n    COALESCE(l.total_labs, 0) AS total_labs,\n    COALESCE(l.abnormal_labs, 0) AS score\n  FROM asthma_cohort c\n  LEFT JOIN labs_asthma l USING (hadm_id)\n),\np95_cte AS (\n  SELECT APPROX_QUANTILES(score, 100)[OFFSET(95)] AS p95_score\n  FROM asthma_scores\n),\ngeneral_stats AS (\n  SELECT \n    AVG(los_days) AS avg_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    IFNULL(SUM(score) / NULLIF(SUM(total_labs), 0), 0) AS critical_lab_rate\n  FROM general_scores\n),\ntop_stats AS (\n  SELECT \n    AVG(los_days) AS avg_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    IFNULL(SUM(score) / NULLIF(SUM(total_labs), 0), 0) AS critical_lab_rate\n  FROM asthma_scores\n  WHERE score >= (SELECT p95_score FROM p95_cte)\n)\nSELECT \n  (SELECT p95_score FROM p95_cte) AS percentile_95,\n  g.avg_los AS general_los_days,\n  g.mortality_rate AS general_mortality_rate,\n  g.critical_lab_rate AS general_critical_lab_rate,\n  t.avg_los AS top_tier_los_days,\n  t.mortality_rate AS top_tier_mortality_rate,\n  t.critical_lab_rate AS top_tier_critical_lab_rate\nFROM general_stats g, top_stats t;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [14:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [14:12]\n\nLocation: US\nJob ID: aee99d69-bedc-4951-bd2a-061e5eab607e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: b411cd3e-ff67-4265-b8da-1dc55fa700e3\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

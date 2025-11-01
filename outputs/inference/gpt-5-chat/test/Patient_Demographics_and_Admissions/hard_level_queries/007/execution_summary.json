@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating an 88-year-old man. Among male Medicare patients aged 83\u201393 admitted via the ED with a principal diagnosis of TIA, what are the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >10 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n    ON adm.subject_id = diag.subject_id\n    AND adm.hadm_id = diag.hadm_id\n    AND diag.seq_num = 1   -- principal diagnosis\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddiag\n    ON diag.icd_code = ddiag.icd_code\n    AND diag.icd_version = ddiag.icd_version\n  WHERE pat.gender = 'M'\n    AND adm.insurance = 'Medicare'\n    AND pat.anchor_age BETWEEN 83 AND 93\n    AND adm.admission_location LIKE 'EMERGENCY DEPARTMENT%'\n    AND LOWER(ddiag.long_title) LIKE '%transient ischemic attack%'\n),\nreadmit_flag AS (\n  SELECT\n    idx.subject_id,\n    idx.hadm_id,\n    idx.admittime,\n    idx.dischtime,\n    idx.los_days,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS next\n        WHERE next.subject_id = idx.subject_id\n          AND next.admittime > idx.dischtime\n          AND DATETIME_DIFF(next.admittime, idx.dischtime, DAY) <= 30\n      )\n      THEN 1 ELSE 0\n    END AS readmitted\n  FROM cohort AS idx\n),\nstats AS (\n  SELECT\n    COUNT(*) AS total_index_stays,\n    SUM(readmitted) AS n_readmitted,\n    SAFE_DIVIDE(SUM(readmitted), COUNT(*)) AS readmission_rate,\n    APPROX_QUANTILES(CASE WHEN readmitted=1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted,\n    APPROX_QUANTILES(CASE WHEN readmitted=0 THEN los_days END, 100)[OFFSET(50)] AS median_los_nonreadmitted,\n    SAFE_DIVIDE(SUM(CASE WHEN los_days > 10 THEN 1 ELSE 0 END), COUNT(*)) AS pct_los_over_10_days\n  FROM readmit_flag\n)\nSELECT\n  readmission_rate,\n  median_los_readmitted,\n  median_los_nonreadmitted,\n  pct_los_over_10_days\nFROM stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

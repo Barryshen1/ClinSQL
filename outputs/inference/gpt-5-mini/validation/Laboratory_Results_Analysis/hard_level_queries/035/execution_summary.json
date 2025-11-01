@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83-year-old female inpatient. Among female patients aged 78\u201388 with acute ischemic stroke, what was the minimum 72-hour laboratory instability score? Also compare cohort average critical lab events to general inpatients and report cohort LOS and in-hospital mortality.",
+  "final_sql": "WITH stroke_hadm AS (\n  -- Admissions for female patients age 78-88 with an ischemic stroke diagnosis\n  SELECT DISTINCT a.hadm_id, a.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON a.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON dx.icd_code = dd.icd_code\n   AND dx.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 78 AND 88\n    AND LOWER(dd.long_title) LIKE '%ischemic%'\n    AND (LOWER(dd.long_title) LIKE '%stroke%' OR LOWER(dd.long_title) LIKE '%infarct%')\n),\n\n-- Per-admission counts of \"critical\" lab events within first 72 hours of admission\nlab_crit_counts AS (\n  SELECT\n    a.hadm_id,\n    COUNTIF(\n      (\n        le.valuenum IS NOT NULL\n        AND (\n          (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower)\n          OR (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper)\n        )\n      )\n      OR (\n        le.flag IS NOT NULL\n        AND (\n          LOWER(le.flag) LIKE '%abnorm%'\n          OR LOWER(le.flag) LIKE '%high%'\n          OR LOWER(le.flag) LIKE '%low%'\n          OR LOWER(le.flag) LIKE '%crit%'\n        )\n      )\n    ) AS crit_events_72h\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON le.hadm_id = a.hadm_id\n  WHERE le.charttime >= a.admittime\n    AND le.charttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n  GROUP BY a.hadm_id\n),\n\n-- All admissions with basic metrics (LOS, expired flag) and left-joined lab counts\nadmission_metrics AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- compute LOS in days (fractional)\n    CASE\n      WHEN a.admittime IS NOT NULL AND a.dischtime IS NOT NULL\n      THEN TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0\n      ELSE NULL\n    END AS los_days,\n    COALESCE(lc.crit_events_72h, 0) AS crit_events_72h\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN lab_crit_counts lc\n    ON a.hadm_id = lc.hadm_id\n)\n\n-- Final aggregates: cohort stats and general inpatient comparison\nSELECT\n  -- Cohort identifiers and size\n  COUNT(DISTINCT sh.hadm_id) AS cohort_n_admissions,\n\n  -- Minimum 72-hour instability score within the cohort\n  MIN(am_c.crit_events_72h) AS cohort_min_72h_instability_score,\n\n  -- Cohort average critical events within 72h and general inpatients average for comparison\n  ROUND(AVG(am_c.crit_events_72h), 3) AS cohort_avg_crit_events_72h,\n  ROUND((\n    SELECT AVG(crit_events_72h) FROM admission_metrics\n  ), 3) AS general_inpatients_avg_crit_events_72h,\n\n  -- Cohort LOS and in-hospital mortality\n  ROUND(AVG(am_c.los_days), 3) AS cohort_avg_los_days,\n  ROUND(AVG(CASE WHEN am_c.hospital_expire_flag IS NULL THEN 0 ELSE CAST(am_c.hospital_expire_flag AS NUMERIC) END), 4) AS cohort_in_hospital_mortality_rate\n\nFROM stroke_hadm sh\nJOIN admission_metrics am_c\n  ON sh.hadm_id = am_c.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"t_events_72h\" at [75:16]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"t_events_72h\" at [75:16]\n\nLocation: US\nJob ID: a1f2a76b-9bc6-4bf8-b54a-589529651862\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

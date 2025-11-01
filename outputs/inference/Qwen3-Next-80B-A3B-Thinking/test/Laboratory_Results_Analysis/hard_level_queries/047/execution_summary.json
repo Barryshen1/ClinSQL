@@ -1,0 +1,23 @@
+{
+  "query": "I have a 76-year-old man. Among male inpatients with ARDS aged 71\u201381, what is the 90th\u2011percentile instability score in the first 72 hours? For patients at/above that threshold, report mortality, mean LOS, and compare critical lab rates to general inpatients.",
+  "final_sql": "WITH ards_patients AS (\n  SELECT p.subject_id, p.anchor_age, p.gender, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON d.subject_id = p.subject_id\n  WHERE d.icd_code = 'J80' AND d.icd_version = 10\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 71 AND 81\n),\nards_icu AS (\n  SELECT a.subject_id, a.hadm_id, i.stay_id, i.intime, i.outtime, i.los\n  FROM ards_patients a\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON a.hadm_id = i.hadm_id\n),\nvitals AS (\n  SELECT \n    i.stay_id,\n    i.intime,\n    c.charttime,\n    c.itemid,\n    c.valuenum\n  FROM ards_icu i\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c ON i.stay_id = c.stay_id\n  WHERE c.charttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 72 HOUR)\n    AND c.itemid IN (220045, 220050)\n),\ninstability_events AS (\n  SELECT \n    stay_id,\n    SUM(CASE WHEN itemid = 220045 AND valuenum > 100 THEN 1 ELSE 0 END) +\n    SUM(CASE WHEN itemid = 220050 AND valuenum < 90 THEN 1 ELSE 0 END) AS instability_score\n  FROM vitals\n  GROUP BY stay_id\n),\npercentile AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS threshold\n  FROM instability_events\n),\nhigh_instability AS (\n  SELECT \n    ie.stay_id,\n    ie.instability_score,\n    a.hospital_expire_flag,\n    i.los\n  FROM instability_events ie\n  JOIN ards_icu i ON ie.stay_id = i.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n  CROSS JOIN percentile p\n  WHERE ie.instability_score >= p.threshold\n),\nhigh_instability_hadm AS (\n  SELECT DISTINCT hadm_id\n  FROM high_instability\n  JOIN ards_icu ON high_instability.stay_id = ards_icu.stay_id\n),\ncritical_labs AS (\n  SELECT \n    'high_instability' AS group_name,\n    COUNT(DISTINCT CASE WHEN l.valuenum > 5.0 THEN l.subject_id END) * 1.0 / COUNT(DISTINCT l.subject_id) AS potassium_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN high_instability_hadm hi ON l.hadm_id = hi.hadm_id\n  WHERE l.itemid = 50971\n),\ngeneral_labs AS (\n  SELECT \n    'general_inpatients' AS group_name,\n    COUNT(DISTINCT CASE WHEN l.valuenum > 5.0 THEN l.subject_id END) * 1.0 / COUNT(DISTINCT l.subject_id) AS potassium_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  WHERE l.itemid = 50971\n),\nmortality_los AS (\n  SELECT \n    AVG(CAST(hospital_expire_flag AS INT64)) AS mortality_rate,\n    AVG(los) AS mean_los\n  FROM high_instability\n)\nSELECT \n  m.mortality_rate,\n  m.mean_los,\n  c.potassium_rate AS high_instability_kpotassium,\n  g.potassium_rate AS general_kpotassium\nFROM mortality_los m\nCROSS JOIN critical_labs c\nCROSS JOIN general_labs g;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside i at [44:7]; reason: invalidQuery, location: query, message: Name los not found inside i at [44:7]\n\nLocation: US\nJob ID: 45dfc034-546b-4cbc-844f-c5d6cae3c5d1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

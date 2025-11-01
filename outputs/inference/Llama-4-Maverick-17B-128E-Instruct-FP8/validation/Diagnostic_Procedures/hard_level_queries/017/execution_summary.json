@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH \neligible_patients AS (\n  SELECT p.subject_id, p.anchor_age, p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 83 AND 93\n),\nsepsis_patients AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (d.long_title LIKE '%Sepsis%' OR d.long_title LIKE '%septic%')\n),\nfirst_icu_stay AS (\n  SELECT subject_id, hadm_id, stay_id, intime, outtime, \n         ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS icu_stay_num\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nsepsis_first_icu AS (\n  SELECT ep.subject_id, fis.hadm_id, fis.stay_id, fis.intime\n  FROM eligible_patients ep\n  JOIN sepsis_patients sp ON ep.subject_id = sp.subject_id\n  JOIN first_icu_stay fis ON sp.subject_id = fis.subject_id AND sp.hadm_id = fis.hadm_id\n  WHERE fis.icu_stay_num = 1\n),\ndiagnostic_intensity AS (\n  SELECT sf.stay_id, COUNT(DISTINCT pe.itemid) AS num_procedures\n  FROM sepsis_first_icu sf\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe ON sf.stay_id = pe.stay_id\n  WHERE pe.starttime <= sf.intime + INTERVAL 3 DAY\n  GROUP BY sf.stay_id\n),\nquartiles AS (\n  SELECT stay_id, num_procedures,\n         NTILE(4) OVER (ORDER BY num_procedures) AS quartile\n  FROM diagnostic_intensity\n),\nicu_los_mortality AS (\n  SELECT fis.stay_id, fis.intime, fis.outtime, \n         (DATE_DIFF(fis.outtime, fis.intime, DAY)) AS icu_los_days,\n         a.hospital_expire_flag AS mortality_flag\n  FROM first_icu_stay fis\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON fis.hadm_id = a.hadm_id\n),\nfinal_data AS (\n  SELECT q.quartile, q.num_procedures, ilm.icu_los_days, ilm.mortality_flag\n  FROM quartiles q\n  JOIN icu_los_mortality ilm ON q.stay_id = ilm.stay_id\n)\nSELECT \n  quartile,\n  AVG(num_procedures) AS mean_procedure_count,\n  AVG(icu_los_days) AS mean_icu_los_days,\n  AVG(mortality_flag) * 100 AS mortality_percentage\nFROM final_data\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

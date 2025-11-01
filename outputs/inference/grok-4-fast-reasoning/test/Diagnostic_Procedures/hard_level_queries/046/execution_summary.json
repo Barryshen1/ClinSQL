@@ -1,0 +1,28 @@
+{
+  "query": "My 42\u2011year\u2011old female: among female ICU patients aged 37\u201347 with ARDS (first ICU stay), what is the minimum diagnostic utilization (distinct procedures during first 72 hours)? Compare to all ICU patients and report P75/P90, mean hospital LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH first_stays AS (\n  -- All first ICU stays\n  SELECT subject_id, hadm_id, stay_id, intime, outtime, los,\n         ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays\n  WHERE intime IS NOT NULL\n  QUALIFY rn = 1\n),\nards_hadms AS (\n  -- HADMs with ARDS diagnosis (any position)\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n  WHERE icd_code IN ('5185', '51851', '51852', 'J80', 'J9600', 'J9601', 'J9602')\n    AND icd_version IN (9, 10)\n),\nstay_procs AS (\n  -- Distinct procedures in first 72h per first stay\n  SELECT \n    fs.subject_id, fs.hadm_id, fs.stay_id, fs.intime,\n    COUNT(DISTINCT pe.itemid) AS num_distinct_procs\n  FROM first_stays fs\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pe\n    ON fs.subject_id = pe.subject_id\n    AND fs.hadm_id = pe.hadm_id\n    AND fs.stay_id = pe.stay_id\n    AND pe.starttime >= fs.intime\n    AND pe.starttime < DATETIME_ADD(fs.intime, INTERVAL 72 HOUR)\n  GROUP BY fs.subject_id, fs.hadm_id, fs.stay_id, fs.intime\n),\nards_cohort AS (\n  -- ARDS cohort: first stays + filters\n  SELECT \n    sp.*,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los_days,\n    a.hospital_expire_flag\n  FROM stay_procs sp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON sp.subject_id = p.subject_id\n  INNER JOIN ards_hadms ah\n    ON sp.subject_id = ah.subject_id AND sp.hadm_id = ah.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON sp.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 37 AND 47\n),\nall_cohort AS (\n  -- All first ICU stays\n  SELECT \n    sp.*,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los_days,\n    a.hospital_expire_flag\n  FROM stay_procs sp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON sp.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON sp.hadm_id = a.hadm_id\n),\n-- Aggregations for ARDS cohort\nards_agg AS (\n  SELECT \n    MIN(num_distinct_procs) AS min_procs,\n    APPROX_QUANTILES(num_distinct_procs, 4)[OFFSET(2)] AS p75_procs,\n    APPROX_QUANTILES(num_distinct_procs, 10)[OFFSET(8)] AS p90_procs,\n    AVG(hospital_los_days) AS mean_hospital_los,\n    AVG(hospital_expire_flag * 1.0) AS mortality_rate\n  FROM ards_cohort\n),\n-- Aggregations for all cohort\nall_agg AS (\n  SELECT \n    MIN(num_distinct_procs) AS min_procs,\n    APPROX_QUANTILES(num_distinct_procs, 4)[OFFSET(2)] AS p75_procs,\n    APPROX_QUANTILES(num_distinct_procs, 10)[OFFSET(8)] AS p90_procs,\n    AVG(hospital_los_days) AS mean_hospital_los,\n    AVG(hospital_expire_flag * 1.0) AS mortality_rate\n  FROM all_cohort\n)\n-- Combine results\nSELECT 'ARDS female 37-47 (first ICU stay)' AS cohort, min_procs, p75_procs, p90_procs, mean_hospital_los, mortality_rate\nFROM ards_agg\nUNION ALL\nSELECT 'All ICU patients (first ICU stay)' AS cohort, min_procs, p75_procs, p90_procs, mean_hospital_los, mortality_rate\nFROM all_agg;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator IN for argument types INT64 and {STRING} at [14:21]; reason: invalidQuery, location: query, message: No matching signature for operator IN for argument types INT64 and {STRING} at [14:21]\n\nLocation: US\nJob ID: 0fa4ce13-d37a-4d8f-a4db-7b2388cb5d7e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 65e1472a-e427-4edc-b891-b2c06b5f22ce\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

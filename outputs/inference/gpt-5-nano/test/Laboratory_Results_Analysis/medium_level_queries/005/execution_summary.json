@@ -1,0 +1,16 @@
+{
+  "query": "For a 40-year-old man, among male patients aged 35\u201345 admitted with chest pain or AMI, what are counts of first high-sensitivity troponin T categorized as normal, borderline, or myocardial injury?",
+  "final_sql": "WITH\n  -- Identify hs-cTnT measurements (label contains troponin and hs/high-sensitivity)\n  hs_troponin AS (\n    SELECT\n      le.hadm_id,\n      le.charttime,\n      le.valuenum,\n      le.valueuom\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n      ON le.itemid = dli.itemid\n    WHERE LOWER(dli.label) LIKE '%troponin%'\n      AND (LOWER(dli.label) LIKE '%hs%' OR LOWER(dli.label) LIKE '%high sensitivity%')\n      AND le.valuenum IS NOT NULL\n      AND (LOWER(le.valueuom) LIKE '%ng/l%')\n  ),\n\n  -- First hs-cTnT measurement per admission\n  first_hs_tn AS (\n    SELECT hadm_id, charttime, valuenum\n    FROM (\n      SELECT\n        hst.hadm_id,\n        hst.charttime,\n        hst.valuenum,\n        ROW_NUMBER() OVER (PARTITION BY hst.hadm_id ORDER BY hst.charttime) AS rn\n      FROM hs_troponin AS hst\n    )\n    WHERE rn = 1\n  ),\n\n  -- Valid first hs-cTnT measurements that fall inside the admission window\n  valid_first_tn AS (\n    SELECT\n      fh.hadm_id,\n      fh.charttime,\n      fh.valuenum\n    FROM first_hs_tn AS fh\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n      ON fh.hadm_id = a.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n    WHERE fh.charttime >= a.admittime\n      AND (a.dischtime IS NULL OR fh.charttime <= a.dischtime)\n      AND p.gender = 'Male'\n      AND p.anchor_age BETWEEN 35 AND 45\n  ),\n\n  -- Hadm IDs with chest pain or myocardial infarction diagnosis\n  hadm_chest_pain AS (\n    SELECT DISTINCT a.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddi\n      ON di.icd_code = ddi.icd_code AND di.icd_version = ddi.icd_version\n    WHERE LOWER(ddi.long_title) LIKE '%chest pain%'\n       OR LOWER(ddi.long_title) LIKE '%myocardial infarction%'\n  )\n\nSELECT\n  CASE\n    WHEN t.valuenum < 5 THEN 'normal'\n    WHEN t.valuenum >= 5 AND t.valuenum <= 14 THEN 'borderline'\n    WHEN t.valuenum > 14 THEN 'myocardial injury'\n    ELSE 'unknown'\n  END AS category,\n  COUNT(*) AS count\nFROM valid_first_tn AS t\nJOIN hadm_chest_pain AS hcp\n  ON t.hadm_id = hcp.hadm_id\nGROUP BY category\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

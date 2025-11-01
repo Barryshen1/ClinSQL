@@ -1,0 +1,28 @@
+{
+  "query": "I have a 51-year-old male inpatient. Among male inpatients 46\u201356 with acute myocardial infarction, stratify by the composite risk score (age plus major complications) into quintiles and report in-hospital mortality%, major complication%, and median survivor LOS per quintile.",
+  "final_sql": "WITH ami_cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    -- Flag major complication\n    IF(SUM(\n      CASE\n        WHEN (d.icd_version = 9 AND (\n              d.icd_code LIKE '428%' OR  -- CHF\n              d.icd_code = '4275'  OR    -- Cardiac arrest\n              d.icd_code = '78551' OR    -- Cardiogenic shock\n              d.icd_code LIKE '584%'    -- Acute renal failure\n            ))\n         OR (d.icd_version = 10 AND (\n              d.icd_code LIKE 'I50%' OR  -- CHF\n              d.icd_code LIKE 'I46%' OR  -- Cardiac arrest\n              d.icd_code = 'R570'  OR    -- Cardiogenic shock\n              d.icd_code LIKE 'N17%'    -- Acute kidney failure\n            ))\n        THEN 1 ELSE 0\n      END\n    ) > 0, 1, 0) AS major_complication_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 46 AND 56\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n    )\n  GROUP BY p.subject_id, a.hadm_id, p.gender, p.anchor_age,\n           a.hospital_expire_flag, a.admittime, a.dischtime\n),\nrisk_scored AS (\n  SELECT\n    *,\n    anchor_age + major_complication_flag * 10 AS risk_score\n  FROM ami_cohort\n),\nquintiled AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM risk_scored\n)\nSELECT\n  risk_quintile,\n  COUNT(*) AS admissions,\n  100 * SUM(hospital_expire_flag) / COUNT(*) AS in_hosp_mortality_pct,\n  100 * SUM(major_complication_flag) / COUNT(*) AS major_complication_pct,\n  PERCENTILE_CONT(IF(hospital_expire_flag = 0 AND los >= 0, los, NULL), 0.5) \n    OVER (PARTITION BY risk_quintile) AS median_survivor_los\nFROM quintiled\nGROUP BY risk_quintile\nORDER BY risk_quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column hospital_expire_flag which is neither grouped nor aggregated at [60:22]; reason: invalidQuery, location: query, message: SELECT list expression references column hospital_expire_flag which is neither grouped nor aggregated at [60:22]\n\nLocation: US\nJob ID: e36baa0e-af2a-4fa7-b071-9d7a9824910b\n",
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword IGNORE at [60:29]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword IGNORE at [60:29]\n\nLocation: US\nJob ID: d672ce5b-42d3-4c93-a365-fb6e2bbe6e48\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [61:5]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [61:5]\n\nLocation: US\nJob ID: 1e6e6cc9-7a77-49d5-b3ac-72f887f2cdc8\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column hospital_expire_flag which is neither grouped nor aggregated at [60:22]; reason: invalidQuery, location: query, message: SELECT list expression references column hospital_expire_flag which is neither grouped nor aggregated at [60:22]\n\nLocation: US\nJob ID: e36baa0e-af2a-4fa7-b071-9d7a9824910b\n"
+    }
+  ]
+}

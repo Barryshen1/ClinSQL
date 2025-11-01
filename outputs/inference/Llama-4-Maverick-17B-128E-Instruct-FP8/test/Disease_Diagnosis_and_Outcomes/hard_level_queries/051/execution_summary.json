@@ -1,0 +1,28 @@
+{
+  "query": "For a 40-year-old male inpatient with acute pancreatitis, among male inpatients aged 35\u201345, stratify into risk-score quartiles (diagnosis count plus 5\u00d7major complication flags) and report in-hospital mortality, major complication rate, and median survivor LOS for each quartile and overall.",
+  "final_sql": "WITH \n-- Step 1: Identify patients with acute pancreatitis\nacute_pancreatitis_patients AS (\n  SELECT DISTINCT h.subject_id, h.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` h\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON h.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON h.subject_id = p.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 35 AND 45\n  AND dicd.long_title LIKE '%Acute pancreatitis%'\n),\n\n-- Step 2: Calculate diagnosis count and major complication flags\npatient_risk_score AS (\n  SELECT ap.subject_id, ap.hadm_id,\n         COUNT(DISTINCT d.icd_code) AS diagnosis_count,\n         SUM(CASE WHEN dicd.long_title LIKE '% complication%' OR dicd.long_title LIKE '%failure%' THEN 1 ELSE 0 END) AS major_complication_flags,\n         MAX(a.hospital_expire_flag) AS hospital_expire_flag,\n         DATETIME_DIFF(MAX(a.dischtime), MIN(a.admittime), SECOND) AS los_in_seconds\n  FROM acute_pancreatitis_patients ap\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON ap.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON ap.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  GROUP BY ap.subject_id, ap.hadm_id\n),\n\n-- Step 3: Calculate risk score and stratify into quartiles\nrisk_score_quartiles AS (\n  SELECT subject_id, hadm_id, hospital_expire_flag, los_in_seconds, major_complication_flags,\n         diagnosis_count + 5 * major_complication_flags AS risk_score,\n         NTILE(4) OVER (ORDER BY diagnosis_count + 5 * major_complication_flags) AS risk_quartile\n  FROM patient_risk_score\n)\n\n-- Step 4: Calculate required metrics for each quartile and overall\nSELECT \n  risk_quartile,\n  COUNT(*) AS total_patients,\n  SUM(hospital_expire_flag) / COUNT(*) AS in_hospital_mortality,\n  SUM(CASE WHEN major_complication_flags > 0 THEN 1 ELSE 0 END) / COUNT(*) AS major_complication_rate,\n  APPROX_QUANTILES(CASE WHEN hospital_expire_flag = 0 THEN los_in_seconds ELSE NULL END, 100)[OFFSET(50)] / (24*3600) AS median_survivor_los_days\nFROM risk_score_quartiles\nGROUP BY ROLLUP(risk_quartile)\nORDER BY risk_quartile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: major_complication_flags at [40:17]; reason: invalidQuery, location: query, message: Unrecognized name: major_complication_flags at [40:17]\n\nLocation: US\nJob ID: 98bda98e-1752-4f4b-bf25-7d1b2a353263\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unsupported type INTERVAL for aggregate function approx_quantiles; reason: invalidQuery, location: query, message: Unsupported type INTERVAL for aggregate function approx_quantiles\n\nLocation: US\nJob ID: e3e5bf1d-1a8c-4e20-b7d5-2927ed9d2a62\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 92\u2011year\u2011old man. Among male patients aged 87\u201397 admitted for suspected ACS, what are counts, percentages, and in\u2011hospital mortality rates by index Troponin T category (Normal/Minimal, Borderline, Elevated)?",
+  "final_sql": "WITH eligible_patients AS (\n  -- Base cohort: males aged 87-97 with primary ACS admission\n  SELECT DISTINCT p.subject_id, a.hadm_id, a.admittime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id AND d.seq_num = 1\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n    ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 87 AND 97\n    AND LOWER(icd.long_title) LIKE '%acute myocardial infarction%'\n),\ntroponin_itemids AS (\n  -- Identify Troponin T itemids\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE category = 'Chemistry'\n    AND LOWER(label) LIKE '%troponin t%'\n),\nindex_troponin AS (\n  -- First Troponin T lab within 24h of admission\n  SELECT \n    ep.subject_id,\n    ep.hadm_id,\n    ep.admittime,\n    ep.hospital_expire_flag,\n    le.charttime,\n    le.valuenum,\n    CASE \n      WHEN le.valuenum <= 0.1 THEN 'Normal/Minimal'\n      WHEN le.valuenum > 0.1 AND le.valuenum <= 0.5 THEN 'Borderline'\n      ELSE 'Elevated'\n    END AS troponin_category\n  FROM eligible_patients ep\n  INNER JOIN troponin_itemids ti\n    ON 1=1  -- Placeholder; actual join via labevents\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ep.hadm_id = le.hadm_id\n    AND ti.itemid = le.itemid\n    AND le.valuenum IS NOT NULL\n    AND le.valuenum > 0\n    AND le.charttime >= ep.admittime\n    AND EXTRACT(DAY FROM (le.charttime - ep.admittime)) <= 1\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY ep.hadm_id ORDER BY le.charttime ASC) = 1\n)\n-- Aggregations by category\nSELECT \n  troponin_category,\n  COUNT(*) AS patient_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100, 2) AS mortality_rate_pct\nFROM index_troponin\nGROUP BY troponin_category\nORDER BY \n  CASE troponin_category\n    WHEN 'Normal/Minimal' THEN 1\n    WHEN 'Borderline' THEN 2\n    ELSE 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [47:42]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [47:42]\n\nLocation: US\nJob ID: 5848f729-6617-4106-941c-bd4538ec1ed7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "Male patient, 94. Among male ICU patients aged 89\u201399, what is the 95th\u2011percentile 48\u2011hour instability score for ischemic stroke? For the top instability quartile, compare ischemic stroke versus general ICU: N, mean instability, mean abnormal episodes, mean ICU LOS (hrs), and mortality.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: male patients 89-99 with first ICU stay\n  SELECT \n    p.subject_id, \n    p.anchor_age, \n    i.stay_id, \n    i.hadm_id, \n    i.intime, \n    i.outtime, \n    i.los, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON p.subject_id = i.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON i.hadm_id = a.hadm_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age BETWEEN 89 AND 99\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY i.intime ASC) = 1\n),\nstroke_cohort AS (\n  -- Add stroke flag (any I63 ICD-10 or relevant ICD-9 diagnosis in the admission)\n  SELECT \n    c.*,\n    MAX(CASE WHEN (d.icd_version = 10 AND d.icd_code LIKE 'I63%') \n             OR (d.icd_version = 9 AND (d.icd_code LIKE '433%' OR d.icd_code LIKE '434%' OR d.icd_code = '436'))\n             THEN 1 ELSE 0 END) AS has_stroke\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON c.hadm_id = d.hadm_id\n  GROUP BY \n    c.subject_id, c.anchor_age, c.stay_id, c.hadm_id, c.intime, c.outtime, c.los, c.hospital_expire_flag\n),\nscores AS (\n  -- Compute instability score and abnormal episodes per patient/stay\n  SELECT \n    sc.*,\n    -- Instability score: count of warning=1 events in first 48h\n    (SELECT COUNT(*) \n     FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n     WHERE ce.stay_id = sc.stay_id\n       AND ce.charttime >= sc.intime\n       AND ce.charttime < TIMESTAMP_ADD(sc.intime, INTERVAL 48 HOUR)\n       AND ce.warning IS NOT NULL \n       AND ce.warning = 1\n    ) AS instability_score,\n    -- Abnormal episodes: distinct charttime with at least one warning=1 in first 48h\n    (SELECT COUNT(DISTINCT ce.charttime)\n     FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n     WHERE ce.stay_id = sc.stay_id\n       AND ce.charttime >= sc.intime\n       AND ce.charttime < TIMESTAMP_ADD(sc.intime, INTERVAL 48 HOUR)\n       AND ce.warning IS NOT NULL \n       AND ce.warning = 1\n    ) AS abnormal_episodes\n  FROM stroke_cohort sc\n),\np95_stroke AS (\n  -- 95th percentile instability score for ischemic stroke patients\n  SELECT PERCENTILE_CONT(instability_score, 0.95) AS p95_instability_stroke\n  FROM scores \n  WHERE has_stroke = 1\n),\np75_overall AS (\n  -- 75th percentile instability score for entire cohort (for top quartile threshold)\n  SELECT PERCENTILE_CONT(instability_score, 0.75) AS p75_instability\n  FROM scores\n),\ntop_quartile AS (\n  -- Patients in top instability quartile\n  SELECT s.*\n  FROM scores s\n  CROSS JOIN p75_overall p75\n  WHERE s.instability_score >= p75.p75_instability\n),\ncomparison AS (\n  SELECT \n    CASE WHEN has_stroke = 1 THEN 'Ischemic Stroke' ELSE 'General ICU' END AS cohort_type,\n    COUNT(DISTINCT subject_id) AS N,\n    AVG(instability_score) AS mean_instability,\n    AVG(abnormal_episodes) AS mean_abnormal_episodes,\n    AVG(los * 24) AS mean_icu_los_hrs,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM top_quartile\n  GROUP BY has_stroke\n)\n-- Final output: comparison table for top quartile (with p95 only for stroke)\nSELECT \n  cohort_type,\n  CASE WHEN cohort_type = 'Ischemic Stroke' THEN p95_instability_stroke ELSE NULL END AS p95_instability_score,\n  N,\n  ROUND(mean_instability, 2) AS mean_instability,\n  ROUND(mean_abnormal_episodes, 2) AS mean_abnormal_episodes,\n  ROUND(mean_icu_los_hrs, 2) AS mean_icu_los_hrs,\n  ROUND(mortality_rate, 4) AS mortality_rate\nFROM comparison\nCROSS JOIN p95_stroke\nORDER BY CASE WHEN cohort_type = 'Ischemic Stroke' THEN 1 ELSE 2 END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e47bc7bd-7802-418c-99f9-ac58ed1a27b9\n",
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:19]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:19]\n\nLocation: US\nJob ID: 3f71577f-3c66-44a5-9c58-e1a638206ca3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [81:38]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [81:38]\n\nLocation: US\nJob ID: a24e7c17-75b1-41e8-8398-e44af7b7b5c7\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e47bc7bd-7802-418c-99f9-ac58ed1a27b9\n"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "41-year-old man: among male inpatients 36\u201346 with T2DM and heart failure, compare initiation rates (%) of each antidiabetic class in first 12h versus final 48h pre-discharge and report net change (pp).",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.admittime, a.dischtime,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 36 AND 46\n),\nt2dm_hf_patients AS (\n  SELECT pc.hadm_id, pc.admittime, pc.dischtime\n  FROM patient_cohort pc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON pc.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (d.icd_code LIKE 'E11%' AND di.icd_version = 10)  -- T2DM\n     OR (d.icd_code LIKE 'I50%' AND di.icd_version = 10)  -- Heart Failure\n  GROUP BY pc.hadm_id, pc.admittime, pc.dischtime\n  HAVING COUNT(DISTINCT CASE WHEN d.icd_code LIKE 'E11%' THEN 1 END) >= 1\n     AND COUNT(DISTINCT CASE WHEN d.icd_code LIKE 'I50%' THEN 1 END) >= 1\n),\nantidiabetics AS (\n  SELECT \n    t2dm_hf_patients.hadm_id,\n    p.starttime,\n    p.drug,\n    CASE\n      WHEN LOWER(p.drug) LIKE '%metformin%' THEN 'Biguanide'\n      WHEN LOWER(p.drug) LIKE '%sulfonylurea%' OR LOWER(p.drug) IN ('glipizide', 'glyburide', 'glimipiride') THEN 'Sulfonylurea'\n      WHEN LOWER(p.drug) LIKE '%thiazolidinedione%' OR LOWER(p.drug) IN ('pioglitazone', 'rosiglitazone') THEN 'Thiazolidinedione'\n      WHEN LOWER(p.drug) LIKE '%dpp4%' OR LOWER(p.drug) LIKE '%gliptin%' THEN 'DPP-4 Inhibitor'\n      WHEN LOWER(p.drug) LIKE '%glp1%' OR LOWER(p.drug) LIKE '%agonist%' AND LOWER(p.drug) LIKE '%glp%' THEN 'GLP-1 Receptor Agonist'\n      WHEN LOWER(p.drug) LIKE '%sglt2%' OR LOWER(p.drug) LIKE '%flozin%' THEN 'SGLT2 Inhibitor'\n      WHEN LOWER(p.drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN LOWER(p.drug) LIKE '%meglitinide%' OR LOWER(p.drug) IN ('repaglinide', 'nateglinide') THEN 'Meglitinide'\n      ELSE 'Other'\n    END AS drug_class\n  FROM t2dm_hf_patients\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON t2dm_hf_patients.hadm_id = p.hadm_id\n  WHERE p.starttime IS NOT NULL\n),\nwindows AS (\n  SELECT \n    a.hadm_id,\n    a.drug_class,\n    -- First 12h of admission\n    CASE WHEN a.starttime >= p.admittime AND a.starttime <= p.admittime + INTERVAL '12' HOUR THEN 1 ELSE 0 END AS in_first_12h,\n    -- Final 48h before discharge\n    CASE WHEN a.starttime >= p.dischtime - INTERVAL '48' HOUR AND a.starttime < p.dischtime THEN 1 ELSE 0 END AS in_final_48h\n  FROM antidiabetics a\n  JOIN t2dm_hf_patients p ON a.hadm_id = p.hadm_id\n),\nclass_patient_initiation AS (\n  SELECT \n    drug_class,\n    hadm_id,\n    MAX(in_first_12h) AS initiated_first_12h,\n    MAX(in_final_48h) AS initiated_final_48h\n  FROM windows\n  GROUP BY drug_class, hadm_id\n),\nsummary AS (\n  SELECT \n    drug_class,\n    AVG(1.0 * initiated_first_12h) * 100 AS pct_initiated_first_12h,\n    AVG(1.0 * initiated_final_48h) * 100 AS pct_initiated_final_48h\n  FROM class_patient_initiation\n  GROUP BY drug_class\n  HAVING COUNT(*) >= 1  -- Ensure at least one patient\n)\nSELECT \n  drug_class,\n  ROUND(pct_initiated_first_12h, 2) AS pct_first_12h,\n  ROUND(pct_initiated_final_48h, 2) AS pct_final_48h,\n  ROUND(pct_initiated_final_48h - pct_initiated_first_12h, 2) AS net_change_pp\nFROM summary\nORDER BY net_change_pp DESC;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [43:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [43:5]\n\nLocation: US\nJob ID: eae4930f-3ae7-47c9-ae55-f53787bf335a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

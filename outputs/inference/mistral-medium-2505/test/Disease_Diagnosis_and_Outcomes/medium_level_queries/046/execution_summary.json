@@ -1,0 +1,16 @@
+{
+  "query": "For my 77\u2011yo male with heart failure: among males 72\u201382 with HF, compare ICU vs non\u2011ICU by LOS (\u22643, 4\u20136, 7\u201310, >10 days); report in\u2011hospital mortality, median LOS, average comorbidity count.",
+  "final_sql": "WITH\n-- Define heart failure ICD codes (I50.*)\nheart_failure_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code LIKE 'I50.%'\n),\n\n-- Get all male patients aged 72-82 with heart failure\nhf_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) <= 3 THEN '\u22643 days'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 4 AND 6 THEN '4-6 days'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 7 AND 10 THEN '7-10 days'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) > 10 THEN '>10 days'\n    END AS los_category,\n    -- Check if patient had ICU stay\n    CASE WHEN i.stay_id IS NOT NULL THEN 'ICU' ELSE 'Non-ICU' END AS admission_type\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 72 AND 82\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE icd_code IN (SELECT icd_code FROM heart_failure_codes)\n    )\n    AND a.dischtime IS NOT NULL\n),\n\n-- Count comorbidities (excluding heart failure)\ncomorbidity_counts AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT icd_code) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_code NOT IN (SELECT icd_code FROM heart_failure_codes)\n  GROUP BY hadm_id\n)\n\n-- Final aggregation\nSELECT\n  admission_type,\n  los_category,\n  COUNT(*) AS admission_count,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS in_hospital_mortality,\n  ROUND(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 4) AS mortality_rate,\n  APPROX_QUANTILES(los_days, 4)[OFFSET(2)] AS median_los,\n  AVG(comorbidity_count) AS avg_comorbidity_count\nFROM hf_patients\nLEFT JOIN comorbidity_counts USING (hadm_id)\nGROUP BY admission_type, los_category\nORDER BY admission_type, los_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

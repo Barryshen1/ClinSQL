@@ -1,0 +1,16 @@
+{
+  "query": "I have an 81-year-old man. Among male Medicare patients 76\u201386 admitted from the ED with a principal ischemic stroke, what are the 30-day all-cause readmission rate, median index LOS for readmitted vs non-readmitted, and percent index stays >5 days?",
+  "final_sql": "WITH base AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS index_los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON d.subject_id = a.subject_id AND d.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND LOWER(a.insurance) LIKE '%medicare%'\n    AND LOWER(a.admission_type) LIKE '%emergency%'\n    AND a.edregtime IS NOT NULL\n    AND d.seq_num = 1\n    AND d.icd_code LIKE 'I63%'\n),\nbase2 AS (\n  SELECT *\n  FROM base\n),\nreadmission AS (\n  SELECT\n    b.subject_id,\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.index_los_days,\n    MAX(CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS readmit_flag\n  FROM base2 AS b\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n    ON a2.subject_id = b.subject_id\n   AND a2.admittime > b.dischtime\n   AND a2.admittime <= TIMESTAMP_ADD(b.dischtime, INTERVAL 30 DAY)\n  GROUP BY b.subject_id, b.hadm_id, b.admittime, b.dischtime, b.index_los_days\n),\nreadmit_labeled AS (\n  SELECT *,\n         CASE WHEN readmit_flag = 1 THEN 'Readmitted within 30 days'\n              ELSE 'No readmission within 30 days' END AS readmit_group\n  FROM readmission\n),\nmedian_calcs AS (\n  SELECT readmit_group, APPROX_QUANTILES(index_los_days, 100) AS quantiles\n  FROM readmit_labeled\n  GROUP BY readmit_group\n),\npct_gt5 AS (\n  SELECT 100.0 * SUM(CASE WHEN index_los_days > 5 THEN 1 ELSE 0 END) / COUNT(*) AS pct_gt5\n  FROM readmit_labeled\n)\nSELECT\n  -- 30-day readmission rate\n  (SELECT AVG(readmit_flag) FROM readmission) AS readmission_rate_30d,\n  -- Median index LOS for readmitted within 30 days\n  (SELECT quantiles[OFFSET(49)]\n     FROM median_calcs\n     WHERE readmit_group = 'Readmitted within 30 days') AS median_index_los_days_readmitted,\n  -- Median index LOS for no readmission within 30 days\n  (SELECT quantiles[OFFSET(49)]\n     FROM median_calcs\n     WHERE readmit_group = 'No readmission within 30 days') AS median_index_los_days_no_readmission,\n  -- Percent index stays > 5 days\n  (SELECT pct_gt5 FROM pct_gt5) AS pct_index_stays_gt5_days;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

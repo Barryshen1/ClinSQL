@@ -1,0 +1,28 @@
+{
+  "query": "For a 55\u2011year\u2011old female: among female ICU patients aged 50\u201360 with intracranial hemorrhage, report 25th, 50th (median), and 90th percentiles of procedure burden during the first 72 ICU hours, and compare ICU LOS and in\u2011hospital mortality to the general ICU.",
+  "final_sql": "WITH admission_age AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n),\n\nich_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND icd_code = '431')\n     OR (icd_version = 10 AND SUBSTR(icd_code, 1, 3) = 'I61')\n),\n\nich_cohort AS (\n  SELECT DISTINCT aa.subject_id\n  FROM admission_age aa\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON aa.hadm_id = diag.hadm_id\n  JOIN ich_codes ic\n    ON diag.icd_code = ic.icd_code AND diag.icd_version = ic.icd_version\n  WHERE aa.gender = 'F'\n    AND aa.age_at_admission >= 50 AND aa.age_at_admission <= 60\n),\n\nich_icu_stays AS (\n  SELECT\n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.los AS icu_los_days,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  JOIN ich_cohort ich\n    ON ie.subject_id = ich.subject_id\n),\n\nich_procedure_burden AS (\n  SELECT\n    iis.stay_id,\n    iis.icu_los_days,\n    iis.hospital_expire_flag,\n    COUNT(proc.itemid) AS procedure_count_72h\n  FROM ich_icu_stays iis\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` proc\n    ON iis.stay_id = proc.stay_id\n    AND proc.starttime >= iis.intime\n    AND proc.starttime <= DATETIME_ADD(iis.intime, INTERVAL 72 HOUR)\n  GROUP BY iis.stay_id, iis.icu_los_days, iis.hospital_expire_flag\n),\n\ngeneral_icu_stays AS (\n  SELECT\n    ie.stay_id,\n    ie.intime,\n    ie.los AS icu_los_days,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n),\n\ngeneral_procedure_burden AS (\n  SELECT\n    gis.stay_id,\n    gis.icu_los_days,\n    gis.hospital_expire_flag,\n    COUNT(proc.itemid) AS procedure_count_72h\n  FROM general_icu_stays gis\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` proc\n    ON gis.stay_id = proc.stay_id\n    AND proc.starttime >= gis.intime\n    AND proc.starttime <= DATETIME_ADD(gis.intime, INTERVAL 72 HOUR)\n  GROUP BY gis.stay_id, gis.icu_los_days, gis.hospital_expire_flag\n),\n\nich_summary AS (\n  SELECT\n    APPROX_PERCENTILE(procedure_count_72h, 0.25) AS ich_procedure_25th,\n    APPROX_PERCENTILE(procedure_count_72h, 0.50) AS ich_procedure_50th,\n    APPROX_PERCENTILE(procedure_count_72h, 0.90) AS ich_procedure_90th,\n    APPROX_QUANTILES(icu_los_days, 100)[OFFSET(50)] AS ich_icu_los_median,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS ich_mortality_rate\n  FROM ich_procedure_burden\n),\n\ngeneral_summary AS (\n  SELECT\n    APPROX_QUANTILES(icu_los_days, 100)[OFFSET(50)] AS general_icu_los_median,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS general_mortality_rate\n  FROM general_procedure_burden\n)\n\nSELECT\n  ich_procedure_25th,\n  ich_procedure_50th,\n  ich_procedure_90th,\n  ich_icu_los_median,\n  general_icu_los_median,\n  ich_mortality_rate,\n  general_mortality_rate\nFROM ich_summary, general_summary;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: APPROX_PERCENTILE at [89:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [89:5]\n\nLocation: US\nJob ID: 5420b3ba-a738-4d01-8f7e-964cb83c143b\n",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside gis at [81:31]; reason: invalidQuery, location: query, message: Name intime not found inside gis at [81:31]\n\nLocation: US\nJob ID: 5669eae1-1e8c-40d9-9ad6-4f5f2716055d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column procedure_count_72h which is neither grouped nor aggregated at [89:21]; reason: invalidQuery, location: query, message: SELECT list expression references column procedure_count_72h which is neither grouped nor aggregated at [89:21]\n\nLocation: US\nJob ID: b49687fd-7b57-46c0-a6b4-f5a845423134\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [89:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [89:5]\n\nLocation: US\nJob ID: 5420b3ba-a738-4d01-8f7e-964cb83c143b\n"
+    }
+  ]
+}

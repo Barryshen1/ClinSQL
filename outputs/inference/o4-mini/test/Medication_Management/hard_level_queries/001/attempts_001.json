@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a1.subject_id,\n    a1.hadm_id,\n    a1.admittime,\n    a1.dischtime,\n    a1.hospital_expire_flag,\n    TIMESTAMP_DIFF(a1.dischtime, a1.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a1\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a1.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d1\n      ON a1.subject_id = d1.subject_id\n     AND a1.hadm_id = d1.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n      ON d1.icd_code = dicd.icd_code\n     AND d1.icd_version = dicd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND LOWER(dicd.long_title) LIKE '%cardiac arrest%'\n),\nmed_score AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    c.los_days,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM\n    cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n      ON c.subject_id = pr.subject_id\n     AND c.hadm_id = pr.hadm_id\n     AND pr.drug IS NOT NULL\n     AND pr.starttime BETWEEN c.admittime\n                        AND TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    c.los_days\n),\nreadmit AS (\n  SELECT\n    m.*,\n    CASE WHEN COUNT(a2.hadm_id) > 0 THEN 1 ELSE 0 END AS readmit30_flag\n  FROM\n    med_score m\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      ON m.subject_id = a2.subject_id\n     AND a2.admittime > m.dischtime\n     AND a2.admittime <= TIMESTAMP_ADD(m.dischtime, INTERVAL 30 DAY)\n  GROUP BY\n    m.subject_id,\n    m.hadm_id,\n    m.admittime,\n    m.dischtime,\n    m.hospital_expire_flag,\n    m.los_days,\n    m.complexity_score\n),\nquintiles AS (\n  SELECT\n    r.*,\n    NTILE(5) OVER (ORDER BY r.complexity_score) AS complexity_quintile\n  FROM\n    readmit r\n)\nSELECT\n  complexity_quintile,\n  COUNT(*) AS patient_count,\n  ROUND(AVG(complexity_score),2) AS avg_score,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  ROUND(AVG(los_days),2) AS avg_los_days,\n  ROUND(100 * AVG(hospital_expire_flag),2) AS mortality_pct,\n  ROUND(100 * AVG(readmit30_flag),2) AS readmission30_pct\nFROM\n  quintiles\nGROUP BY\n  complexity_quintile\nORDER BY\n  complexity_quintile;",
+      "success": true,
+      "error": null,
+      "row_count": 5
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 5
+}

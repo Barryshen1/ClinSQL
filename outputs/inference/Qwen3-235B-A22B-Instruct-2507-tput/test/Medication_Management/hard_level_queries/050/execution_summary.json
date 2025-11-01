@@ -1,0 +1,28 @@
+{
+  "query": "Patient is female, 86. Among female inpatients age 81\u201391 with AKI, compare medication complexity score distribution and outcomes for those with both CNS\u2011depressant and nephrotoxic drugs versus other AKI patients. Report quartiles, mean complexity, overall LOS and mortality, and top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 81 AND 91\n),\n\naki_admissions AS (\n  SELECT DISTINCT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN patients_filtered p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%acute kidney injury%'\n     OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n),\n\ndrug_exposure AS (\n  SELECT \n    p.hadm_id,\n    MAX(CASE \n      WHEN LOWER(p.drug) IN (\n        'midazolam', 'lorazepam', 'diazepam', 'propofol', 'fentanyl', 'morphine', \n        'oxycodone', 'clonazepam', 'alprazolam', 'phenobarbital', 'dexmedetomidine'\n      ) THEN 1 ELSE 0 \n    END) AS has_cns,\n    MAX(CASE \n      WHEN LOWER(p.drug) IN (\n        'vancomycin', 'gentamicin', 'tobramycin', 'amikacin', 'amphotericin', \n        'cisplatin', 'cyclosporine', 'tacrolimus', 'ibuprofen', 'ketorolac', \n        'naproxen', 'contrast', 'radiocontrast'\n      ) THEN 1 ELSE 0 \n    END) AS has_nephro\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions p\n  JOIN aki_admissions aki ON p.hadm_id = aki.hadm_id\n  WHERE p.drug IS NOT NULL\n  GROUP BY p.hadm_id\n),\n\nadmission_groups AS (\n  SELECT \n    aki.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    COALESCE(de.has_cns, 0) AS has_cns,\n    COALESCE(de.has_nephro, 0) AS has_nephro,\n    CASE \n      WHEN COALESCE(de.has_cns, 0) = 1 AND COALESCE(de.has_nephro, 0) = 1 THEN 'both'\n      ELSE 'other'\n    END AS drug_group\n  FROM aki_admissions aki\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON aki.hadm_id = a.hadm_id\n  LEFT JOIN drug_exposure de ON aki.hadm_id = de.hadm_id\n),\n\ncomplexity_los AS (\n  SELECT\n    ag.hadm_id,\n    ag.drug_group,\n    ag.hospital_expire_flag,\n    -- Medication complexity: number of distinct drugs\n    COALESCE(p_count.drug_count, 0) AS complexity,\n    -- LOS in days\n    DATETIME_DIFF(ag.dischtime, ag.admittime, SECOND) / (24 * 60 * 60) AS los_days\n  FROM admission_groups ag\n  LEFT JOIN (\n    SELECT hadm_id, COUNT(DISTINCT LOWER(drug)) AS drug_count\n    FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions\n    WHERE drug IS NOT NULL\n    GROUP BY hadm_id\n  ) p_count ON ag.hadm_id = p_count.hadm_id\n),\n\ngroup_stats AS (\n  SELECT\n    drug_group,\n    -- Complexity quartiles\n    APPROX_QUANTILES(complexity, 100)[OFFSET(25)] AS q1_complexity,\n    APPROX_QUANTILES(complexity, 100)[OFFSET(50)] AS median_complexity,\n    APPROX_QUANTILES(complexity, 100)[OFFSET(75)] AS q3_complexity,\n    AVG(complexity) AS mean_complexity,\n    -- Mean LOS\n    AVG(los_days) AS mean_los_days,\n    -- Overall mortality\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    -- Top-quartile LOS threshold\n    APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS los_q3\n  FROM complexity_los\n  GROUP BY drug_group\n),\n\n-- Now compute mortality in top-quartile LOS patients\ntop_los_mortality AS (\n  SELECT\n    cl.drug_group,\n    AVG(CAST(cl.hospital_expire_flag AS FLOAT64)) AS top_quartile_mortality\n  FROM complexity_los cl\n  JOIN group_stats gs ON cl.drug_group = gs.drug_group\n  WHERE cl.los_days >= gs.los_q3\n  GROUP BY cl.drug_group\n)\n\n-- Final output\nSELECT\n  gs.drug_group,\n  gs.q1_complexity,\n  gs.median_complexity,\n  gs.q3_complexity,\n  gs.mean_complexity,\n  gs.mean_los_days,\n  gs.mortality_rate,\n  gs.los_q3 AS top_quartile_los_threshold,\n  COALESCE(tlm.top_quartile_mortality, 0) AS top_quartile_mortality\nFROM group_stats gs\nLEFT JOIN top_los_mortality tlm ON gs.drug_group = tlm.drug_group\nORDER BY gs.drug_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword WHERE at [1:24]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword WHERE at [1:24]\n\nLocation: US\nJob ID: 307dd754-7a47-40d8-b718-30f2d3d9b855\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [86:14]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [86:14]\n\nLocation: US\nJob ID: 5918db3b-1085-4124-93bd-c36296389ea2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

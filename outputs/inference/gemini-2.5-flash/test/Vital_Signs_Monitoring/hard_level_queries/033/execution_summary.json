@@ -1,0 +1,28 @@
+{
+  "query": "I have a 56\u2011year\u2011old female on invasive mechanical ventilation. Among female ICU patients aged 51\u201361, what percentile is an instability score of 80 in the first 48 hours? Also report ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH vent_patients AS (\n    SELECT DISTINCT ce.subject_id, ce.hadm_id, ce.stay_id\n    FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce -- Corrected dataset path\n    WHERE\n        ce.itemid = 224696 -- itemid for 'Ventilation Mode'\n        AND ce.valuenum = 1 -- Value indicating invasive ventilation is active/present (as described in the original note)\n),\n-- CTE 2: Select the base cohort meeting age, gender, and ventilation criteria.\npatient_cohort_base AS (\n    SELECT\n        p.subject_id,\n        adm.hadm_id,\n        icu.stay_id,\n        (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) AS age_at_admission,\n        icu.intime,\n        icu.los AS icu_los_days,\n        adm.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p -- Corrected dataset path\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm -- Corrected dataset path\n        ON p.subject_id = adm.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu -- Corrected dataset path\n        ON adm.hadm_id = icu.hadm_id\n    INNER JOIN vent_patients vp -- Filter for patients on invasive ventilation found in CTE 1\n        ON icu.stay_id = vp.stay_id\n    WHERE\n        p.gender = 'F' -- Female patients\n        AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 51 AND 61 -- Age 51-61\n),\n-- CTE 3: Calculate the instability score for each patient in the cohort.\n-- Proxy instability score: number of distinct lab itemids within the first 48 hours of ICU stay.\ninstability_score_calc AS (\n    SELECT\n        pc.stay_id,\n        pc.icu_los_days,\n        pc.hospital_expire_flag,\n        COUNT(DISTINCT le.itemid) AS instability_score\n    FROM patient_cohort_base pc\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le -- Corrected dataset path\n        ON pc.subject_id = le.subject_id\n        AND pc.hadm_id = le.hadm_id\n    WHERE\n        le.charttime >= pc.intime -- Lab event occurred after ICU admit\n        AND le.charttime <= DATETIME_ADD(pc.intime, INTERVAL 48 HOUR) -- ...and within the first 48 hours\n    GROUP BY\n        pc.stay_id,\n        pc.icu_los_days,\n        pc.hospital_expire_flag\n),\n-- CTE 4: Rank the patients by instability score to assign deciles.\nranked_cohort AS (\n    SELECT\n        isc.stay_id,\n        isc.instability_score,\n        isc.icu_los_days,\n        isc.hospital_expire_flag,\n        -- Assign decile rank (1-10), with 10 being the most unstable (highest score)\n        NTILE(10) OVER (ORDER BY isc.instability_score ASC) AS decile_rank\n    FROM instability_score_calc isc\n)\n-- Part 1: Calculate the percentile for an instability score of 80.\n-- This uses the empirical percentile definition: (count < X + 0.5 * count = X) / total count.\nSELECT\n    'Percentile for instability score of 80' AS metric_description,\n    CAST(\n        SAFE_DIVIDE(\n            (COUNT(CASE WHEN instability_score < 80 THEN 1 END) + 0.5 * COUNT(CASE WHEN instability_score = 80 THEN 1 END)),\n            COUNT(instability_score)\n        ) * 100\n        AS BIGNUMERIC\n    ) AS value\nFROM ranked_cohort\n\nUNION ALL\n\n-- Part 2a: Report Average ICU LOS for the most unstable decile.\nSELECT\n    'Avg ICU LOS for most unstable decile (days)' AS metric_description,\n    CAST(AVG(icu_los_days) AS BIGNUMERIC) AS value\nFROM ranked_cohort\nWHERE decile_rank = 10 -- Most unstable decile (highest scores)\n\nUNION ALL\n\n-- Part 2b: Report Hospital Mortality for the most unstable decile.\nSELECT\n    'Hospital Mortality Rate for most unstable decile' AS metric_description,\n    CAST(AVG(hospital_expire_flag) AS BIGNUMERIC) AS value\nFROM ranked_cohort\nWHERE decile_rank = 10;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"=\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"=\" at [1:15]\n\nLocation: US\nJob ID: 28eea151-a73d-49bf-924f-ba257eca79d2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "403 Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.\n\nLocation: US\nJob ID: 66467310-b934-4336-84ef-174b10ea47e5\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

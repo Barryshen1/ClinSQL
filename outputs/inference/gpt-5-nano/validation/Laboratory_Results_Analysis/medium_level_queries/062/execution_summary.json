@@ -1,0 +1,16 @@
+{
+  "query": "I have a 51-year-old female with suspected ACS. Among female ACS admissions age 46\u201356, what are counts, percentages, and mean hospital length of stay for first hs\u2011TnT: Normal, Borderline, Myocardial Injury?",
+  "final_sql": "WITH acs_adm AS (\n  SELECT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND (\n      dd.long_title LIKE '%myocardial infarction%' OR\n      dd.long_title LIKE '%unstable angina%' OR\n      dd.long_title LIKE '%acute coronary%'\n    )\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 46 AND 56\n),\ntroponin_hosp AS (\n  SELECT le.hadm_id, le.charttime, le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli ON le.itemid = dli.itemid\n  JOIN acs_adm aa ON le.hadm_id = aa.hadm_id\n  WHERE (LOWER(dli.label) LIKE '%troponin%' AND LOWER(dli.label) LIKE '%troponin t%')\n     AND le.charttime BETWEEN aa.admittime AND aa.dischtime\n  UNION ALL\n  SELECT ce.hadm_id, ce.charttime, ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di ON ce.itemid = di.itemid\n  JOIN acs_adm aa ON ce.hadm_id = aa.hadm_id\n  WHERE (LOWER(di.label) LIKE '%troponin%' AND LOWER(di.label) LIKE '%troponin t%')\n     AND ce.charttime BETWEEN aa.admittime AND aa.dischtime\n),\nfirst_troponin AS (\n  SELECT hadm_id, charttime, valuenum,\n         ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n  FROM troponin_hosp\n  WHERE valuenum IS NOT NULL\n),\nfirst_per_adm AS (\n  SELECT hadm_id, valuenum\n  FROM first_troponin\n  WHERE rn = 1\n),\ncategory AS (\n  SELECT hadm_id,\n         CASE\n           WHEN valuenum <= 14 THEN 'Normal'\n           WHEN valuenum > 14 AND valuenum <= 52 THEN 'Borderline'\n           WHEN valuenum > 52 THEN 'Myocardial Injury'\n           ELSE NULL\n         END AS tnt_category\n  FROM first_per_adm\n  WHERE valuenum IS NOT NULL\n),\nlos AS (\n  SELECT a.hadm_id,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days\n  FROM acs_adm AS a\n),\ntot AS (\n  SELECT COUNT(*) AS total_adm FROM category\n)\nSELECT\n  c.tnt_category AS tnt_category,\n  COUNT(*) AS admissions_within_category,\n  ROUND(100.0 * COUNT(*) / t.total_adm, 2) AS pct_of_acs_admissions,\n  AVG(l.los_days) AS mean_los_days\nFROM category AS c\nJOIN los AS l ON c.hadm_id = l.hadm_id\nCROSS JOIN tot AS t\nGROUP BY c.tnt_category, t.total_adm\nORDER BY c.tnt_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

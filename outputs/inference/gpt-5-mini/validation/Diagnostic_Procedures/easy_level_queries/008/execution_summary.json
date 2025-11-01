@@ -1,0 +1,22 @@
+{
+  "query": "For my 93-year-old female, among females aged 88-98 what is the 25th percentile of distinct echocardiography procedures per patient?",
+  "final_sql": "WITH female_cohort AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 88 AND 98\n),\n\necho_icd AS (\n  -- ICD procedure codes whose description mentions echo / echocardi\n  SELECT\n    pr.subject_id,\n    CONCAT('ICD_', pr.icd_version, '_', pr.icd_code) AS proc_code\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dpr\n    ON pr.icd_code = dpr.icd_code\n   AND pr.icd_version = dpr.icd_version\n  WHERE LOWER(dpr.long_title) LIKE '%echo%'\n     OR LOWER(dpr.long_title) LIKE '%echocardi%'\n),\n\necho_hcpcs AS (\n  -- HCPCS / CPT events whose description or mapped long_description mentions echo / echocardi\n  SELECT\n    h.subject_id,\n    CONCAT('HCPCS_', h.hcpcs_cd) AS proc_code\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh\n    ON h.hcpcs_cd = dh.code\n  WHERE LOWER(COALESCE(h.short_description, dh.long_description, '')) LIKE '%echo%'\n     OR LOWER(COALESCE(h.short_description, dh.long_description, '')) LIKE '%echocardi%'\n),\n\n-- Union distinct procedure occurrences per subject to avoid counting duplicates from source tables\necho_procs_distinct AS (\n  SELECT DISTINCT subject_id, proc_code FROM echo_icd\n  UNION DISTINCT\n  SELECT DISTINCT subject_id, proc_code FROM echo_hcpcs\n),\n\nper_subject_counts AS (\n  -- Count distinct echo procedure codes per subject; include zeros for cohort members with no matches\n  SELECT\n    fc.subject_id,\n    COALESCE(ep.count_procs, 0) AS num_distinct_echo_procs\n  FROM female_cohort fc\n  LEFT JOIN (\n    SELECT subject_id, COUNT(1) AS count_procs\n    FROM echo_procs_distinct\n    GROUP BY subject_id\n  ) ep\n  USING(subject_id)\n)\n\n-- Compute 25th percentile (approximate) across the cohort\nSELECT\n  (APPROX_QUANTILES(num_distinct_echo_procs, 4))[OFFSET(1)] AS p25_distinct_echo_procedures_per_patient\nFROM per_subject_counts;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: p at [11:5]; reason: invalidQuery, location: query, message: Unrecognized name: p at [11:5]\n\nLocation: US\nJob ID: 2e80c068-d3d5-4ddb-a5cc-ba4a061c5b9b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

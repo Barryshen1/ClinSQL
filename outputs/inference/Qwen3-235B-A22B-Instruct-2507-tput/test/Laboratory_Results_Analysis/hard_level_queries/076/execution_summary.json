@@ -1,0 +1,22 @@
+{
+  "query": "For a 92\u2011year\u2011old man with ACS: among male inpatients aged 87\u201397, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u2265P95 report mean LOS, in\u2011hospital mortality, and compare avg critical lab events per patient to general inpatients.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 87 AND 97\n),\n\nlab_events_72h AS (\n  SELECT\n    pa.hadm_id,\n    COUNT(CASE WHEN le.flag = 'abnormal' THEN 1 END) AS instability_score\n  FROM patient_admissions pa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.labevents le\n    ON pa.hadm_id = le.hadm_id\n    AND le.charttime >= pa.admittime\n    AND le.charttime < DATETIME_ADD(pa.admittime, INTERVAL 72 HOUR)\n  GROUP BY pa.hadm_id\n),\n\npercentiles AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 1000)[OFFSET(950)] AS p95_score\n  FROM lab_events_72h\n),\n\ngeneral_inpatients AS (\n  SELECT\n    pa.hadm_id,\n    COUNT(CASE WHEN le.flag IN ('abnormal', 'delta', 'high', 'low') THEN 1 END) AS critical_lab_count\n  FROM patient_admissions pa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.labevents le\n    ON pa.hadm_id = le.hadm_id\n  GROUP BY pa.hadm_id\n),\n\nhigh_instability_patients AS (\n  SELECT\n    pa.hadm_id,\n    pa.dischtime,\n    pa.admittime,\n    pa.hospital_expire_flag,\n    COALESCE(lev.instability_score, 0) AS instability_score\n  FROM patient_admissions pa\n  INNER JOIN lab_events_72h lev ON pa.hadm_id = lev.hadm_id\n  CROSS JOIN percentiles p\n  WHERE lev.instability_score >= p.p95_score\n),\n\nsummary_high AS (\n  SELECT\n    AVG(TIMESTAMP_DIFF(h.dischtime, h.admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(CAST(h.hospital_expire_flag AS FLOAT64)) AS in_hospital_mortality_rate,\n    AVG(gi.critical_lab_count) AS avg_critical_labs_per_patient\n  FROM high_instability_patients h\n  INNER JOIN general_inpatients gi ON h.hadm_id = gi.hadm_id\n),\n\nsummary_general AS (\n  SELECT\n    AVG(critical_lab_count) AS avg_critical_labs_general\n  FROM general_inpatients\n)\n\nSELECT\n  s1.mean_los_days,\n  s1.in_hospital_mortality_rate,\n  s1.avg_critical_labs_per_patient,\n  s2.avg_critical_labs_general\nFROM summary_high s1\nCROSS JOIN summary_general s2;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [59:9]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [59:9]\n\nLocation: US\nJob ID: 107302c7-3a53-45eb-94b8-e7fa6b3bca7d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

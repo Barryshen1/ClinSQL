@@ -1,0 +1,16 @@
+{
+  "query": "For a 45-year-old male in ICU: among male ICU patients 40\u201350, report percent in per-stay mean SBP categories (<140; 140\u2013159; \u2265160 mmHg) during first 48 h and MI rate per category.",
+  "final_sql": "WITH sbp_items AS (\n  -- identify SBP-related itemids in ICU d_items by label\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%systolic%'\n),\n\nsbp_vals AS (\n  -- SBP measurements (numeric) from chartevents for those itemids\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN sbp_items di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n),\n\nsbp_first48 AS (\n  -- per-stay mean SBP during first 48 hours of the ICU stay\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    AVG(sf.valuenum) AS mean_sbp\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN sbp_vals sf\n    ON sf.stay_id = s.stay_id\n   AND sf.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 48 HOUR)\n  GROUP BY s.subject_id, s.hadm_id, s.stay_id\n),\n\nmi_hadm AS (\n  -- flag hospital admissions that include any diagnosis with \"myocardial infarction\" in the description\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n    ON d.icd_code = icd.icd_code\n   AND d.icd_version = icd.icd_version\n  WHERE LOWER(icd.long_title) LIKE '%myocardial infarction%'\n),\n\ncohort AS (\n  -- restrict to male patients aged 40-50 (anchor_age) and include per-stay mean SBP\n  SELECT s.*, p.gender, p.anchor_age\n  FROM sbp_first48 s\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n),\n\ncohort_with_mi AS (\n  -- attach MI flag and SBP category per stay\n  SELECT\n    c.*,\n    CASE WHEN m.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS mi_flag,\n    CASE\n      WHEN c.mean_sbp < 140 THEN '<140'\n      WHEN c.mean_sbp >= 140 AND c.mean_sbp < 160 THEN '140-159'\n      ELSE '>=160'\n    END AS sbp_category\n  FROM cohort c\n  LEFT JOIN mi_hadm m\n    ON c.hadm_id = m.hadm_id\n),\n\nagg AS (\n  SELECT\n    sbp_category,\n    COUNT(*) AS n_stays,\n    SUM(mi_flag) AS mi_count\n  FROM cohort_with_mi\n  GROUP BY sbp_category\n),\n\ntotal AS (\n  SELECT COUNT(*) AS total_stays FROM cohort_with_mi\n)\n\nSELECT\n  a.sbp_category,\n  a.n_stays,\n  ROUND(100.0 * SAFE_DIVIDE(a.n_stays, t.total_stays), 2) AS percent_of_cohort,\n  a.mi_count,\n  ROUND(100.0 * SAFE_DIVIDE(a.mi_count, a.n_stays), 2) AS mi_rate_percent\nFROM agg a\nCROSS JOIN total t\nORDER BY\n  CASE\n    WHEN a.sbp_category = '<140' THEN 1\n    WHEN a.sbp_category = '140-159' THEN 2\n    WHEN a.sbp_category = '>=160' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

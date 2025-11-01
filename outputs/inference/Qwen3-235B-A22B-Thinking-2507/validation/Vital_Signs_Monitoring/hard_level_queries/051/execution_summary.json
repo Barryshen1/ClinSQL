@@ -1,0 +1,22 @@
+{
+  "query": "Male patient, 94. Among male ICU patients aged 89–99, what is the 95th‑percentile 48‑hour instability score for ischemic stroke? For the top instability quartile, compare ischemic stroke versus general ICU: N, mean instability, mean abnormal episodes, mean ICU LOS (hrs), and mortality.",
+  "final_sql": "WITH admissions_with_age AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n),\ngeneral_icu AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    a.admittime,\n    i.intime,\n    i.outtime,\n    a.hospital_expire_flag\n  FROM admissions_with_age a\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  WHERE a.gender = 'M'\n    AND a.age BETWEEN 89 AND 99\n),\nstroke_diagnoses AS (\n  SELECT \n    hadm_id,\n    TRUE AS has_stroke\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code LIKE '434%')\n     OR (icd_version = 10 AND icd_code LIKE 'I63%')\n  GROUP BY hadm_id\n),\ngeneral_icu_with_stroke AS (\n  SELECT \n    g.*,\n    COALESCE(s.has_stroke, FALSE) AS is_stroke\n  FROM general_icu g\n  LEFT JOIN stroke_diagnoses s\n    ON g.hadm_id = s.hadm_id\n),\ninstability_scores AS (\n  SELECT \n    g.stay_id,\n    g.subject_id,\n    g.hadm_id,\n    g.intime,\n    g.outtime,\n    g.hospital_expire_flag,\n    g.is_stroke,\n    COUNT(*) AS instability_score\n  FROM general_icu_with_stroke g\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON g.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN g.intime AND g.intime + INTERVAL '48' HOUR\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE di.category IN (\n      'Heart Rate',\n      'Respiratory Rate',\n      'Non-Invasive Blood Pressure',\n      'Temperature',\n      'O2 saturation pulseoxymetry'\n    )\n    AND ce.valuenum IS NOT NULL\n    AND di.lownormalvalue IS NOT NULL\n    AND di.highnormalvalue IS NOT NULL\n    AND (ce.valuenum < di.lownormalvalue OR ce.valuenum > di.highnormalvalue)\n  GROUP BY g.stay_id, g.subject_id, g.hadm_id, g.intime, g.outtime, g.hospital_expire_flag, g.is_stroke\n),\nquartiles AS (\n  SELECT *,\n    NTILE(4) OVER (ORDER BY instability_score DESC) AS quartile_general,\n    NTILE(4) OVER (PARTITION BY is_stroke ORDER BY instability_score DESC) AS quartile_stroke\n  FROM instability_scores\n)\n-- Part 1: 95th percentile for ischemic stroke group\nSELECT \n  '95th_percentile_ischemic_stroke' AS group_type,\n  CAST(NULL AS INT64) AS N,\n  p95 AS mean_instability,\n  CAST(NULL AS FLOAT64) AS mean_abnormal_episodes,\n  CAST(NULL AS FLOAT64) AS mean_los_hours,\n  CAST(NULL AS FLOAT64) AS mortality\nFROM (\n  SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(95)] AS p95\n  FROM instability_scores\n  WHERE is_stroke = TRUE\n)\n\nUNION ALL\n\n-- Part 2: Ischemic stroke top quartile\nSELECT \n  'ischemic stroke' AS group_type,\n  COUNT(*) AS N,\n  AVG(instability_score) AS mean_instability,\n  AVG(instability_score / 48.0) AS mean_abnormal_episodes,\n  AVG(TIMESTAMP_DIFF(outtime, intime, SECOND) / 3600.0) AS mean_los_hours,\n  AVG(hospital_expire_flag) AS mortality\nFROM quartiles\nWHERE is_stroke = TRUE AND quartile_stroke = 1\n\nUNION ALL\n\n-- Part 2: General ICU top quartile\nSELECT \n  'general ICU' AS group_type,\n  COUNT(*) AS N,\n  AVG(instability_score) AS mean_instability,\n  AVG(instability_score / 48.0) AS mean_abnormal_episodes,\n  AVG(TIMESTAMP_DIFF(outtime, intime, SECOND) / 3600.0) AS mean_los_hours,\n  AVG(hospital_expire_flag) AS mortality\nFROM quartiles\nWHERE quartile_general = 1;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "qwen3-235b-a22b-thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXTRACT does not support arguments of type: INTERVAL at [104:27]; reason: invalidQuery, location: query, message: EXTRACT does not support arguments of type: INTERVAL at [104:27]\n\nLocation: US\nJob ID: c6ebd256-4427-4b69-9355-1e544c77e6a3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

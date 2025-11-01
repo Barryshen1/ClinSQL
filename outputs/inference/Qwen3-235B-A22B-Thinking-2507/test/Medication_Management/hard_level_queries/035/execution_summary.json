@@ -1,0 +1,23 @@
+{
+  "query": "Patient: 45-year-old woman. Among female inpatients aged 40\u201350 with neutropenic fever, stratify admissions by medication complexity score (first 48 hours) into quartiles and report per quartile: patient count, mean/min/max score, mean LOS, mortality %, and 30-day readmission %.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 40 AND 50\n),\n\nneutropenia AS (\n  SELECT DISTINCT\n    le.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN patients_filtered pf\n    ON le.hadm_id = pf.hadm_id\n  WHERE le.itemid = 51146  -- Absolute neutrophil count\n    AND le.valuenum < 500\n    AND le.charttime <= TIMESTAMP_ADD(pf.admittime, INTERVAL 48 HOUR)\n),\n\nfever AS (\n  SELECT DISTINCT\n    ce.hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN patients_filtered pf\n    ON ce.hadm_id = pf.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie\n    ON ce.stay_id = ie.stay_id\n  WHERE ce.itemid = 223761  -- Temperature Fahrenheit (101\u00b0F = 38.3\u00b0C)\n    AND ce.valuenum >= 101.0\n    AND ce.charttime <= TIMESTAMP_ADD(pf.admittime, INTERVAL 48 HOUR)\n    AND ie.intime <= TIMESTAMP_ADD(pf.admittime, INTERVAL 48 HOUR)\n),\n\nneutropenic_fever AS (\n  SELECT \n    pf.subject_id,\n    pf.hadm_id,\n    pf.admittime,\n    pf.dischtime,\n    pf.hospital_expire_flag\n  FROM patients_filtered pf\n  INNER JOIN neutropenia n ON pf.hadm_id = n.hadm_id\n  INNER JOIN fever f ON pf.hadm_id = f.hadm_id\n),\n\nmedication_complexity AS (\n  SELECT \n    nf.hadm_id,\n    COUNT(DISTINCT e.medication) AS medication_count\n  FROM neutropenic_fever nf\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar` e\n    ON nf.hadm_id = e.hadm_id\n    AND e.charttime <= TIMESTAMP_ADD(nf.admittime, INTERVAL 48 HOUR)\n  GROUP BY nf.hadm_id\n),\n\nquartiles AS (\n  SELECT \n    mc.hadm_id,\n    mc.medication_count,\n    NTILE(4) OVER (ORDER BY mc.medication_count) AS score_quartile\n  FROM medication_complexity mc\n),\n\nreadmissions AS (\n  SELECT \n    a1.hadm_id AS index_admission,\n    CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM neutropenic_fever a1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND a2.admittime <= TIMESTAMP_ADD(a1.dischtime, INTERVAL 30 DAY)\n    AND a1.hadm_id != a2.hadm_id\n)\n\nSELECT \n  q.score_quartile,\n  COUNT(*) AS patient_count,\n  AVG(q.medication_count) AS mean_score,\n  MIN(q.medication_count) AS min_score,\n  MAX(q.medication_count) AS max_score,\n  AVG(TIMESTAMP_DIFF(nf.dischtime, nf.admittime, HOUR)/24.0) AS mean_los,\n  (SUM(nf.hospital_expire_flag) * 100.0 / COUNT(*)) AS mortality_pct,\n  (SUM(COALESCE(r.readmitted_30d, 0)) * 100.0 / \n   NULLIF(COUNT(*) - SUM(nf.hospital_expire_flag), 0)) AS readmission_30d_pct\nFROM quartiles q\nINNER JOIN neutropenic_fever nf ON q.hadm_id = nf.hadm_id\nLEFT JOIN readmissions r ON q.hadm_id = r.index_admission\nGROUP BY q.score_quartile\nORDER BY q.score_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"fever\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"fever\" at [1:18]\n\nLocation: US\nJob ID: 29cdb893-a5d0-41d1-9959-3935ff4abfd2\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 53-year-old female inpatient. Among female inpatients 48\u201358, compare hemorrhagic stroke vs age\u2011matched controls: first 48\u2011hour medication complexity distribution, outcomes (LOS, mortality) for patients with \u22652 serotonergic drugs versus <2, and LOS/mortality for top complexity quartile.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag AS mortality,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        WHERE \n          a.hadm_id = diag.hadm_id AND\n          (\n            (diag.icd_version = 10 AND diag.icd_code LIKE 'I6[0-2]%') OR\n            (diag.icd_version = 9 AND diag.icd_code LIKE '43[0-2]%')\n          )\n      ) THEN 1 \n      ELSE 0 \n    END AS is_hemorrhagic\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n),\n\nprescriptions_48h AS (\n  SELECT \n    pr.hadm_id,\n    pr.drug AS drug_name,\n    CASE \n      WHEN LOWER(pr.drug) LIKE '%citalopram%' OR\n           LOWER(pr.drug) LIKE '%escitalopram%' OR\n           LOWER(pr.drug) LIKE '%fluoxetine%' OR\n           LOWER(pr.drug) LIKE '%fluvoxamine%' OR\n           LOWER(pr.drug) LIKE '%paroxetine%' OR\n           LOWER(pr.drug) LIKE '%sertraline%' OR\n           LOWER(pr.drug) LIKE '%duloxetine%' OR\n           LOWER(pr.drug) LIKE '%venlafaxine%' OR\n           LOWER(pr.drug) LIKE '%desvenlafaxine%' OR\n           LOWER(pr.drug) LIKE '%trazodone%' OR\n           LOWER(pr.drug) LIKE '%nefazodone%' OR\n           LOWER(pr.drug) LIKE '%vilazodone%' OR\n           LOWER(pr.drug) LIKE '%vortioxetine%' OR\n           LOWER(pr.drug) LIKE '%tramadol%' OR\n           LOWER(pr.drug) LIKE '%fentanyl%' OR\n           LOWER(pr.drug) LIKE '%lithium%' OR\n           LOWER(pr.drug) LIKE '%buspirone%' OR\n           LOWER(pr.drug) LIKE '%triptan%' OR\n           LOWER(pr.drug) LIKE '%sumatriptan%' OR\n           LOWER(pr.drug) LIKE '%rizatriptan%' OR\n           LOWER(pr.drug) LIKE '%almotriptan%' OR\n           LOWER(pr.drug) LIKE '%eletriptan%' OR\n           LOWER(pr.drug) LIKE '%frovatriptan%' OR\n           LOWER(pr.drug) LIKE '%naratriptan%' OR\n           LOWER(pr.drug) LIKE '%zolmitriptan%' \n      THEN 1 \n      ELSE 0 \n    END AS is_serotonergic\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  INNER JOIN base_cohort b\n    ON pr.hadm_id = b.hadm_id\n  WHERE \n    pr.starttime >= b.admittime\n    AND pr.starttime <= DATETIME_ADD(b.admittime, INTERVAL 48 HOUR)\n),\n\npatient_meds AS (\n  SELECT \n    b.subject_id,\n    b.hadm_id,\n    b.is_hemorrhagic,\n    b.los_days,\n    b.mortality,\n    COUNT(DISTINCT p.drug_name) AS medication_complexity,\n    COUNT(DISTINCT CASE WHEN p.is_serotonergic = 1 THEN p.drug_name END) AS serotonergic_count\n  FROM base_cohort b\n  LEFT JOIN prescriptions_48h p\n    ON b.hadm_id = p.hadm_id\n  GROUP BY b.subject_id, b.hadm_id, b.is_hemorrhagic, b.los_days, b.mortality\n),\n\nquartile_cutoff AS (\n  SELECT \n    APPROX_QUANTILES(medication_complexity, 4)[OFFSET(3)] AS q3\n  FROM patient_meds\n)\n\nSELECT \n  pm.*,\n  CASE \n    WHEN pm.serotonergic_count >= 2 THEN '>=2' \n    ELSE '<2' \n  END AS serotonergic_group,\n  CASE \n    WHEN pm.medication_complexity >= (SELECT q3 FROM quartile_cutoff) THEN 1\n    ELSE 0 \n  END AS is_top_complexity\nFROM patient_meds pm;",
+  "execution_success": true,
+  "row_count": 48413,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name icd_code not found inside d at [12:14]; reason: invalidQuery, location: query, message: Name icd_code not found inside d at [12:14]\n\nLocation: US\nJob ID: b677338b-7bad-4eac-b01c-5f251765d2d5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 48413,
+      "error": null
+    }
+  ]
+}

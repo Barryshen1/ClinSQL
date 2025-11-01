@@ -1,0 +1,28 @@
+{
+  "query": "For a 92-year-old woman: among female ICU patients aged 87\u201397 with lower GI bleeding (first ICU stay), stratify by quintiles of distinct procedures in the first 48 hours and report mean procedure count, mean ICU LOS (days), and in-hospital mortality%.",
+  "final_sql": "WITH lower_gi_hadm AS (\n  -- Identify hospital admissions with a diagnosis indicative of lower GI bleeding\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    USING(icd_code, icd_version)\n  WHERE (\n    LOWER(dd.long_title) LIKE '%rectal%'\n    OR LOWER(dd.long_title) LIKE '%rectum%'\n    OR LOWER(dd.long_title) LIKE '%hematochezia%'\n    OR (LOWER(dd.long_title) LIKE '%lower%' AND LOWER(dd.long_title) LIKE '%gastrointestinal%')\n    OR LOWER(dd.long_title) LIKE '%lower gastrointestinal%'\n  )\n),\n\nfirst_icu_per_admission AS (\n  -- Select first ICU stay per hospital admission (hadm_id)\n  SELECT *\n  FROM (\n    SELECT\n      icu.*,\n      a.hospital_expire_flag,\n      p.anchor_age,\n      ROW_NUMBER() OVER (PARTITION BY icu.hadm_id ORDER BY icu.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON icu.hadm_id = a.hadm_id AND icu.subject_id = a.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON icu.subject_id = p.subject_id\n    JOIN lower_gi_hadm lg\n      ON icu.hadm_id = lg.hadm_id\n    WHERE p.gender = 'F'\n      AND p.anchor_age BETWEEN 87 AND 97\n  )\n  WHERE rn = 1\n),\n\nproc_counts AS (\n  -- Count distinct procedures (procedureevents.itemid) within first 48 hours of ICU stay\n  SELECT\n    f.stay_id,\n    f.subject_id,\n    f.hadm_id,\n    f.intime,\n    f.outtime,\n    f.los,\n    f.hospital_expire_flag,\n    COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM first_icu_per_admission f\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON f.subject_id = pe.subject_id\n   AND f.hadm_id = pe.hadm_id\n   AND pe.starttime IS NOT NULL\n   AND pe.starttime >= f.intime\n   AND pe.starttime <= TIMESTAMP_ADD(f.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    f.stay_id, f.subject_id, f.hadm_id, f.intime, f.outtime, f.los, f.hospital_expire_flag\n),\n\nwith_quintiles AS (\n  -- Assign quintiles by procedure count\n  SELECT\n    pc.*,\n    NTILE(5) OVER (ORDER BY proc_count) AS quintile\n  FROM proc_counts pc\n)\n\n-- Aggregate results by quintile\nSELECT\n  quintile,\n  COUNT(*) AS n_stays,\n  ROUND(AVG(proc_count), 2) AS mean_proc_count,\n  ROUND(AVG(los), 3) AS mean_icu_los_days,\n  ROUND(100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS inhospital_mortality_pct\nFROM with_quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]\n\nLocation: US\nJob ID: 2af42093-e161-4443-b71b-877c74bd3ab9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]\n\nLocation: US\nJob ID: d695857b-6f2b-4ffc-8819-cf4badc52a9f\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

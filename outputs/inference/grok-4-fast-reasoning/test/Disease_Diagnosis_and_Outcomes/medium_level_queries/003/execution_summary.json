@@ -1,0 +1,28 @@
+{
+  "query": "49-year-old man: among men 44\u201354 with ischemic vs hemorrhagic stroke, report mortality (%) and median LOS, stratified by LOS (\u22645/>5) and comorbidity (low/med/high), with % mech vent, vasopressors, RRT.",
+  "final_sql": "WITH admissions_with_icu AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) AS age,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE EXISTS (\n    SELECT 1 \n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i \n    WHERE i.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n  )\n),\nstroke AS (\n  SELECT \n    hadm_id,\n    CASE \n      WHEN icd_version = 10 AND icd_code LIKE 'I63%' THEN 'ischemic'\n      WHEN icd_version = 10 AND (icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%') THEN 'hemorrhagic'\n      WHEN icd_version = 9 AND (icd_code LIKE '433%' OR icd_code LIKE '434%' OR icd_code = '436') THEN 'ischemic'\n      WHEN icd_version = 9 AND (icd_code LIKE '430%' OR icd_code LIKE '431%' OR icd_code LIKE '432%') THEN 'hemorrhagic'\n      ELSE NULL\n    END AS stroke_type\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE seq_num = 1\n),\ncomorb AS (\n  SELECT \n    hadm_id,\n    COUNT(*) AS num_comorb\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE seq_num > 1\n  GROUP BY hadm_id\n),\ncohort AS (\n  SELECT \n    a.hadm_id,\n    a.los_days,\n    a.hospital_expire_flag,\n    s.stroke_type,\n    CASE \n      WHEN a.los_days <= 5 THEN '<=5'\n      ELSE '>5'\n    END AS los_group,\n    CASE \n      WHEN COALESCE(c.num_comorb, 0) <= 1 THEN 'low'\n      WHEN COALESCE(c.num_comorb, 0) <= 4 THEN 'med'\n      ELSE 'high'\n    END AS comorb_group\n  FROM admissions_with_icu a\n  INNER JOIN stroke s \n    ON a.hadm_id = s.hadm_id \n    AND s.stroke_type IS NOT NULL\n  LEFT JOIN comorb c \n    ON a.hadm_id = c.hadm_id\n  WHERE a.gender = 'M' \n    AND a.age BETWEEN 44 AND 54\n),\nvent_hadm AS (\n  SELECT DISTINCT i.hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON ce.stay_id = i.stay_id\n  WHERE ce.itemid IN (720, 223848, 223849, 224008, 224069, 224396, 224397, 224435, 224436, 224444, 224455, 224456, 224457)\n),\nvasop_hadm AS (\n  SELECT DISTINCT i.hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.inputevents` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON ie.stay_id = i.stay_id\n  WHERE ie.itemid IN (221906, 222315, 225798, 220661, 220242, 220543)  -- norepinephrine, vasopressin, phenylephrine, epinephrine, dopamine, dobutamine\n    AND ((ie.amount IS NOT NULL AND ie.amount > 0) OR (ie.rate IS NOT NULL AND ie.rate > 0))\n),\nrrt_hadm AS (\n  SELECT DISTINCT i.hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON pe.stay_id = i.stay_id\n  WHERE pe.itemid IN (225826, 228353, 228354, 228537, 228538, 228539, 228540)  -- hemodialysis, SLEDD, SCUF, CVVH, CVVHD, CVVHDF, isolated UF\n),\ncohort_flags AS (\n  SELECT \n    c.*,\n    CASE WHEN v.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS mech_vent,\n    CASE WHEN vp.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS vasop,\n    CASE WHEN r.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS rrt\n  FROM cohort c\n  LEFT JOIN vent_hadm v ON c.hadm_id = v.hadm_id\n  LEFT JOIN vasop_hadm vp ON c.hadm_id = vp.hadm_id\n  LEFT JOIN rrt_hadm r ON c.hadm_id = r.hadm_id\n)\nSELECT \n  stroke_type,\n  los_group,\n  comorb_group,\n  COUNT(*) AS n,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct,\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los,\n  ROUND(AVG(mech_vent) * 100, 2) AS pct_mech_vent,\n  ROUND(AVG(vasop) * 100, 2) AS pct_vasopressors,\n  ROUND(AVG(rrt) * 100, 2) AS pct_rrt\nFROM cohort_flags\nGROUP BY stroke_type, los_group, comorb_group\nORDER BY stroke_type, los_group, comorb_group;",
+  "execution_success": true,
+  "row_count": 10,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [26:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [26:12]\n\nLocation: US\nJob ID: 0744193d-937a-44e6-81bb-941cd9982e82\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e05da8ad-6566-4db0-b7ee-ed8b6d8a837d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 10,
+      "error": null
+    }
+  ]
+}

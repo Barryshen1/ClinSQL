@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 82\u2011year\u2011old man. Among male ICU patients aged 77\u201387 admitted with asthma exacerbation, stratify first 72\u2011hour ICU procedure burden into quartiles and report each quartile\u2019s mean procedure count, mean hospital LOS (days), and hospital mortality.",
+  "final_sql": "WITH asthma_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 77 AND 87\n    AND d.icd_version = 10\n    AND LOWER(d_icd.long_title) LIKE '%asthma%'\n    AND LOWER(d_icd.long_title) LIKE '%exacerbation%'\n),\nfirst_icu_stay AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los AS icu_los_days,\n    ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS rn\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN asthma_patients ap ON i.hadm_id = ap.hadm_id\n),\nfirst_icu_procedures AS (\n  SELECT\n    f.stay_id,\n    COUNT(*) AS procedure_count_72h\n  FROM first_icu_stay f\n  INNER JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON f.stay_id = pe.stay_id\n  WHERE pe.starttime >= f.intime\n    AND pe.starttime <= DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY f.stay_id\n),\nhospital_los AS (\n  SELECT\n    ap.subject_id,\n    ap.hadm_id,\n    ap.hospital_expire_flag,\n    DATETIME_DIFF(ap.dischtime, ap.admittime, DAY) AS hospital_los_days\n  FROM asthma_patients ap\n),\nquartile_data AS (\n  SELECT\n    h.hospital_los_days,\n    h.hospital_expire_flag,\n    COALESCE(p.procedure_count_72h, 0) AS procedure_count_72h,\n    NTILE(4) OVER (ORDER BY COALESCE(p.procedure_count_72h, 0)) AS procedure_quartile\n  FROM hospital_los h\n  INNER JOIN first_icu_stay fis ON h.hadm_id = fis.hadm_id\n  LEFT JOIN first_icu_procedures p ON fis.stay_id = p.stay_id\n)\nSELECT\n  procedure_quartile,\n  AVG(procedure_count_72h) AS mean_procedure_count,\n  AVG(hospital_los_days) AS mean_hospital_los_days,\n  AVG(hospital_expire_flag) AS mean_hospital_mortality\nFROM quartile_data\nGROUP BY procedure_quartile\nORDER BY procedure_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name procedureevent_id not found inside pe at [38:14]; reason: invalidQuery, location: query, message: Name procedureevent_id not found inside pe at [38:14]\n\nLocation: US\nJob ID: 69bae7c8-aa9e-4eb3-ba58-6d1ab3089e9f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

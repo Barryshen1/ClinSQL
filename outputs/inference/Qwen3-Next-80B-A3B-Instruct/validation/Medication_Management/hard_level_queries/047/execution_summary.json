@@ -1,0 +1,22 @@
+{
+  "query": "I have a 53-year-old female inpatient. Among female inpatients 48\u201358, compare hemorrhagic stroke vs age\u2011matched controls: first 48\u2011hour medication complexity distribution, outcomes (LOS, mortality) for patients with \u22652 serotonergic drugs versus <2, and LOS/mortality for top complexity quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    CASE \n      WHEN di.icd_version = 9 AND di.icd_code IN ('430', '431', '432') THEN 1\n      WHEN di.icd_version = 10 AND di.icd_code IN ('I60', 'I61', 'I62') THEN 1\n      ELSE 0 \n    END AS is_hemorrhagic_stroke\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n    ON a.hadm_id = di.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n),\n\nserotonergic_drugs AS (\n  SELECT DISTINCT LOWER(drug_name) AS drug_name\n  FROM UNNEST([\n    'fluoxetine', 'sertraline', 'citalopram', 'escitalopram', 'paroxetine', 'fluvoxamine',\n    'venlafaxine', 'duloxetine',\n    'amitriptyline', 'clomipramine', 'imipramine', 'nortriptyline',\n    'tramadol', 'dextromethorphan', 'meperidine', 'pethidine',\n    'sumatriptan', 'rizatriptan', 'zolmitriptan',\n    'mirtazapine', 'trazodone',\n    'linezolid', 'mdma'\n  ]) AS drug_name\n),\n\nmedication_complexity AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS serotonergic_drug_count\n  FROM cohort c\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.prescriptions pr\n    ON c.hadm_id = pr.hadm_id\n    AND pr.starttime >= c.admittime\n    AND pr.starttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  INNER JOIN serotonergic_drugs sd\n    ON LOWER(pr.drug) = sd.drug_name\n  GROUP BY c.subject_id, c.hadm_id\n),\n\ncohort_with_complexity AS (\n  SELECT \n    c.*,\n    COALESCE(mc.serotonergic_drug_count, 0) AS serotonergic_drug_count,\n    CASE \n      WHEN COALESCE(mc.serotonergic_drug_count, 0) >= 2 THEN 1 \n      ELSE 0 \n    END AS has_ge2_serotonergic,\n    DATETIME_DIFF(c.dischtime, c.admittime, DAY) AS los_days\n  FROM cohort c\n  LEFT JOIN medication_complexity mc\n    ON c.subject_id = mc.subject_id AND c.hadm_id = mc.hadm_id\n),\n\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY serotonergic_drug_count) AS complexity_quartile\n  FROM cohort_with_complexity\n)\n\nSELECT \n  'Hemorrhagic Stroke vs Control' AS comparison_group,\n  is_hemorrhagic_stroke AS group_label,\n  AVG(serotonergic_drug_count) AS mean_serotonergic_drugs,\n  AVG(CAST(has_ge2_serotonergic AS FLOAT64)) AS pct_ge2_serotonergic,\n  AVG(los_days) AS mean_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM quartiles\nGROUP BY is_hemorrhagic_stroke\n\nUNION ALL\n\nSELECT \n  '\u22652 vs <2 Serotonergic Drugs' AS comparison_group,\n  has_ge2_serotonergic AS group_label,\n  AVG(serotonergic_drug_count) AS mean_serotonergic_drugs,\n  1.0 AS pct_ge2_serotonergic,  -- By definition, 100% in \u22652 group, 0% in <2\n  AVG(los_days) AS mean_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM quartiles\nGROUP BY has_ge2_serotonergic\n\nUNION ALL\n\nSELECT \n  'Top Complexity Quartile (Q4)' AS comparison_group,\n  complexity_quartile AS group_label,\n  AVG(serotonergic_drug_count) AS mean_serotonergic_drugs,\n  AVG(CAST(has_ge2_serotonergic AS FLOAT64)) AS pct_ge2_serotonergic,\n  AVG(los_days) AS mean_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM quartiles\nWHERE complexity_quartile = 4\nGROUP BY complexity_quartile\nORDER BY comparison_group, group_label;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \"*\" at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \"*\" at [1:6]\n\nLocation: US\nJob ID: 2509b30a-2533-4f94-b8ab-c1043306ca81\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

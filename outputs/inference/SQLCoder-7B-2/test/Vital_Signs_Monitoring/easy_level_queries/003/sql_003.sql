@@ -1,0 +1,1 @@
+SELECT AVG(omr.value) AS average_heart_rate FROM omr JOIN icustays ON omr.subject_id = icustays.subject_id JOIN patients ON icustays.subject_id = patients.subject_id WHERE patients.gender = 'M' AND patients.anchor_age = 45 AND EXTRACT(YEAR FROM icustays.intime) BETWEEN 2015 AND 2016 AND omr.result_name = 'Heart Rate';

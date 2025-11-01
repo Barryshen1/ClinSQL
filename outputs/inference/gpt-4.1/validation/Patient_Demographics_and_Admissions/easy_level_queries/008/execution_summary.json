@@ -1,0 +1,16 @@
+{
+  "query": "For my 57-year-old male, among men aged 52\u201362 undergoing their first PCI, what is the average 30-day readmission rate?",
+  "final_sql": "WITH pci_codes AS (\n  -- Identify PCI ICD codes\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE LOWER(long_title) LIKE '%percutaneous coronary intervention%'\n     OR LOWER(long_title) LIKE '%coronary angioplasty%'\n     OR LOWER(long_title) LIKE '%pci%'\n),\nfirst_pci AS (\n  -- Find first PCI for each patient\n  SELECT\n    p.subject_id,\n    pr.hadm_id,\n    pr.chartdate AS pci_date\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n    ON p.subject_id = pr.subject_id\n  JOIN pci_codes pc\n    ON pr.icd_code = pc.icd_code AND pr.icd_version = pc.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n),\nfirst_pci_admission AS (\n  -- For each patient, select their earliest PCI (first PCI admission)\n  SELECT\n    subject_id,\n    hadm_id,\n    MIN(pci_date) AS first_pci_date\n  FROM first_pci\n  GROUP BY subject_id, hadm_id\n),\nindex_admissions AS (\n  -- Get admission/discharge times for first PCI admissions\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM first_pci_admission f\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.subject_id = a.subject_id AND f.hadm_id = a.hadm_id\n),\neligible_patients AS (\n  -- Exclude patients who died during index admission\n  SELECT *\n  FROM index_admissions\n  WHERE hospital_expire_flag = 0\n    AND (deathtime IS NULL OR deathtime > dischtime)\n),\nreadmissions AS (\n  -- For each eligible patient, check for readmission within 30 days\n  SELECT\n    e.subject_id,\n    e.hadm_id AS index_hadm_id,\n    e.dischtime,\n    MIN(a.admittime) AS readmit_time\n  FROM eligible_patients e\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON e.subject_id = a.subject_id\n    AND a.admittime > e.dischtime\n    AND a.admittime <= DATETIME_ADD(e.dischtime, INTERVAL 30 DAY)\n  GROUP BY e.subject_id, e.hadm_id, e.dischtime\n),\nfinal AS (\n  -- Mark patients with/without 30-day readmission\n  SELECT\n    ep.subject_id,\n    ep.hadm_id,\n    CASE WHEN r.readmit_time IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM eligible_patients ep\n  LEFT JOIN readmissions r\n    ON ep.subject_id = r.subject_id AND ep.hadm_id = r.index_hadm_id\n)\nSELECT\n  COUNTIF(readmitted_30d = 1) AS num_readmitted_30d,\n  COUNT(*) AS num_eligible_patients,\n  SAFE_DIVIDE(COUNTIF(readmitted_30d = 1), COUNT(*)) AS avg_30d_readmission_rate\nFROM final;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

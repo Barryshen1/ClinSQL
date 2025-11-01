@@ -1,0 +1,1 @@
+SELECT AVG(icu.los) AS average_los FROM admissions AS hosp JOIN patients AS pt ON hosp.subject_id = pt.subject_id JOIN icustays AS icu ON hosp.stay_id = icu.stay_id WHERE pt.gender = 'M' AND pt.anchor_year = 81 AND pt.anchor_year_group = 'DAPT' AND EXTRACT(YEAR FROM icu.intime) = EXTRACT(YEAR FROM hosp.admittime) + 1;

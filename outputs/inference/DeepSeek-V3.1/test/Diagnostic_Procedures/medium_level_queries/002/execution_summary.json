@@ -1,0 +1,16 @@
+{
+  "query": "For a 69\u2011year\u2011old man with TIA, among male TIA patients aged 64\u201374 (LOS 1\u20137 days), what's the mean ultrasounds/echocardiograms per admission: 1\u20133 vs 4\u20137 days, stratified by ICU use?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    -- Check if the patient had any ICU stay\n    CASE WHEN icu.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS had_icu\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddiag\n    ON diag.icd_code = ddiag.icd_code AND diag.icd_version = ddiag.icd_version\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id \n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) icu\n    ON adm.hadm_id = icu.hadm_id\n  WHERE \n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 64 AND 74\n    AND (ddiag.icd_code = 'G45.9' AND ddiag.icd_version = 10)\n       OR (ddiag.icd_code = '435.9' AND ddiag.icd_version = 9)\n    AND DATE_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 7\n  GROUP BY adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, icu.hadm_id\n),\nprocedures AS (\n  SELECT \n    p.hadm_id,\n    p.chartdate,\n    -- Calculate hospital day: day 1 is the day of admission\n    DATE_DIFF(DATE(p.chartdate), DATE(c.admittime), DAY) + 1 AS hospital_day,\n    -- Group into 1-3 and 4-7\n    CASE \n      WHEN DATE_DIFF(DATE(p.chartdate), DATE(c.admittime), DAY) + 1 BETWEEN 1 AND 3 THEN '1-3'\n      WHEN DATE_DIFF(DATE(p.chartdate), DATE(c.admittime), DAY) + 1 BETWEEN 4 AND 7 THEN '4-7'\n      ELSE NULL \n    END AS day_group\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  INNER JOIN cohort c\n    ON p.hadm_id = c.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n    ON p.icd_code = dp.icd_code AND p.icd_version = dp.icd_version\n  WHERE \n    -- Filter for echocardiograms/ultrasounds\n    (dp.icd_version = 10 AND dp.icd_code LIKE 'BH23%')\n    OR (dp.icd_version = 9 AND dp.icd_code LIKE '88.72%')\n    -- Ensure within the hospital stay days 1-7\n    AND DATE_DIFF(DATE(p.chartdate), DATE(c.admittime), DAY) + 1 BETWEEN 1 AND 7\n),\n-- Count procedures per admission per day group\nprocedure_counts AS (\n  SELECT \n    c.hadm_id,\n    c.had_icu,\n    COUNTIF(p.day_group = '1-3') AS count_1_3,\n    COUNTIF(p.day_group = '4-7') AS count_4_7\n  FROM cohort c\n  LEFT JOIN procedures p\n    ON c.hadm_id = p.hadm_id\n  GROUP BY c.hadm_id, c.had_icu\n)\n-- Compute mean counts stratified by ICU use\nSELECT \n  had_icu,\n  AVG(count_1_3) AS mean_echo_1_3,\n  AVG(count_4_7) AS mean_echo_4_7\nFROM procedure_counts\nGROUP BY had_icu\nORDER BY had_icu;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

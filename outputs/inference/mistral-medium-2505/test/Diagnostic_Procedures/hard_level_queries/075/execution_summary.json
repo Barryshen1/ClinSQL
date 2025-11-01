@@ -1,0 +1,28 @@
+{
+  "query": "For a 44-year-old man: among male ICU admissions aged 39\u201349 with DKA, stratify first ICU stay diagnostic intensity (distinct procedures in first 24 h) into quintiles and report number of stays, mean/min/max procedure count, mean ICU LOS (days) and hospital mortality%",
+  "final_sql": "WITH\n-- Get male patients aged 39-49\nmale_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 39 AND 49\n),\n\n-- Get first ICU stay per admission with DKA diagnosis\ndka_stays AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.intime AS icu_intime,\n    i.outtime AS icu_outtime,\n    TIMESTAMP_DIFF(i.outtime, i.intime, HOUR)/24 AS icu_los_days,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN male_patients p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON a.hadm_id = i.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  WHERE d.icd_code IN ('E1310', 'E1311') -- DKA ICD-10 codes\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY a.hadm_id ORDER BY i.intime) = 1 -- First ICU stay per admission\n),\n\n-- Count distinct procedures in first 24 hours of ICU stay\nprocedure_counts AS (\n  SELECT\n    s.stay_id,\n    COUNT(DISTINCT p.itemid) AS procedure_count\n  FROM dka_stays s\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON s.stay_id = p.stay_id\n    AND p.starttime BETWEEN s.icu_intime AND TIMESTAMP_ADD(s.icu_intime, INTERVAL 24 HOUR)\n  GROUP BY s.stay_id\n),\n\n-- Create quintiles based on procedure counts\nquintiles AS (\n  SELECT\n    stay_id,\n    procedure_count,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM procedure_counts\n)\n\n-- Final aggregation by quintile\nSELECT\n  quintile,\n  COUNT(s.stay_id) AS number_of_stays,\n  AVG(procedure_count) AS mean_procedure_count,\n  MIN(procedure_count) AS min_procedure_count,\n  MAX(procedure_count) AS max_procedure_count,\n  AVG(icu_los_days) AS mean_icu_los_days,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(s.stay_id), 1) AS hospital_mortality_percent\nFROM quintiles q\nJOIN dka_stays s ON q.stay_id = s.stay_id\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside p at [36:11]; reason: invalidQuery, location: query, message: Name charttime not found inside p at [36:11]\n\nLocation: US\nJob ID: 034854b1-b95a-4022-988e-ad7bb3027d5b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [52:9]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [52:9]\n\nLocation: US\nJob ID: 06c504af-3e79-48ea-82a0-251bade263af\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

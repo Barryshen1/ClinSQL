@@ -1,0 +1,22 @@
+{
+  "query": "For a 45-year-old male in ICU: among male ICU patients 40\u201350, report percent in per-stay mean SBP categories (<140; 140\u2013159; \u2265160 mmHg) during first 48 h and MI rate per category.",
+  "final_sql": "WITH sbp_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) = 'sbp'\n),\nfiltered_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 40 AND 50\n),\nicu_stays_filtered AS (\n  SELECT i.subject_id, i.hadm_id, i.stay_id, i.intime, i.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN filtered_patients p ON i.subject_id = p.subject_id\n),\nsbp_measurements AS (\n  SELECT ce.stay_id, ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN sbp_itemids s ON ce.itemid = s.itemid\n  JOIN icu_stays_filtered i ON ce.stay_id = i.stay_id\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN i.intime AND DATETIME_ADD(i.intime, INTERVAL 48 HOUR)\n),\nmean_sbp_per_stay AS (\n  SELECT stay_id, AVG(valuenum) AS mean_sbp\n  FROM sbp_measurements\n  GROUP BY stay_id\n),\nsbp_category AS (\n  SELECT stay_id,\n    CASE\n      WHEN mean_sbp < 140 THEN '<140'\n      WHEN mean_sbp BETWEEN 140 AND 159 THEN '140\u2013159'\n      WHEN mean_sbp >= 160 THEN '\u2265160'\n    END AS sbp_cat\n  FROM mean_sbp_per_stay\n),\nmi_diagnoses AS (\n  SELECT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE REGEXP_CONTAINS(LOWER(d.long_title), r'myocardial infarction')\n),\nstay_with_mi AS (\n  SELECT s.stay_id, s.sbp_cat,\n    CASE WHEN m.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_mi\n  FROM sbp_category s\n  JOIN icu_stays_filtered i ON s.stay_id = i.stay_id\n  LEFT JOIN mi_diagnoses m ON i.hadm_id = m.hadm_id\n),\naggregated AS (\n  SELECT sbp_cat,\n    COUNT(*) AS stay_count,\n    SUM(has_mi) AS mi_count\n  FROM stay_with_mi\n  GROUP BY sbp_cat\n)\nSELECT\n  sbp_cat,\n  ROUND(stay_count * 100.0 / SUM(stay_count) OVER (), 2) AS percent_stays,\n  ROUND(mi_count * 100.0 / stay_count, 2) AS mi_rate_percent\nFROM aggregated\nORDER BY\n  CASE sbp_cat\n    WHEN '<140' THEN 1\n    WHEN '140\u2013159' THEN 2\n    WHEN '\u2265160' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_hosp.d_items was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_hosp.d_items was not found in location US\n\nLocation: US\nJob ID: 53a5a4d4-90f4-4d53-b17d-379f52a4faa3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

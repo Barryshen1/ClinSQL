@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating a 45\u2011year\u2011old woman with AKI. Among female inpatients 40\u201350 with AKI, stratify by composite risk (5\u00d7comorbidities +50 if ARDS) into quintiles and report per quintile: N; 30\u2011day post\u2011discharge mortality %; ARDS co\u2011occurrence %; median survivor LOS (days).",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.dod,\n    (SELECT COUNT(*) \n     FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n     WHERE di.hadm_id = a.hadm_id AND di.seq_num > 1) AS num_comorb,\n    EXISTS(\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n      WHERE di.hadm_id = a.hadm_id \n        AND ((di.icd_version = 9 AND di.icd_code LIKE '584.%') \n             OR (di.icd_version = 10 AND di.icd_code LIKE 'N17%'))\n    ) AS has_aki,\n    EXISTS(\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n      WHERE di.hadm_id = a.hadm_id \n        AND ((di.icd_version = 9 AND di.icd_code LIKE '518.5%') \n             OR (di.icd_version = 10 AND di.icd_code = 'J80'))\n    ) AS has_ards\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND a.admission_type <> 'OBSERVATION'\n    AND a.dischtime IS NOT NULL\n),\nfiltered_cohort AS (\n  SELECT *, \n    5 * num_comorb + IF(has_ards, 50, 0) AS risk_score\n  FROM cohort \n  WHERE has_aki\n),\nquintiled AS (\n  SELECT *, \n    NTILE(5) OVER (ORDER BY risk_score ASC) AS quintile\n  FROM filtered_cohort\n),\nwith_los AS (\n  SELECT *, \n    DATE_DIFF(CAST(dischtime AS DATE), CAST(admittime AS DATE), DAY) AS los_days\n  FROM quintiled\n)\nSELECT \n  quintile,\n  COUNT(*) AS N,\n  ROUND(\n    SAFE_DIVIDE(\n      SUM(CASE WHEN hospital_expire_flag = 0 \n               AND dod IS NOT NULL \n               AND dod > CAST(dischtime AS DATE) \n               AND dod <= DATE_ADD(CAST(dischtime AS DATE), INTERVAL 30 DAY) \n           THEN 1 ELSE 0 END) * 100.0,\n      SUM(CASE WHEN hospital_expire_flag = 0 THEN 1 ELSE 0 END)\n    ), 2\n  ) AS mortality_30d_pct,\n  ROUND(\n    SAFE_DIVIDE(\n      SUM(CASE WHEN has_ards THEN 1 ELSE 0 END) * 100.0,\n      COUNT(*)\n    ), 2\n  ) AS ards_pct,\n  APPROX_QUANTILES(\n    CASE WHEN hospital_expire_flag = 0 THEN los_days END, \n    2\n  )[OFFSET(1)] AS median_survivor_los\nFROM with_los\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 63\u2011year\u2011old male with HHS: among male patients aged 58\u201368, what were patient and admission counts and mean radiography/CT procedures per admission for LOS 1\u20134 versus 5\u20137 days?",
+  "final_sql": "WITH hhs_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    di.hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n    ON p.subject_id = di.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dic\n    ON di.icd_code = dic.icd_code AND di.icd_version = dic.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND LOWER(dic.long_title) LIKE '%hyperosmolar%'\n),\n\nicu_stays_with_los AS (\n  SELECT\n    hp.subject_id,\n    hp.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    EXTRACT(DAY FROM (i.outtime - i.intime)) AS los_days\n  FROM hhs_patients hp\n  JOIN physionet-data.mimiciv_3_1_icu.icustays i\n    ON hp.hadm_id = i.hadm_id\n  WHERE i.intime IS NOT NULL AND i.outtime IS NOT NULL\n),\n\nct_radiography_procedures AS (\n  SELECT\n    pe.stay_id,\n    COUNT(*) AS procedure_count\n  FROM physionet-data.mimiciv_3_1_icu.procedureevents pe\n  JOIN physionet-data.mimiciv_3_1_icu.d_items di\n    ON pe.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%radiography%'\n     OR LOWER(di.label) LIKE '%ct%'\n     OR LOWER(di.label) LIKE '%computed tomography%'\n     OR LOWER(di.label) LIKE '%x-ray%'\n     OR LOWER(di.label) LIKE '%radiologic%'\n  GROUP BY pe.stay_id\n),\n\nadmission_procedure_totals AS (\n  SELECT\n    isw.hadm_id,\n    SUM(COALESCE(cr.procedure_count, 0)) AS total_procedures\n  FROM icu_stays_with_los isw\n  LEFT JOIN ct_radiography_procedures cr\n    ON isw.stay_id = cr.stay_id\n  GROUP BY isw.hadm_id\n),\n\nbinned_los AS (\n  SELECT\n    isw.subject_id,\n    isw.hadm_id,\n    isw.los_days,\n    CASE\n      WHEN isw.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN isw.los_days BETWEEN 5 AND 7 THEN '5-7 days'\n      ELSE 'other'\n    END AS los_bin,\n    apt.total_procedures\n  FROM icu_stays_with_los isw\n  JOIN admission_procedure_totals apt\n    ON isw.hadm_id = apt.hadm_id\n  WHERE isw.los_days BETWEEN 1 AND 7\n)\n\nSELECT\n  los_bin,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(DISTINCT hadm_id) AS admission_count,\n  AVG(total_procedures) AS mean_procedures_per_admission\nFROM binned_los\nGROUP BY los_bin\nORDER BY los_bin;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

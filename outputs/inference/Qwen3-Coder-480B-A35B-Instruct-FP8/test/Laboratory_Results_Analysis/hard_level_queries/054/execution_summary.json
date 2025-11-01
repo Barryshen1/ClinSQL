@@ -1,0 +1,22 @@
+{
+  "query": "I have a 43\u2011year\u2011old woman. Among female inpatients aged 38\u201348 with AMI, calculate a 72\u2011hour lab instability score, stratify AMI patients into quartiles, and report LOS and in\u2011hospital mortality for each quartile. Compare overall critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH ami_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    COUNT(l.labevent_id) AS instability_score\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND l.flag = 'abnormal'\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n    AND d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND dd.icd_code LIKE '410%')\n      OR\n      (d.icd_version = 10 AND dd.icd_code LIKE 'I21%')\n    )\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, p.anchor_age\n),\n\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM\n    ami_cohort\n),\n\nquartile_summary AS (\n  SELECT\n    quartile,\n    COUNT(*) AS patient_count,\n    AVG(los_days) AS avg_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM\n    quartiles\n  GROUP BY\n    quartile\n),\n\ncontrol_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n    AND a.hadm_id NOT IN (\n      SELECT DISTINCT d.hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE (\n        (d.icd_version = 9 AND d.icd_code LIKE '410%')\n        OR\n        (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n      )\n    )\n),\n\ncontrol_abnormal_labs AS (\n  SELECT\n    COUNT(l.labevent_id) AS total_abnormal_labs\n  FROM\n    control_cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n    AND l.flag = 'abnormal'\n)\n\nSELECT\n  q.quartile,\n  q.patient_count,\n  q.avg_los,\n  q.mortality_rate,\n  ctl.total_abnormal_labs AS control_abnormal_lab_count\nFROM\n  quartile_summary q\nCROSS JOIN\n  control_abnormal_labs ctl\nORDER BY\n  q.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [6:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [6:7]\n\nLocation: US\nJob ID: df3670a6-cb16-4f17-87f5-963cbb559e5a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

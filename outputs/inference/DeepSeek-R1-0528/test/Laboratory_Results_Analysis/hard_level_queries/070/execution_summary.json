@@ -1,0 +1,22 @@
+{
+  "query": "I have a 45-year-old man. Among male inpatients 40\u201350 with hemorrhagic stroke, compute a 72\u2011hour lab instability score (count of unique abnormal labs), stratify into quartiles, and report LOS, mortality, and per\u2011lab abnormal rates versus general inpatients.",
+  "final_sql": "WITH hemorrhagic_stroke AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code IN ('430', '431', '432')) OR\n    (icd_version = 10 AND icd_code IN ('I60', 'I61', 'I62'))\n),\nbase_cohort AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    p.anchor_age,\n    CASE WHEN h.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS is_case\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  LEFT JOIN hemorrhagic_stroke h\n    ON a.hadm_id = h.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n),\ncohort_labs AS (\n  SELECT \n    c.hadm_id,\n    le.itemid,\n    dli.label AS lab_name,\n    c.is_case\n  FROM base_cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n    ON le.itemid = dli.itemid\n  WHERE \n    le.flag IS NOT NULL \n    AND le.flag <> 'normal'\n),\ncase_instability AS (\n  SELECT \n    hadm_id,\n    COUNT(DISTINCT itemid) AS instability_score\n  FROM cohort_labs\n  WHERE is_case = 1\n  GROUP BY hadm_id\n),\ncase_with_quartile AS (\n  SELECT \n    c.*,\n    COALESCE(ci.instability_score, 0) AS instability_score,\n    NTILE(4) OVER (ORDER BY COALESCE(ci.instability_score, 0)) AS quartile\n  FROM base_cohort c\n  LEFT JOIN case_instability ci\n    ON c.hadm_id = ci.hadm_id\n  WHERE c.is_case = 1\n),\ncohort_groups AS (\n  SELECT \n    hadm_id,\n    quartile AS group_id,\n    CONCAT('Quartile ', CAST(quartile AS STRING)) AS group_label\n  FROM case_with_quartile\n  UNION ALL\n  SELECT \n    hadm_id,\n    5 AS group_id,\n    'Control' AS group_label\n  FROM base_cohort\n  WHERE is_case = 0\n),\ngroup_summary AS (\n  SELECT \n    g.group_id,\n    g.group_label,\n    AVG(DATETIME_DIFF(c.dischtime, c.admittime, DAY)) AS avg_los,\n    AVG(c.hospital_expire_flag) * 100 AS mortality_rate\n  FROM cohort_groups g\n  INNER JOIN base_cohort c\n    ON g.hadm_id = c.hadm_id\n  GROUP BY g.group_id, g.group_label\n),\ngroup_counts AS (\n  SELECT \n    group_id, \n    COUNT(DISTINCT hadm_id) AS total_patients\n  FROM cohort_groups\n  GROUP BY group_id\n),\nlab_rates AS (\n  SELECT \n    g.group_id,\n    g.group_label,\n    cl.lab_name,\n    COUNT(DISTINCT g.hadm_id) AS abnormal_count,\n    (COUNT(DISTINCT g.hadm_id) * 100.0) / gc.total_patients AS abnormal_rate\n  FROM cohort_groups g\n  INNER JOIN cohort_labs cl\n    ON g.hadm_id = cl.hadm_id\n  INNER JOIN group_counts gc\n    ON g.group_id = gc.group_id\n  GROUP BY g.group_id, g.group_label, cl.lab_name, gc.total_patients\n),\ncombined AS (\n  SELECT \n    group_id,\n    group_label,\n    NULL AS lab_name,\n    avg_los,\n    mortality_rate,\n    NULL AS abnormal_rate\n  FROM group_summary\n  UNION ALL\n  SELECT \n    group_id,\n    group_label,\n    lab_name,\n    NULL AS avg_los,\n    NULL AS mortality_rate,\n    abnormal_rate\n  FROM lab_rates\n)\nSELECT *\nFROM combined\nORDER BY group_id, lab_name;",
+  "execution_success": true,
+  "row_count": 625,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword SELECT but got keyword GROUPS at [60:1]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword SELECT but got keyword GROUPS at [60:1]\n\nLocation: US\nJob ID: 5489c106-ce04-4347-a248-2e77901d32ff\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 625,
+      "error": null
+    }
+  ]
+}

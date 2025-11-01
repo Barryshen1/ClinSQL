@@ -1,0 +1,101 @@
+WITH cohort AS (
+  SELECT 
+    adm.subject_id, 
+    adm.hadm_id, 
+    adm.hospital_expire_flag AS mortality,
+    pt.anchor_age
+  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt
+    ON adm.subject_id = pt.subject_id
+  WHERE pt.gender = 'F'
+    AND pt.anchor_age BETWEEN 85 AND 95
+    AND EXISTS (
+      SELECT 1
+      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag
+      WHERE diag.subject_id = adm.subject_id
+        AND diag.hadm_id = adm.hadm_id
+        AND diag.icd_code LIKE 'J45%'
+        AND diag.icd_version = 10
+    )
+),
+
+charlson_map AS (
+  SELECT 
+    hadm_id,
+    subject_id,
+    MAX(CASE WHEN icd_code LIKE 'I21%' OR icd_code LIKE 'I22%' OR icd_code = 'I252' THEN 1 ELSE 0 END) AS mi,
+    MAX(CASE WHEN icd_code LIKE 'I50%' OR icd_code LIKE 'I110%' OR icd_code LIKE 'I130%' OR icd_code LIKE 'I132%' OR icd_code LIKE 'I255%' OR icd_code LIKE 'I420%' OR icd_code LIKE 'I425%' OR icd_code LIKE 'I426%' OR icd_code LIKE 'I427%' OR icd_code LIKE 'I428%' OR icd_code LIKE 'I429%' OR icd_code LIKE 'I43极%' OR icd_code LIKE 'I50%' OR icd_code LIKE 'P290%' THEN 1 ELSE 0 END) AS chf,
+    MAX(CASE WHEN icd_code LIKE 'I70%' OR icd_code LIKE 'I71%' OR icd_code LIKE '极I731%' OR icd_code LIKE 'I738%' OR icd_code LIKE 'I739%' OR icd_code LIKE 'I771%' OR icd_code LIKE 'I790%' OR icd_code LIKE 'I792%' OR icd_code LIKE 'K551%' OR icd_code LIKE 'K558%' OR icd_code LIKE 'K559%' OR icd_code LIKE 'Z958%' OR icd_code LIKE 'Z959%' THEN 1 ELSE 0 END) AS pvd,
+    MAX(CASE WHEN icd_code LIKE 'G45%' OR icd_code LIKE 'G46%' OR icd_code LIKE 'H340%' OR icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%' OR icd_code LIKE 'I63%' OR icd_code LIKE 'I64%' OR icd_code LIKE 'I65%' OR icd_code LIKE 'I66%' OR icd_code LIKE 'I67%' OR icd_code LIKE 'I68%' OR icd_code LIKE 'I69%' THEN 1 ELSE 0 END) AS cvd,
+    MAX(CASE WHEN icd_code LIKE 'F00%' OR icd_code LIKE 'F01%' OR icd_code LIKE 'F02%' OR icd_code LIKE 'F03%' OR icd_code LIKE 'F051%' OR icd_code LIKE 'G30%' OR icd_code LIKE 'G311%' THEN 1 ELSE 0 END) AS dementia,
+    MAX(CASE WHEN icd_code LIKE 'I278%' OR icd_code LIKE 'I279%' OR icd_code LIKE 'J40%' OR icd_code LIKE 'J41%' OR icd_code LIKE 'J42%' OR icd_code LIKE 'J43%' OR icd_code LIKE 'J44%' OR icd_code LIKE 'J45%' OR icd_code LIKE 'J46%' OR icd_code LIKE 'J47%' OR icd_code LIKE 'J60%' OR icd_code LIKE 'J61%' OR icd_code LIKE 'J62%' OR icd_code LIKE 'J63%' OR icd_code LIKE '极J64%' OR icd_code LIKE 'J65%' OR icd_code LIKE 'J66%' OR icd_code LIKE 'J67%' OR icd_code LIKE 'J684%' OR icd_code LIKE 'J701%' OR icd_code LIKE 'J703%' THEN 1 ELSE 0 END) AS copd,
+    MAX(CASE WHEN icd_code LIKE 'M05%' OR icd_code LIKE 'M06%' OR icd_code LIKE 'M315%' OR icd_code LIKE 'M32%' OR icd_code LIKE 'M33%' OR icd_code LIKE 'M34%' OR icd_code LIKE 'M351%' OR icd_code LIKE 'M353%' OR icd_code LIKE 'M360%' THEN 1 ELSE 0 END) AS rheum,
+    MAX(CASE WHEN icd_code LIKE 'K25%' OR icd_code LIKE 'K26%' OR icd_code LIKE 'K27%' OR icd_code LIKE 'K28%' THEN 1 ELSE 0 END) AS pud,
+    MAX(CASE WHEN icd_code LIKE 'B18%' OR icd_code LIKE 'K700%' OR icd_code LIKE 'K701%' OR icd_code LIKE 'K702%' OR icd_code LIKE 'K703%' OR icd_code LIKE 'K709%' OR icd_code LIKE 'K713%' OR icd_code LIKE 'K714%' OR icd_code LIKE 'K715%' OR icd_code LIKE 'K717%' OR icd_code LIKE 'K73%' OR icd_code LIKE 'K74%' OR icd_code LIKE 'K760%' OR icd_code LIKE 'K762%' OR icd_code LIKE 'K763%' OR icd_code LIKE 'K764%' OR icd_code LIKE 'K768%' OR icd_code LIKE 'K769%' OR icd_code LIKE 'Z944%' THEN 1 ELSE 0 END) AS mld,
+    MAX(CASE WHEN icd_code LIKE 'E100%' OR icd_code LIKE 'E101%' OR icd_code LIKE 'E106%' OR icd_code LIKE 'E108%' OR icd_code LIKE 'E109%' OR icd_code LIKE 'E110%' OR icd_code LIKE 'E111%' OR icd_code LIKE 'E116%' OR icd_code LIKE 'E118%' OR icd_code LIKE 'E119%' OR icd_code LIKE 'E120%' OR icd_code LIKE 'E121%' OR icd_code LIKE 'E126%' OR icd_code LIKE 'E128%' OR icd_code LIKE 'E129%' OR icd_code LIKE 'E130%' OR icd极_code LIKE 'E131%' OR icd_code LIKE 'E136%' OR icd_code LIKE 'E138%' OR icd_code LIKE 'E139%' OR icd_code LIKE 'E140%' OR icd_code LIKE 'E141%' OR icd_code LIKE 'E146%' OR icd_code LIKE 'E148%' OR icd_code LIKE 'E149%' THEN 1 ELSE 0 END) AS `diab without cc`,
+    MAX(CASE WHEN icd_code LIKE 'E102%' OR icd_code LIKE 'E103%' OR icd_code LIKE 'E104%' OR icd_code LIKE 'E105%' OR icd_code LIKE 'E107%' OR icd_code LIKE 'E112%' OR icd_code LIKE 'E113%' OR icd_code LIKE 'E114%' OR icd_code LIKE 'E115%' OR icd_code LIKE 'E117%' OR icd_code LIKE 'E122%' OR icd_code LIKE 'E123%' OR icd_code LIKE 'E124%' OR icd_code LIKE 'E125%' OR icd_code LIKE 'E127%' OR icd_code LIKE 'E132%' OR icd_code LIKE 'E133%' OR icd_code LIKE 'E134%' OR icd_code LIKE 'E135%' OR icd_code LIKE 'E137%' OR icd_code LIKE '极E142%' OR icd_code LIKE 'E143%' OR icd_code LIKE 'E144%' OR icd_code LIKE 'E145%' OR icd_code LIKE 'E147%' THEN 1 ELSE 0 END) AS `diab with cc`,
+    MAX(CASE WHEN icd_code LIKE 'G041%' OR icd_code LIKE 'G114%' OR icd_code LIKE 'G801%' OR icd_code LIKE 'G802%' OR icd_code LIKE 'G81%' OR icd_code LIKE 'G82%' OR icd_code LIKE 'G830%' OR icd_code LIKE 'G831%' OR icd_code LIKE 'G832%' OR icd_code LIKE 'G833%' OR icd_code LIKE 'G834%' OR icd_code LIKE 'G839%' THEN 1 ELSE 0 END) AS para,
+    MAX(CASE WHEN icd_code LIKE 'I120%' OR icd_code LIKE 'I131%' OR icd_code LIKE 'N032%' OR icd_code LIKE 'N033%' OR icd_code LIKE 'N034%' OR icd_code LIKE 'N035%' OR icd_code LIKE 'N036%' OR icd_code LIKE 'N037%' OR icd_code LIKE 'N052%' OR icd_code LIKE 'N053%' OR icd_code LIKE 'N054%' OR icd_code LIKE 'N055%极' OR icd_code LIKE 'N056%' OR icd_code LIKE 'N057%' OR icd_code LIKE 'N18%' OR icd_code LIKE 'N19%' OR icd_code LIKE 'N250%' OR icd_code LIKE 'Z490%' OR icd_code LIKE 'Z491%' OR icd_code LIKE 'Z492%' OR icd_code LIKE 'Z940%' OR icd_code LIKE 'Z992%' THEN 1 ELSE 0 END) AS renal,
+    MAX(CASE WHEN icd_code LIKE 'C0%' OR icd_code LIKE 'C1%' OR icd_code LIKE 'C2%' OR icd_code LIKE 'C3%' OR icd_code LIKE 'C4%' OR icd_code LIKE 'C5%' OR icd_code LIKE 'C6%' OR icd_code LIKE 'C7%' OR icd_code LIKE 'C8%' OR icd_code LIKE 'C9%' OR icd_code LIKE 'D00%' OR icd_code LIKE 'D01%' OR icd_code LIKE 'D02%' OR icd_code LIKE 'D03%' OR icd_code LIKE 'D04%' OR icd_code LIKE 'D05%' OR icd_code LIKE 'D06%' OR icd_code LIKE 'D07%' OR icd_code LIKE 'D08%' OR icd_code LIKE 'D09%' OR icd_code LIKE 'D10%' OR icd_code LIKE 'D11%' OR icd_code LIKE 'D12%' OR icd_code LIKE 'D13%' OR icd_code LIKE 'D14%' OR icd_code LIKE 'D15%' OR icd_code LIKE 'D16%' OR icd_code LIKE 'D17%' OR icd_code LIKE 'D18%' OR icd_code LIKE 'D19%' OR icd_code LIKE 'D20%' OR icd_code LIKE 'D21%' OR icd_code LIKE 'D22%' OR icd_code LIKE 'D23%' OR icd_code LIKE 'D24%' OR icd_code LIKE 'D25%' OR icd_code LIKE 'D26%' OR icd_code LIKE 'D27%' OR icd_code LIKE 'D28%' OR icd_code LIKE 'D29%' OR icd_code LIKE 'D30%' OR icd_code LIKE 'D31%' OR icd_code LIKE 'D32%' OR icd_code LIKE 'D33%' OR icd_code LIKE 'D34%' OR icd_code LIKE 'D35%' OR icd_code LIKE 'D36%' OR icd_code LIKE 'D3a%' OR icd_code LIKE 'D4a%' THEN 1 ELSE 0 END) AS cancer,
+    MAX(CASE WHEN icd_code LIKE 'I850%' OR icd_code LIKE 'I859%' OR icd_code LIKE 'I864%' OR icd_code LIKE 'I982%' OR icd_code LIKE 'K704%' OR icd_code LIKE 'K711%' OR icd_code LIKE 'K721%' OR icd_code LIKE 'K729%' OR icd_code LIKE 'K765%' OR icd_code LIKE 'K766%' OR icd_code LIKE 'K767%' THEN 1 ELSE 0 END) as msld,
+    MAX(CASE WHEN icd_code LIKE 'C77%' OR icd_code LIKE 'C78%' OR icd_code LIKE 'C79%' OR icd_code LIKE 'C80%' THEN 1 ELSE 0 END) AS met_cancer,
+    MAX(CASE WHEN icd_code LIKE 'B20%' OR icd_code LIKE 'B21%' OR icd_code LIKE 'B22%' OR icd_code LIKE 'B24%' THEN 1 ELSE 0 END) AS aids
+  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` 
+  WHERE icd_version = 10
+  GROUP BY hadm_id, subject_id
+),
+
+charlson_score AS (
+  SELECT 
+    hadm_id,
+    subject_id,
+    mi + chf + pvd + cvd + dementia + copd + rheum + pud + mld + 
+    CASE WHEN `diab with cc` = 1 OR `diab without cc` = 1 THEN 1 ELSE 0 END + 
+    para + renal + cancer + msld + met_cancer + aids AS charlson
+  FROM charlson_map
+),
+
+cohort_with_score AS (
+  SELECT 
+    c.subject_id,
+    c.hadm_id,
+    c.mortality,
+    cs.charlson
+  FROM cohort c
+  LEFT JOIN charlson_score cs
+    ON c.hadm_id = cs.hadm_id AND c.subject_id = cs.subject_id
+),
+
+complications AS (
+  SELECT 
+    hadm_id,
+    MAX(CASE WHEN icd_code LIKE 'I21%' OR icd_code LIKE 'I22%' OR icd_code LIKE 'I50%' OR icd_code LIKE 'I48%' THEN 1 ELSE 0 END) AS cardiovascular,
+    MAX(CASE WHEN icd_code LIKE 'I6%' OR icd_code LIKE 'G40%' OR icd_code LIKE 'G41%' THEN 1 ELSE 0 END) AS neurologic
+  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`
+  WHERE icd_version = 10
+  GROUP BY hadm_id
+),
+
+final_data AS (
+  SELECT 
+    c.subject_id,
+    c.hadm_id,
+    c.mortality,
+    c.charlson,
+    COALESCE(cv.cardiovascular, 0) AS cardiovascular,
+    COALESCE(cv.neurologic, 0) AS neurologic,
+    NTILE(4) OVER (ORDER BY c.charlson) AS quartile
+  FROM cohort_with_score c
+  LEFT JOIN complications cv
+    ON c.hadm_id = cv.hadm_id
+)
+
+SELECT 
+  quartile,
+  COUNT(*) AS n_patients,
+  ROUND(SUM(mortality) / COUNT(*) * 100, 2) AS mortality_rate_percent,
+  ROUND(SUM(cardiovascular) / COUNT(*) * 100, 2) AS cardiovascular_rate_percent,
+  ROUND(SUM(neurologic) / COUNT(*) * 100, 2) AS neurologic_rate_percent
+FROM final_data
+GROUP BY quartile
+ORDER BY quartile;

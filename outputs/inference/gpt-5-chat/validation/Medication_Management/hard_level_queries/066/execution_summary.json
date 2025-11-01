@@ -1,0 +1,16 @@
+{
+  "query": "I have a 48-year-old male inpatient. Among male inpatients aged 43\u201353 with a transplant diagnosis, compute medication complexity score over the first 7 hospital days, stratify into quartiles, and report per quartile: n, mean score, LOS, in-hospital mortality, and 30-day readmission",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.gender,\n    pat.anchor_age,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON adm.subject_id = di.subject_id\n   AND adm.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON di.icd_code = dicd.icd_code\n   AND di.icd_version = dicd.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 43 AND 53\n    AND UPPER(dicd.long_title) LIKE '%TRANSPLANT%'\n),\nmed_complexity AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.subject_id = pr.subject_id\n   AND c.hadm_id = pr.hadm_id\n   AND pr.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.subject_id, c.hadm_id\n),\ncohort_with_score AS (\n  SELECT\n    c.*,\n    mc.complexity_score,\n    DATE_DIFF(c.dischtime, c.admittime, DAY) AS los_days\n  FROM cohort c\n  LEFT JOIN med_complexity mc\n    ON c.subject_id = mc.subject_id\n   AND c.hadm_id = mc.hadm_id\n),\nreadmit_flag AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    CASE WHEN MIN(b.admittime) IS NOT NULL THEN 1 ELSE 0 END AS readmit_30d\n  FROM cohort_with_score a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` b\n    ON a.subject_id = b.subject_id\n   AND b.admittime > a.dischtime\n   AND DATETIME_DIFF(b.admittime, a.dischtime, DAY) <= 30\n  GROUP BY a.subject_id, a.hadm_id\n),\nwith_flags AS (\n  SELECT\n    cws.*,\n    rf.readmit_30d\n  FROM cohort_with_score cws\n  LEFT JOIN readmit_flag rf\n    ON cws.subject_id = rf.subject_id\n   AND cws.hadm_id = rf.hadm_id\n),\nwith_quartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY complexity_score) AS complexity_quartile\n  FROM with_flags\n)\nSELECT\n  complexity_quartile,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(complexity_score),2) AS mean_score,\n  ROUND(AVG(los_days),2) AS mean_los_days,\n  ROUND(AVG(hospital_expire_flag)*100,2) AS in_hosp_mortality_pct,\n  ROUND(AVG(readmit_30d)*100,2) AS readmit_30d_pct\nFROM with_quartiles\nGROUP BY complexity_quartile\nORDER BY complexity_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

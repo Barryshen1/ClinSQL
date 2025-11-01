@@ -1,0 +1,22 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH pe_admissions AS (\n  -- Identify admissions with PE diagnosis\n  SELECT DISTINCT\n    di.subject_id,\n    di.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    (d.icd_version = 9 AND d.icd_code LIKE '415.1%')\n    OR\n    (d.icd_version = 10 AND d.icd_code LIKE 'I26%')\n),\n\neligible_patients AS (\n  -- Filter patients by age and gender\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    p.gender\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  WHERE\n    p.anchor_age BETWEEN 44 AND 54\n    AND p.gender = 'M'\n),\n\nfirst_icu_stays AS (\n  -- Get first ICU stay for each subject\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM\n      physionet-data.mimiciv_3_1_icu.icustays\n  ) i\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    ON i.hadm_id = a.hadm_id\n  WHERE\n    i.rn = 1\n),\n\nicu_procedures AS (\n  -- Count distinct procedures in first 72 hours of ICU stay\n  SELECT\n    f.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM\n    first_icu_stays f\n  JOIN\n    physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON f.stay_id = pe.stay_id\n  WHERE\n    pe.starttime >= f.intime\n    AND pe.starttime <= DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY\n    f.stay_id\n),\n\nall_first_stays_with_procedures AS (\n  -- Include all first ICU stays, even with 0 procedures\n  SELECT\n    f.stay_id,\n    f.hadm_id,\n    f.intime,\n    f.dischtime,\n    f.hospital_expire_flag,\n    COALESCE(p.procedure_count, 0) AS procedure_count\n  FROM\n    first_icu_stays f\n  LEFT JOIN\n    icu_procedures p\n    ON f.stay_id = p.stay_id\n),\n\nquintile_stratified AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM\n    all_first_stays_with_procedures\n)\n\nSELECT\n  quintile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(DATETIME_DIFF(dischtime, intime, HOUR) / 24.0) AS avg_hospital_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent\nFROM\n  quintile_stratified\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Subquery of type IN must have only one output column at [47:7]; reason: invalidQuery, location: query, message: Subquery of type IN must have only one output column at [47:7]\n\nLocation: US\nJob ID: fead0faf-be34-43e3-8154-b5ce1550b919\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

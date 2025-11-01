@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY duration) - percentile_cont(0.25) within GROUP (ORDER BY duration)) AS interquartile_range FROM male_patients mp JOIN male_hospitalized mh ON mp.subject_id = mh.subject_id WHERE mp.drug = 'digoxin';

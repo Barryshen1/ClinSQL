@@ -1,0 +1,23 @@
+{
+  "query": "I have an 86\u2011year\u2011old female. Among female patients aged 81\u201391 admitted for chest pain or AMI, what's the distribution of index hs\u2011TnT (normal/borderline/myocardial injury), with counts, percentages, and mean LOS?",
+  "final_sql": "WITH \n-- Step 1: Get admissions with age and filter by gender and age\nadmissions_filtered AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 81 AND 91\n),\n\n-- Step 2: Filter by primary diagnosis (chest pain or AMI)\nadmissions_diagnosis AS (\n  SELECT \n    af.hadm_id,\n    af.subject_id,\n    af.admittime,\n    af.dischtime,\n    af.age\n  FROM admissions_filtered af\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON af.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag\n    ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE diag.seq_num = 1\n    AND (\n      d_diag.icd_code IN ('R072','R073','R074','R078','R079') \n      OR d_diag.icd_code LIKE 'I21%' \n      OR d_diag.icd_code LIKE 'I22%'\n    )\n),\n\n-- Step 3: Get the first hs-TnT for each admission\nfirst_troponin AS (\n  SELECT \n    le.hadm_id,\n    le.valuenum,\n    le.charttime,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  WHERE le.itemid IN (\n    SELECT itemid \n    FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` \n    WHERE label = 'Troponin T, high sensitivity'\n  )\n  AND le.valuenum IS NOT NULL\n),\n\n-- Step 4: Join admissions_diagnosis with first_troponin\ntroponin_with_admission AS (\n  SELECT \n    ad.hadm_id,\n    ad.admittime,\n    ad.dischtime,\n    ft.valuenum,\n    -- Compute LOS in days (BigQuery-compatible)\n    TIMESTAMP_DIFF(ad.dischtime, ad.admittime, SECOND) / (24*60*60) AS los_days\n  FROM admissions_diagnosis ad\n  INNER JOIN first_troponin ft\n    ON ad.hadm_id = ft.hadm_id\n  WHERE ft.rn = 1\n    -- Ensure lab event is during admission\n    AND ft.charttime >= ad.admittime\n    AND ft.charttime <= ad.dischtime\n)\n\n-- Final aggregation\nSELECT\n  CASE \n    WHEN valuenum < 14 THEN 'normal'\n    WHEN valuenum BETWEEN 14 AND 19 THEN 'borderline'\n    WHEN valuenum >= 20 THEN 'myocardial injury'\n    ELSE 'unknown'\n  END AS troponin_category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  AVG(los_days) AS mean_los_days\nFROM troponin_with_admission\nGROUP BY troponin_category\nORDER BY \n  CASE troponin_category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'myocardial injury' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:12]\n\nLocation: US\nJob ID: c203ff9b-2214-4f4c-8cb9-a9330f2115a9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating a 56-year-old woman. Among hospitalized women with COPD, what's the 75th percentile of average serum creatinine in first 24h?",
+  "final_sql": "WITH\n-- Step 1: Identify all hospital admissions for patients with a COPD diagnosis.\ncopd_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    -- ICD-9 codes for COPD: 491.x (chronic bronchitis), 492.x (emphysema), 496 (chronic airway obstruction)\n    (icd_version = 9 AND (icd_code LIKE '491%' OR icd_code LIKE '492%' OR icd_code = '496'))\n    -- ICD-10 codes for COPD: J41-J44\n    OR (icd_version = 10 AND (icd_code LIKE 'J41%' OR icd_code LIKE 'J42%' OR icd_code LIKE 'J43%' OR icd_code LIKE 'J44%'))\n  GROUP BY\n    subject_id,\n    hadm_id\n),\n\n-- Step 2: Filter for female patients and get their hospital admission time.\nfemale_copd_admissions AS (\n  SELECT\n    copd.subject_id,\n    copd.hadm_id,\n    adm.admittime\n  FROM\n    copd_admissions AS copd\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON copd.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON copd.hadm_id = adm.hadm_id\n  WHERE\n    pat.gender = 'F'\n),\n\n-- Step 3: Get all serum creatinine measurements for these admissions within the first 24 hours.\ncreatinine_in_24h AS (\n  SELECT\n    fc_adm.hadm_id,\n    le.valuenum\n  FROM\n    female_copd_admissions AS fc_adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON fc_adm.hadm_id = le.hadm_id\n  WHERE\n    -- itemid for Creatinine, Blood is 50912\n    le.itemid = 50912\n    AND le.valuenum IS NOT NULL -- We can only average numeric, non-null values\n    -- Filter for the first 24 hours of the hospital admission\n    AND le.charttime BETWEEN fc_adm.admittime AND TIMESTAMP_ADD(fc_adm.admittime, INTERVAL 24 HOUR)\n),\n\n-- Step 4: Calculate the average creatinine for each admission that had at least one measurement.\navg_creatinine_per_admission AS (\n  SELECT\n    hadm_id,\n    AVG(valuenum) AS avg_creatinine\n  FROM\n    creatinine_in_24h\n  GROUP BY\n    hadm_id\n)\n\n-- Step 5: Calculate the 75th percentile of these average values.\nSELECT\n  APPROX_QUANTILES(avg_creatinine, 100)[OFFSET(75)] AS p75_avg_serum_creatinine\nFROM\n  avg_creatinine_per_admission;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

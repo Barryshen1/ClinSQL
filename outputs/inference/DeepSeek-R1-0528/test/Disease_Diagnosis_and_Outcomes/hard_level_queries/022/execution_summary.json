@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating a 45\u2011year\u2011old woman with AKI. Among female inpatients 40\u201350 with AKI, stratify by composite risk (5\u00d7comorbidities +50 if ARDS) into quintiles and report per quintile: N; 30\u2011day post\u2011discharge mortality %; ARDS co\u2011occurrence %; median survivor LOS (days).",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.anchor_year,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.dod,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n),\naki_admissions AS (\n  SELECT DISTINCT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    c.dod,\n    c.age_at_admission\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON c.hadm_id = di.hadm_id\n  WHERE \n    c.age_at_admission BETWEEN 40 AND 50\n    AND (\n      (di.icd_version = 9 AND di.icd_code IN ('584', '5845', '5846', '5847', '5848', '5849'))\n      OR (di.icd_version = 10 AND di.icd_code IN ('N17', 'N170', 'N171', 'N172', 'N178', 'N179'))\n    )\n),\ncomorb_ards AS (\n  SELECT\n    aki.hadm_id,\n    -- Flag ARDS (1 if present, else 0)\n    MAX(CASE \n          WHEN (di.icd_version = 9 AND di.icd_code = '51882') \n             OR (di.icd_version = 10 AND di.icd_code = 'J80') \n          THEN 1 ELSE 0 \n        END) AS ards_flag,\n    -- Count distinct comorbidities (exclude AKI/ARDS codes)\n    COUNT(DISTINCT \n          CASE WHEN (di.icd_version = 9 AND di.icd_code IN ('584','5845','5846','5847','5848','5849','51882')) \n                OR (di.icd_version = 10 AND di.icd_code IN ('N17','N170','N171','N172','N178','N179','J80'))\n               THEN NULL  -- Exclude AKI/ARDS\n               ELSE CONCAT(di.icd_code, '_', CAST(di.icd_version AS STRING))\n          END\n    ) AS comorbidity_count\n  FROM aki_admissions aki\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON aki.hadm_id = di.hadm_id\n  GROUP BY aki.hadm_id\n),\nrisk_data AS (\n  SELECT\n    aki.*,\n    ca.ards_flag,\n    ca.comorbidity_count,\n    -- Calculate risk score: 5*comorbidities + 50 if ARDS\n    (5 * ca.comorbidity_count) + (CASE WHEN ca.ards_flag = 1 THEN 50 ELSE 0 END) AS risk_score\n  FROM aki_admissions aki\n  INNER JOIN comorb_ards ca\n    ON aki.hadm_id = ca.hadm_id\n),\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM risk_data\n),\noutcomes AS (\n  SELECT\n    risk_quintile,\n    hadm_id,\n    -- 30-day post-discharge mortality (0/1)\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 0  -- Exclude in-hospital deaths\n      WHEN dod IS NOT NULL AND dod <= DATE_ADD(dischtime, INTERVAL 30 DAY) THEN 1\n      ELSE 0\n    END AS mortality_30d,\n    ards_flag,\n    -- LOS for survivors (NULL if died in hospital)\n    CASE\n      WHEN hospital_expire_flag = 0 \n        THEN DATE_DIFF(dischtime, admittime, DAY)\n      ELSE NULL\n    END AS los_days\n  FROM quintiles\n)\nSELECT\n  risk_quintile,\n  COUNT(hadm_id) AS N,\n  ROUND(AVG(mortality_30d) * 100, 2) AS mortality_30d_pct,\n  ROUND(AVG(ards_flag) * 100, 2) AS ards_cooccurrence_pct,\n  APPROX_QUANTILES(los_days, 100)[SAFE_OFFSET(50)] AS median_survivor_los_days\nFROM outcomes\nGROUP BY risk_quintile\nORDER BY risk_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [100:19]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [100:19]\n\nLocation: US\nJob ID: 7f7aa815-98ae-4811-95aa-ad0d4ae4a229\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

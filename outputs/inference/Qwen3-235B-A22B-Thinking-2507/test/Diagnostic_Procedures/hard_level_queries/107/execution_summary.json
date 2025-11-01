@@ -1,0 +1,23 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH admissions_with_pe AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code = '4151')  -- ICD-9: Pulmonary embolism\n    OR (icd_version = 10 AND icd_code LIKE 'I26%')  -- ICD-10: Pulmonary embolism codes\n),\nbase_population AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    -- Compute age at admission (MIMIC-IV standard approximation)\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN admissions_with_pe pe\n    ON a.hadm_id = pe.hadm_id\n  WHERE\n    p.gender = 'F'  -- Female patients only\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 65 AND 75\n),\nfirst_icu_stays AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,\n    bp.hospital_expire_flag,\n    ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS stay_order\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN base_population bp\n    ON i.hadm_id = bp.hadm_id\n  WHERE i.first_careunit IS NOT NULL  -- Ensure valid ICU stay\n),\nprocedure_counts AS (\n  SELECT\n    fis.stay_id,\n    COUNT(*) AS procedure_count\n  FROM first_icu_stays fis\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON fis.stay_id = pe.stay_id\n    AND pe.starttime >= fis.intime\n    AND pe.starttime <= fis.intime + INTERVAL '72' HOUR\n  WHERE \n    pe.ordercategoryname IN ('Diagnostic Imaging', 'Diagnostic Testing')\n  GROUP BY fis.stay_id\n),\nquartile_data AS (\n  SELECT\n    fis.stay_id,\n    COALESCE(pc.procedure_count, 0) AS procedure_count,\n    fis.los,\n    fis.hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY COALESCE(pc.procedure_count, 0)) AS quartile\n  FROM first_icu_stays fis\n  LEFT JOIN procedure_counts pc\n    ON fis.stay_id = pc.stay_id\n  WHERE fis.stay_order = 1  -- Only first ICU stay\n)\nSELECT\n  quartile,\n  COUNT(*) AS N,\n  ROUND(AVG(procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(los), 2) AS mean_icu_los_days,\n  ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(*), 2) AS hospital_mortality_pct\nFROM quartile_data\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]\n\nLocation: US\nJob ID: 849c73fd-cd3a-41aa-a327-cacb67df0c74\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

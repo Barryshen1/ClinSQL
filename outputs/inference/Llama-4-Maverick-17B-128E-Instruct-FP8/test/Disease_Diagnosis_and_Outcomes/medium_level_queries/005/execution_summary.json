@@ -1,0 +1,22 @@
+{
+  "query": "For my 43\u2011year\u2011old male with heart failure: among male HF patients 38\u201348, report in\u2011hospital mortality (%) with 95% CI and mean comorbidity count, stratified by ICU vs no ICU, LOS (1\u20133/4\u20137/\u22658), Charlson (\u22643/4\u20135/>5).",
+  "final_sql": "WITH \ncohort AS (\n  SELECT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 38 AND 48\n),\nhf_patients AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n  ON d.icd_code = diag.icd_code AND d.icd_version = diag.icd_version\n  WHERE diag.long_title LIKE '%Heart failure%' AND d.hadm_id IN (SELECT hadm_id FROM cohort)\n),\nicu_status AS (\n  SELECT a.hadm_id, \n         CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END AS icu_admission,\n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON a.hadm_id = i.hadm_id\n  WHERE a.hadm_id IN (SELECT hadm_id FROM hf_patients)\n),\ncharlson_index AS (\n  SELECT d.hadm_id, COUNT(DISTINCT diag.icd_code) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n  ON d.icd_code = diag.icd_code AND d.icd_version = diag.icd_version\n  WHERE d.hadm_id IN (SELECT hadm_id FROM hf_patients)\n  GROUP BY d.hadm_id\n),\ncombined AS (\n  SELECT \n    i.hadm_id,\n    i.icu_admission,\n    CASE \n      WHEN i.los BETWEEN 1 AND 3 THEN '1-3'\n      WHEN i.los BETWEEN 4 AND 7 THEN '4-7'\n      ELSE '>=8'\n    END AS los_category,\n    CASE \n      WHEN c.comorbidity_count <= 3 THEN '<=3'\n      WHEN c.comorbidity_count BETWEEN 4 AND 5 THEN '4-5'\n      ELSE '>5'\n    END AS charlson_category,\n    a.hospital_expire_flag\n  FROM icu_status i\n  INNER JOIN charlson_index c ON i.hadm_id = c.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n)\nSELECT \n  icu_admission,\n  los_category,\n  charlson_category,\n  COUNT(*) AS total_patients,\n  SUM(hospital_expire_flag) / COUNT(*) * 100 AS in_hospital_mortality_pct,\n  SQRT(SUM(hospital_expire_flag) / COUNT(*) * (1 - SUM(hospital_expire_flag) / COUNT(*)) / COUNT(*)) * 1.96 * 100 AS mortality_ci_95,\n  AVG(comorbidity_count) AS mean_comorbidity_count\nFROM (\n  SELECT \n    c.icu_admission,\n    c.los_category,\n    c.charlson_category,\n    c.hospital_expire_flag,\n    ci.comorbidity_count\n  FROM combined c\n  INNER JOIN charlson_index ci ON c.hadm_id = ci.hadm_id\n) \nGROUP BY icu_admission, los_category, charlson_category\nORDER BY icu_admission, los_category, charlson_category;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hadm_id at [3:22]; reason: invalidQuery, location: query, message: Unrecognized name: hadm_id at [3:22]\n\nLocation: US\nJob ID: 033ff1dd-29f7-4436-a4d2-ea7fe9cd6d05\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

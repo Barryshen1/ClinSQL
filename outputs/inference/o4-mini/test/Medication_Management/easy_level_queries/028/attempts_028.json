@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH\n-- 1. Base admissions for women aged 44-54\nfemale_adms AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n),\n\n-- 2. Antiplatelet prescriptions within those admissions\napl_prescriptions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    starttime,\n    stoptime,\n    CASE\n      WHEN LOWER(drug) LIKE '%aspirin%' THEN 'aspirin'\n      WHEN LOWER(drug) LIKE '%clopidogrel%' THEN 'p2y12'\n      WHEN LOWER(drug) LIKE '%ticagrelor%' THEN 'p2y12'\n      WHEN LOWER(drug) LIKE '%prasugrel%' THEN 'p2y12'\n      ELSE NULL\n    END AS apl_class\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    LOWER(drug) LIKE '%aspirin%'\n    OR LOWER(drug) LIKE '%clopidogrel%'\n    OR LOWER(drug) LIKE '%ticagrelor%'\n    OR LOWER(drug) LIKE '%prasugrel%'\n),\n\n-- 3. DAPT admissions: require at least one aspirin and one P2Y12 prescription overlapping\ndapt_adms AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    apl_prescriptions AS a\n    JOIN apl_prescriptions AS b\n      ON a.subject_id = b.subject_id\n      AND a.hadm_id    = b.hadm_id\n      AND a.apl_class = 'aspirin'\n      AND b.apl_class = 'p2y12'\n      -- overlap condition\n      AND a.starttime <= b.stoptime\n      AND b.starttime <= a.stoptime\n    JOIN female_adms AS f\n      ON a.subject_id = f.subject_id\n      AND a.hadm_id    = f.hadm_id\n),\n\n-- 4. All antiplatelet prescriptions for the DAPT cohort\ndapt_pres_durations AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    DATE_DIFF(p.stoptime, p.starttime, DAY) AS duration_days\n  FROM\n    apl_prescriptions AS p\n    JOIN dapt_adms AS d\n      ON p.subject_id = d.subject_id\n      AND p.hadm_id    = d.hadm_id\n  WHERE\n    p.starttime IS NOT NULL\n    AND p.stoptime IS NOT NULL\n    AND DATE_DIFF(p.stoptime, p.starttime, DAY) >= 0\n)\n\n-- 5. Compute the standard deviation of prescription durations\nSELECT\n  STDDEV_POP(duration_days) AS sd_duration_days\nFROM\n  dapt_pres_durations;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

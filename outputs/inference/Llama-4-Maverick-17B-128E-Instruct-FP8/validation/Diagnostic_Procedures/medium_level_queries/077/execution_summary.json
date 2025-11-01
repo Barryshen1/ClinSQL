@@ -1,0 +1,16 @@
+{
+  "query": "For a 62\u2011year\u2011old female with septic shock: among females 57\u201367, what are p25/p50/p75 of ultrasounds (incl. echo) per admission, by LOS 1\u20133 vs 4\u20137 days and ICU vs no ICU?",
+  "final_sql": "WITH \n-- Step 1: Identify patients with septic shock\nseptic_shock_patients AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n    ON d.icd_code = diag.icd_code AND d.icd_version = diag.icd_version\n  WHERE diag.long_title LIKE '%Septic shock%' AND d.icd_version = 10\n),\n\n-- Step 2: Filter patients based on age, gender, and presence in septic_shock_patients\nfiltered_patients AS (\n  SELECT p.subject_id, p.anchor_age, a.hadm_id, \n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n         CASE WHEN i.stay_id IS NOT NULL THEN 'ICU' ELSE 'No ICU' END AS icu_status\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 57 AND 67\n    AND a.hadm_id IN (SELECT hadm_id FROM septic_shock_patients)\n    AND DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\n\n-- Step 3: Count ultrasounds per admission\nultrasound_counts AS (\n  SELECT h.hadm_id, COUNT(*) AS ultrasound_count\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n    ON h.hcpcs_cd = d.code\n  WHERE d.short_description LIKE '%Ultrasound%' OR d.short_description LIKE '%Echocardiogram%'\n  GROUP BY h.hadm_id\n),\n\n-- Step 4: Combine filtered patients with ultrasound counts and stratify\ncombined_data AS (\n  SELECT fp.hadm_id, fp.los, fp.icu_status, COALESCE(uc.ultrasound_count, 0) AS ultrasound_count,\n         CASE WHEN fp.los BETWEEN 1 AND 3 THEN '1-3 days'\n              WHEN fp.los BETWEEN 4 AND 7 THEN '4-7 days' END AS los_group\n  FROM filtered_patients fp\n  LEFT JOIN ultrasound_counts uc\n    ON fp.hadm_id = uc.hadm_id\n  WHERE fp.los BETWEEN 1 AND 7\n)\n\n-- Step 5: Calculate percentiles\nSELECT los_group, icu_status,\n       APPROX_QUANTILES(ultrasound_count, 100)[OFFSET(25)] AS p25,\n       APPROX_QUANTILES(ultrasound_count, 100)[OFFSET(50)] AS p50,\n       APPROX_QUANTILES(ultrasound_count, 100)[OFFSET(75)] AS p75\nFROM combined_data\nGROUP BY los_group, icu_status\nORDER BY los_group, icu_status;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

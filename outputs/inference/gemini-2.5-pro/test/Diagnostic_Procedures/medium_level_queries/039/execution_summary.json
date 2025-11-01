@@ -1,0 +1,16 @@
+{
+  "query": "For an 82\u2011year\u2011old man with asthma exacerbation, among males 77\u201387 admitted 1\u20134 vs 5\u20138 days and stratified by ICU vs non\u2011ICU, what are mean, min, max CT/MRI per admission?",
+  "final_sql": "WITH\n  asthma_admissions AS (\n    -- Step 1: Identify all hospital admissions for the target patient cohort and LOS.\n    -- Cohort: Males, 77-87 years old, with a diagnosis of asthma exacerbation.\n    -- LOS: Hospital stay between 1 and 8 days.\n    SELECT DISTINCT\n      a.hadm_id,\n      CASE\n        WHEN DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 4\n        THEN '1-4 days'\n        ELSE '5-8 days'\n      END AS los_category\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p ON a.subject_id = p.subject_id\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx ON a.hadm_id = dx.hadm_id\n    WHERE\n      p.gender = 'M'\n      AND p.anchor_age BETWEEN 77 AND 87\n      AND DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 8\n      AND (\n        -- ICD-9 codes for asthma with acute exacerbation (e.g., 493.02, 493.12, ...)\n        (dx.icd_version = 9 AND dx.icd_code IN ('49302', '49312', '49322', '49392'))\n        -- ICD-10 codes for asthma with acute exacerbation (e.g., J45.21, J45.901, ...)\n        OR (dx.icd_version = 10 AND dx.icd_code LIKE 'J45%1')\n      )\n  ),\n  scan_counts AS (\n    -- Step 2: Count the number of CT or MRI scans for each hospital admission.\n    -- We use hcpcsevents, which records procedures for billing.\n    SELECT\n      hadm_id,\n      COUNT(hcpcs_cd) AS num_scans\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n    WHERE\n      -- Filter for descriptions indicating a CT or MRI scan.\n      LOWER(short_description) LIKE 'ct %' OR LOWER(short_description) LIKE 'mri %'\n    GROUP BY\n      hadm_id\n  ),\n  icu_admissions AS (\n    -- Step 3: Identify all hospital admissions that included an ICU stay.\n    SELECT DISTINCT\n      hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_icu.icustays`\n  )\n-- Step 4: Combine the data and calculate final statistics.\nSELECT\n  aa.los_category,\n  CASE\n    WHEN icu.hadm_id IS NOT NULL THEN 'ICU'\n    ELSE 'Non-ICU'\n  END AS icu_status,\n  COUNT(aa.hadm_id) AS num_admissions,\n  -- Use COALESCE to treat admissions with no scans as having 0 scans.\n  -- This is crucial for correct mean, min, and max calculations.\n  AVG(COALESCE(sc.num_scans, 0)) AS mean_scans_per_admission,\n  MIN(COALESCE(sc.num_scans, 0)) AS min_scans_per_admission,\n  MAX(COALESCE(sc.num_scans, 0)) AS max_scans_per_admission\nFROM\n  asthma_admissions AS aa\nLEFT JOIN\n  icu_admissions AS icu ON aa.hadm_id = icu.hadm_id\nLEFT JOIN\n  scan_counts AS sc ON aa.hadm_id = sc.hadm_id\nGROUP BY\n  los_category,\n  icu_status\nORDER BY\n  icu_status,\n  los_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

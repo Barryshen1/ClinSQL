@@ -1,0 +1,16 @@
+{
+  "query": "Male patient, 64, admitted with DKA. Among male inpatients aged 59\u201369 with DKA, what is the mean calculated risk score and 30\u2011day mortality? Compare AKI and ARDS rates and survivor LOS versus age\u2011matched general inpatients; give percentile for matched risk.",
+  "final_sql": "WITH\n-- All male patients aged 59-69\nbase AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.dod,\n    d.drg_mortality\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.drgcodes` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n),\n-- Diagnoses per admission\ndx AS (\n  SELECT\n    di.subject_id,\n    di.hadm_id,\n    dd.long_title\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n),\n-- Flag cohorts\nflags AS (\n  SELECT\n    b.*,\n    MAX(CASE WHEN LOWER(long_title) LIKE '%ketoacidosis%' THEN 1 ELSE 0 END) AS has_dka,\n    MAX(CASE WHEN LOWER(long_title) LIKE '%acute kidney%' THEN 1 ELSE 0 END) AS has_aki,\n    MAX(CASE WHEN LOWER(long_title) LIKE '%acute respiratory distress%' THEN 1 ELSE 0 END) AS has_ards\n  FROM base b\n  LEFT JOIN dx\n    ON b.subject_id = dx.subject_id\n    AND b.hadm_id = dx.hadm_id\n  GROUP BY b.subject_id, b.hadm_id, b.anchor_age, b.gender, b.admittime, b.dischtime, b.hospital_expire_flag, b.dod, b.drg_mortality\n),\n-- Calculate mortality within 30 days of admission\nmort_flags AS (\n  SELECT\n    *,\n    CASE\n      WHEN dod IS NOT NULL\n       AND TIMESTAMP_DIFF(dod, admittime, DAY) <= 30\n      THEN 1 ELSE 0\n    END AS mort30\n  FROM flags\n),\n-- Aggregate metrics for each cohort\nagg AS (\n  SELECT\n    cohort,\n    AVG(drg_mortality) AS mean_risk_score,\n    AVG(mort30) AS mort30_rate,\n    AVG(has_aki) AS aki_rate,\n    AVG(has_ards) AS ards_rate,\n    AVG(CASE WHEN hospital_expire_flag = 0 THEN TIMESTAMP_DIFF(dischtime, admittime, DAY) END) AS mean_survivor_los\n  FROM (\n    SELECT\n      CASE WHEN has_dka = 1 THEN 'DKA' ELSE 'General' END AS cohort,\n      *\n    FROM mort_flags\n  ) t\n  GROUP BY cohort\n),\n-- Percentile rank of DKA mean risk among general cohort admissions\nranked AS (\n  SELECT\n    hadm_id,\n    drg_mortality,\n    PERCENT_RANK() OVER (ORDER BY drg_mortality) AS risk_percentile\n  FROM mort_flags\n  WHERE has_dka = 0 -- general cohort\n    AND drg_mortality IS NOT NULL\n),\ndka_percentile AS (\n  SELECT\n    AVG(risk_percentile) AS dka_mean_risk_percentile\n  FROM ranked\n  JOIN mort_flags mf\n    ON ranked.hadm_id = mf.hadm_id\n  WHERE mf.has_dka = 1\n)\nSELECT\n  a.*,\n  p.dka_mean_risk_percentile\nFROM agg a\nLEFT JOIN dka_percentile p\n  ON a.cohort = 'DKA';",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

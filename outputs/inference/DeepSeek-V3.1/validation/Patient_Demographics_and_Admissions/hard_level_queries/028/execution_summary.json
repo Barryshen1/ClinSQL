@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 60\u2011year\u2011old woman. In female Medicare patients aged 55\u201365 admitted from the ED with principal cellulitis, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >7 days?",
+  "final_sql": "WITH cellulitis_admissions AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    pat.gender,\n    pat.anchor_age,\n    adm.insurance,\n    adm.admission_location,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los,\n    -- Rank admissions per patient to get the first eligible one\n    ROW_NUMBER() OVER (PARTITION BY adm.subject_id ORDER BY adm.admittime) AS admission_rank\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE \n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 55 AND 65\n    AND adm.insurance = 'Medicare'\n    AND adm.admission_location = 'EMERGENCY ROOM'\n    AND diag.seq_num = 1  -- principal diagnosis\n    AND (\n      (diag.icd_version = 10 AND diag.icd_code LIKE 'L03%') \n      OR \n      (diag.icd_version = 9 AND (diag.icd_code LIKE '681%' OR diag.icd_code LIKE '682%'))\n    )\n    AND adm.hospital_expire_flag = 0  -- exclude deaths during index admission\n),\nindex_admissions AS (\n  SELECT * \n  FROM cellulitis_admissions \n  WHERE admission_rank = 1\n),\nreadmission_flag AS (\n  SELECT \n    ia.subject_id,\n    ia.hadm_id AS index_hadm,\n    ia.admittime AS index_admittime,\n    ia.dischtime AS index_dischtime,\n    ia.los AS index_los,\n    -- Check for any readmission within 30 days\n    MAX(CASE \n        WHEN readm.hadm_id IS NOT NULL THEN 1 \n        ELSE 0 \n    END) AS readmitted_30d\n  FROM index_admissions ia\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` readm\n    ON ia.subject_id = readm.subject_id\n    AND readm.admittime > ia.dischtime\n    AND readm.admittime <= DATE_ADD(ia.dischtime, INTERVAL 30 DAY)\n  GROUP BY ia.subject_id, ia.hadm_id, ia.admittime, ia.dischtime, ia.los\n)\nSELECT \n  COUNT(*) AS total_index_admissions,\n  AVG(readmitted_30d) * 100 AS readmission_rate_percent,\n  -- Median LOS for readmitted: use approx_quantiles and get the 0.5 quantile (median)\n  (SELECT approx_quantiles(index_los, 100)[OFFSET(50)] \n   FROM readmission_flag \n   WHERE readmitted_30d = 1) AS median_los_readmitted,\n  -- Median LOS for non-readmitted\n  (SELECT approx_quantiles(index_los, 100)[OFFSET(50)] \n   FROM readmission_flag \n   WHERE readmitted_30d = 0) AS median_los_non_readmitted,\n  -- Percentage of index stays with LOS > 7 days\n  AVG(CASE WHEN index_los > 7 THEN 1.0 ELSE 0.0 END) * 100 AS percent_los_gt_7_days\nFROM readmission_flag;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [60:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [60:3]\n\nLocation: US\nJob ID: e217e5fb-0d43-4607-8926-d4ac8c15130f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

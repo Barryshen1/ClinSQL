@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 48\u2011year\u2011old woman. Among female patients aged 43\u201353 admitted with suspected ACS, what are counts, percentages, and average hospital LOS for initial Troponin T: Normal, Borderline, Elevated?",
+  "final_sql": "WITH eligible AS (\n  -- Female patients aged 43-53 at admission with suspected ACS (proxy via ACS/Chest Pain ICD codes)\n  SELECT a.hadm_id,\n         a.subject_id,\n         a.admittime,\n         a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 43 AND 53\n    -- Suspected ACS proxies: AMI, other ischemic conditions, and chest pain\n    AND (\n          LOWER(di.icd_code) LIKE '410%'\n          OR LOWER(di.icd_code) LIKE '411%'\n          OR LOWER(di.icd_code) LIKE '413%'\n          OR LOWER(di.icd_code) LIKE '786%'\n        )\n),\ninitial_chart AS (\n  -- Earliest Troponin T test per admission\n  SELECT l.hadm_id,\n         l.subject_id,\n         MIN(l.charttime) AS first_charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS di\n    ON l.itemid = di.itemid\n  JOIN eligible AS e\n    ON e.hadm_id = l.hadm_id AND e.subject_id = l.subject_id\n  WHERE LOWER(di.label) LIKE '%troponin t%'\n     OR LOWER(di.label) LIKE '%troponin_t%'\n  GROUP BY l.hadm_id, l.subject_id\n),\ninitial_values AS (\n  -- Get the actual value corresponding to the initial charttime\n  SELECT iv.hadm_id,\n         iv.subject_id,\n         l.valuenum\n  FROM initial_chart AS iv\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n    ON l.hadm_id = iv.hadm_id\n   AND l.subject_id = iv.subject_id\n   AND l.charttime = iv.first_charttime\n   AND l.valuenum IS NOT NULL\n)\nSELECT\n  CASE\n    WHEN iv.valuenum <= 0.04 THEN 'Normal'\n    WHEN iv.valuenum > 0.04 AND iv.valuenum < 0.39 THEN 'Borderline'\n    WHEN iv.valuenum >= 0.39 THEN 'Elevated'\n  END AS troponin_category,\n  COUNT(*) AS count,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percent_of_group,\n  AVG(TIMESTAMP_DIFF(e.dischtime, e.admittime, SECOND) / 86400.0) AS avg_los_days\nFROM initial_values AS iv\nJOIN eligible AS e\n  ON e.hadm_id = iv.hadm_id AND e.subject_id = iv.subject_id\nGROUP BY troponin_category\nORDER BY troponin_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

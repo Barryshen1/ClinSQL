@@ -1,0 +1,16 @@
+{
+  "query": "For my 93-year-old male patient: among patients aged 88\u201398 with elective admissions (postoperative proxy), report mean, median (p50), p75, p90 LOS by discharge outcome (home; SNF/rehab/LTACH; in-hospital death) and percent with LOS \u22647 days.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    adm.discharge_location,\n    pat.anchor_age,\n    pat.gender,\n    -- Calculate LOS in days\n    SAFE_CAST(TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS FLOAT64) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON adm.subject_id = pat.subject_id\n  WHERE\n    pat.anchor_age BETWEEN 88 AND 98\n    AND pat.gender = 'M'\n    AND adm.admission_type = 'ELECTIVE'\n    -- Exclude missing LOS\n    AND adm.admittime IS NOT NULL\n    AND adm.dischtime IS NOT NULL\n)\n, classified AS (\n  SELECT\n    *,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN LOWER(discharge_location) LIKE '%home%' THEN 'Home'\n      WHEN LOWER(discharge_location) LIKE '%snf%' OR\n           LOWER(discharge_location) LIKE '%rehab%' OR\n           LOWER(discharge_location) LIKE '%skilled nursing%' OR\n           LOWER(discharge_location) LIKE '%ltac%' OR\n           LOWER(discharge_location) LIKE '%long term acute care%' OR\n           LOWER(discharge_location) LIKE '%extended care%' OR\n           LOWER(discharge_location) LIKE '%nursing home%' THEN 'SNF/Rehab/LTACH'\n      ELSE 'Other'\n    END AS discharge_outcome\n  FROM cohort\n)\n, filtered AS (\n  SELECT\n    *\n  FROM classified\n  WHERE discharge_outcome IN ('Home', 'SNF/Rehab/LTACH', 'In-hospital death')\n    AND los > 0\n)\nSELECT\n  discharge_outcome,\n  ROUND(AVG(los), 2) AS mean_los,\n  ROUND(APPROX_QUANTILES(los, 100)[OFFSET(50)], 2) AS median_los,\n  ROUND(APPROX_QUANTILES(los, 100)[OFFSET(75)], 2) AS p75_los,\n  ROUND(APPROX_QUANTILES(los, 100)[OFFSET(90)], 2) AS p90_los,\n  ROUND(100 * SUM(CASE WHEN los <= 7 THEN 1 ELSE 0 END) / COUNT(*), 1) AS percent_los_le_7\nFROM\n  filtered\nGROUP BY\n  discharge_outcome\nORDER BY\n  discharge_outcome;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

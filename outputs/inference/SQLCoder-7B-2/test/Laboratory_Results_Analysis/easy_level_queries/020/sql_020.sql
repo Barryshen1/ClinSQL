@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY l.value) AS seventy_five_percentile FROM labevents l JOIN admissions a ON l.subject_id = a.subject_id AND l.hadm_id = a.hadm_id JOIN patients p ON a.subject_id = p.subject_id WHERE p.gender = 'M' AND l.itemid = 261 AND a.admission_type_id = 5;

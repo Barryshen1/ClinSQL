@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      USING (subject_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d1\n      USING (subject_id, hadm_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n      USING (subject_id, hadm_id)\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    -- T2DM ICD\u201010 E11*\n    AND d1.icd_code LIKE 'E11%'\n    AND d1.icd_version = 10\n    -- Heart failure ICD\u201010 I50*\n    AND d2.icd_code LIKE 'I50%'\n    AND d2.icd_version = 10\n),\nmed_windows AS (\n  SELECT\n    c.hadm_id,\n    CASE\n      WHEN LOWER(p.drug) LIKE '%insulin%' THEN 'insulin'\n      WHEN p.route = 'PO' THEN 'oral_agent'\n      ELSE NULL\n    END AS drug_class,\n    MAX(CASE WHEN p.starttime BETWEEN c.admittime \n                        AND TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR) THEN 1 ELSE 0 END) AS in_first24,\n    MAX(CASE WHEN p.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 48 HOUR)\n                        AND c.dischtime THEN 1 ELSE 0 END) AS in_last48\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n      ON c.hadm_id = p.hadm_id\n  WHERE\n    (LOWER(p.drug) LIKE '%insulin%' OR p.route = 'PO')\n  GROUP BY\n    c.hadm_id,\n    drug_class\n  HAVING\n    drug_class IS NOT NULL\n),\nsummary AS (\n  SELECT\n    drug_class,\n    COUNTIF(in_first24 = 1) AS n_first24,\n    COUNTIF(in_last48 = 1) AS n_last48,\n    COUNTIF(in_first24 = 1 AND in_last48 = 1) AS n_continued,\n    COUNTIF(in_first24 = 0 AND in_last48 = 1) AS n_initiated,\n    COUNTIF(in_first24 = 1 AND in_last48 = 0) AS n_discontinued\n  FROM\n    med_windows\n  GROUP BY\n    drug_class\n),\ntotal AS (\n  SELECT COUNT(DISTINCT hadm_id) AS total_adm\n  FROM cohort\n)\nSELECT\n  s.drug_class,\n  s.n_first24,\n  ROUND(s.n_first24 / t.total_adm * 100, 1) AS pct_first24,\n  s.n_last48,\n  ROUND(s.n_last48 / t.total_adm * 100, 1) AS pct_last48,\n  s.n_continued,\n  s.n_initiated,\n  s.n_discontinued\nFROM\n  summary s\n  CROSS JOIN total t\nORDER BY\n  drug_class;",
+      "success": true,
+      "error": null,
+      "row_count": 2
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 2
+}

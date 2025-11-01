@@ -1,0 +1,28 @@
+{
+  "query": "54\u2011year\u2011old male inpatient: among male inpatients aged 49\u201359 with ischemic stroke, what is the 75th percentile of the 72\u2011hour lab instability score? For the high\u2011instability stroke group report LOS, mortality, and compare critical lab rates to age\u2011matched controls.",
+  "final_sql": "WITH stroke_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND (\n      LOWER(did.long_title) LIKE '%ischemic stroke%'\n      OR LOWER(did.long_title) LIKE '%cerebral infarction%'\n      OR d.icd_code IN (\n        '433', '433.0', '433.1', '433.2', '433.3', '433.8', '433.9',\n        '434', '434.0', '434.01', '434.1', '434.11', '434.9', '434.91',\n        '436'\n      )\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I63%')\n    )\n),\n\nlab_values_72h AS (\n  SELECT\n    sc.subject_id,\n    sc.hadm_id,\n    le.valuenum,\n    le.ref_range_lower,\n    le.ref_range_upper\n  FROM stroke_cohort sc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.labevents le\n    ON sc.hadm_id = le.hadm_id\n  WHERE le.charttime >= sc.admittime\n    AND le.charttime <= sc.admittime + INTERVAL '72' HOUR\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n),\n\nlab_instability AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    STDDEV(valuenum) AS lab_instability_score\n  FROM lab_values_72h\n  GROUP BY subject_id, hadm_id\n  HAVING COUNT(valuenum) >= 3\n),\n\npercentile_75 AS (\n  SELECT PERCENTILE_CONT(lab_instability_score, 0.75) AS p75_score\n  FROM lab_instability\n),\n\ngrouped_patients AS (\n  SELECT\n    li.subject_id,\n    li.hadm_id,\n    li.lab_instability_score,\n    DATETIME_DIFF(sc.dischtime, sc.admittime, DAY) AS los_days,\n    sc.hospital_expire_flag,\n    CASE\n      WHEN li.lab_instability_score >= (SELECT p75_score FROM percentile_75) THEN 'high'\n      ELSE 'low'\n    END AS instability_group\n  FROM lab_instability li\n  INNER JOIN stroke_cohort sc\n    ON li.subject_id = sc.subject_id AND li.hadm_id = sc.hadm_id\n),\n\ncritical_lab_flags AS (\n  SELECT\n    lv.subject_id,\n    lv.hadm_id,\n    MAX(CASE WHEN lv.valuenum < lv.ref_range_lower OR lv.valuenum > lv.ref_range_upper THEN 1 ELSE 0 END) AS has_critical_lab\n  FROM lab_values_72h lv\n  GROUP BY lv.subject_id, lv.hadm_id\n),\n\nfinal_metrics AS (\n  SELECT\n    (SELECT p75_score FROM percentile_75) AS p75_score,\n    AVG(CASE WHEN gp.instability_group = 'high' THEN gp.los_days END) AS high_los_avg,\n    AVG(CASE WHEN gp.instability_group = 'high' THEN gp.hospital_expire_flag END) AS high_mortality_rate,\n    AVG(CASE WHEN gp.instability_group = 'high' THEN clf.has_critical_lab END) AS high_critical_lab_rate,\n    AVG(CASE WHEN gp.instability_group = 'low' THEN clf.has_critical_lab END) AS low_critical_lab_rate\n  FROM grouped_patients gp\n  INNER JOIN critical_lab_flags clf\n    ON gp.subject_id = clf.subject_id AND gp.hadm_id = clf.hadm_id\n)\n\nSELECT *\nFROM final_metrics;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 0b8a2b5e-4b2b-48f4-a2f9-57d765b074ad\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:15]\n\nLocation: US\nJob ID: d4f2edf2-3173-4c43-981f-1309765f09b2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:15]\n\nLocation: US\nJob ID: 25d0d182-c208-4874-a356-411c4b1df421\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 0b8a2b5e-4b2b-48f4-a2f9-57d765b074ad\n"
+    }
+  ]
+}

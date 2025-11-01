@@ -1,0 +1,22 @@
+{
+  "query": "I'm caring for a 92\u2011year\u2011old woman with intracranial hemorrhage. In female inpatients aged 87\u201397 with ICH, stratify by medication complexity (unique drugs + routes in first 48 hours) into quartiles and report admissions, score ranges, LOS, mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH ich_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 87 AND 97\n    AND (\n      LOWER(dicd.long_title) LIKE '%intracranial hemorrhage%'\n      OR LOWER(dicd.long_title) LIKE '%subarachnoid%'\n      OR LOWER(dicd.long_title) LIKE '%intracerebral%'\n      OR LOWER(dicd.long_title) LIKE '%intracranial bleed%'\n      OR LOWER(dicd.long_title) LIKE '%cerebral hemorrhage%'\n      OR LOWER(dicd.long_title) LIKE '%hemorrhage, intracranial%'\n      OR d.icd_code IN ('430', '431', '432', 'I60', 'I61', 'I62')\n    )\n),\n\nfirst_icu_stay AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN ich_patients ip ON i.subject_id = ip.subject_id AND i.hadm_id = ip.hadm_id\n),\n\nfiltered_icu_stays AS (\n  SELECT *\n  FROM first_icu_stay\n  WHERE rn = 1\n),\n\nmedication_complexity AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    COUNT(DISTINCT CONCAT(di.label, '|', COALESCE(ie.ordercategorydescription, 'Unknown'))) AS drug_route_count\n  FROM filtered_icu_stays f\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.inputevents ie\n    ON f.stay_id = ie.stay_id\n    AND ie.starttime >= f.intime\n    AND ie.starttime <= DATETIME_ADD(f.intime, INTERVAL 48 HOUR)\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.d_items di\n    ON ie.itemid = di.itemid\n    AND di.linksto = 'inputevents'\n  GROUP BY f.subject_id, f.hadm_id\n),\n\nquartiles AS (\n  SELECT\n    mc.subject_id,\n    mc.hadm_id,\n    mc.drug_route_count,\n    NTILE(4) OVER (ORDER BY mc.drug_route_count) AS quartile\n  FROM medication_complexity mc\n),\n\nreadmissions AS (\n  SELECT\n    a1.subject_id,\n    a1.hadm_id,\n    CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM ich_patients a1\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.admissions a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND a2.admittime <= DATETIME_ADD(a1.dischtime, INTERVAL 30 DAY)\n)\n\nSELECT\n  q.quartile,\n  COUNT(q.subject_id) AS admissions,\n  MIN(q.drug_route_count) AS min_complexity_score,\n  MAX(q.drug_route_count) AS max_complexity_score,\n  AVG(f.los) AS avg_los,\n  AVG(CAST(i.hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent,\n  AVG(CAST(r.readmitted_30d AS FLOAT64)) * 100 AS readmission_30d_percent\nFROM quartiles q\nJOIN filtered_icu_stays f ON q.subject_id = f.subject_id AND q.hadm_id = f.hadm_id\nJOIN ich_patients i ON q.subject_id = i.subject_id AND q.hadm_id = i.hadm_id\nLEFT JOIN readmissions r ON q.subject_id = r.subject_id AND q.hadm_id = r.hadm_id\nGROUP BY q.quartile\nORDER BY q.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"female\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"female\" at [1:16]\n\nLocation: US\nJob ID: 7b72d5d2-0b0f-4498-b5e4-095fe7e3c90f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

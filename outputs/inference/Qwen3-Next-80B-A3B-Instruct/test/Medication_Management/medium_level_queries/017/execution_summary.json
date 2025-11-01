@@ -1,0 +1,22 @@
+{
+  "query": "For a 42\u2011year\u2011old female: among female inpatients 37\u201347 with diabetes and heart failure (stay \u2265144h), compare % on antidiabetics, beta\u2011blockers, ACEi/ARB/ARNI, loop diuretics in first vs final 72h and report continued/initiated/discontinued counts.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    p.subject_id\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON i.subject_id = p.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON i.subject_id = d.subject_id AND i.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND i.los >= 6  -- 6 days = 144 hours\n    AND (\n      -- Diabetes: ICD-9 250.x, ICD-10 E10-E14\n      (d.icd_version = 9 AND d.icd_code LIKE '250%')\n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E12%' OR d.icd_code LIKE 'E13%' OR d.icd_code LIKE 'E14%'))\n    )\n    AND (\n      -- Heart failure: ICD-9 428.x, ICD-10 I50.x\n      (d.icd_version = 9 AND d.icd_code LIKE '428%')\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n    )\n),\n\ndrug_classes AS (\n  SELECT 'antidiabetic' AS drug_class, label FROM UNNEST([\n    'insulin', 'metformin', 'glipizide', 'glyburide', 'glimepiride', 'pioglitazone', 'rosiglitazone',\n    'liraglutide', 'semaglutide', 'exenatide', 'dulaglutide', 'canagliflozin', 'dapagliflozin', 'empagliflozin', 'glucagon'\n  ]) AS label\n  UNION ALL\n  SELECT 'beta_blocker' AS drug_class, label FROM UNNEST([\n    'metoprolol', 'atenolol', 'carvedilol', 'propranolol', 'bisoprolol', 'nadolol', 'labetalol', 'timolol'\n  ]) AS label\n  UNION ALL\n  SELECT 'acei_arb_arni' AS drug_class, label FROM UNNEST([\n    'lisinopril', 'enalapril', 'ramipril', 'captopril', 'benazepril', 'trandolapril', 'quinapril', 'fosinopril',\n    'losartan', 'valsartan', 'irbesartan', 'candesartan', 'telmisartan', 'olmesartan', 'sacubitril'\n  ]) AS label\n  UNION ALL\n  SELECT 'loop_diuretic' AS drug_class, label FROM UNNEST([\n    'furosemide', 'bumetanide', 'torsemide'\n  ]) AS label\n),\n\nmedication_exposure AS (\n  SELECT\n    c.stay_id,\n    dc.drug_class,\n    MAX(CASE WHEN ie.starttime BETWEEN c.intime AND TIMESTAMP_ADD(c.intime, INTERVAL 72 HOUR) THEN 1 ELSE 0 END) AS in_first_72h,\n    MAX(CASE WHEN ie.starttime BETWEEN TIMESTAMP_SUB(c.outtime, INTERVAL 72 HOUR) AND c.outtime THEN 1 ELSE 0 END) AS in_final_72h\n  FROM cohort c\n  INNER JOIN physionet-data.mimiciv_3_1_icu.inputevents ie\n    ON c.stay_id = ie.stay_id\n  INNER JOIN physionet-data.mimiciv_3_1_icu.d_items di\n    ON ie.itemid = di.itemid\n  INNER JOIN drug_classes dc\n    ON LOWER(di.label) LIKE '%' || LOWER(dc.label) || '%'\n  GROUP BY c.stay_id, dc.drug_class\n)\n\nSELECT\n  drug_class,\n  AVG(in_first_72h) * 100 AS pct_first_72h,\n  AVG(in_final_72h) * 100 AS pct_final_72h,\n  SUM(CASE WHEN in_first_72h = 0 AND in_final_72h = 1 THEN 1 ELSE 0 END) AS count_initiated,\n  SUM(CASE WHEN in_first_72h = 1 AND in_final_72h = 0 THEN 1 ELSE 0 END) AS count_discontinued,\n  SUM(CASE WHEN in_first_72h = 1 AND in_final_72h = 1 THEN 1 ELSE 0 END) AS count_continued\nFROM medication_exposure\nGROUP BY drug_class\nORDER BY drug_class;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"a\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"a\" at [1:16]\n\nLocation: US\nJob ID: 2a97b829-f08c-404f-850c-f93f09e56702\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

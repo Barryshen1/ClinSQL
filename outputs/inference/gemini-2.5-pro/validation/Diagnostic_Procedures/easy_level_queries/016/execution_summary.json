@@ -1,0 +1,16 @@
+{
+  "query": "For my 80-year-old female patient: among females aged 75\u201385, what is the 75th percentile of distinct ECG/telemetry procedures per hospitalization?",
+  "final_sql": "WITH\n  -- Step 1: Identify hospital admissions for female patients aged 75-85\n  female_patients_75_85 AS (\n    SELECT\n      p.subject_id,\n      adm.hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      ON p.subject_id = adm.subject_id\n    WHERE\n      p.gender = 'F'\n      AND (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year + p.anchor_age) BETWEEN 75 AND 85\n  ),\n\n  -- Step 2: Consolidate all ECG/Telemetry procedures from various sources\n  ecg_procedures AS (\n    -- Source 1: ICD-coded procedures\n    SELECT\n      subject_id,\n      hadm_id,\n      icd_code AS procedure_identifier\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.procedures_icd`\n    WHERE\n      icd_code = '8952' -- ICD-9 code for 'Electrocardiogram'\n\n    UNION ALL\n\n    -- Source 2: HCPCS-coded procedures\n    SELECT\n      subject_id,\n      hadm_id,\n      hcpcs_cd AS procedure_identifier\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n    WHERE\n      hcpcs_cd IN (\n        '93000', -- ECG, routine\n        '93005', -- ECG, tracing only\n        '93010', -- ECG, interpretation and report only\n        '93040', -- Rhythm ECG, 1-3 leads\n        '93041', -- Rhythm ECG, tracing only\n        '93042', -- Rhythm ECG, interpretation and report only\n        '93224', -- Ambulatory ECG monitoring up to 48 hours\n        '93225', -- ... scanning analysis with report\n        '93226', -- ... recording (includes hook-up, recording, and disconnection)\n        '93227'  -- ... physician review and interpretation\n      )\n\n    UNION ALL\n\n    -- Source 3: ICU procedure events\n    SELECT\n      subject_id,\n      hadm_id,\n      CAST(itemid AS STRING) AS procedure_identifier\n    FROM\n      `physionet-data.mimiciv_3_1_icu.procedureevents`\n    WHERE\n      itemid IN (\n        224345, -- 12 Lead EKG\n        226482  -- Telemetry\n      )\n  ),\n\n  -- Step 3: Count the number of distinct procedures for each hospitalization in the cohort\n  proc_counts_per_hosp AS (\n    SELECT\n      cohort.hadm_id,\n      COUNT(DISTINCT procs.procedure_identifier) AS num_distinct_procedures\n    FROM\n      female_patients_75_85 AS cohort\n    LEFT JOIN\n      ecg_procedures AS procs\n      ON cohort.hadm_id = procs.hadm_id\n    GROUP BY\n      cohort.hadm_id\n  )\n\n-- Step 4: Calculate the 75th percentile of the distinct procedure counts\nSELECT\n  APPROX_QUANTILES(num_distinct_procedures, 100)[OFFSET(75)] AS p75_distinct_ecg_procedures\nFROM\n  proc_counts_per_hosp;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

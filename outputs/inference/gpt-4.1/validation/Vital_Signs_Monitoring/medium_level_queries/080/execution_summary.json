@@ -1,0 +1,16 @@
+{
+  "query": "For a 61-year-old female ICU patient: among female ICU stays aged 56\u201366, categorize per-stay mean MAP over first 48 hours (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report count, mean, median, IQR.",
+  "final_sql": "WITH map_itemids AS (\n  -- List of MAP itemids in MIMIC-IV\n  SELECT 220052 AS itemid UNION ALL\n  SELECT 220181 UNION ALL\n  SELECT 225312 UNION ALL\n  SELECT 227243\n),\nfemale_icu_stays AS (\n  -- Select ICU stays for female patients aged 56-66\n  SELECT\n    icu.stay_id,\n    icu.subject_id,\n    icu.intime,\n    icu.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON icu.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 56 AND 66\n),\nmap_measurements AS (\n  -- MAP measurements in first 48h of ICU stay\n  SELECT\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    JOIN map_itemids mi ON ce.itemid = mi.itemid\n    JOIN female_icu_stays fs ON ce.stay_id = fs.stay_id\n  WHERE\n    ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n    AND ce.charttime >= fs.intime\n    AND ce.charttime < TIMESTAMP_ADD(fs.intime, INTERVAL 48 HOUR)\n),\nmean_map_per_stay AS (\n  -- Calculate mean MAP per ICU stay\n  SELECT\n    stay_id,\n    AVG(valuenum) AS mean_map\n  FROM\n    map_measurements\n  GROUP BY\n    stay_id\n),\ncategorized_map AS (\n  -- Categorize mean MAP\n  SELECT\n    stay_id,\n    mean_map,\n    CASE\n      WHEN mean_map < 65 THEN '<65'\n      WHEN mean_map >= 65 AND mean_map < 75 THEN '65-74'\n      WHEN mean_map >= 75 AND mean_map < 85 THEN '75-84'\n      WHEN mean_map >= 85 THEN '\u226585'\n      ELSE 'Unknown'\n    END AS map_category\n  FROM\n    mean_map_per_stay\n)\nSELECT\n  map_category,\n  COUNT(*) AS stay_count,\n  ROUND(AVG(mean_map), 2) AS mean_of_mean_map,\n  ROUND(APPROX_QUANTILES(mean_map, 2)[OFFSET(1)], 2) AS median_of_mean_map,\n  ROUND(APPROX_QUANTILES(mean_map, 4)[OFFSET(1)], 2) AS iqr_25,\n  ROUND(APPROX_QUANTILES(mean_map, 4)[OFFSET(3)], 2) AS iqr_75\nFROM\n  categorized_map\nWHERE\n  map_category != 'Unknown'\nGROUP BY\n  map_category\nORDER BY\n  -- Order by category in clinical order\n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65-74' THEN 2\n    WHEN '75-84' THEN 3\n    WHEN '\u226585' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

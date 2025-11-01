@@ -1,0 +1,23 @@
+{
+  "query": "I have a 49-year-old male inpatient; among males 44\u201354 on general wards, report LOS p50/p75/p90/p95 and the percentile rank of a 7\u2011day stay, stratified by discharge home/hospice/death.",
+  "final_sql": "WITH filtered_admissions AS (\n  SELECT\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.discharge_location,\n    -- Compute age at admission using MIMIC-IV anchor system\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admit,\n    -- Calculate LOS in fractional days using DATETIME_DIFF (handles DATETIME type)\n    DATETIME_DIFF(adm.dischtime, adm.admittime, SECOND) / 86400.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  -- Exclude ICU stays by ensuring no matching record in icustays\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON adm.hadm_id = icu.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND icu.stay_id IS NULL  -- Critical: no ICU stay\n    -- Filter discharge locations per clinical question\n    AND adm.discharge_location IN ('HOME', 'HOME HEALTH CARE', 'HOSPICE', 'DEAD/EXPIRED')\n    -- Age filter: 44-54 inclusive\n    AND p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) BETWEEN 44 AND 54\n),\ndischarge_groups AS (\n  SELECT\n    CASE\n      WHEN discharge_location IN ('HOME', 'HOME HEALTH CARE') THEN 'home'\n      WHEN discharge_location = 'HOSPICE' THEN 'hospice'\n      WHEN discharge_location = 'DEAD/EXPIRED' THEN 'death'\n    END AS discharge_group,\n    los_days\n  FROM filtered_admissions\n)\nSELECT\n  discharge_group,\n  -- Calculate percentiles using APPROX_QUANTILES (efficient for large datasets)\n  APPROX_QUANTILES(los_days, 1000)[OFFSET(500)] AS p50,  -- 50th percentile\n  APPROX_QUANTILES(los_days, 1000)[OFFSET(750)] AS p75,  -- 75th percentile\n  APPROX_QUANTILES(los_days, 1000)[OFFSET(900)] AS p90,  -- 90th percentile\n  APPROX_QUANTILES(los_days, 1000)[OFFSET(950)] AS p95,  -- 95th percentile\n  -- Percentile rank for 7-day stay: % of stays <= 7 days\n  ROUND(COUNTIF(los_days <= 7) * 100.0 / COUNT(*), 2) AS percentile_rank_7\nFROM discharge_groups\nGROUP BY discharge_group\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [10:6]; reason: invalidQuery, location: query, message: No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [10:6]\n\nLocation: US\nJob ID: b79f1ff7-4b20-4c10-bf57-fb60f66f95ba\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

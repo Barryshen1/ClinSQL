@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH first_icu AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.los,\n    ROW_NUMBER() OVER (\n      PARTITION BY icu.hadm_id\n      ORDER BY icu.intime\n    ) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n),\ndka_admissions AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE\n    d.icd_version = 9\n    AND d.icd_code LIKE '2501%'  -- DKA ICD-9 codes 250.1x\n),\nprocedures_24h AS (\n  SELECT\n    pe.stay_id,\n    COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    JOIN first_icu icu\n      ON pe.subject_id = icu.subject_id\n     AND pe.hadm_id    = icu.hadm_id\n     AND pe.stay_id    = icu.stay_id\n     AND icu.rn = 1\n  WHERE\n    pe.starttime BETWEEN icu.intime\n                     AND DATETIME_ADD(icu.intime, INTERVAL 24 HOUR)\n  GROUP BY\n    pe.stay_id\n),\ncohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    COALESCE(p24.proc_count, 0) AS procedure_count,\n    icu.los,\n    adm.hospital_expire_flag\n  FROM\n    first_icu icu\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n      ON icu.subject_id = adm.subject_id\n     AND icu.hadm_id    = adm.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON icu.subject_id = pat.subject_id\n    JOIN dka_admissions dka\n      ON icu.subject_id = dka.subject_id\n     AND icu.hadm_id    = dka.hadm_id\n    LEFT JOIN procedures_24h p24\n      ON icu.stay_id = p24.stay_id\n  WHERE\n    icu.rn = 1\n    AND pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 39 AND 49\n),\nwith_quintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM\n    cohort\n)\nSELECT\n  quintile,\n  COUNT(*) AS num_stays,\n  ROUND(AVG(procedure_count),2) AS mean_proc_count,\n  MIN(procedure_count)     AS min_proc_count,\n  MAX(procedure_count)     AS max_proc_count,\n  ROUND(AVG(los), 2)       AS mean_icu_los_days,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS hospital_mortality_pct\nFROM\n  with_quintiles\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+      "success": true,
+      "error": null,
+      "row_count": 5
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 5
+}

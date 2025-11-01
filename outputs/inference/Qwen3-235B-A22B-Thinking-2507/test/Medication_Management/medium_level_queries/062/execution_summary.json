@@ -1,0 +1,23 @@
+{
+  "query": "For my 55-year-old female patient: among female inpatients 50\u201360 with diabetes and heart failure, report initiation rates of injectable GLP\u20111s in first 72h versus final 72h, with absolute and relative change.",
+  "final_sql": "WITH eligible_patients AS (\n  -- Identify patients meeting demographic and diagnosis criteria\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 50 AND 60\n    AND EXISTS (\n      -- Diabetes diagnosis (ICD-9: 250.x, ICD-10: E08-E13)\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '250%')\n          OR (d.icd_version = 10 AND (d.icd_code LIKE 'E08%' OR d.icd_code LIKE 'E09%' OR \n                                      d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR \n                                      d.icd_code LIKE 'E12%' OR d.icd_code LIKE 'E13%'))\n        )\n    )\n    AND EXISTS (\n      -- Heart failure diagnosis (ICD-9: 428.x, ICD-10: I50.x)\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '428%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n        )\n    )\n),\n\nglp1_medications AS (\n  -- Identify GLP-1 receptor agonist prescriptions\n  SELECT \n    p.hadm_id,\n    p.starttime AS dose_time\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  WHERE \n    -- Filter for GLP-1 RAs using drug names and brand names\n    (LOWER(p.drug) LIKE '%liraglutide%' \n     OR LOWER(p.drug) LIKE '%victoza%'\n     OR LOWER(p.drug) LIKE '%semaglutide%' \n     OR LOWER(p.drug) LIKE '%ozempic%'\n     OR LOWER(p.drug) LIKE '%dulaglutide%' \n     OR LOWER(p.drug) LIKE '%trulicity%'\n     OR LOWER(p.drug) LIKE '%exenatide%' \n     OR LOWER(p.drug) LIKE '%byetta%'\n     OR LOWER(p.drug) LIKE '%lixisenatide%' \n     OR LOWER(p.drug) LIKE '%adlyxin%')\n    -- Exclude oral routes\n    AND p.route IS NOT NULL\n    AND LOWER(p.route) NOT LIKE '%oral%'\n    AND LOWER(p.route) NOT LIKE '%po%'\n),\n\nfirst_doses AS (\n  -- Get first dose time for each admission\n  SELECT \n    hadm_id,\n    MIN(dose_time) AS first_dose_time\n  FROM glp1_medications\n  GROUP BY hadm_id\n),\n\ncohort_analysis AS (\n  -- Combine population with first dose information\n  SELECT \n    ep.hadm_id,\n    ep.admittime,\n    ep.dischtime,\n    fd.first_dose_time,\n    -- Flag if initiated in first 72h\n    CASE \n      WHEN fd.first_dose_time <= TIMESTAMP_ADD(ep.admittime, INTERVAL 72 HOUR) THEN 1 \n      ELSE 0 \n    END AS initiated_in_first_72h,\n    -- Flag if initiated in final 72h\n    CASE \n      WHEN fd.first_dose_time >= TIMESTAMP_SUB(ep.dischtime, INTERVAL 72 HOUR) THEN 1 \n      ELSE 0 \n    END AS initiated_in_last_72h\n  FROM eligible_patients ep\n  LEFT JOIN first_doses fd ON ep.hadm_id = fd.hadm_id\n)\n\n-- Final calculation of rates and changes\nSELECT \n  COUNT(*) AS total_patients,\n  SUM(initiated_in_first_72h) AS count_first_72h,\n  SUM(initiated_in_last_72h) AS count_last_72h,\n  ROUND(SUM(initiated_in_first_72h) * 100.0 / COUNT(*), 2) AS rate_first_72h_percent,\n  ROUND(SUM(initiated_in_last_72h) * 100.0 / COUNT(*), 2) AS rate_last_72h_percent,\n  ROUND((SUM(initiated_in_last_72h) * 1.0 / COUNT(*) - SUM(initiated_in_first_72h) * 1.0 / COUNT(*)) * 100, 2) AS absolute_change_percent,\n  CASE \n    WHEN SUM(initiated_in_first_72h) = 0 THEN NULL\n    ELSE ROUND(((SUM(initiated_in_last_72h) * 1.0 / COUNT(*) - SUM(initiated_in_first_72h) * 1.0 / COUNT(*)) / (SUM(initiated_in_first_72h) * 1.0 / COUNT(*))) * 100, 2)\n  END AS relative_change_percent\nFROM cohort_analysis;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: 318bce5d-2544-4b52-9db3-5cf0cca3f904\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

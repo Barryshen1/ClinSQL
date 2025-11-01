@@ -1,0 +1,28 @@
+{
+  "query": "I'm caring for a 92\u2011year\u2011old woman with intracranial hemorrhage. In female inpatients aged 87\u201397 with ICH, stratify by medication complexity (unique drugs + routes in first 48 hours) into quartiles and report admissions, score ranges, LOS, mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.hospital_expire_flag,\n        DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n        pat.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    WHERE \n        pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 87 AND 97\n        AND diag.icd_version = 10\n        AND diag.icd_code IN ('I60', 'I61', 'I62')\n),\nmedications AS (\n    SELECT \n        emar.hadm_id,\n        COUNT(DISTINCT CONCAT(emar.medication, COALESCE(ed.route, ''))) AS complexity_score\n    FROM `physionet-data.mimiciv_3_1_hosp.emar` emar\n    INNER JOIN cohort\n        ON emar.hadm_id = cohort.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.emar_detail` ed\n        ON emar.emar_id = ed.emar_id\n        AND emar.emar_seq = ed.emar_seq\n    WHERE \n        emar.charttime BETWEEN cohort.admittime AND DATETIME_ADD(cohort.admittime, INTERVAL 48 HOUR)\n    GROUP BY emar.hadm_id\n),\ncohort_with_complexity AS (\n    SELECT \n        c.*,\n        COALESCE(m.complexity_score, 0) AS complexity_score,\n        NTILE(4) OVER (ORDER BY COALESCE(m.complexity_score, 0)) AS complexity_quartile\n    FROM cohort c\n    LEFT JOIN medications m\n        ON c.hadm_id = m.hadm_id\n),\nreadmissions AS (\n    SELECT \n        c1.hadm_id,\n        COUNT(CASE WHEN c2.hadm_id IS NOT NULL THEN 1 ELSE NULL END) AS has_30d_readmit\n    FROM cohort_with_complexity c1\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` c2\n        ON c1.subject_id = c2.subject_id\n        AND c2.admittime > c1.dischtime\n        AND c2.admittime <= DATETIME_ADD(c1.dischtime, INTERVAL 30 DAY)\n    GROUP BY c1.hadm_id\n)\nSELECT \n    complexity_quartile,\n    COUNT(*) AS admissions,\n    MIN(complexity_score) AS min_score,\n    MAX(complexity_score) AS max_score,\n    ROUND(AVG(los_days), 2) AS avg_los_days,\n    ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_percent,\n    ROUND(100.0 * SUM(has_30d_readmit) / COUNT(*), 2) AS readmit_30d_percent\nFROM cohort_with_complexity c\nLEFT JOIN readmissions r\n    ON c.hadm_id = r.hadm_id\nGROUP BY complexity_quartile\nORDER BY complexity_quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name route not found inside emar at [24:62]; reason: invalidQuery, location: query, message: Name route not found inside emar at [24:62]\n\nLocation: US\nJob ID: ff3f3ec6-141c-4e98-88f3-de4e335c106b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside ed at [30:31]; reason: invalidQuery, location: query, message: Name hadm_id not found inside ed at [30:31]\n\nLocation: US\nJob ID: 9e4bc149-7076-4f02-946b-6c29e7ca5a2a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

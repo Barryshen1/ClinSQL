@@ -1,0 +1,29 @@
+{
+  "query": "I have a 58-year-old woman after cardiac arrest. Among female inpatients 53\u201363 with post\u2011arrest, what is the 90th percentile 48\u2011hour lab instability score? For those \u2265 that value, report count, mortality, mean LOS, and compare critical lab frequency to all inpatients.",
+  "final_sql": "WITH critical_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE category IN ('Electrolytes', 'Renal', 'Hematology', 'Blood Gas', 'Cardiac')\n),\nbase_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n),\ncardiac_arrest_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM base_admissions b\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON b.hadm_id = d.hadm_id\n  WHERE d.icd_code = 'I46.9'\n    AND d.icd_version = 10\n),\nadmission_labs AS (\n  SELECT\n    b.hadm_id,\n    le.valuenum,\n    le.ref_range_lower,\n    le.ref_range_upper\n  FROM base_admissions b\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON b.hadm_id = le.hadm_id\n  JOIN critical_itemids c\n    ON le.itemid = c.itemid\n  WHERE le.charttime BETWEEN b.admittime\n    AND TIMESTAMP_ADD(b.admittime, INTERVAL 48 HOUR)\n),\nabnormal_labs AS (\n  SELECT\n    hadm_id,\n    CASE\n      WHEN ref_range_lower IS NOT NULL AND ref_range_upper IS NOT NULL\n        THEN CASE\n          WHEN valuenum < ref_range_lower OR valuenum > ref_range_upper THEN 1\n          ELSE 0\n        END\n      ELSE 0\n    END AS is_abnormal\n  FROM admission_labs\n),\ninstability_scores AS (\n  SELECT\n    hadm_id,\n    SUM(is_abnormal) AS instability_score\n  FROM abnormal_labs\n  GROUP BY hadm_id\n),\nadmissions_with_score AS (\n  SELECT\n    b.hadm_id,\n    b.hospital_expire_flag,\n    b.dischtime,\n    b.admittime,\n    COALESCE(i.instability_score, 0) AS instability_score,\n    CASE WHEN c.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS is_cardiac_arrest\n  FROM base_admissions b\n  LEFT JOIN instability_scores i\n    ON b.hadm_id = i.hadm_id\n  LEFT JOIN cardiac_arrest_admissions c\n    ON b.hadm_id = c.hadm_id\n),\ncardiac_arrest_scores AS (\n  SELECT instability_score\n  FROM admissions_with_score\n  WHERE is_cardiac_arrest = 1\n),\np90 AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS p90\n  FROM cardiac_arrest_scores\n),\nhigh_risk_group AS (\n  SELECT\n    hadm_id,\n    hospital_expire_flag,\n    dischtime,\n    admittime,\n    instability_score\n  FROM admissions_with_score\n  WHERE is_cardiac_arrest = 1\n    AND instability_score >= (SELECT p90 FROM p90)\n),\ngroup1_metrics AS (\n  SELECT\n    COUNT(*) AS count,\n    AVG(hospital_expire_flag) * 100 AS mortality_percent,\n    AVG(DATEDIFF(dischtime, admittime)) AS mean_los_days\n  FROM high_risk_group\n),\navg_instability_group1 AS (\n  SELECT\n    AVG(instability_score) AS avg_instability\n  FROM high_risk_group\n),\navg_instability_all AS (\n  SELECT\n    AVG(instability_score) AS avg_instability\n  FROM admissions_with_score\n  WHERE is_cardiac_arrest = 0\n)\nSELECT\n  group1_metrics.*,\n  (SELECT avg_instability FROM avg_instability_group1) AS avg_instability_group1,\n  (SELECT avg_instability FROM avg_instability_all) AS avg_instability_all\nFROM group1_metrics;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Column name hadm_id is ambiguous at [22:19]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [22:19]\n\nLocation: US\nJob ID: d66d6488-a985-4049-a0f5-946088d0f091\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword AND at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AND at [1:1]\n\nLocation: US\nJob ID: 3ee6e6be-9d07-4be3-842a-01e2d3beaa36\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"-\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"-\" at [1:10]\n\nLocation: US\nJob ID: ccd58181-fe98-4960-8eb4-eb4ff8ff4fff\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [22:19]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [22:19]\n\nLocation: US\nJob ID: d66d6488-a985-4049-a0f5-946088d0f091\n"
+    }
+  ]
+}

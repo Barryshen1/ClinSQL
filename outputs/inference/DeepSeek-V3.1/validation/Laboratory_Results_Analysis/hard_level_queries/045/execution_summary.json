@@ -1,0 +1,22 @@
+{
+  "query": "I have a 57\u2011year\u2011old man admitted with asthma exacerbation. Among male inpatients aged 52\u201362 with asthma exacerbation, what is the 90th\u2011percentile 72\u2011hour lab instability score? For the top decile, report mortality, mean LOS, average critical lab events, and compare to age\u2011matched males.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age,\n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND dd.icd_code LIKE 'J45%'\n    AND LOWER(dd.long_title) LIKE '%exacerbation%'\n),\nlabs_72hr AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    le.charttime,\n    le.itemid,\n    le.valuenum,\n    le.value,\n    le.flag\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n),\nabnormal_labs AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    -- Count distinct lab events (by itemid and charttime) that are abnormal\n    COUNT(DISTINCT CONCAT(CAST(itemid AS STRING), CAST(charttime AS STRING))) AS instability_score\n  FROM labs_72hr\n  WHERE flag IS NOT NULL AND flag != 'normal'\n  GROUP BY subject_id, hadm_id\n),\ncohort_with_score AS (\n  SELECT \n    c.*,\n    COALESCE(a.instability_score, 0) AS instability_score\n  FROM cohort c\n  LEFT JOIN abnormal_labs a\n    ON c.hadm_id = a.hadm_id\n),\npercentile_calc AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 100) AS percentiles\n  FROM cohort_with_score\n),\np90 AS (\n  SELECT percentiles[OFFSET(90)] AS p90_score\n  FROM percentile_calc\n),\ntop_decile AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    instability_score,\n    hospital_expire_flag,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM cohort_with_score\n  WHERE instability_score >= (SELECT p90_score FROM p90)\n),\ncohort_agg AS (\n  SELECT \n    'Entire Cohort' AS group_label,\n    COUNT(*) AS n_patients,\n    AVG(instability_score) AS avg_instability_score,\n    AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS avg_los_days,\n    SUM(hospital_expire_flag) AS mortality_count,\n    SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)) AS mortality_rate\n  FROM cohort_with_score\n),\ntop_decile_agg AS (\n  SELECT \n    'Top Decile' AS group_label,\n    COUNT(*) AS n_patients,\n    AVG(instability_score) AS avg_instability_score,\n    AVG(los_days) AS avg_los_days,\n    SUM(hospital_expire_flag) AS mortality_count,\n    SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)) AS mortality_rate\n  FROM top_decile\n)\nSELECT * FROM cohort_agg\nUNION ALL\nSELECT * FROM top_decile_agg\nORDER BY group_label;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dli at [31:9]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dli at [31:9]\n\nLocation: US\nJob ID: ca7d7b94-d77c-4a63-a3a4-f10a4d1cdc3b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

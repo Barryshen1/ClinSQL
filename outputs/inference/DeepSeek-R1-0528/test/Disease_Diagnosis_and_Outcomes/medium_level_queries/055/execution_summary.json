@@ -1,0 +1,28 @@
+{
+  "query": "For my 76\u2011year\u2011old female (age 71\u201381) with complications of care, compare ICU vs non\u2011ICU: report in\u2011hospital mortality by LOS quartile (Q1\u2013Q4), absolute/relative vs Q1, and % mechanical ventilation, vasopressors, RRT.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id,\n    adm.hadm_id,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_hospital,\n    adm.hospital_expire_flag,\n    p.gender,\n    (EXTRACT(YEAR FROM adm.admittime) - (p.anchor_year - p.anchor_age)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (EXTRACT(YEAR FROM adm.admittime) - (p.anchor_year - p.anchor_age)) BETWEEN 71 AND 81\n    AND adm.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE icd_version = 10\n        AND REGEXP_CONTAINS(icd_code, '^T8[0-8]')\n    )\n),\n\ncohort_icu_flag AS (\n  SELECT \n    c.*,\n    CASE WHEN i.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS icu_flag\n  FROM cohort c\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id \n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) i ON c.hadm_id = i.hadm_id\n),\n\ninterventions AS (\n  SELECT \n    c.hadm_id,  -- Explicit table alias to resolve ambiguity\n    MAX(CASE WHEN proc.icd_code IN ('5A1935Z', '5A1945Z', '5A1955Z') AND proc.icd_version = 10 THEN 1 ELSE 0 END) AS mech_vent,\n    MAX(CASE WHEN REGEXP_CONTAINS(LOWER(pres.drug), 'norepinephrine|epinephrine|dopamine|vasopressin|phenylephrine') THEN 1 ELSE 0 END) AS vasopressor,\n    MAX(CASE WHEN proc.icd_code IN ('5A1D60Z', '5A1D70Z', '5A1D80Z', '5A1D90Z') AND proc.icd_version = 10 THEN 1 ELSE 0 END) AS rrt\n  FROM cohort_icu_flag c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc \n    ON c.hadm_id = proc.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres \n    ON c.hadm_id = pres.hadm_id\n  GROUP BY c.hadm_id  -- Explicit table alias\n),\n\nfinal_cohort AS (\n  SELECT \n    c.*,\n    COALESCE(i.mech_vent, 0) AS mech_vent,\n    COALESCE(i.vasopressor, 0) AS vasopressor,\n    COALESCE(i.rrt, 0) AS rrt\n  FROM cohort_icu_flag c\n  LEFT JOIN interventions i \n    ON c.hadm_id = i.hadm_id\n),\n\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (PARTITION BY icu_flag ORDER BY los_hospital) AS los_quartile\n  FROM final_cohort\n),\n\nmortality_agg AS (\n  SELECT \n    icu_flag,\n    los_quartile,\n    COUNT(*) AS total_admissions,\n    SUM(hospital_expire_flag) AS mortality_count,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(mech_vent) * 100 AS mech_vent_pct,\n    AVG(vasopressor) * 100 AS vasopressor_pct,\n    AVG(rrt) * 100 AS rrt_pct\n  FROM quartiles\n  GROUP BY icu_flag, los_quartile\n)\n\nSELECT \n  CASE icu_flag WHEN 1 THEN 'ICU' ELSE 'Non-ICU' END AS patient_group,\n  los_quartile,\n  total_admissions,\n  mortality_count,\n  ROUND(mortality_rate, 4) AS mortality_rate,\n  ROUND(mortality_rate - FIRST_VALUE(mortality_rate) OVER (PARTITION BY icu_flag ORDER BY los_quartile), 4) AS mortality_abs_diff_vs_q1,\n  ROUND(mortality_rate / FIRST_VALUE(mortality_rate) OVER (PARTITION BY icu_flag ORDER BY los_quartile), 4) AS mortality_rel_risk_vs_q1,\n  ROUND(mech_vent_pct, 2) AS mech_vent_pct,\n  ROUND(vasopressor_pct, 2) AS vasopressor_pct,\n  ROUND(rrt_pct, 2) AS rrt_pct\nFROM mortality_agg\nORDER BY patient_group, los_quartile;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword THEN but got identifier \"REGEXP\" at [37:36]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword THEN but got identifier \"REGEXP\" at [37:36]\n\nLocation: US\nJob ID: 2a760d01-7468-44dc-8dd8-c0f90083ed60\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [35:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [35:5]\n\nLocation: US\nJob ID: c5cc038f-4f06-424e-b10d-ea9a1568c449\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

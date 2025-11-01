@@ -1,0 +1,16 @@
+{
+  "query": "I have a 63\u2011year\u2011old man admitted for COPD exacerbation. Among male patients 58\u201368, stratified into tertiles by medication complexity during the first 72h, report for each tertile: n, min/max and mean complexity score, mean LOS, mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH copd_admissions AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag\n    ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE LOWER(d_diag.long_title) LIKE '%chronic obstructive pulmonary disease%'\n    OR d_diag.icd_code IN ('496', 'J44.0', 'J44.1', 'J44.9')\n),\npatient_age_gender AS (\n  SELECT p.subject_id, p.gender,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 58 AND 68\n),\ncohort AS (\n  SELECT ca.subject_id, ca.hadm_id, ca.admittime, ca.dischtime, ca.hospital_expire_flag\n  FROM copd_admissions ca\n  INNER JOIN patient_age_gender pag\n    ON ca.subject_id = pag.subject_id\n  WHERE pag.age_at_admit BETWEEN 58 AND 68\n),\nmedication_complexity AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    COUNT(DISTINCT rx.drug) AS complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` rx\n    ON c.hadm_id = rx.hadm_id\n    AND rx.starttime >= c.admittime\n    AND rx.starttime <= DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag\n),\ntertiles AS (\n  SELECT *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM medication_complexity\n),\nreadmissions AS (\n  SELECT \n    t.*,\n    LEAD(t.admittime) OVER (PARTITION BY t.subject_id ORDER BY t.admittime) AS next_admittime\n  FROM tertiles t\n),\nreadmit_flag AS (\n  SELECT *,\n    CASE \n      WHEN next_admittime IS NOT NULL AND DATETIME_DIFF(next_admittime, dischtime, DAY) <= 30 \n      THEN 1 ELSE 0 \n    END AS thirty_day_readmit\n  FROM readmissions\n)\nSELECT\n  tertile,\n  COUNT(*) AS n,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  AVG(complexity_score) AS mean_complexity,\n  AVG(DATETIME_DIFF(dischtime, admittime, SECOND) / (60 * 60 * 24)) AS mean_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_pct,\n  AVG(thirty_day_readmit) * 100 AS thirty_day_readmission_pct\nFROM readmit_flag\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

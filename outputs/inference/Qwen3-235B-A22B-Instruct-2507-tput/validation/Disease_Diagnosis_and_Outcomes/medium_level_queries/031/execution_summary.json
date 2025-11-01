@@ -1,0 +1,16 @@
+{
+  "query": "Patient: 58-year-old female. Among females 53\u201363 with sepsis vs septic shock, for LOS \u22647 vs >7 days report N, in\u2011hospital mortality (%), median time\u2011to\u2011death (non\u2011survivors), absolute and relative mortality differences.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 53 AND 63\n),\n\nicu_stays_with_los AS (\n  SELECT\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los AS icu_los_days,\n    CASE WHEN i.los <= 7 THEN '\u22647' ELSE '>7' END AS los_group\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays i\n),\n\n-- Diagnoses: identify sepsis and septic shock\ndiagnosis_groups AS (\n  SELECT\n    di.hadm_id,\n    MAX(CASE WHEN di.icd_code = 'R6521' AND di.icd_version = 10 THEN 1 ELSE 0 END) AS has_septic_shock,\n    MAX(CASE WHEN di.icd_code IN ('A419', 'A418', 'A4151', 'A4159') AND di.icd_version = 10 THEN 1 ELSE 0 END) AS has_sepsis\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  GROUP BY di.hadm_id\n),\n\n-- Assign group: prioritize septic shock over sepsis\ncohort AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.age_at_admit,\n    pa.admittime,\n    pa.deathtime,\n    pa.hospital_expire_flag,\n    ics.stay_id,\n    ics.intime,\n    ics.outtime,\n    ics.icu_los_days,\n    ics.los_group,\n    CASE\n      WHEN dg.has_septic_shock = 1 THEN 'Septic Shock'\n      WHEN dg.has_sepsis = 1 THEN 'Sepsis'\n      ELSE NULL\n    END AS sepsis_group\n  FROM patient_admissions pa\n  INNER JOIN icu_stays_with_los ics ON pa.hadm_id = ics.hadm_id\n  INNER JOIN diagnosis_groups dg ON pa.hadm_id = dg.hadm_id\n  WHERE dg.has_septic_shock = 1 OR dg.has_sepsis = 1\n),\n\n-- For time-to-death in non-survivors\ntime_to_death AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    sepsis_group,\n    los_group,\n    hospital_expire_flag,\n    CASE\n      WHEN hospital_expire_flag = 1 AND deathtime IS NOT NULL AND intime IS NOT NULL\n      THEN DATETIME_DIFF(deathtime, intime, HOUR)\n      ELSE NULL\n    END AS time_to_death_hours\n  FROM cohort\n)\n\n-- Final aggregation\nSELECT\n  sepsis_group,\n  los_group,\n  COUNT(*) AS n,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  APPROX_QUANTILES(time_to_death_hours, 100)[OFFSET(50)] AS median_time_to_death_hours\nFROM time_to_death\nGROUP BY sepsis_group, los_group\nORDER BY sepsis_group, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

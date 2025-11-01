@@ -1,0 +1,28 @@
+{
+  "query": "I have a 79\u2011year\u2011old woman inpatient with intracranial hemorrhage. Among women 74\u201384 with ICH, stratify initial 72\u2011hour lab instability (distinct abnormal labs) into quintiles; report mortality and mean LOS by quintile and compare critical lab rates to age\u2011matched controls.",
+  "final_sql": "WITH ich_patients AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, TRUE AS is_ich\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d_icd ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 74 AND 84\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('430', '431', '432'))\n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%'))\n    )\n),\n\ncontrols AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, FALSE AS is_ich\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 74 AND 84\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n      JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d_icd ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code IN ('430', '431', '432'))\n          OR (d.icd_version = 10 AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%'))\n        )\n    )\n),\n\nall_patients AS (\n  SELECT * FROM ich_patients\n  UNION ALL\n  SELECT * FROM controls\n),\n\nlab_abnormal_72h AS (\n  SELECT \n    l.subject_id,\n    l.hadm_id,\n    COUNT(DISTINCT l.itemid) AS num_distinct_abnormal_labs\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents l\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_labitems dl ON l.itemid = dl.itemid\n  JOIN all_patients adm ON l.subject_id = adm.subject_id AND l.hadm_id = adm.hadm_id\n  WHERE l.charttime >= adm.admittime\n    AND l.charttime <= adm.admittime + INTERVAL '72 hours'\n    AND l.valuenum IS NOT NULL\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n    AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n  GROUP BY l.subject_id, l.hadm_id\n),\n\npatients_with_instability AS (\n  SELECT \n    ap.subject_id,\n    ap.hadm_id,\n    ap.anchor_age,\n    ap.admittime,\n    ap.dischtime,\n    ap.hospital_expire_flag,\n    ap.is_ich,\n    COALESCE(l.num_distinct_abnormal_labs, 0) AS instability_score\n  FROM all_patients ap\n  LEFT JOIN lab_abnormal_72h l ON ap.subject_id = l.subject_id AND ap.hadm_id = l.hadm_id\n),\n\nquintiles AS (\n  SELECT \n    CASE WHEN is_ich THEN 'ICH' ELSE 'Control' END AS group_type,\n    NTILE(5) OVER (ORDER BY instability_score) AS quintile,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days,\n    hospital_expire_flag\n  FROM patients_with_instability\n)\n\nSELECT \n  group_type,\n  quintile,\n  AVG(los_days) AS mean_los_days,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM quintiles\nGROUP BY group_type, quintile\nORDER BY group_type, quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword GROUP at [53:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [53:3]\n\nLocation: US\nJob ID: ca87e376-50f9-411d-ac78-29ac63b130bc\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"lab\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"lab\" at [1:16]\n\nLocation: US\nJob ID: 1da7010f-48b9-4fde-8908-508f2dc3a282\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [51:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [51:3]\n\nLocation: US\nJob ID: a4c048ad-afbb-4890-88af-f2073df40bca\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [53:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [53:3]\n\nLocation: US\nJob ID: ca87e376-50f9-411d-ac78-29ac63b130bc\n"
+    }
+  ]
+}

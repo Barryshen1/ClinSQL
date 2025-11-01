@@ -1,0 +1,22 @@
+{
+  "query": "For a 61-year-old woman with intracranial hemorrhage: among female ICU patients aged 56\u201366 with ICH, what is the 95th percentile of diagnostic intensity during the first 72 hours? Compare ICU length of stay and in-hospital mortality to the ICU population.",
+  "final_sql": "WITH\n  -- 1) Identify ICU stays for the target group: female, age 56-66, with ICH\n  ich_cohort AS (\n    SELECT\n      ic.subject_id,\n      ic.hadm_id,\n      ic.stay_id,\n      ic.intime,\n      ic.outtime,\n      ic.los\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON ic.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n      AND p.anchor_age BETWEEN 56 AND 66\n      AND EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n        WHERE dx.subject_id = ic.subject_id\n          AND dx.hadm_id = ic.hadm_id\n          AND (\n            (dx.icd_version = 9 AND dx.icd_code = '431')\n            OR (dx.icd_version = 10 AND dx.icd_code LIKE 'I61%')\n          )\n      )\n  ),\n\n  -- 2) Diagnostic intensity: count labevents in first 72 hours of ICU stay\n  intensity72h AS (\n    SELECT\n      ic.subject_id,\n      ic.hadm_id,\n      ic.stay_id,\n      COUNT(le.labevent_id) AS intensity_72h\n    FROM ich_cohort AS ic\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n      ON le.subject_id = ic.subject_id\n     AND le.hadm_id = ic.hadm_id\n     AND le.charttime >= ic.intime\n     AND le.charttime < TIMESTAMP_ADD(ic.intime, INTERVAL 72 HOUR)\n    GROUP BY ic.subject_id, ic.hadm_id, ic.stay_id\n  ),\n\n  -- 3) 95th percentile of diagnostic intensity in this cohort\n  intensity_95 AS (\n    SELECT (APPROX_QUANTILES(intensity_72h, 100)[OFFSET(95)]) AS intensity_95\n    FROM intensity72h\n  ),\n\n  -- 4) ICU subgroup and LOS/mortality metrics for comparison\n  group_los_mort AS (\n    SELECT\n      (APPROX_QUANTILES(ic.los, 100)[OFFSET(50)]) AS los_median_group,\n      AVG(CASE WHEN adm.hospital_expire_flag = 1 THEN 1.0 ELSE 0 END) AS mort_rate_group\n    FROM ich_cohort ic\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      ON ic.hadm_id = adm.hadm_id\n  ),\n\n  -- 5) ICU population for comparison\n  icu_population AS (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ),\n\n  -- 6) ICU population: median LOS\n  icu_los_mort AS (\n    SELECT (APPROX_QUANTILES(ic.los, 100)[OFFSET(50)]) AS los_median_icu\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` ic\n    JOIN icu_population ip ON ic.hadm_id = ip.hadm_id\n  ),\n\n  -- 7) ICU population mortality\n  icu_mort AS (\n    SELECT AVG(CASE WHEN adm.hospital_expire_flag = 1 THEN 1.0 ELSE 0 END) AS mort_rate_icu\n    FROM icu_population ip\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n      ON ip.hadm_id = adm.hadm_id\n  )\n\nSELECT\n  intensity_95.intensity_95 AS intensity_95_72h,\n  group_los_mort.los_median_group,\n  group_los_mort.mort_rate_group,\n  icu_los_mort.los_median_icu,\n  icu_mort.mort_rate_icu\nFROM intensity_95\nCROSS JOIN group_los_mort\nCROSS JOIN icu_los_mort\nCROSS JOIN icu_mort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [61:7]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [61:7]\n\nLocation: US\nJob ID: 0edd38ab-d8f5-43b6-aaac-f9e2e3319643\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

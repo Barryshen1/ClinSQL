@@ -1,0 +1,22 @@
+{
+  "query": "I have a 69-year-old woman. Among female patients age 64\u201374 hospitalized for AMI, what percentage had index high-sensitivity troponin T categorized as Normal (\u22640.014), Borderline (0.015\u20130.052), or Myocardial Injury (>0.052)?",
+  "final_sql": "WITH ami_codes AS (\n  SELECT DISTINCT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (\n    (icd_version = 10 AND SUBSTR(icd_code, 1, 3) IN ('I21', 'I22'))  -- AMI codes\n  )\n),\nami_admissions AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  INNER JOIN ami_codes ac\n    ON di.icd_code = ac.icd_code AND di.icd_version = 10\n),\npatients_in_age_group AS (\n  SELECT p.subject_id,\n         EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN ami_admissions a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 64 AND 74\n),\nfirst_ami_admission AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS rn\n  FROM ami_admissions a\n  INNER JOIN patients_in_age_group pag ON a.subject_id = pag.subject_id\n),\nindex_troponin AS (\n  SELECT fa.subject_id, fa.hadm_id, le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY fa.hadm_id ORDER BY le.charttime) AS rn\n  FROM first_ami_admission fa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON fa.hadm_id = le.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON le.itemid = dl.itemid\n  WHERE dl.label = 'TROPONIN T HIGH SENSITIVE'\n    AND le.valuenum IS NOT NULL\n    AND le.charttime >= fa.admittime\n    AND fa.rn = 1  -- only first AMI admission per patient\n),\ncategorized AS (\n  SELECT \n    CASE\n      WHEN valuenum <= 0.014 THEN 'Normal (\u22640.014)'\n      WHEN valuenum <= 0.052 THEN 'Borderline (0.015\u20130.052)'\n      ELSE 'Myocardial Injury (>0.052)'\n    END AS category\n  FROM index_troponin\n  WHERE rn = 1  -- first troponin in admission\n)\nSELECT \n  category,\n  COUNT(*) AS count,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percentage\nFROM categorized\nGROUP BY category\nORDER BY \n  CASE category\n    WHEN 'Normal (\u22640.014)' THEN 1\n    WHEN 'Borderline (0.015\u20130.052)' THEN 2\n    WHEN 'Myocardial Injury (>0.052)' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: FIELD at [60:10]; reason: invalidQuery, location: query, message: Function not found: FIELD at [60:10]\n\nLocation: US\nJob ID: 6dfb4aab-bef6-428e-8785-3764a15dcd73\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

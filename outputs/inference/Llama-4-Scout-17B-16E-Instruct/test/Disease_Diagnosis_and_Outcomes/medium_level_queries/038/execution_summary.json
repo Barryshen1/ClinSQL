@@ -1,0 +1,22 @@
+{
+  "query": "I have an 85\u2011year\u2011old woman. Among females 80\u201390 with heart failure, stratified ICU vs non\u2011ICU and LOS <8 vs \u22658 days, report in\u2011hospital mortality (%) and CKD and diabetes prevalence.",
+  "final_sql": "WITH \n  -- Identify heart failure, CKD, and diabetes\n  diagnoses AS (\n    SELECT \n      di.subject_id,\n      di.hadm_id,\n      ddd.long_title,\n      CASE \n        WHEN ddd.long_title LIKE '%Heart Failure%' THEN 1\n        WHEN ddd.long_title LIKE '%Chronic kidney disease%' THEN 1\n        WHEN ddd.long_title LIKE '%Diabetes%' THEN 1\n        ELSE 0\n      END AS has_heart_failure,\n      CASE \n        WHEN ddd.long_title LIKE '%Chronic kidney disease%' THEN 1\n        ELSE 0\n      END AS has_ckd,\n      CASE \n        WHEN ddd.long_title LIKE '%Diabetes%' THEN 1\n        ELSE 0\n      END AS has_diabetes\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddd \n      ON di.icd_code = ddd.icd_code AND di.icd_version = ddd.icd_version\n  ),\n  \n  -- Patient and admission information\n  patient_info AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      p.gender,\n      p.anchor_age,\n      a.admittime,\n      a.dischtime,\n      a.deathtime,\n      COALESCE(i.stay_id, NULL) AS stay_id,\n      TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n    LEFT JOIN \n      `physionet-data.mimiciv_3_1_icu.icustays` i \n      ON a.hadm_id = i.hadm_id\n  ),\n  \n  -- Aggregate information\n  aggregated AS (\n    SELECT \n      pi.subject_id,\n      pi.hadm_id,\n      pi.stay_id,\n      pi.los,\n      pi.gender,\n      pi.anchor_age,\n      SUM(di.has_heart_failure) > 0 AS has_heart_failure,\n      SUM(di.has_ckd) > 0 AS has_ckd,\n      SUM(di.has_diabetes) > 0 AS has_diabetes,\n      CASE \n        WHEN pi.deathtime IS NOT NULL THEN 1\n        ELSE 0\n      END AS died_in_hospital\n    FROM \n      patient_info pi\n    LEFT JOIN \n      diagnoses di ON pi.hadm_id = di.hadm_id\n    GROUP BY \n      pi.subject_id, pi.hadm_id, pi.stay_id, pi.los, pi.gender, pi.anchor_age, pi.deathtime\n  )\n\n-- Final query\nSELECT \n  CASE \n    WHEN a.gender = 'F' AND a.anchor_age BETWEEN 80 AND 90 THEN 'Target Population'\n    ELSE 'Other'\n  END AS population,\n  CASE \n    WHEN a.stay_id IS NOT NULL THEN 'ICU'\n    ELSE 'Non-ICU'\n  END AS icu_stay,\n  CASE \n    WHEN a.los < 8 THEN '<8 days'\n    ELSE '\u22658 days'\n  END AS los_category,\n  AVG(a.died_in_hospital) AS in_hospital_mortality_rate,\n  AVG(CASE WHEN a.has_ckd THEN 1 ELSE 0 END) AS ckd_prevalence,\n  AVG(CASE WHEN a.has_diabetes THEN 1 ELSE 0 END) AS diabetes_prevalence\nFROM \n  aggregated a\nWHERE \n  a.gender = 'F' AND a.anchor_age BETWEEN 80 AND 90 AND a.has_heart_failure\nGROUP BY \n  population, icu_stay, los_category\nORDER BY \n  population, icu_stay, los_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [40:7]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [40:7]\n\nLocation: US\nJob ID: 93ffd029-ab65-4f0d-aa9e-b49d31abd51e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

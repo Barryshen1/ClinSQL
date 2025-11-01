@@ -1,0 +1,16 @@
+{
+  "query": "I have a 72-year-old woman. Among female patients 67\u201377 admitted with ACS, report counts, percent of admissions, and in-hospital mortality rates for initial Troponin T: \u22640.04 normal; >0.04\u20130.1 borderline; >0.1 elevated.",
+  "final_sql": "WITH acs_admissions AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, p.gender, p.anchor_age, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id\n   AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 67 AND 77\n    AND (\n      -- ICD-based ACS definition via text\n      LOWER(dd.long_title) LIKE '%acute myocardial infarction%'\n      OR LOWER(dd.long_title) LIKE '%unstable angina%'\n      OR LOWER(dd.long_title) LIKE '%acute ischemic heart%'\n      OR (di.icd_version = 9 AND di.icd_code LIKE '410%')\n      OR (di.icd_version = 9 AND di.icd_code LIKE '411%')\n      OR (di.icd_version = 10 AND di.icd_code LIKE 'I21%')\n      OR (di.icd_version = 10 AND di.icd_code LIKE 'I22%')\n      OR (di.icd_version = 10 AND di.icd_code = 'I20.0')\n    )\n),\ntroponin_first AS (\n  SELECT\n    acs.subject_id,\n    acs.hadm_id,\n    l.charttime,\n    l.valuenum\n  FROM acs_admissions acs\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON acs.subject_id = l.subject_id\n   AND acs.hadm_id = l.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON l.itemid = dl.itemid\n  WHERE dl.label LIKE '%Troponin T%'\n    AND l.valuenum IS NOT NULL\n    AND l.charttime IS NOT NULL\n),\nfirst_measurement AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum AS troponin_t_value\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      valuenum,\n      charttime,\n      ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n    FROM troponin_first\n  ) t\n  WHERE rn = 1\n),\ncategorized AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    acs.hospital_expire_flag,\n    CASE\n      WHEN f.troponin_t_value <= 0.04 THEN 'Normal'\n      WHEN f.troponin_t_value > 0.04 AND f.troponin_t_value <= 0.1 THEN 'Borderline'\n      WHEN f.troponin_t_value > 0.1 THEN 'Elevated'\n    END AS troponin_category\n  FROM first_measurement f\n  JOIN acs_admissions acs\n    ON f.subject_id = acs.subject_id\n   AND f.hadm_id = acs.hadm_id\n)\nSELECT\n  troponin_category,\n  COUNT(*) AS admissions_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percent_of_admissions,\n  ROUND(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS mortality_rate_percent\nFROM categorized\nGROUP BY troponin_category\nORDER BY troponin_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

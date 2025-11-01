@@ -1,0 +1,28 @@
+{
+  "query": "For my 44\u2011year\u2011old male with chest pain: among men aged 39\u201349 admitted for chest pain, report counts, percentages, and mean, median, IQR of initial hs\u2011TnT by category (normal/borderline/myocardial injury).",
+  "final_sql": "WITH troponin_items AS (\n  -- permissive selection of troponin lab itemids; adjust/replace with exact LOINC/itemids if desired\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE (\n    LOWER(label) LIKE '%troponin%' \n    OR LOWER(label) LIKE '%tnt%' \n    OR LOWER(label) LIKE '%hs troponin%' \n    OR LOWER(label) LIKE '%high sensitivity troponin%' \n    OR LOWER(label) LIKE '%troponin t%'\n  )\n),\nchest_pain_adms AS (\n  -- admissions for males aged 39-49 with primary dx containing \"chest pain\"\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dic\n    ON a.hadm_id = dic.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddesc\n    ON dic.icd_code = ddesc.icd_code\n    AND dic.icd_version = ddesc.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND dic.seq_num = 1  -- primary diagnosis\n    AND LOWER(ddesc.long_title) LIKE '%chest pain%'\n),\nfirst_troponin AS (\n  -- earliest troponin per admission (on/after admittime), numeric values only\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  JOIN chest_pain_adms ca\n    ON le.hadm_id = ca.hadm_id\n    AND le.charttime >= ca.admittime\n  WHERE le.valuenum IS NOT NULL\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime, le.storetime) = 1\n),\ncategorized AS (\n  -- categorize using chosen thresholds (adjust thresholds if needed)\n  SELECT\n    ft.hadm_id,\n    ft.subject_id,\n    ft.charttime,\n    ft.valuenum,\n    CASE\n      WHEN ft.valuenum <= 14 THEN 'normal'                     -- <=14 ng/L (commonly 99th percentile)\n      WHEN ft.valuenum > 14 AND ft.valuenum <= 50 THEN 'borderline'  -- >14 to 50\n      WHEN ft.valuenum > 50 THEN 'myocardial injury'           -- >50\n      ELSE 'unknown'\n    END AS category\n  FROM first_troponin ft\n),\nstats_by_cat AS (\n  -- compute counts, percentages, mean, and approximate quantiles per category\n  SELECT\n    category,\n    COUNT(*) AS n,\n    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percent_of_measured,\n    ROUND(AVG(valuenum), 2) AS mean_hsTnT,\n    (APPROX_QUANTILES(valuenum, 4))[OFFSET(1)] AS p25_approx,\n    (APPROX_QUANTILES(valuenum, 4))[OFFSET(2)] AS median_approx,\n    (APPROX_QUANTILES(valuenum, 4))[OFFSET(3)] AS p75_approx\n  FROM categorized\n  GROUP BY category\n)\nSELECT\n  category,\n  n,\n  percent_of_measured,\n  mean_hsTnT,\n  median_approx AS median_hsTnT,\n  p25_approx AS p25_hsTnT,\n  p75_approx AS p75_hsTnT\nFROM stats_by_cat\nORDER BY\n  -- order by clinical severity\n  CASE category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'myocardial injury' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:14]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:14]\n\nLocation: US\nJob ID: d2abab08-9f7c-4998-94c6-d9303be8372a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: loinc_code at [3:25]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [3:25]\n\nLocation: US\nJob ID: a0a55fba-7448-4cc7-bf49-a4490f0dc164\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

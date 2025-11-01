@@ -1,0 +1,22 @@
+{
+  "query": "I have an 84-year-old male inpatient with pulmonary embolism. Among male inpatients aged 79\u201389 with PE and top\u2011quartile comorbidity burden, what is his composite risk score percentile? Also report 30\u2011day mortality, cardiac and neurologic complication rates, and median survival days.",
+  "final_sql": "WITH pe_cohort AS (\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 79 AND 89\n    AND LOWER(dd.long_title) LIKE '%pulmonary embolism%'\n),\ncomorb_counts AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT d.icd_code) AS comorbidity_count\n  FROM pe_cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON c.hadm_id = d.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n),\nq3_val AS (\n  SELECT\n    APPROX_QUANTILES(comorbidity_count, 4)[OFFSET(3)] AS q3\n  FROM comorb_counts\n),\ntop_quartile AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.anchor_age,\n    c.gender,\n    c.admittime,\n    c.dischtime,\n    c.deathtime,\n    c.hospital_expire_flag,\n    cc.comorbidity_count,\n    -- Composite risk score definition\n    (c.anchor_age + cc.comorbidity_count * 2 + c.hospital_expire_flag * 10) AS risk_score\n  FROM pe_cohort c\n  JOIN comorb_counts cc\n    ON c.hadm_id = cc.hadm_id\n  CROSS JOIN q3_val\n  WHERE cc.comorbidity_count >= q3_val.q3\n),\npercentiles AS (\n  SELECT\n    t.*,\n    PERCENT_RANK() OVER (ORDER BY risk_score) AS risk_score_percentile\n  FROM top_quartile t\n),\ncomplications AS (\n  SELECT\n    tq.subject_id,\n    tq.hadm_id,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%myocardial infarction%'\n               OR LOWER(dd.long_title) LIKE '%heart failure%'\n               OR LOWER(dd.long_title) LIKE '%arrhythmia%' THEN 1 ELSE 0 END) AS cardiac_flag,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%stroke%'\n               OR LOWER(dd.long_title) LIKE '%seizure%' THEN 1 ELSE 0 END) AS neuro_flag\n  FROM top_quartile tq\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON tq.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  GROUP BY tq.subject_id, tq.hadm_id\n),\noutcomes AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.anchor_age,\n    p.risk_score_percentile,\n    -- 30-day mortality flag\n    CASE WHEN p.deathtime IS NOT NULL\n              AND DATETIME_DIFF(p.deathtime, p.admittime, DAY) <= 30\n         THEN 1 ELSE 0 END AS death_30day_flag,\n    c.cardiac_flag,\n    c.neuro_flag,\n    -- Survival days (only if died)\n    CASE WHEN p.deathtime IS NOT NULL\n         THEN DATETIME_DIFF(p.deathtime, p.admittime, DAY)\n         END AS survival_days\n  FROM percentiles p\n  LEFT JOIN complications c\n    ON p.subject_id = c.subject_id AND p.hadm_id = c.hadm_id\n),\nsummary AS (\n  SELECT\n    AVG(death_30day_flag) AS mortality_30day_rate,\n    AVG(cardiac_flag) AS cardiac_complication_rate,\n    AVG(neuro_flag) AS neuro_complication_rate,\n    APPROX_QUANTILES(survival_days, 2)[OFFSET(1)] AS median_survival_days\n  FROM outcomes\n)\nSELECT\n  o.subject_id,\n  o.hadm_id,\n  o.risk_score_percentile,\n  s.mortality_30day_rate,\n  s.cardiac_complication_rate,\n  s.neuro_complication_rate,\n  s.median_survival_days\nFROM outcomes o\nCROSS JOIN summary s\nWHERE o.anchor_age = 84;",
+  "execution_success": true,
+  "row_count": 31,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name anchor_age not found inside o at [117:9]; reason: invalidQuery, location: query, message: Name anchor_age not found inside o at [117:9]\n\nLocation: US\nJob ID: e3ee4a61-19ce-4abb-bc92-3e07ff4ece55\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 31,
+      "error": null
+    }
+  ]
+}

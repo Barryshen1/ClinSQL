@@ -1,0 +1,22 @@
+{
+  "query": "As a consultant for a 47\u2011year\u2011old man, among male inpatients aged 42\u201352 with DVT, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u226595th percentile report mortality, mean LOS, and compare critical lab rates to all inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    p.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 42 AND 52\n    AND a.hadm_id IN (\n      SELECT di.hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n      JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE LOWER(d.long_title) LIKE '%deep vein thrombosis%'\n    )\n),\n\nlab_abnormalities AS (\n  SELECT \n    c.hadm_id,\n    COUNT(*) AS abnormal_lab_count\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp`.labevents l ON c.hadm_id = l.hadm_id\n  WHERE l.charttime >= c.admittime \n    AND l.charttime <= c.admittime + INTERVAL '72' HOUR\n    AND l.valuenum IS NOT NULL\n    AND (\n      (l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower)\n      OR (l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper)\n    )\n  GROUP BY c.hadm_id\n),\n\ncohort_with_score AS (\n  SELECT \n    c.*,\n    COALESCE(l.abnormal_lab_count, 0) AS lab_instability_score\n  FROM cohort c\n  LEFT JOIN lab_abnormalities l ON c.hadm_id = l.hadm_id\n),\n\npercentiles AS (\n  SELECT \n    APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(95)] AS p95_score\n  FROM cohort_with_score\n),\n\nhigh_risk AS (\n  SELECT \n    c.*,\n    p.p95_score\n  FROM cohort_with_score c\n  CROSS JOIN percentiles p\n  WHERE c.lab_instability_score >= p.p95_score\n),\n\nsummary_stats AS (\n  SELECT\n    h.p95_score,\n    AVG(CAST(h.hospital_expire_flag AS FLOAT64)) AS mortality_rate_high_risk,\n    AVG(TIMESTAMP_DIFF(h.dischtime, h.admittime, HOUR) / 24.0) AS mean_los_high_risk,\n    AVG(h.lab_instability_score) AS mean_abnormal_labs_high_risk\n  FROM high_risk h\n  GROUP BY h.p95_score\n),\n\noverall_stats AS (\n  SELECT\n    AVG(lab_instability_score) AS mean_abnormal_labs_overall\n  FROM cohort_with_score\n)\n\nSELECT\n  s.p95_score,\n  s.mortality_rate_high_risk,\n  s.mean_los_high_risk,\n  s.mean_abnormal_labs_high_risk,\n  o.mean_abnormal_labs_overall\nFROM summary_stats s\nCROSS JOIN overall_stats o;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name p95_score is ambiguous at [61:5]; reason: invalidQuery, location: query, message: Column name p95_score is ambiguous at [61:5]\n\nLocation: US\nJob ID: 9b2806b5-432c-4a10-90fc-ef5733e22edf\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For my 44\u2011year\u2011old male with status epilepticus: among male inpatients 39\u201349, in the first 24 hours compare medication complexity and percentile rank, LOS and mortality for QT\u2011prolonging versus bleeding\u2011risk interactions vs general inpatients; report LOS and mortality for target top quartile.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort (male inpatients aged 39-49)\ncohort AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M' AND anchor_age BETWEEN 39 AND 49\n),\n\n-- Step 2: Identify hospital admissions for the cohort\nadmissions_cohort AS (\n  SELECT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN cohort c ON a.subject_id = c.subject_id\n),\n\n-- Step 3: Identify hospital admissions for status epilepticus\nstatus_epilepticus_admissions AS (\n  SELECT diag.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd ON diag.icd_code = d_icd.icd_code AND diag.icd_version = d_icd.icd_version\n  WHERE d_icd.long_title LIKE '%Status epilepticus%'\n),\n\n-- Step 4: Patients in ICU within the first 24 hours who are in the cohort and have status epilepticus\nicu_stays AS (\n  SELECT i.stay_id, i.hadm_id, i.intime, i.outtime, i.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN admissions_cohort ac ON i.hadm_id = ac.hadm_id\n  WHERE i.hadm_id IN (SELECT hadm_id FROM status_epilepticus_admissions)\n),\n\n-- Step 5: Medication prescriptions within the first 24 hours of ICU stay\nicu_medications AS (\n  SELECT i.stay_id, p.drug, p.starttime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN icu_stays i ON p.hadm_id = i.hadm_id\n  WHERE p.starttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 24 HOUR)\n),\n\n-- Step 6: Identify QT-prolonging and bleeding-risk medications (simplified, actual implementation depends on specific medication lists)\nmedication_risks AS (\n  SELECT stay_id, drug,\n         CASE WHEN drug LIKE '%QT-prolonging%' THEN 'QT-prolonging'\n              WHEN drug LIKE '%bleeding-risk%' THEN 'Bleeding-risk'\n              ELSE 'Other'\n         END AS risk_category\n  FROM icu_medications\n),\n\n-- Step 7: Calculate medication complexity (count of medications per stay_id)\nmedication_complexity AS (\n  SELECT stay_id, COUNT(DISTINCT drug) AS num_medications\n  FROM icu_medications\n  GROUP BY stay_id\n),\n\n-- Step 8: Calculate percentile rank for medication complexity\npercentile_rank AS (\n  SELECT stay_id, num_medications,\n         PERCENT_RANK() OVER (ORDER BY num_medications) AS percentile\n  FROM medication_complexity\n),\n\n-- Step 9: Calculate LOS and Mortality\nlos_mortality AS (\n  SELECT i.stay_id, i.los, \n         CASE WHEN a.dischtime IS NULL OR a.deathtime IS NOT NULL THEN 1 ELSE 0 END AS hospital_mortality\n  FROM icu_stays i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n)\n\n-- Final query to compare metrics and report for target top quartile\nSELECT \n  risk_category,\n  PERCENTILE_CONT(num_medications, 0.75) OVER () AS top_quartile_medication_complexity,\n  AVG(los) AS avg_los,\n  AVG(hospital_mortality) AS avg_hospital_mortality\nFROM (\n  SELECT m.risk_category, mc.num_medications, lm.los, lm.hospital_mortality\n  FROM medication_risks m\n  JOIN medication_complexity mc ON m.stay_id = mc.stay_id\n  JOIN percentile_rank pr ON mc.stay_id = pr.stay_id\n  JOIN los_mortality lm ON pr.stay_id = lm.stay_id\n  WHERE pr.percentile >= 0.75  -- Top quartile\n)\nGROUP BY risk_category;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column num_medications which is neither grouped nor aggregated at [75:19]; reason: invalidQuery, location: query, message: SELECT list expression references column num_medications which is neither grouped nor aggregated at [75:19]\n\nLocation: US\nJob ID: 3cb1349d-0262-42e6-9eaf-8405791f6930\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hadm_id at [4:22]; reason: invalidQuery, location: query, message: Unrecognized name: hadm_id at [4:22]\n\nLocation: US\nJob ID: cca98921-23de-4127-9cc7-6dcb89323076\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: PERCENTILE at [75:3]; reason: invalidQuery, location: query, message: Function not found: PERCENTILE at [75:3]\n\nLocation: US\nJob ID: 635b50bf-f167-48be-9826-3bacab65f8d1\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column num_medications which is neither grouped nor aggregated at [75:19]; reason: invalidQuery, location: query, message: SELECT list expression references column num_medications which is neither grouped nor aggregated at [75:19]\n\nLocation: US\nJob ID: 3cb1349d-0262-42e6-9eaf-8405791f6930\n"
+    }
+  ]
+}

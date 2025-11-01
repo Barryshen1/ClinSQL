@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 57-year-old female. Among female medicine inpatients aged 52\u201362 (non\u2011elective), report mean, median (p50), p75, p90 LOS and percentile rank of 7 days by discharge: home, facility, in\u2011hospital death.",
+  "final_sql": "WITH base AS (\n    SELECT \n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag,\n        adm.discharge_location,\n        adm.admission_type,\n        pt.gender,\n        pt.anchor_age,\n        -- Calculate LOS in days (fractional)\n        DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days,\n        -- Categorize discharge group\n        CASE \n            WHEN adm.hospital_expire_flag = 1 THEN 'Death'\n            WHEN adm.discharge_location IN ('HOME', 'HOME HEALTH CARE') THEN 'Home'\n            ELSE 'Facility'\n        END AS discharge_group\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n        ON adm.subject_id = pt.subject_id\n    -- Filter for medicine patients: hadm_id must be in medicine services\n    WHERE adm.hadm_id IN (\n        SELECT hadm_id \n        FROM `physionet-data.mimiciv_3_1_hosp.services` \n        WHERE curr_service LIKE 'MED%'\n    )\n    AND pt.gender = 'F'\n    AND pt.anchor_age BETWEEN 52 AND 62\n    AND adm.admission_type IN ('URGENT', 'EMERGENCY')\n    AND adm.dischtime IS NOT NULL\n    AND adm.admittime IS NOT NULL\n),\nagg AS (\n    SELECT \n        discharge_group,\n        COUNT(*) AS num_patients,\n        AVG(los_days) AS mean_los,\n        APPROX_QUANTILES(los_days, 100) AS quantiles\n    FROM base\n    GROUP BY discharge_group\n)\nSELECT \n    discharge_group,\n    num_patients,\n    mean_los,\n    quantiles[OFFSET(50)] AS median_los,\n    quantiles[OFFSET(75)] AS p75_los,\n    quantiles[OFFSET(90)] AS p90_los,\n    (SELECT AVG(CASE WHEN los_days <= 7 THEN 1.0 ELSE 0.0 END) \n     FROM base b \n     WHERE b.discharge_group = agg.discharge_group) AS percentile_rank_7\nFROM agg\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

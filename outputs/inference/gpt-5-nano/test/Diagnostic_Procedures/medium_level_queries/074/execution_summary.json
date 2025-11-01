@@ -1,0 +1,16 @@
+{
+  "query": "For my 45\u2011year\u2011old female with ischemic stroke: among women 40\u201350 with 1\u20137 day stays, give mean, min, max imaging procedures per admission for 1\u20134 vs 5\u20137 days, stratified by ICU.",
+  "final_sql": "WITH cohort_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS LOS\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'Female'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND dd.long_title LIKE '%ischemic stroke%'\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\n-- Step 2: ICU flag per admission (1 if there is an ICU stay for this admission, else 0)\nicu_flag AS (\n  SELECT\n    ca.hadm_id,\n    ca.subject_id,\n    ca.LOS,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n        WHERE icu.hadm_id = ca.hadm_id\n          AND icu.subject_id = ca.subject_id\n      ) THEN 1\n      ELSE 0\n    END AS is_in_icu\n  FROM cohort_admissions AS ca\n),\n-- Step 3: imaging counts per admission\nimaging_counts AS (\n  SELECT\n    hadm_id,\n    COUNT(*) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` AS he\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` AS dc\n    ON he.hcpcs_cd = dc.code\n  WHERE\n    LOWER(dc.long_description) LIKE '%imaging%'\n    OR LOWER(he.short_description) LIKE '%ct%'\n    OR LOWER(he.short_description) LIKE '%mri%'\n    OR LOWER(he.short_description) LIKE '%x-ray%'\n    OR LOWER(he.short_description) LIKE '%xray%'\n    OR LOWER(he.short_description) LIKE '%ultrasound%'\n  GROUP BY hadm_id\n)\n\n-- Step 4: assemble and compute statistics by LOS group and ICU status\nSELECT\n  los_group AS los_group,\n  is_in_icu AS is_in_icu,\n  AVG(imaging_count) AS mean_imaging_per_admission,\n  MIN(imaging_count) AS min_imaging_per_admission,\n  MAX(imaging_count) AS max_imaging_per_admission\nFROM (\n  SELECT\n    i.is_in_icu,\n    CASE\n      WHEN i.LOS BETWEEN 1 AND 4 THEN '1-4'\n      WHEN i.LOS BETWEEN 5 AND 7 THEN '5-7'\n    END AS los_group,\n    COALESCE(ic.imaging_count, 0) AS imaging_count\n  FROM icu_flag AS i\n  LEFT JOIN imaging_counts ic\n    ON i.hadm_id = ic.hadm_id\n  WHERE i.LOS BETWEEN 1 AND 7\n    AND (CASE\n           WHEN i.LOS BETWEEN 1 AND 4 THEN '1-4'\n           WHEN i.LOS BETWEEN 5 AND 7 THEN '5-7'\n         END) IS NOT NULL\n) t\nGROUP BY los_group, is_in_icu\nORDER BY los_group, is_in_icu;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

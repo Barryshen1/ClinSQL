@@ -1,0 +1,22 @@
+{
+  "query": "For my 64-year-old male patient with ACS, among males 59\u201369 what are p25/p50/p75 of diagnostic procedures per admission, stratified by 1\u20133 vs 4\u20137 days and primary vs secondary diagnosis?",
+  "final_sql": "WITH filtered_patients AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n),\n\nbase_admissions AS (\n  SELECT \n    fp.*,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    a.hospital_expire_flag\n  FROM filtered_patients fp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON fp.subject_id = a.subject_id\n  WHERE a.hospital_expire_flag = 0\n    AND DATE_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\n\nlos_stratified AS (\n  SELECT \n    *,\n    CASE \n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3 days'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7 days'\n    END AS los_stratum\n  FROM base_admissions\n),\n\n-- Primary diagnosis procedures: procedures matching primary diag ICD code\nprimary_diag_procs AS (\n  SELECT \n    ls.hadm_id,\n    ls.los_stratum,\n    COUNT(DISTINCT pi.icd_code) AS num_primary_procs\n  FROM los_stratified ls\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON ls.hadm_id = di.hadm_id\n    AND di.seq_num = 1\n    AND di.icd_version = 9\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n    ON ls.hadm_id = pi.hadm_id\n    AND pi.icd_code LIKE di.icd_code  -- Match procedure to primary diag code (approximate relevance)\n    AND pi.icd_code LIKE '8%'\n    AND pi.icd_version = 9\n  GROUP BY ls.hadm_id, ls.los_stratum\n),\n\n-- Secondary diagnosis procedures: procedures matching any secondary diag ICD code\nsecondary_diag_procs AS (\n  SELECT \n    ls.hadm_id,\n    ls.los_stratum,\n    COUNT(DISTINCT pi.icd_code) AS num_secondary_procs\n  FROM los_stratified ls\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON ls.hadm_id = di.hadm_id\n    AND di.seq_num > 1\n    AND di.icd_version = 9\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n    ON ls.hadm_id = pi.hadm_id\n    AND pi.icd_code LIKE di.icd_code  -- Match to secondary diag code\n    AND pi.icd_code LIKE '8%'\n    AND pi.icd_version = 9\n  GROUP BY ls.hadm_id, ls.los_stratum\n)\n\n-- Combine and compute percentiles\nSELECT \n  'Primary Diagnosis' AS diagnosis_type,\n  los_stratum,\n  PERCENTILE_CONT(num_primary_procs, 0.25) OVER (PARTITION BY los_stratum) AS p25,\n  PERCENTILE_CONT(num_primary_procs, 0.50) OVER (PARTITION BY los_stratum) AS p50,\n  PERCENTILE_CONT(num_primary_procs, 0.75) OVER (PARTITION BY los_stratum) AS p75\nFROM primary_diag_procs\n\nUNION ALL\n\nSELECT \n  'Secondary Diagnosis' AS diagnosis_type,\n  los_stratum,\n  PERCENTILE_CONT(num_secondary_procs, 0.25) OVER (PARTITION BY los_stratum) AS p25,\n  PERCENTILE_CONT(num_secondary_procs, 0.50) OVER (PARTITION BY los_stratum) AS p50,\n  PERCENTILE_CONT(num_secondary_procs, 0.75) OVER (PARTITION BY los_stratum) AS p75\nFROM secondary_diag_procs\n\nORDER BY diagnosis_type, los_stratum;",
+  "execution_success": true,
+  "row_count": 47080,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column num_primary_procs which is neither grouped nor aggregated at [93:19]; reason: invalidQuery, location: query, message: SELECT list expression references column num_primary_procs which is neither grouped nor aggregated at [93:19]\n\nLocation: US\nJob ID: d79c6454-3d7d-4267-8f30-890b203c40f1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 47080,
+      "error": null
+    }
+  ]
+}

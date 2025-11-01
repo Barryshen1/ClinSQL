@@ -1,0 +1,22 @@
+{
+  "query": "Evaluating a 64\u2011year\u2011old woman: among female ICU patients aged 59\u201369 with a shock diagnosis versus without shock, in the first 24 hours what are mean and percentiles of composite instability score, hypotension (MAP<65) and tachycardia burden, ICU LOS, and mortality?",
+  "final_sql": "WITH \n-- Step 1: Identify female patients aged 59-69\neligible_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age BETWEEN 59 AND 69\n),\n\n-- Step 2: Determine shock diagnosis\nshock_diagnosis AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` USING (icd_code, icd_version)\n  WHERE REGEXP_CONTAINS(long_title, r'(?i)shock')  -- Simplified shock diagnosis identification\n),\n\n-- Step 3 & 4: Extract ICU stay information and vital signs within the first 24 hours\nicu_data AS (\n  SELECT \n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    CASE WHEN sd.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS shock,\n    -- Vital signs extraction\n    -- Assuming itemid for MAP is known (e.g., 220052) and for heart rate (e.g., 220050)\n    AVG(CASE WHEN ce.itemid = 220052 THEN ce.valuenum END) AS mean_map,\n    SUM(CASE WHEN ce.itemid = 220052 AND ce.valuenum < 65 THEN 1 ELSE 0 END) / COUNT(*) AS hypotension_burden,\n    SUM(CASE WHEN ce.itemid = 220050 AND ce.valuenum > 100 THEN 1 ELSE 0 END) / COUNT(*) AS tachycardia_burden\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  LEFT JOIN shock_diagnosis sd ON ie.hadm_id = sd.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON ie.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN ie.intime AND TIMESTAMP_ADD(ie.intime, INTERVAL 24 HOUR)\n  WHERE ie.subject_id IN (SELECT subject_id FROM eligible_patients)\n  GROUP BY ie.subject_id, ie.hadm_id, ie.stay_id, ie.intime, ie.outtime, sd.hadm_id\n),\n\n-- Step 5: Compute ICU LOS and mortality\nicu_outcomes AS (\n  SELECT \n    i.stay_id,\n    DATETIME_DIFF(i.outtime, i.intime, HOUR) / 24 AS icu_los,\n    CASE \n      WHEN i.outtime = (SELECT MAX(outtime) FROM `physionet-data.mimiciv_3_1_icu.icustays` WHERE subject_id = i.subject_id) \n      AND (SELECT deathtime FROM `physionet-data.mimiciv_3_1_hosp.admissions` WHERE hadm_id = i.hadm_id) IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS mortality\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n),\n\n-- Step 6: Statistical analysis\nfinal_data AS (\n  SELECT \n    id.shock,\n    id.hypotension_burden,\n    id.tachycardia_burden,\n    io.icu_los,\n    io.mortality\n  FROM icu_data id\n  JOIN icu_outcomes io ON id.stay_id = io.stay_id\n)\n\nSELECT \n  shock,\n  COUNT(*) AS n,\n  AVG(hypotension_burden) AS mean_hypotension,\n  APPROX_QUANTILES(hypotension_burden, 100)[OFFSET(25)] AS p25_hypotension,\n  APPROX_QUANTILES(hypotension_burden, 100)[OFFSET(50)] AS median_hypotension,\n  APPROX_QUANTILES(hypotension_burden, 100)[OFFSET(75)] AS p75_hypotension,\n  AVG(tachycardia_burden) AS mean_tachycardia,\n  APPROX_QUANTILES(tachycardia_burden, 100)[OFFSET(25)] AS p25_tachycardia,\n  APPROX_QUANTILES(tachycardia_burden, 100)[OFFSET(50)] AS median_tachycardia,\n  APPROX_QUANTILES(tachycardia_burden, 100)[OFFSET(75)] AS p75_tachycardia,\n  AVG(icu_los) AS mean_icu_los,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(25)] AS p25_icu_los,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(50)] AS median_icu_los,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(75)] AS p75_icu_los,\n  AVG(mortality) AS mortality_rate\nFROM final_data\nGROUP BY shock;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column hypotension_burden which is neither grouped nor aggregated at [66:19]; reason: invalidQuery, location: query, message: SELECT list expression references column hypotension_burden which is neither grouped nor aggregated at [66:19]\n\nLocation: US\nJob ID: bba844d1-422b-413c-9f1b-72d5a35219c3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

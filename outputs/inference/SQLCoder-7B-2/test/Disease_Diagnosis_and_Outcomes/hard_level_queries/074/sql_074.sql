@@ -1,0 +1,1 @@
+SELECT p.gender, percent_rank() OVER (ORDER BY p.gender) AS percentile_rank FROM physionet-data.mimiciv_3_1_hosp.patients p WHERE p.subject_id = 123456789 LIMIT 1;

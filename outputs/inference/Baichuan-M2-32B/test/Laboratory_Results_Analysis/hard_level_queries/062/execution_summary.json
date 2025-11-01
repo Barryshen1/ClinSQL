@@ -1,0 +1,23 @@
+{
+  "query": "I have a 48\u2011year\u2011old female inpatient. In female admissions aged 43\u201353 with sepsis, what is the 25th\u2011percentile instability score (critical lab event count) in the first 72 hours? Report cohort and general mean critical events per admission, LOS, and mortality.",
+  "final_sql": "WITH sepsis_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND d.icd_code IN ('A40', 'A41', 'R65.20')\n    AND d.icd_version = 10\n  GROUP BY a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, p.gender, p.anchor_age\n),\ncritical_labs AS (\n  SELECT\n    itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE\n    category IN ('Blood Gas', 'Chemistry', 'Hematology', 'Urinalysis')\n),\nfirst_72h_labs AS (\n  SELECT\n    s.hadm_id,\n    COUNT(labevent_id) AS abnormal_lab_count\n  FROM sepsis_admissions s\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON s.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN s.admittime AND TIMESTAMP_ADD(s.admittime, INTERVAL 72 HOUR)\n  LEFT JOIN critical_labs cl\n    ON l.itemid = cl.itemid\n  WHERE\n    l.valuenum IS NOT NULL\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n    AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n  GROUP BY s.hadm_id\n),\nadmission_metrics AS (\n  SELECT\n    s.hadm_id,\n    s.hospital_expire_flag AS mortality,\n    TIMESTAMP_DIFF(s.dischtime, s.admittime, DAY) AS los_days,\n    COALESCE(f.abnormal_lab_count, 0) AS instability_score\n  FROM sepsis_admissions s\n  LEFT JOIN first_72h_labs f\n    ON s.hadm_id = f.hadm_id\n)\nSELECT\n  APPROX_QUANTILES(instability_score, 100)[OFFSET(25)] AS p25_instability_score,\n  AVG(instability_score) AS mean_critical_events,\n  AVG(los_days) AS mean_los,\n  SUM(mortality) / COUNT(*) AS mortality_rate\nFROM admission_metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"ICD\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"ICD\" at [1:13]\n\nLocation: US\nJob ID: f1a32ade-2c88-476a-addc-5e7325608ddb\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

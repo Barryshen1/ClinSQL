@@ -1,0 +1,28 @@
+{
+  "query": "For my 64-year-old male inpatient, among male medicine-service admissions aged 59\u201369, provide LOS distribution (mean, 25th/50th/75th/90th percentiles) by discharge home, facility, and in-hospital death, and percent \u226410 days.",
+  "final_sql": "WITH first_service AS (\n  SELECT \n    hadm_id,\n    curr_service,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY transfertime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.services`\n),\nadmissions_with_service AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN first_service s ON a.hadm_id = s.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE s.rn = 1\n    AND s.curr_service LIKE '%MED%'\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\ncategorized_los AS (\n  SELECT\n    los_days,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN LOWER(discharge_location) = 'home' THEN 'Discharged home'\n      ELSE 'Discharged to facility'\n    END AS discharge_category\n  FROM admissions_with_service\n),\nlos_stats AS (\n  SELECT\n    discharge_category,\n    AVG(los_days) AS mean_los,\n    APPROX_QUANTILES(los_days, 1000) AS quantiles,\n    AVG(CASE WHEN los_days <= 10 THEN 1.0 ELSE 0.0 END) AS pct_los_le_10_days\n  FROM categorized_los\n  GROUP BY discharge_category\n)\nSELECT\n  discharge_category,\n  mean_los,\n  quantiles[OFFSET(250)] AS p25_los,   -- 25th percentile\n  quantiles[OFFSET(500)] AS p50_los,   -- 50th percentile\n  quantiles[OFFSET(750)] AS p75_los,   -- 75th percentile\n  quantiles[OFFSET(900)] AS p90_los,   -- 90th percentile\n  pct_los_le_10_days\nFROM los_stats\nORDER BY discharge_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [40:19]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [40:19]\n\nLocation: US\nJob ID: 0629a541-5a00-4fe1-af42-462480bac164\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 9d300446-2270-4095-9172-143faec9960d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

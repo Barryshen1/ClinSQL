@@ -1,0 +1,17 @@
+{
+  "query": "42-year-old male with pneumonia: among male ICU patients aged 37\u201347 in their first ICU stay, stratify distinct procedures in the first 48 hours into quintiles and report mean procedure count, mean ICU LOS (days), and hospital mortality by quintile.",
+  "final_sql": "WITH PatientDemographics AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age AS age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n),\nICUStays AS (\n  SELECT\n    ic.subject_id,\n    ic.hadm_id,\n    ic.stay_id,\n    ic.intime,\n    ic.outtime,\n    ic.los AS icu_los\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n),\nHospitalAdmissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n),\nICUProcedures AS (\n  SELECT\n    pe.subject_id,\n    pe.hadm_id,\n    pe.stay_id,\n    pe.starttime,\n    pe.endtime,\n    pe.itemid\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n),\nProcedureLabels AS (\n  SELECT\n    di.itemid,\n    di.label\n  FROM\n    `physionet-data.mimiciv_3_1_icu.d_items` AS di\n  WHERE\n    di.category = 'Procedure'\n),\nProcedureCounts AS (\n  SELECT\n    ic.subject_id,\n    ic.hadm_id,\n    ic.stay_id,\n    COUNT(pe.itemid) AS procedure_count\n  FROM\n    ICUStays AS ic\n    JOIN ICUProcedures AS pe ON ic.stay_id = pe.stay_id\n    JOIN ProcedureLabels AS pl ON pe.itemid = pl.itemid\n  WHERE\n    pe.starttime BETWEEN ic.intime AND TIMESTAMP_ADD(ic.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    ic.subject_id,\n    ic.hadm_id,\n    ic.stay_id\n),\nPatientFilters AS (\n  SELECT\n    pd.subject_id,\n    ha.hadm_id,\n    ic.stay_id,\n    ic.intime,\n    ic.outtime,\n    ic.icu_los,\n    ha.hospital_expire_flag,\n    pc.procedure_count\n  FROM\n    PatientDemographics AS pd\n    JOIN HospitalAdmissions AS ha ON pd.subject_id = ha.subject_id\n    JOIN ICUStays AS ic ON ha.hadm_id = ic.hadm_id\n    JOIN ProcedureCounts AS pc ON ic.stay_id = pc.stay_id\n  WHERE\n    pd.gender = 'M'\n    AND pd.age BETWEEN 37 AND 47\n    AND ic.stay_id IN (\n      SELECT\n        MIN(stay_id)\n      FROM\n        `physionet-data.mimiciv_3_1_icu.icustays`\n      WHERE\n        subject_id = pd.subject_id\n      GROUP BY\n        subject_id\n    )\n),\nProcedureQuintiles AS (\n  SELECT\n    pf.subject_id,\n    pf.hadm_id,\n    pf.stay_id,\n    pf.intime,\n    pf.outtime,\n    pf.icu_los,\n    pf.hospital_expire_flag,\n    pf.procedure_count,\n    NTILE(5) OVER (ORDER BY pf.procedure_count) AS procedure_quintile\n  FROM\n    PatientFilters AS pf\n)\nSELECT\n  procedure_quintile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(icu_los) AS mean_icu_los,\n  AVG(hospital_expire_flag) AS hospital_mortality\nFROM\n  ProcedureQuintiles\nGROUP BY\n  procedure_quintile\nORDER BY\n  procedure_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

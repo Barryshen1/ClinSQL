@@ -1,0 +1,22 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE (p.gender = 'Male' OR p.gender = 'M')\n    AND p.anchor_age BETWEEN 41 AND 51\n),\n\n-- Neutropenia diagnoses\nneutropenia_adms AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%neutropenia%'\n),\n\n-- Fever diagnoses\nfever_adms AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%fever%'\n),\n\n-- Admissions that have both neutropenia and fever\ncohort_neutro_fever AS (\n  SELECT bc.subject_id, bc.hadm_id, bc.admittime, bc.dischtime, bc.hospital_expire_flag\n  FROM base_cohort AS bc\n  JOIN neutropenia_adms AS n ON bc.subject_id = n.subject_id AND bc.hadm_id = n.hadm_id\n  JOIN fever_adms AS f ON bc.subject_id = f.subject_id AND bc.hadm_id = f.hadm_id\n),\n\n-- Medications count in first 48 hours\nmeds_within_48h AS (\n  SELECT cn.subject_id,\n         cn.hadm_id,\n         cn.admittime,\n         cn.dischtime,\n         cn.hospital_expire_flag,\n         COUNT(DISTINCT pr.drug) AS med_count\n  FROM cohort_neutro_fever AS cn\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n    ON pr.subject_id = cn.subject_id\n   AND pr.hadm_id = cn.hadm_id\n   AND pr.starttime >= cn.admittime\n   AND pr.starttime < TIMESTAMP_ADD(cn.admittime, INTERVAL 48 HOUR)\n  GROUP BY cn.subject_id, cn.hadm_id, cn.admittime, cn.dischtime, cn.hospital_expire_flag\n),\n\n-- 30-day readmission flag\nreadmission_flag AS (\n  SELECT mw48.subject_id,\n         mw48.hadm_id,\n         mw48.admittime,\n         mw48.dischtime,\n         mw48.hospital_expire_flag,\n         mw48.med_count,\n         TIMESTAMP_DIFF(mw48.dischtime, mw48.admittime, SECOND) / 86400.0 AS los_days,\n         CASE\n           WHEN EXISTS (\n             SELECT 1\n             FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n             WHERE a2.subject_id = mw48.subject_id\n               AND a2.admittime > mw48.dischtime\n               AND a2.admittime <= TIMESTAMP_ADD(mw48.dischtime, INTERVAL 30 DAY)\n           ) THEN 1\n           ELSE 0\n         END AS readmit_30_flag\n  FROM meds_within_48h AS mw48\n)\n\nSELECT\n  tertile AS tertile,\n  AVG(los_days) AS avg_los_days,\n  100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS in_hosp_mortality_pct,\n  100.0 * SUM(readmit_30_flag) / COUNT(*) AS readmission_30d_pct\nFROM (\n  -- Assign tertiles based on med_count\n  SELECT subject_id,\n         hadm_id,\n         admittime,\n         dischtime,\n         hospital_expire_flag,\n         med_count,\n         los_days,\n         readmit_30_flag,\n         NTILE(3) OVER (ORDER BY med_count) AS tertile\n  FROM readmission_flag\n) AS t\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:18]\n\nLocation: US\nJob ID: cbd4f6b7-f15b-41f0-a693-c9ea08226733\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

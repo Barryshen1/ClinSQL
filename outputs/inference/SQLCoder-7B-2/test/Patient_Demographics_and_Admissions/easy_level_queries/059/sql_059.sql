@@ -1,0 +1,1 @@
+SELECT MAX(icustays.los) AS max_length_of_stay FROM icustays JOIN patients ON icustays.subject_id = patients.subject_id JOIN procedures_icd ON icustays.hadm_id = procedures_icd.subject_id WHERE patients.gender = 'F' AND patients.anchor_age = 64 AND procedures_icd.icd_code = '47019' AND patients.anchor_year BETWEEN 59 AND 69;

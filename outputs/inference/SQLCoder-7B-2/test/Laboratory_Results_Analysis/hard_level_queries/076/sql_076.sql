@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.95) within GROUP (ORDER BY i.value) AS p95_value FROM male_inpatients i;

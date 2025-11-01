@@ -1,0 +1,16 @@
+{
+  "query": "For benchmarking my 70-year-old female ICU patient: among female ICU stays age 65\u201375, summarize per-measurement systolic BP in first 24h by categories (<140; 140\u2013159; \u2265160) giving mean, median, IQR.",
+  "final_sql": "WITH filtered_patients AS (\n  SELECT \n    p.subject_id, \n    icu.stay_id,\n    icu.intime,\n    -- Calculate exact age at ICU admission\n    p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year)) BETWEEN 65 AND 75\n),\nsbp_events AS (\n  SELECT \n    fp.stay_id,\n    ce.valuenum AS sbp_value\n  FROM filtered_patients fp\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON fp.stay_id = ce.stay_id\n  WHERE \n    ce.itemid IN (220050, 220179)  -- Systolic BP item IDs\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0            -- Exclude invalid values\n    AND ce.charttime >= fp.intime\n    AND ce.charttime <= DATETIME_ADD(fp.intime, INTERVAL 24 HOUR)\n),\ncategorized_sbp AS (\n  SELECT \n    sbp_value,\n    CASE \n      WHEN sbp_value < 140 THEN '<140'\n      WHEN sbp_value BETWEEN 140 AND 159 THEN '140-159'\n      WHEN sbp_value >= 160 THEN '>=160'\n    END AS sbp_category\n  FROM sbp_events\n),\nstats AS (\n  SELECT \n    sbp_category,\n    COUNT(*) AS num_measurements,\n    AVG(sbp_value) AS mean_sbp,\n    APPROX_QUANTILES(sbp_value, 100) AS quantiles  -- 101-point quantile array\n  FROM categorized_sbp\n  GROUP BY sbp_category\n)\nSELECT \n  sbp_category,\n  num_measurements,\n  ROUND(mean_sbp, 2) AS mean_sbp,\n  ROUND(quantiles[OFFSET(50)], 2) AS median_sbp,  -- 50th percentile\n  ROUND(quantiles[OFFSET(75)] - quantiles[OFFSET(25)], 2) AS iqr  -- Q3 - Q1\nFROM stats\nORDER BY \n  CASE sbp_category\n    WHEN '<140' THEN 1\n    WHEN '140-159' THEN 2\n    WHEN '>=160' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

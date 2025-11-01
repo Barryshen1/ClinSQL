@@ -1,0 +1,16 @@
+{
+  "query": "I have an 82-year-old male. Among male patients age 77\u201387 admitted with AMI, what's the distribution of initial hs\u2011TnT (normal / borderline / myocardial injury)? Report counts and percentages.",
+  "final_sql": "WITH ami_admissions AS (\n  -- Identify male patients age 77-87 with AMI\n  SELECT\n    adm.subject_id,\n    adm.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON adm.subject_id = pat.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      ON adm.hadm_id = diag.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n      ON diag.icd_code = dicd.icd_code AND diag.icd_version = dicd.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 77 AND 87\n    AND (\n      -- ICD-10 AMI: I21.x, I22.x; ICD-9 AMI: 410.x\n      (diag.icd_version = 10 AND (diag.icd_code LIKE 'I21%' OR diag.icd_code LIKE 'I22%'))\n      OR\n      (diag.icd_version = 9 AND diag.icd_code LIKE '410%')\n    )\n    AND diag.seq_num = 1 -- primary diagnosis\n),\n\nhs_tnt_items AS (\n  -- Find itemids for hs-TnT\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n    AND LOWER(label) LIKE '%high%'\n),\n\ninitial_hs_tnt AS (\n  -- For each AMI admission, get the earliest hs-TnT measurement\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    l.charttime,\n    l.valuenum,\n    l.valueuom\n  FROM\n    ami_admissions a\n    JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n      ON a.subject_id = l.subject_id AND a.hadm_id = l.hadm_id\n    JOIN hs_tnt_items h\n      ON l.itemid = h.itemid\n  WHERE\n    l.valuenum IS NOT NULL\n),\nfirst_hs_tnt AS (\n  -- Get the first hs-TnT per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    charttime,\n    valuenum,\n    valueuom\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC, valuenum ASC) AS rn\n    FROM initial_hs_tnt\n  )\n  WHERE rn = 1\n),\n\ncategorized AS (\n  -- Categorize hs-TnT values\n  SELECT\n    hadm_id,\n    subject_id,\n    valuenum,\n    valueuom,\n    CASE\n      WHEN valuenum < 14 THEN 'Normal'\n      WHEN valuenum >= 14 AND valuenum <= 52 THEN 'Borderline'\n      WHEN valuenum > 52 THEN 'Myocardial injury'\n      ELSE 'Unknown'\n    END AS hs_tnt_category\n  FROM first_hs_tnt\n  WHERE valueuom = 'ng/L' -- restrict to ng/L for consistency\n)\n\nSELECT\n  hs_tnt_category,\n  COUNT(*) AS admission_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS percent_of_total\nFROM categorized\nWHERE hs_tnt_category != 'Unknown'\nGROUP BY hs_tnt_category\nORDER BY hs_tnt_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 56\u2011year\u2011old female postoperative patient. Among female surgical admissions aged 51\u201361, stratified by 24\u2011h medication complexity quartiles (unique drugs plus weighted high\u2011risk classes), report LOS, in\u2011hospital mortality (%) and 30\u2011day readmission (%) and counts by quartile for comparison.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 51 AND 61\n),\n\nsurgical_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.services\n  WHERE LOWER(curr_service) = 'surg'\n),\n\nhigh_risk_drugs AS (\n  SELECT LOWER(drug) AS drug_name\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions\n  GROUP BY drug_name\n  HAVING SUM(CASE\n    WHEN LOWER(drug) IN (\n      'warfarin', 'heparin', 'insulin', 'fentanyl', 'morphine',\n      'digoxin', 'potassium chloride', 'phenytoin', 'lithium', 'theophylline'\n    ) THEN 1 ELSE 0 END) > 0\n),\n\nmedication_complexity AS (\n  SELECT\n    pa.hadm_id,\n    SUM(CASE WHEN hr.drug_name IS NOT NULL THEN 2 ELSE 1 END) AS complexity_score\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.prescriptions pr\n    ON pa.hadm_id = pr.hadm_id\n  LEFT JOIN high_risk_drugs hr\n    ON LOWER(pr.drug) = hr.drug_name\n  WHERE pr.starttime >= pa.admittime\n    AND pr.starttime < DATETIME_ADD(pa.admittime, INTERVAL 24 HOUR)\n    AND pr.drug IS NOT NULL\n  GROUP BY pa.hadm_id\n),\n\nadmissions_with_outcomes AS (\n  SELECT\n    pa.*,\n    mc.complexity_score,\n    -- Calculate LOS in days\n    DATETIME_DIFF(pa.dischtime, pa.admittime, SECOND) / (24 * 60 * 60) AS los_days,\n    -- Flag for 30-day readmission\n    CASE\n      WHEN LEAD(pa.admittime) OVER (PARTITION BY pa.subject_id ORDER BY pa.admittime) <= DATETIME_ADD(pa.dischtime, INTERVAL 30 DAY)\n        THEN 1 ELSE 0 END AS thirty_day_readmit\n  FROM patient_admissions pa\n  INNER JOIN surgical_admissions sa ON pa.hadm_id = sa.hadm_id\n  LEFT JOIN medication_complexity mc ON pa.hadm_id = mc.hadm_id\n  WHERE pa.dischtime IS NOT NULL\n),\n\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY complexity_score) AS quartile\n  FROM admissions_with_outcomes\n  WHERE complexity_score IS NOT NULL\n)\n\nSELECT\n  quartile,\n  COUNT(*) AS count_patients,\n  ROUND(AVG(los_days), 2) AS avg_los_days,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS in_hospital_mortality_pct,\n  ROUND(AVG(thirty_day_readmit) * 100, 2) AS thirty_day_readmission_pct\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

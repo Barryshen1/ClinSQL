@@ -1,0 +1,1 @@
+SELECT MIN(a.dischtime - a.admittime) AS min_length_of_stay FROM admissions a JOIN patients p ON a.subject_id = p.subject_id JOIN emar e ON a.subject_id = e.subject_id JOIN pharmacy ph ON e.pharmacy_id = ph.pharmacy_id WHERE p.gender = 'F' AND p.anchor_age = 91 AND p.anchor_year_group BETWEEN 86 AND 96 AND ph.drug = 'atorvastatin' AND ph.dose_val_rx BETWEEN 40 AND 80;

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 67-year-old female ICU patient. Among female ICU patients aged 62\u201372, show first-24h per-measurement temperature categories (<36.0 / 36.0\u201337.9 / \u226538.0\u00b0C) with mean, median, IQR and AKI rate.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON i.subject_id = p.subject_id\n  WHERE LOWER(p.gender) = 'female'\n    AND p.anchor_age BETWEEN 62 AND 72\n),\n\ntemp_raw AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    ce.valuenum\n  FROM cohort AS c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ce.stay_id = c.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON ce.itemid = di.itemid\n  WHERE (\n          LOWER(di.label) LIKE '%temperature%'\n          OR LOWER(di.label) LIKE '%temp%'\n        )\n    AND ce.charttime >= c.intime\n    AND ce.charttime < TIMESTAMP_ADD(c.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\n\ncategorized AS (\n  SELECT\n    CASE\n      WHEN valuenum < 36.0 THEN '<36.0'\n      WHEN valuenum <= 37.9 THEN '36.0-37.9'\n      ELSE '>=38.0'\n    END AS temp_category,\n    valuenum\n  FROM temp_raw\n),\n\nquantiles_cat AS (\n  SELECT temp_category, APPROX_QUANTILES(valuenum, 100) AS quantiles\n  FROM categorized\n  GROUP BY temp_category\n),\n\nsummary_cat AS (\n  SELECT\n    c.temp_category,\n    COUNT(*) AS n_measurements,\n    AVG(c.valuenum) AS mean_temp,\n    q.quantiles[OFFSET(50)] AS median_temp,\n    (q.quantiles[OFFSET(75)] - q.quantiles[OFFSET(25)]) AS iqr_temp\n  FROM categorized c\n  JOIN quantiles_cat q ON c.temp_category = q.temp_category\n  GROUP BY c.temp_category, q.quantiles[OFFSET(50)], (q.quantiles[OFFSET(75)] - q.quantiles[OFFSET(25)])\n),\n\noverall_values AS (\n  SELECT valuenum FROM temp_raw\n),\noverall_stat AS (\n  SELECT\n    COUNT(*) AS n_measurements,\n    AVG(valuenum) AS mean_temp,\n    APPROX_QUANTILES(valuenum, 100) AS quantiles\n  FROM overall_values\n),\nsummary_overall AS (\n  SELECT\n    'Overall' AS temp_category,\n    o.n_measurements,\n    o.mean_temp,\n    o.quantiles[OFFSET(50)] AS median_temp,\n    (o.quantiles[OFFSET(75)] - o.quantiles[OFFSET(25)]) AS iqr_temp\n  FROM overall_stat o\n),\n\naki_flags AS (\n  SELECT DISTINCT c.subject_id\n  FROM cohort AS c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON c.subject_id = di.subject_id AND c.hadm_id = di.hadm_id\n  WHERE di.icd_code LIKE 'N17%'\n     OR di.icd_code LIKE '584%'\n),\naki_calc AS (\n  SELECT\n    (SELECT COUNT(*) FROM aki_flags) AS aki_cases,\n    (SELECT COUNT(*) FROM cohort) AS total_cohort\n)\n\nSELECT\n  s.temp_category,\n  s.n_measurements,\n  s.mean_temp,\n  s.median_temp,\n  s.iqr_temp,\n  a.aki_cases,\n  a.total_cohort,\n  SAFE_DIVIDE(a.aki_cases, a.total_cohort) AS aki_rate\nFROM (\n  SELECT * FROM summary_cat\n  UNION ALL\n  SELECT * FROM summary_overall\n) AS s\nCROSS JOIN aki_calc a\nORDER BY CASE WHEN s.temp_category = 'Overall' THEN 1 ELSE 0 END,\n         s.temp_category;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [50:18]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [50:18]\n\nLocation: US\nJob ID: ead37fc2-540a-4cec-929f-83be3d626dd2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references q.quantiles which is neither grouped nor aggregated at [57:5]; reason: invalidQuery, location: query, message: SELECT list expression references q.quantiles which is neither grouped nor aggregated at [57:5]\n\nLocation: US\nJob ID: cf8a52be-0d50-429d-aff9-38fb7a085ea3\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 94\u2011year\u2011old man admitted with lower GI bleeding. Among male inpatients aged 89\u201399 with lower GI bleed, compute a 72\u2011hour lab instability score, stratify into quintiles, and report LOS, mortality, and quintile critical\u2011lab rates versus general inpatient rate.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT \n    a.subject_id, \n    a.hadm_id, \n    p.gender, \n    p.anchor_age, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id AND d.seq_num = 1\n  WHERE p.gender = 'M'\n    AND p.anchor_age >= 89\n    AND p.anchor_age <= 99\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('569.3', '569.84', '578.1')) \n      OR \n      (d.icd_version = 10 AND d.icd_code IN ('K92.1', 'K92.2'))\n    )\n),\npatient_labs AS (\n  SELECT \n    c.*,\n    l.itemid, \n    l.valuenum, \n    l.valueuom, \n    l.flag, \n    l.charttime\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l \n    ON c.hadm_id = l.hadm_id\n  WHERE l.charttime >= c.admittime \n    AND l.charttime < TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n),\ninstability_score AS (\n  SELECT \n    hadm_id, \n    COUNT(CASE WHEN flag = 'abnormal' THEN 1 END) AS instability_score_raw\n  FROM patient_labs\n  GROUP BY hadm_id\n),\ncritical_flag AS (\n  SELECT \n    hadm_id,\n    MAX(CASE \n      WHEN itemid = 51221 AND valuenum < 7.0 AND valueuom = 'g/dL' THEN 1\n      WHEN itemid IN (50577, 51265) AND valuenum < 50 THEN 1\n      WHEN itemid = 51237 AND valuenum > 1.5 THEN 1\n      WHEN itemid = 50912 AND valuenum > 2.0 AND valueuom = 'mg/dL' THEN 1\n      WHEN itemid = 51006 AND valuenum > 50 AND valueuom = 'mg/dL' THEN 1\n      ELSE 0 \n    END) AS has_critical_raw\n  FROM patient_labs\n  GROUP BY hadm_id\n),\ncohort_with_scores AS (\n  SELECT \n    c.*,\n    COALESCE(s.instability_score_raw, 0) AS instability_score,\n    COALESCE(cr.has_critical_raw, 0) AS has_critical,\n    TIMESTAMP_DIFF(\n      COALESCE(c.dischtime, c.admittime),  -- Handle rare NULL dischtime\n      c.admittime, \n      HOUR\n    ) / 24.0 AS los_days\n  FROM cohort c\n  LEFT JOIN instability_score s ON c.hadm_id = s.hadm_id\n  LEFT JOIN critical_flag cr ON c.hadm_id = cr.hadm_id\n),\nquintiled AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY instability_score ASC) AS quintile\n  FROM cohort_with_scores\n),\nquintile_stats AS (\n  SELECT \n    quintile,\n    COUNT(*) AS n_patients,\n    ROUND(AVG(los_days), 2) AS avg_los_days,\n    ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100, 2) AS mortality_rate_pct,\n    ROUND(AVG(CAST(has_critical AS FLOAT64)) * 100, 2) AS critical_lab_rate_pct\n  FROM quintiled\n  GROUP BY quintile\n  ORDER BY quintile\n),\n-- General inpatient computations (all admissions)\nall_admissions AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\ngeneral_labs AS (\n  SELECT \n    l.subject_id, \n    l.hadm_id, \n    l.itemid, \n    l.valuenum, \n    l.valueuom,\n    l.charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN all_admissions aa \n    ON l.hadm_id = aa.hadm_id\n  WHERE l.charttime >= aa.admittime \n    AND l.charttime < TIMESTAMP_ADD(aa.admittime, INTERVAL 72 HOUR)\n),\ngeneral_critical AS (\n  SELECT \n    hadm_id,\n    MAX(CASE \n      WHEN itemid = 51221 AND valuenum < 7.0 AND valueuom = 'g/dL' THEN 1\n      WHEN itemid IN (50577, 51265) AND valuenum < 50 THEN 1\n      WHEN itemid = 51237 AND valuenum > 1.5 THEN 1\n      WHEN itemid = 50912 AND valuenum > 2.0 AND valueuom = 'mg/dL' THEN 1\n      WHEN itemid = 51006 AND valuenum > 50 AND valueuom = 'mg/dL' THEN 1\n      ELSE 0 \n    END) AS has_critical\n  FROM general_labs\n  GROUP BY hadm_id\n),\ngeneral_rate AS (\n  SELECT \n    ROUND(AVG(CAST(COALESCE(gc.has_critical, 0) AS FLOAT64)) * 100, 2) AS general_critical_rate_pct,\n    COUNT(DISTINCT aa.hadm_id) AS total_inpatients\n  FROM all_admissions aa\n  LEFT JOIN general_critical gc ON aa.hadm_id = gc.hadm_id\n)\nSELECT \n  qs.*,\n  gr.general_critical_rate_pct\nFROM quintile_stats qs\nCROSS JOIN general_rate gr;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:8]\n\nLocation: US\nJob ID: e322f24f-ac0a-465c-8117-c57ba7c1b470\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [84:44]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [84:44]\n\nLocation: US\nJob ID: 9a39b941-e682-427e-9d70-5be6e4287935\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

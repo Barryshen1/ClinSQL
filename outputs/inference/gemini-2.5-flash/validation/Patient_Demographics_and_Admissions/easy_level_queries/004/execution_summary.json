@@ -1,0 +1,16 @@
+{
+  "query": "For my 75-year-old female with AKI, what's the SD of length of stay (days) for first admissions in females 70\u201380?",
+  "final_sql": "WITH akicodes AS (\n    SELECT\n        icd_code,\n        icd_version\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n    WHERE\n        (icd_version = 9 AND icd_code LIKE '584.%') -- ICD-9 codes for Acute kidney failure\n        OR (icd_version = 10 AND icd_code LIKE 'N17.%') -- ICD-10 codes for Acute kidney failure\n),\n-- Step 2: Retrieve admissions data, patient demographics, calculate age at admission and LOS,\n-- and rank admissions to identify the first one for each patient.\nadmissions_data AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        p.gender,\n        p.anchor_age,\n        p.anchor_year,\n        DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n        -- Calculate age at admission: anchor_age + years passed since anchor_year\n        p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admission,\n        -- Rank each admission for a subject to find their first admission\n        ROW_NUMBER() OVER (PARTITION BY adm.subject_id ORDER BY adm.admittime) as rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON adm.subject_id = p.subject_id\n),\n-- Step 3: Filter for the specific cohort: first admission, female, age 70-80, and valid LOS.\ncohort_admissions AS (\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        ad.los_days,\n        ad.age_at_admission\n    FROM\n        admissions_data ad\n    WHERE\n        ad.rn = 1 -- Only consider the patient's first admission\n        AND ad.gender = 'F' -- Filter for female patients\n        -- Ensure age is between 70 and 80 at the time of admission.\n        -- We also explicitly exclude patients originally marked as 90+ (due to MIMIC-IV age handling)\n        -- to ensure their true age falls within 70-80 range.\n        AND ad.age_at_admission >= 70\n        AND ad.age_at_admission <= 80\n        AND ad.anchor_age < 90 -- Exclude patients whose recorded anchor_age was 90 or higher\n        AND ad.los_days IS NOT NULL -- Exclude admissions with missing discharge or admission times\n        AND ad.los_days >= 0 -- Exclude admissions with illogical negative length of stay\n)\n-- Step 4: Join the filtered cohort with diagnoses to identify AKI patients\n-- and then calculate the standard deviation of their length of stay.\nSELECT\n    STDDEV(ca.los_days) AS stddev_los_days_for_aki_females_70_80\nFROM\n    cohort_admissions ca\nJOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON ca.subject_id = di.subject_id AND ca.hadm_id = di.hadm_id\nJOIN\n    akicodes ak\n    ON di.icd_code = ak.icd_code AND di.icd_version = ak.icd_version;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

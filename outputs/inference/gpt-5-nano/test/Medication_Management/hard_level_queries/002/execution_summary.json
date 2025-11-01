@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 72-year-old man with AMI. Among male inpatients aged 67-77 with AMI, stratified into tertiles by first-24-hour medication complexity score, report per tertile: admission count, score range and mean, mean LOS (days), in-hospital mortality%, and 30-day readmission%.",
+  "final_sql": "WITH base AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- LOS in days, inclusive\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) + 1 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'Male'\n    AND p.anchor_age BETWEEN 67 AND 77\n    -- AMI: ICD-9 410% or ICD-10 I21% / I22%\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%'))\n          OR (di.icd_version = 9  AND di.icd_code LIKE '410%')\n        )\n    )\n),\n\n-- Part 2: Compute per-admission first-24h medication complexity proxy (MCS)\ncohort AS (\n  SELECT\n    b.subject_id,\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.hospital_expire_flag,\n    b.los_days,\n    -- first-24h MCS proxy: number of distinct medications started within 24 hours of admission\n    COALESCE((\n      SELECT COUNT(DISTINCT ph.medication)\n      FROM `physionet-data.mimiciv_3_1_hosp.pharmacy` AS ph\n      WHERE ph.subject_id = b.subject_id\n        AND ph.hadm_id = b.hadm_id\n        AND ph.starttime >= b.admittime\n        AND ph.starttime <= TIMESTAMP_ADD(b.admittime, INTERVAL 24 HOUR)\n    ), 0) AS mcs,\n    -- 30-day readmission indicator (to be computed below)\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n      WHERE a2.subject_id = b.subject_id\n        AND a2.admittime > b.dischtime\n        AND a2.admittime <= TIMESTAMP_ADD(b.dischtime, INTERVAL 30 DAY)\n    ) AS readmit_30\n  FROM base b\n)\n\n-- Part 3: Assign tertiles and summarize by tertile\nSELECT\n  tertile,\n  COUNT(*) AS admissions,\n  MIN(mcs) AS min_mcs,\n  MAX(mcs) AS max_mcs,\n  AVG(mcs) AS mean_mcs,\n  AVG(los_days) AS mean_los_days,\n  100 * AVG(CAST(hospital_expire_flag AS INT64)) AS in_hospital_mortality_percent,\n  100 * AVG(CAST(readmit_30 AS INT64)) AS readmission_30d_percent\nFROM (\n  SELECT\n     *,\n     NTILE(3) OVER (ORDER BY mcs) AS tertile\n  FROM cohort\n) t\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name drug not found inside ph at [39:32]; reason: invalidQuery, location: query, message: Name drug not found inside ph at [39:32]\n\nLocation: US\nJob ID: 316d84a5-f86d-4ae6-b2b8-d5159550e848\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

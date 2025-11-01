@@ -1,0 +1,16 @@
+{
+  "query": "I have an 83-year-old female inpatient. Among female patients aged 78\u201388 with acute ischemic stroke, what was the minimum 72-hour laboratory instability score? Also compare cohort average critical lab events to general inpatients and report cohort LOS and in-hospital mortality.",
+  "final_sql": "WITH \n-- Step 1: Identify patients with acute ischemic stroke\nstroke_patients AS (\n  SELECT DISTINCT p.subject_id, p.anchor_year, p.anchor_age, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'F' \n    AND p.anchor_age BETWEEN 78 AND 88\n    AND dicd.long_title LIKE '%Acute ischemic stroke%'\n),\n\n-- Step 2: Calculate minimum 72-hour laboratory instability score\nlab_instability AS (\n  SELECT sp.hadm_id, \n         COUNT(CASE WHEN le.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` WHERE label IN ('Creatinine', 'Potassium', 'Sodium', 'White Blood Cell Count')) \n                    AND le.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR) THEN 1 ELSE NULL END) AS critical_lab_count\n  FROM stroke_patients sp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON sp.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le ON sp.hadm_id = le.hadm_id\n  GROUP BY sp.hadm_id\n),\n\n-- Step 3 & 4: Compare critical lab events and report cohort LOS and in-hospital mortality\ncohort_outcomes AS (\n  SELECT \n    sp.hadm_id,\n    li.critical_lab_count,\n    a.dischtime - a.admittime AS los,\n    a.hospital_expire_flag AS in_hospital_mortality\n  FROM stroke_patients sp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON sp.hadm_id = a.hadm_id\n  LEFT JOIN lab_instability li ON sp.hadm_id = li.hadm_id\n)\n\n-- Final query to get required statistics\nSELECT \n  MIN(li.critical_lab_count) AS min_72hr_lab_instability,\n  AVG(li.critical_lab_count) AS avg_critical_lab_events_cohort,\n  (SELECT AVG(critical_lab_count) FROM lab_instability WHERE hadm_id NOT IN (SELECT hadm_id FROM stroke_patients)) AS avg_critical_lab_events_general,\n  AVG(co.los) AS avg_los,\n  SUM(co.in_hospital_mortality) / COUNT(co.hadm_id) AS in_hospital_mortality_rate\nFROM cohort_outcomes co\nLEFT JOIN lab_instability li ON co.hadm_id = li.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

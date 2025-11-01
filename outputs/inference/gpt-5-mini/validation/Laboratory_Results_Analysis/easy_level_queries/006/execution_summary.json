@@ -1,0 +1,16 @@
+{
+  "query": "For a 50-year-old female with COPD, what's the standard deviation of nadir serum sodium measured during hospitalization?",
+  "final_sql": "WITH copd_admissions AS (\n  -- Admissions for female patients age 50 with at least one COPD-related diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      USING(subject_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      USING(subject_id, hadm_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON di.icd_code = dd.icd_code\n      AND di.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age = 50\n    AND (\n      LOWER(dd.long_title) LIKE '%chronic obstructive%'\n      OR LOWER(dd.long_title) LIKE '%copd%'\n      OR LOWER(dd.long_title) LIKE '%chronic bronchitis%'\n      OR LOWER(dd.long_title) LIKE '%emphysema%'\n    )\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime\n),\n\nsodium_items AS (\n  -- Lab itemids corresponding to serum/plasma/blood sodium measurements\n  SELECT\n    itemid\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE\n    LOWER(label) LIKE '%sodium%'\n    AND LOWER(COALESCE(fluid, '')) IN ('blood', 'serum', 'plasma')\n),\n\nadmission_nadir_sodium AS (\n  -- For each qualifying admission, compute the nadir (minimum) serum sodium measured during the hospital stay\n  SELECT\n    ca.hadm_id,\n    MIN(le.valuenum) AS nadir_sodium\n  FROM\n    copd_admissions ca\n    JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON le.hadm_id = ca.hadm_id\n    JOIN sodium_items si\n      ON le.itemid = si.itemid\n  WHERE\n    le.valuenum IS NOT NULL\n    -- Ensure the lab occurred during the admission window\n    AND le.charttime BETWEEN ca.admittime AND ca.dischtime\n  GROUP BY\n    ca.hadm_id\n  HAVING\n    MIN(le.valuenum) IS NOT NULL\n)\n\n-- Final: compute the standard deviation of the nadir sodium values across admissions\nSELECT\n  COUNT(*) AS admissions_count,\n  STDDEV_POP(nadir_sodium) AS sd_nadir_sodium,\n  AVG(nadir_sodium) AS mean_nadir_sodium,\n  MIN(nadir_sodium) AS min_nadir_sodium,\n  MAX(nadir_sodium) AS max_nadir_sodium\nFROM\n  admission_nadir_sodium;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 82-year-old female patient with ischemic stroke, what is the 75th percentile of admission serum glucose (mg/dL)?",
+  "final_sql": "WITH patients AS (\n  SELECT subject_id, gender, anchor_age, anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n),\nadmissions AS (\n  SELECT subject_id, hadm_id, admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\ndiagnoses AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND (icd_code LIKE '433%' OR icd_code LIKE '434%' OR icd_code = '436'))\n    OR\n    (icd_version = 10 AND icd_code LIKE 'I63%')\n  )\n),\nqualifying_adms AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_adm\n  FROM admissions a\n  INNER JOIN patients p ON a.subject_id = p.subject_id\n  INNER JOIN diagnoses d ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) = 82\n),\nglucose_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%glucose%'\n    AND category = 'Chemistry'\n    AND fluid = 'Blood'\n),\nglucose_labs AS (\n  SELECT \n    le.subject_id, \n    le.hadm_id, \n    le.charttime, \n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN glucose_items gi ON le.itemid = gi.itemid\n  INNER JOIN qualifying_adms qa ON le.subject_id = qa.subject_id AND le.hadm_id = qa.hadm_id\n  WHERE le.valuenum IS NOT NULL\n    AND le.valueuom = 'mg/dL'\n    AND le.charttime >= qa.admittime\n),\nfirst_glucose AS (\n  SELECT subject_id, hadm_id, valuenum AS admission_glucose\n  FROM (\n    SELECT \n      subject_id, \n      hadm_id, \n      valuenum,\n      ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n    FROM glucose_labs\n  )\n  WHERE rn = 1\n)\nSELECT APPROX_QUANTILES(admission_glucose, 4)[OFFSET(3)] AS p75_admission_glucose_mg_dl\nFROM first_glucose;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 4e5c4c47-5e72-4aac-9eb6-f7c4ac95f40e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

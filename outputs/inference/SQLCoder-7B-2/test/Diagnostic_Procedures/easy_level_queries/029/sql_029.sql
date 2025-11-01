@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY COUNT(DISTINCT p.procedure_id)) AS percentile FROM patients p JOIN procedures_icd pi ON p.subject_id = pi.subject_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dob)) BETWEEN 78 AND 88;

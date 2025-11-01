@@ -1,0 +1,29 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH ich_cohort AS (\n    SELECT\n        a.hadm_id,\n        a.subject_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag,\n        -- Calculate LOS in days using BigQuery's DATE_DIFF\n        DATE_DIFF(a.dischtime, a.admittime, DAY) AS los,\n        p.anchor_age\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        ON a.hadm_id = d.hadm_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 73 AND 83\n        AND d.icd_code LIKE 'I61.%'\n        AND d.icd_version = 10\n),\ninstability_score AS (\n    SELECT\n        c.hadm_id,\n        c.subject_id,\n        -- Count distinct lab types with at least one abnormal value in 48 hours\n        COUNT(DISTINCT CASE\n            WHEN le.valuenum IS NOT NULL\n                AND le.ref_range_lower IS NOT NULL\n                AND le.ref_range_upper IS NOT NULL\n                AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n            THEN le.itemid\n            ELSE NULL\n        END) AS instability_score\n    FROM\n        ich_cohort c\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON c.hadm_id = le.hadm_id\n        AND le.charttime BETWEEN c.admittime AND DATE_ADD(c.admittime, INTERVAL 48 HOUR)\n    GROUP BY\n        c.hadm_id, c.subject_id\n),\nquartiles AS (\n    SELECT\n        *,\n        NTILE(4) OVER (ORDER BY instability_score) AS quartile\n    FROM\n        instability_score\n),\nquartile_summary AS (\n    SELECT\n        quartile,\n        COUNT(*) AS patient_count,\n        ROUND(AVG(los), 2) AS mean_los,\n        ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(*), 2) AS mortality_rate\n    FROM\n        quartiles q\n    INNER JOIN\n        ich_cohort c\n        ON q.hadm_id = c.hadm_id\n    GROUP BY\n        quartile\n),\noverall_mortality AS (\n    SELECT\n        ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(*), 2) AS overall_mortality_rate\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions`\n)\nSELECT\n    qs.quartile,\n    qs.patient_count,\n    qs.mean_los,\n    qs.mortality_rate,\n    om.overall_mortality_rate\nFROM\n    quartile_summary qs,\n    overall_mortality om\nORDER BY\n    qs.quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Ordering by expressions of type STRUCT is not allowed at [50:33]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [50:33]\n\nLocation: US\nJob ID: 00b97e61-7fd0-4507-a037-a76e7c600713\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 285af008-03ea-404f-ab59-1c27592be1bd\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [9:9]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [9:9]\n\nLocation: US\nJob ID: 975abb4c-30d0-40cd-84de-aa0f9c82c6d7\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [50:33]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [50:33]\n\nLocation: US\nJob ID: 00b97e61-7fd0-4507-a037-a76e7c600713\n"
+    }
+  ]
+}

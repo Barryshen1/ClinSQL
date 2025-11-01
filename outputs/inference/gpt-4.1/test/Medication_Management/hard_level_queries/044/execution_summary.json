@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH pe_admissions AS (\n  -- Step 1: Identify women aged 64\u201374 with PE\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND (\n      (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^I26'))\n      OR (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^4151'))\n    )\n),\n\nmed_complexity AS (\n  -- Step 2: Count distinct meds in first 24h for each admission\n  SELECT\n    pe.subject_id,\n    pe.hadm_id,\n    pe.admittime,\n    pe.dischtime,\n    pe.hospital_expire_flag,\n    pe.anchor_age,\n    IFNULL(COUNT(DISTINCT pr.drug), 0) AS med_complexity\n  FROM pe_admissions pe\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.prescriptions pr\n    ON pe.hadm_id = pr.hadm_id\n    AND pr.starttime >= pe.admittime\n    AND pr.starttime < DATETIME_ADD(pe.admittime, INTERVAL 24 HOUR)\n  GROUP BY pe.subject_id, pe.hadm_id, pe.admittime, pe.dischtime, pe.hospital_expire_flag, pe.anchor_age\n),\n\ntertile_assign AS (\n  -- Step 3: Assign tertiles based on med complexity\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag,\n    anchor_age,\n    med_complexity,\n    NTILE(3) OVER (ORDER BY med_complexity) AS tertile\n  FROM med_complexity\n),\n\nreadmissions AS (\n  -- Step 4: Find 30-day readmissions for each admission\n  SELECT\n    curr.hadm_id,\n    CASE WHEN MIN(next.admittime) IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM tertile_assign curr\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.admissions next\n    ON curr.subject_id = next.subject_id\n    AND next.admittime > curr.dischtime\n    AND next.admittime <= DATETIME_ADD(curr.dischtime, INTERVAL 30 DAY)\n  GROUP BY curr.hadm_id\n),\n\nfinal AS (\n  -- Step 5: Combine all info\n  SELECT\n    CAST(t.tertile AS INT64) AS tertile,\n    t.hadm_id,\n    t.med_complexity,\n    DATETIME_DIFF(t.dischtime, t.admittime, DAY) AS los,\n    t.hospital_expire_flag,\n    r.readmitted_30d\n  FROM tertile_assign t\n  LEFT JOIN readmissions r\n    ON t.hadm_id = r.hadm_id\n)\n\n-- Step 6: Aggregate by tertile\nSELECT\n  tertile,\n  COUNT(*) AS admissions,\n  MIN(med_complexity) AS med_score_min,\n  MAX(med_complexity) AS med_score_max,\n  APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_los,\n  ROUND(100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 1) AS mortality_percent,\n  ROUND(100 * SUM(readmitted_30d) / COUNT(*), 1) AS readmission_30d_percent\nFROM final\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Ordering by expressions of type STRUCT is not allowed at [53:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [53:29]\n\nLocation: US\nJob ID: 02e8d2a0-342f-4b7d-9ed8-f7d239a03062\n",
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [47:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [47:29]\n\nLocation: US\nJob ID: ee52634a-7afb-452d-9b92-50bb5761b163\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [53:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [53:29]\n\nLocation: US\nJob ID: d2c00ed9-2172-4e07-8345-dae59a59ce2f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [53:29]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [53:29]\n\nLocation: US\nJob ID: 02e8d2a0-342f-4b7d-9ed8-f7d239a03062\n"
+    }
+  ]
+}

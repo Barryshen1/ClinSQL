@@ -1,0 +1,16 @@
+{
+  "query": "I have a 57-year-old female post–cardiac arrest inpatient. Among females 52–62 with post–cardiac arrest, in the first 48 h what is the instability score IQR (Q1, median)? Compare critical lab events/admission to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE a.dischtime IS NOT NULL  -- Exclude ongoing admissions for LOS/mortality\n),\nfiltered_demographics AS (\n  SELECT\n    hadm_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag,\n    -- Calculate age at admission (year-level approximation)\n    anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) AS age_at_admission\n  FROM base_admissions\n  WHERE gender = 'F'\n    AND anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) BETWEEN 52 AND 62\n),\ncardiac_arrest_cohort AS (\n  SELECT\n    hadm_id,\n    MAX(CASE \n          WHEN (icd_version = 9 AND icd_code = '4275')  -- ICD-9 cardiac arrest\n          OR (icd_version = 10 AND icd_code LIKE 'I46.%')  -- ICD-10 cardiac arrest\n          THEN 1 ELSE 0 \n        END) AS has_cardiac_arrest\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\ninstability_scores AS (\n  SELECT\n    f.hadm_id,\n    f.admittime,\n    f.dischtime,\n    f.hospital_expire_flag,\n    COALESCE(c.has_cardiac_arrest, 0) AS has_cardiac_arrest,\n    COUNT(l.labevent_id) AS instability_score  -- Count critical lab events in 48h\n  FROM filtered_demographics f\n  LEFT JOIN cardiac_arrest_cohort c\n    ON f.hadm_id = c.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON f.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN f.admittime \n                        AND TIMESTAMP_ADD(f.admittime, INTERVAL 48 HOUR)\n    AND l.flag IS NOT NULL  -- Critical lab proxy\n  GROUP BY f.hadm_id, f.admittime, f.dischtime, f.hospital_expire_flag, c.has_cardiac_arrest\n),\ncohort_data AS (\n  SELECT\n    hadm_id,\n    CASE \n      WHEN has_cardiac_arrest = 1 THEN 'cardiac_arrest' \n      ELSE 'general_inpatients' \n    END AS cohort,\n    instability_score,\n    DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0 AS los_days,  -- LOS in days\n    hospital_expire_flag AS mortality\n  FROM instability_scores\n)\nSELECT\n  cohort,\n  APPROX_QUANTILES(instability_score, 100)[OFFSET(25)] AS instability_score_q1,\n  APPROX_QUANTILES(instability_score, 100)[OFFSET(50)] AS instability_score_median,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS los_median_days,\n  AVG(mortality) AS mortality_rate\nFROM cohort_data\nGROUP BY cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "qwen3-235b-a22b-thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

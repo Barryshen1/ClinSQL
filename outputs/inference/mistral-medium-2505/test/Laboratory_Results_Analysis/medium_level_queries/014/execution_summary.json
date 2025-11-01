@@ -1,0 +1,22 @@
+{
+  "query": "For my 84-year-old male, among male patients aged 79\u201389 admitted with ACS, what are counts and percentages of the initial Troponin T categorized as Normal, Borderline, and Elevated?",
+  "final_sql": "WITH\n-- Get male patients aged 79-89\neligible_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 79 AND 89\n),\n\n-- Get admissions with ACS diagnosis (ICD-10 codes I20-I25)\nacs_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM eligible_patients)\n    AND d.icd_code BETWEEN 'I20' AND 'I25'\n    AND d.icd_version = 10\n),\n\n-- Get Troponin T itemid (by label)\ntroponin_item AS (\n  SELECT\n    itemid\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE\n    label LIKE '%Troponin T%'\n),\n\n-- Get first Troponin T measurement per admission\nfirst_troponin AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.valuenum,\n    l.valueuom,\n    l.ref_range_upper,\n    ROW_NUMBER() OVER (PARTITION BY l.subject_id, l.hadm_id ORDER BY l.charttime) as rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    troponin_item t ON l.itemid = t.itemid\n  WHERE\n    l.subject_id IN (SELECT subject_id FROM eligible_patients)\n    AND l.hadm_id IN (SELECT hadm_id FROM acs_admissions)\n    AND l.valuenum IS NOT NULL\n)\n\n-- Final categorization and counts\nSELECT\n  troponin_category,\n  COUNT(*) as count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) as percentage\nFROM (\n  SELECT\n    CASE\n      WHEN ft.valuenum < ft.ref_range_upper THEN 'Normal'\n      WHEN ft.valuenum <= ft.ref_range_upper * 1.5 THEN 'Borderline'\n      ELSE 'Elevated'\n    END as troponin_category\n  FROM\n    first_troponin ft\n  WHERE\n    ft.rn = 1\n    AND ft.ref_range_upper IS NOT NULL\n)\nGROUP BY\n  troponin_category\nORDER BY\n  troponin_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: loinc_code at [39:5]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [39:5]\n\nLocation: US\nJob ID: 418f3706-a4b1-477f-986c-9fd23830c202\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

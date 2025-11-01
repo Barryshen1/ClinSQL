@@ -1,0 +1,16 @@
+{
+  "query": "I have a 52-year-old male to evaluate. In males 47\u201357 admitted for ischemic heart disease whose first Troponin\u2011T exceeded the 99th percentile (>0.014 ng/mL), what are the median and IQR?",
+  "final_sql": "WITH IHD_Admissions AS (\n    -- Step 1: Identify all hospital admissions for the target patient cohort.\n    -- Cohort: Males, 47-57 years old, admitted for Ischemic Heart Disease.\n    SELECT DISTINCT\n        adm.hadm_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n        ON adm.hadm_id = dx.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddx\n        ON dx.icd_code = ddx.icd_code AND dx.icd_version = ddx.icd_version\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 47 AND 57\n        AND (\n            LOWER(ddx.long_title) LIKE '%ischemic heart disease%'\n            OR LOWER(ddx.long_title) LIKE '%myocardial infarction%'\n        )\n),\n\nRanked_Troponin AS (\n    -- Step 2: For the identified admissions, find and rank all Troponin-T measurements by time.\n    SELECT\n        le.hadm_id,\n        le.valuenum,\n        -- Rank the troponin tests for each admission chronologically\n        ROW_NUMBER() OVER(PARTITION BY le.hadm_id ORDER BY le.charttime ASC) as rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    INNER JOIN\n        IHD_Admissions AS iha\n        ON le.hadm_id = iha.hadm_id\n    WHERE\n        -- itemid 51003 corresponds to 'Troponin T' in d_labitems\n        le.itemid = 51003\n        AND le.valuenum IS NOT NULL\n        -- Ensure the unit is correct to match the threshold given in the question\n        AND le.valueuom = 'ng/mL'\n)\n\n-- Step 3 & 4: Filter for the first measurement, apply the value threshold, and calculate statistics.\nSELECT\n    -- Median (50th percentile)\n    APPROX_QUANTILES(t.valuenum, 100)[OFFSET(50)] AS median_troponin_t,\n    -- Interquartile Range (IQR) calculated as 75th percentile - 25th percentile\n    APPROX_QUANTILES(t.valuenum, 100)[OFFSET(75)] - APPROX_QUANTILES(t.valuenum, 100)[OFFSET(25)] AS iqr_troponin_t\nFROM\n    Ranked_Troponin AS t\nWHERE\n    -- Filter for only the first measurement in each admission\n    t.rn = 1\n    -- Filter for admissions where this first measurement exceeded the 99th percentile threshold\n    AND t.valuenum > 0.014;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

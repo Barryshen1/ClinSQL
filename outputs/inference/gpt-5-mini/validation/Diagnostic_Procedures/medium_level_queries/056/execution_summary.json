@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 52-year-old woman. Among women aged 47\u201357 hospitalized with acute pancreatitis, what are patient counts and mean CT/MRI procedures per admission for LOS 1\u20134 days versus 5\u20138 days?",
+  "final_sql": "WITH pancreatitis_admissions AS (\n  -- Admissions for female patients age 47-57 with a diagnosis labeled \"acute pancreatitis\"\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code\n   AND d.icd_version = dicd.icd_version\n  WHERE LOWER(COALESCE(dicd.long_title, '')) LIKE '%acute pancreatitis%'\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 47 AND 57\n),\n\nimaging_counts AS (\n  -- Count CT/MRI HCPCS events that occur during each admission\n  SELECT\n    a.hadm_id,\n    COUNT(*) AS imaging_count\n  FROM pancreatitis_admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp.hcpcsevents` he\n    ON a.hadm_id = he.hadm_id\n   AND a.subject_id = he.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh\n    ON he.hcpcs_cd = dh.code\n  WHERE\n    -- ensure event occurred during the hospital admission (chartdate is a DATE)\n    he.chartdate BETWEEN DATE(a.admittime) AND DATE(a.dischtime)\n    -- identify CT / MRI by keywords in the short_description or long_description\n    AND REGEXP_CONTAINS(\n      UPPER(CONCAT(IFNULL(he.short_description, ''), ' ', IFNULL(dh.long_description, ''))),\n      r'\\bCT\\b|\\bMRI\\b|TOMOGRAPH|MAGNETIC'\n    )\n  GROUP BY a.hadm_id\n)\n\nSELECT\n  CASE\n    WHEN pa.los_days BETWEEN 1 AND 4 THEN '1-4'\n    WHEN pa.los_days BETWEEN 5 AND 8 THEN '5-8'\n  END AS los_group,\n  COUNT(*) AS admission_count,\n  -- average number of CT/MRI procedures per admission (treat NULL as 0)\n  ROUND(AVG(COALESCE(ic.imaging_count, 0)), 3) AS mean_ct_mri_per_admission\nFROM pancreatitis_admissions pa\nLEFT JOIN imaging_counts ic\n  ON pa.hadm_id = ic.hadm_id\nWHERE pa.los_days BETWEEN 1 AND 4 OR pa.los_days BETWEEN 5 AND 8\nGROUP BY los_group\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

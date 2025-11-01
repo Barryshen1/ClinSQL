@@ -1,0 +1,16 @@
+{
+  "query": "91\u2011year\u2011old man admitted urgently on Medicare: among male inpatients 86\u201396, report LOS mean, median, p75, p90 by discharge outcome (home, facility, in\u2011hospital death) and percentile of 10\u2011day stay.",
+  "final_sql": "WITH cohort_admissions AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        -- Calculate Length of Stay in days\n        DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n        -- Categorize discharge outcome\n        CASE\n            WHEN adm.hospital_expire_flag = 1 THEN 'In-hospital Death'\n            WHEN adm.discharge_location IN ('HOME', 'HOME HEALTH CARE', 'AGAINST ADVICE') THEN 'Home'\n            -- All other living discharges (including transfers to other facilities, hospice, etc.) are grouped into 'Facility'.\n            ELSE 'Facility'\n        END AS discharge_outcome\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        -- Filter for specified patient cohort\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 86 AND 96\n        AND adm.admission_type = 'URGENT'\n        AND adm.insurance = 'Medicare'\n        -- Ensure valid admission and discharge times for LOS calculation\n        AND adm.admittime IS NOT NULL\n        AND adm.dischtime IS NOT NULL\n        -- Exclude any potential data errors where discharge is before admission\n        AND DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) >= 0\n)\n-- Step 2: Calculate aggregate statistics (mean, median, p75, p90, and percentage of 10-day stay or less)\n--         for LOS, grouped by the defined discharge outcomes.\nSELECT\n    discharge_outcome,\n    ROUND(AVG(los_days), 2) AS mean_los_days,\n    -- APPROX_QUANTILES is used for median (50th percentile), 75th percentile, and 90th percentile.\n    -- This is an approximate quantile calculation, which is standard practice and efficient in BigQuery.\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS median_los_days,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(75)], 2) AS p75_los_days,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(90)], 2) AS p90_los_days,\n    -- Calculate the percentage of patients with a stay of 10 days or less within each outcome group.\n    ROUND(SUM(CASE WHEN los_days <= 10 THEN 1 ELSE 0 END) * 100.0 / COUNT(los_days), 2) AS percent_10_day_stay_or_less\nFROM\n    cohort_admissions\nGROUP BY\n    discharge_outcome\nORDER BY\n    discharge_outcome;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

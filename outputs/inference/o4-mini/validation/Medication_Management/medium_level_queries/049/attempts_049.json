@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  -- Define the target admissions\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 66 AND 76\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n    -- has diabetes\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n          ON d.icd_code = diag.icd_code\n          AND d.icd_version = diag.icd_version\n      WHERE\n        d.hadm_id = a.hadm_id\n        AND LOWER(diag.long_title) LIKE '%diabetes%'\n    )\n    -- has heart failure\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n          ON d.icd_code = diag.icd_code\n          AND d.icd_version = diag.icd_version\n      WHERE\n        d.hadm_id = a.hadm_id\n        AND LOWER(diag.long_title) LIKE '%heart failure%'\n    )\n),\ntotal_cohort AS (\n  -- Count total admissions in the cohort for denominator\n  SELECT COUNT(DISTINCT hadm_id) AS n_cohort\n  FROM cohort\n),\nexposures AS (\n  -- Gather prescriptions in first 72h and last 24h\n  SELECT\n    c.hadm_id,\n    p.drug_type,\n    'first_72h' AS period\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON p.hadm_id = c.hadm_id\n  WHERE\n    p.starttime >= c.admittime\n    AND p.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n\n  UNION ALL\n\n  SELECT\n    c.hadm_id,\n    p.drug_type,\n    'last_24h' AS period\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON p.hadm_id = c.hadm_id\n  WHERE\n    p.starttime >= TIMESTAMP_SUB(c.dischtime, INTERVAL 24 HOUR)\n    AND p.starttime <= c.dischtime\n)\n\nSELECT\n  e.period,\n  e.drug_type,\n  ROUND(100.0 * COUNT(DISTINCT e.hadm_id) / tc.n_cohort, 1) AS pct_of_cohort\nFROM exposures e\nCROSS JOIN total_cohort tc\nGROUP BY\n  e.period,\n  e.drug_type,\n  tc.n_cohort\nORDER BY\n  e.period,\n  pct_of_cohort DESC;",
+      "success": true,
+      "error": null,
+      "row_count": 6
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 6
+}

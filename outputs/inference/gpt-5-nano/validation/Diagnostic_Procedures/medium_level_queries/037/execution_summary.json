@@ -1,0 +1,16 @@
+{
+  "query": "For a 48\u2011year\u2011old man: among males 43\u201353 hospitalized with AMI, what's the median (IQR) number of radiography/CTs per admission for 1\u20133 vs 4\u20137\u2011day stays, stratified by primary vs secondary AMI?",
+  "final_sql": "WITH\n-- 1) Define AMI-admitted admissions with primary/secondary AMI status and 1-7 day LOS\nAMI_HADM AS (\n  SELECT DISTINCT a.hadm_id,\n         CASE \n           WHEN MAX(CASE WHEN di.seq_num = 1 THEN 1 ELSE 0 END) = 1 THEN 'Primary' \n           ELSE 'Secondary' \n         END AS ami_status\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON di.subject_id = a.subject_id\n   AND di.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND (\n          (di.icd_version = 9 AND di.icd_code LIKE '410%')\n       OR (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%'))\n        )\n  GROUP BY a.hadm_id\n),\nAMI_HADM_STAY AS (\n  SELECT h.hadm_id,\n         h.ami_status,\n         CASE\n           WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3'\n           WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7'\n         END AS stay_group\n  FROM AMI_HADM h\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.hadm_id = h.hadm_id\n  WHERE TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\n-- 2) Imaging counts per admission (aggregate across all ICU stays for the admission)\nIMAGING_PER_ADM AS (\n  SELECT hi.hadm_id,\n         COUNT(*) AS imaging_counts\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` hi\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.hadm_id = hi.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime BETWEEN hi.intime AND hi.outtime\n    AND (\n          di.category IN ('Radiology','Imaging')\n          OR di.label LIKE '%X-ray%' \n          OR di.label LIKE '%CT%' \n          OR di.label LIKE '%Radiograph%'\n        )\n  GROUP BY hi.hadm_id\n),\nIMAGING_ADM AS (\n  SELECT hadm_id,\n         SUM(imaging_counts) AS imaging_counts\n  FROM IMAGING_PER_ADM\n  GROUP BY hadm_id\n)\n-- 3) Aggregate per AMI group and LOS bin, computing median and IQR via approximate quantiles\nSELECT s.ami_status AS ami_status,\n       s.stay_group AS stay_group,\n       APPROX_QUANTILES(COALESCE(i.imaging_counts, 0), 100)[OFFSET(50)] AS median_imaging,\n       APPROX_QUANTILES(COALESCE(i.imaging_counts, 0), 100)[OFFSET(25)] AS q1_imaging,\n       APPROX_QUANTILES(COALESCE(i.imaging_counts, 0), 100)[OFFSET(75)] AS q3_imaging\nFROM AMI_HADM_STAY s\nLEFT JOIN IMAGING_ADM i\n  ON i.hadm_id = s.hadm_id\nGROUP BY s.ami_status, s.stay_group\nORDER BY s.ami_status, s.stay_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

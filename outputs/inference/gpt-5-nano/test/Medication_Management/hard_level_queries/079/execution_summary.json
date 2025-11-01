@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 94\u2011year\u2011old man admitted with hemorrhagic stroke. Among male inpatients aged 89\u201399 with hemorrhagic stroke, stratified into quintiles by medication complexity (unique drugs in first 7 hospital days), report LOS, inpatient mortality, and 30\u2011day readmission per quintile.",
+  "final_sql": "WITH hemorrhagic_cohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id\n   AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE di.icd_version = 10\n    AND di.icd_code LIKE 'I6%'\n    AND p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 89 AND 99\n),\nmed_count AS (\n  SELECT\n    h.hadm_id,\n    COUNT(DISTINCT sp.drug) AS unique_drug_count\n  FROM hemorrhagic_cohort AS h\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS sp\n    ON sp.subject_id = h.subject_id\n   AND sp.hadm_id = h.hadm_id\n   AND sp.starttime >= h.admittime\n   AND sp.starttime < TIMESTAMP_ADD(h.admittime, INTERVAL 7 DAY)\n  WHERE sp.drug IS NOT NULL\n  GROUP BY h.hadm_id\n),\ncohort AS (\n  SELECT\n    h.hadm_id,\n    h.subject_id,\n    h.admittime,\n    h.dischtime,\n    h.hospital_expire_flag,\n    h.deathtime,\n    COALESCE(m.unique_drug_count, 0) AS unique_drug_count\n  FROM hemorrhagic_cohort AS h\n  LEFT JOIN med_count AS m ON m.hadm_id = h.hadm_id\n),\nquint AS (\n  SELECT\n    hadm_id,\n    subject_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag,\n    deathtime,\n    unique_drug_count,\n    NTILE(5) OVER (ORDER BY unique_drug_count ASC) AS quintile\n  FROM cohort\n)\n\nSELECT\n  quintile,\n  AVG(los_days) AS avg_los_days,\n  AVG(inpatient_mortality) AS inpatient_mortality_rate,\n  AVG(readmission_30d) AS readmission_30d_rate\nFROM (\n  SELECT\n    q.quintile,\n    TIMESTAMP_DIFF(TIMESTAMP(c.dischtime), TIMESTAMP(c.admittime), SECOND) / 86400.0 AS los_days,\n    CASE WHEN c.hospital_expire_flag = 1 OR c.deathtime IS NOT NULL THEN 1.0 ELSE 0.0 END AS inpatient_mortality,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = c.subject_id\n          AND a2.hadm_id != c.hadm_id\n          AND a2.admittime > c.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n      ) THEN 1.0\n      ELSE 0.0\n    END AS readmission_30d\n  FROM quint q\n  JOIN cohort c ON c.hadm_id = q.hadm_id\n) t\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [66:6]; reason: invalidQuery, location: query, message: No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [66:6]\n\nLocation: US\nJob ID: 0485d551-e208-4d06-ae88-dd1aaa7f5318\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

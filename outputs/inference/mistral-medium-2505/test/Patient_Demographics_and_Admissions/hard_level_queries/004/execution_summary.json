@@ -1,0 +1,16 @@
+{
+  "query": "I have a 90-year-old female patient. Among female Medicare patients aged 85\u201395 who were transferred from another hospital with a principal diagnosis of osteomyelitis, how many index admissions meet these criteria in the MIMIC\u2011IV dataset during the study period?",
+  "final_sql": "WITH\n-- Get index admissions (first admission for each patient)\nindex_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS admission_rank\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\n\n-- Filter for female Medicare patients aged 85-95 at admission\nfiltered_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.insurance,\n    a.admission_location,\n    -- Calculate age at admission\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    index_admissions ia ON p.subject_id = ia.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id AND ia.hadm_id = a.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND a.insurance = 'Medicare'\n    AND ia.admission_rank = 1  -- Index admission\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 85 AND 95\n    AND a.admission_location LIKE '%TRANSFER%'\n),\n\n-- Get principal diagnosis (seq_num = 1) and join with ICD descriptions\nprincipal_diagnoses AS (\n  SELECT\n    fp.subject_id,\n    fp.hadm_id,\n    d.icd_code,\n    di.long_title\n  FROM\n    filtered_patients fp\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON fp.subject_id = d.subject_id AND fp.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    d.seq_num = 1  -- Principal diagnosis\n    AND LOWER(di.long_title) LIKE '%osteomyelitis%'\n)\n\n-- Count the number of index admissions meeting all criteria\nSELECT\n  COUNT(DISTINCT pd.subject_id) AS num_patients\nFROM\n  principal_diagnoses pd;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

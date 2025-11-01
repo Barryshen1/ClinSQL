@@ -1,0 +1,16 @@
+{
+  "query": "For my 43-year-old female, among women 38\u201348 with heart failure, what's the average 30\u2011day readmission rate after first HF admission?",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    p.anchor_year,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  WHERE p.gender = 'F'\n),\nadmissions_with_age AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN patients_filtered p ON a.subject_id = p.subject_id\n  WHERE a.dischtime IS NOT NULL\n),\nhf_diagnoses AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.age_at_admission\n  FROM admissions_with_age a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di ON a.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE \n    (d.icd_code LIKE 'I50%' AND d.icd_version = 10)\n    OR LOWER(d.long_title) LIKE '%heart failure%'\n),\nfirst_hf_admission AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n  FROM hf_diagnoses\n  WHERE age_at_admission BETWEEN 38 AND 48\n),\nfirst_admissions_only AS (\n  SELECT subject_id, hadm_id, dischtime\n  FROM first_hf_admission\n  WHERE rn = 1\n),\nreadmissions AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.dischtime,\n    a.admittime AS readmit_admittime,\n    ROW_NUMBER() OVER (PARTITION BY f.subject_id ORDER BY a.admittime) AS readmit_rank\n  FROM first_admissions_only f\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON f.subject_id = a.subject_id\n    AND a.admittime > f.dischtime\n    AND a.admittime <= DATETIME_ADD(f.dischtime, INTERVAL 30 DAY)\n)\nSELECT\n  AVG(CASE WHEN r.subject_id IS NOT NULL THEN 1.0 ELSE 0.0 END) AS thirty_day_readmission_rate\nFROM first_admissions_only f\nLEFT JOIN (\n  SELECT DISTINCT subject_id\n  FROM readmissions\n  WHERE readmit_rank = 1\n) r ON f.subject_id = r.subject_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

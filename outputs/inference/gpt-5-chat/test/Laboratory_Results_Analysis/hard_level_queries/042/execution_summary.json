@@ -1,0 +1,28 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH ich_cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n    ON di.icd_code = ddi.icd_code\n    AND di.icd_version = ddi.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 73 AND 83\n    AND LOWER(ddi.long_title) LIKE '%intracerebral hemorrhage%'\n),\nlabs_48h AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT le.itemid) AS instability_score\n  FROM ich_cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.subject_id = le.subject_id\n    AND c.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  WHERE le.itemid IS NOT NULL\n    AND (\n      LOWER(le.flag) = 'abnormal'\n      OR (le.valuenum IS NOT NULL AND (\n           (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower) OR\n           (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper)\n         ))\n    )\n  GROUP BY c.subject_id, c.hadm_id\n),\ncohort_with_score AS (\n  SELECT\n    c.*,\n    IFNULL(l.instability_score, 0) AS instability_score,\n    DATETIME_DIFF(c.dischtime, c.admittime, DAY) AS los_days\n  FROM ich_cohort c\n  LEFT JOIN labs_48h l\n    ON c.subject_id = l.subject_id AND c.hadm_id = l.hadm_id\n),\nquartiled AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM cohort_with_score\n)\n-- First result: quartile stats\nSELECT\n  quartile,\n  COUNT(*) AS admissions_count,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(AVG(hospital_expire_flag)*100, 2) AS mortality_rate_percent\nFROM quartiled\nGROUP BY quartile\nORDER BY quartile;\n\n-- Second result: compare ICH vs all inpatients mean instability score\nWITH all_inpatient_scores AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    COUNT(DISTINCT le.itemid) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON a.subject_id = le.subject_id\n    AND a.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 48 HOUR)\n  WHERE le.itemid IS NOT NULL\n    AND (\n      LOWER(le.flag) = 'abnormal'\n      OR (le.valuenum IS NOT NULL AND (\n           (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower) OR\n           (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper)\n         ))\n    )\n  GROUP BY a.subject_id, a.hadm_id\n),\ncohort_with_score AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    IFNULL(l.instability_score, 0) AS instability_score\n  FROM (\n    SELECT\n      p.subject_id,\n      a.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON a.hadm_id = di.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n      ON di.icd_code = ddi.icd_code\n      AND di.icd_version = ddi.icd_version\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 73 AND 83\n      AND LOWER(ddi.long_title) LIKE '%intracerebral hemorrhage%'\n  ) c\n  LEFT JOIN all_inpatient_scores l\n    ON c.subject_id = l.subject_id AND c.hadm_id = l.hadm_id\n),\nich_mean_score AS (\n  SELECT AVG(instability_score) AS mean_score\n  FROM cohort_with_score\n),\nall_mean_score AS (\n  SELECT AVG(instability_score) AS mean_score\n  FROM all_inpatient_scores\n)\nSELECT 'ICH cohort' AS group_label, mean_score FROM ich_mean_score\nUNION ALL\nSELECT 'All inpatients' AS group_label, mean_score FROM all_mean_score;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/578979f9-47df-4a0e-935e-5d6fbf489211?maxResults=0&location=US&prettyPrint=false: Invalid value: Table \"cohort_with_score\" must be qualified with a dataset (e.g. dataset.table). at [69:1]\n\nLocation: US\nJob ID: 578979f9-47df-4a0e-935e-5d6fbf489211\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/ea8d1e97-f762-4fbe-b486-b3db317b2e20?maxResults=0&location=US&prettyPrint=false: Invalid value: Table \"all_inpatient_scores\" must be qualified with a dataset (e.g. dataset.table). at [88:1]\n\nLocation: US\nJob ID: ea8d1e97-f762-4fbe-b486-b3db317b2e20\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

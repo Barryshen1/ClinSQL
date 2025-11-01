@@ -1,0 +1,1 @@
+SELECT stddev(p.hadm_id) AS standard_deviation FROM patients p JOIN procedures_icd pi ON p.subject_id = pi.subject_id WHERE p.gender = 'F' AND p.anchor_year = 46 AND EXTRACT(YEAR FROM p.dob) BETWEEN 2010 AND 2020 AND pi.icd_code = '42505000';

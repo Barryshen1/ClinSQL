@@ -1,0 +1,28 @@
+{
+  "query": "For my 46\u2011year\u2011old male: among male patients aged 41\u201351 admitted with chest pain or AMI, report counts, percentages, and mean, median, IQR of initial Troponin T by category (normal/borderline/elevated).",
+  "final_sql": "WITH troponin_items AS (\n  -- pick Troponin T items by label (some datasets do not expose a loinc_code column)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n     OR LOWER(label) LIKE '%troponin-t%'\n),\ncohort_admissions AS (\n  -- admissions for male patients age 41-51 with chest pain or AMI diagnosis\n  SELECT DISTINCT a.hadm_id,\n         a.subject_id,\n         a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code\n   AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 41 AND 51\n    -- simple text match for chest pain / myocardial infarction in long_title\n    AND (\n          LOWER(dicd.long_title) LIKE '%chest pain%'\n       OR LOWER(dicd.long_title) LIKE '%myocardial infarction%'\n       OR LOWER(dicd.long_title) LIKE '%acute myocardial infarction%'\n    )\n),\nfirst_troponin_per_adm AS (\n  -- find earliest troponin charttime per admission (hadm_id)\n  SELECT le.hadm_id,\n         MIN(le.charttime) AS first_trop_charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  JOIN cohort_admissions ca\n    ON le.hadm_id = ca.hadm_id\n  -- ensure the troponin occurred during the admission (on/after admittime)\n  WHERE le.charttime >= ca.admittime\n  GROUP BY le.hadm_id\n),\ninitial_troponin AS (\n  -- get the troponin value and reference range at the first measurement time\n  SELECT ca.hadm_id,\n         ca.subject_id,\n         le.valuenum,\n         le.valueuom,\n         le.ref_range_lower,\n         le.ref_range_upper,\n         le.charttime\n  FROM first_troponin_per_adm f\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = f.hadm_id\n   AND le.charttime = f.first_trop_charttime\n  JOIN cohort_admissions ca\n    ON le.hadm_id = ca.hadm_id\n  -- exclude non-numeric valuenum (we handle numeric summaries only)\n  WHERE le.valuenum IS NOT NULL\n),\ncategorized_troponin AS (\n  -- categorize relative to the local reference upper limit.\n  -- Note: if ref_range_upper is NULL we label 'unknown'.\n  SELECT it.*,\n    CASE\n      WHEN it.ref_range_upper IS NULL THEN 'unknown'\n      WHEN it.valuenum <= it.ref_range_upper THEN 'normal'\n      WHEN it.valuenum > it.ref_range_upper\n           AND it.valuenum <= (it.ref_range_upper * 2) THEN 'borderline'\n      WHEN it.valuenum > (it.ref_range_upper * 2) THEN 'elevated'\n      ELSE 'unknown'\n    END AS trop_category\n  FROM initial_troponin it\n)\n\n-- Aggregate per category, compute quantiles as an array, then unpack\nSELECT\n  trop_category AS troponin_category,\n  n_admissions,\n  ROUND(100.0 * n_admissions / total_categorized, 2) AS pct_of_cohort,\n  ROUND(mean_valuenum, 4) AS mean_valuenum,\n  quantiles[OFFSET(1)] AS approx_q1,\n  quantiles[OFFSET(2)] AS approx_median,\n  quantiles[OFFSET(3)] AS approx_q3,\n  ROUND(quantiles[OFFSET(3)] - quantiles[OFFSET(1)], 4) AS approx_IQR,\n  units_present\nFROM (\n  SELECT\n    ct.trop_category,\n    COUNT(*) AS n_admissions,\n    AVG(ct.valuenum) AS mean_valuenum,\n    APPROX_QUANTILES(ct.valuenum, 4) AS quantiles, -- returns array [min, Q1, median, Q3, max]\n    ARRAY_AGG(DISTINCT ct.valueuom IGNORE NULLS) AS units_present\n  FROM categorized_troponin ct\n  WHERE ct.trop_category IN ('normal','borderline','elevated')\n  GROUP BY ct.trop_category\n) agg\nCROSS JOIN (\n  -- explicit total for categories considered (exclude 'unknown')\n  SELECT COUNT(*) AS total_categorized\n  FROM categorized_troponin\n  WHERE trop_category IN ('normal','borderline','elevated')\n) totals\nORDER BY\n  CASE troponin_category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'elevated' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]\n\nLocation: US\nJob ID: be5426c3-db60-4d44-a419-562825d18603\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: loinc_code at [7:9]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [7:9]\n\nLocation: US\nJob ID: d35e76d7-3f2e-4002-b641-ec09b1cec471\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

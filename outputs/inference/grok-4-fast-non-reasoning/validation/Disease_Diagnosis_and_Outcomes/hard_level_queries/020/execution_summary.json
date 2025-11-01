@@ -1,0 +1,28 @@
+{
+  "query": "I have a 51-year-old male inpatient. Among male inpatients 46\u201356 with acute myocardial infarction, stratify by the composite risk score (age plus major complications) into quintiles and report in-hospital mortality%, major complication%, and median survivor LOS per quintile.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: males aged 46-56 with AMI\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    d.seq_num,\n    d.icd_code,\n    d.icd_version\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 46 AND 56\n    AND a.hadm_id IS NOT NULL\n    AND (\n      -- ICD-9 AMI\n      (d.icd_version = '9' AND d.icd_code LIKE '410%')\n      OR\n      -- ICD-10 AMI\n      (d.icd_version = '10' AND d.icd_code LIKE 'I21%')\n    )\n),\n\ncomplications AS (\n  -- Flag and count major complications per admission\n  SELECT \n    c.hadm_id,\n    MAX(c.anchor_age) AS anchor_age,\n    MIN(c.admittime) AS admittime,\n    MAX(c.dischtime) AS dischtime,\n    MAX(c.hospital_expire_flag) AS hospital_expire_flag,\n    -- Count major complications from diagnoses (secondary)\n    COUNT(DISTINCT \n      CASE \n        WHEN c.icd_version = '9' \n             AND c.seq_num > 1\n             AND (c.icd_code = '785.51' OR c.icd_code = '427.41' OR c.icd_code = '427.5' OR c.icd_code = '998.11')\n             THEN CONCAT('diag9_', c.icd_code)\n        WHEN c.icd_version = '10' \n             AND c.seq_num > 1\n             AND (c.icd_code = 'I50.1' OR c.icd_code = 'I48' OR c.icd_code = 'I46' OR c.icd_code LIKE 'T81.0%')\n             THEN CONCAT('diag10_', c.icd_code)\n        ELSE NULL \n      END\n    ) AS major_comp_count\n  FROM cohort c\n  GROUP BY c.hadm_id\n),\n\nrisk_strat AS (\n  SELECT \n    *,\n    anchor_age + COALESCE(major_comp_count, 0) AS composite_score,\n    CASE WHEN COALESCE(major_comp_count, 0) >= 1 THEN 1 ELSE 0 END AS has_major_comp,\n    SAFE.DATE_DIFF(PARSE_DATE('%Y-%m-%d %H:%M:%S', dischtime), PARSE_DATE('%Y-%m-%d %H:%M:%S', admittime), DAY) AS los_days\n  FROM complications\n),\n\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY composite_score) AS quintile\n  FROM risk_strat\n),\n\nsurvivor_los AS (\n  SELECT \n    quintile,\n    PERCENTILE_CONT(los_days, 0.5) OVER (PARTITION BY quintile) AS median_los_days\n  FROM quintiles\n  WHERE hospital_expire_flag = 0\n)\n\n-- Aggregate outcomes by quintile\nSELECT \n  q.quintile,\n  ROUND(AVG(q.hospital_expire_flag) * 100.0, 2) AS mortality_pct,\n  ROUND(AVG(q.has_major_comp) * 100.0, 2) AS major_comp_pct,\n  ROUND(s.median_los_days, 2) AS median_los_days\nFROM quintiles q\nLEFT JOIN survivor_los s\n  ON q.quintile = s.quintile\nGROUP BY q.quintile, s.median_los_days\nORDER BY q.quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [27:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [27:8]\n\nLocation: US\nJob ID: 867bac57-3529-4a5b-8a73-2322db6d8f86\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword FILTER at [105:77]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword FILTER at [105:77]\n\nLocation: US\nJob ID: 10942394-6768-49e6-9dc2-33d20522e486\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [109:38]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [109:38]\n\nLocation: US\nJob ID: 39fce77a-c446-4b5f-91b4-8c9668bfc4bc\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [27:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [27:8]\n\nLocation: US\nJob ID: 867bac57-3529-4a5b-8a73-2322db6d8f86\n"
+    }
+  ]
+}

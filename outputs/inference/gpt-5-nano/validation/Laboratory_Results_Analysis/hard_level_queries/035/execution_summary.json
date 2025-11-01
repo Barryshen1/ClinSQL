@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83-year-old female inpatient. Among female patients aged 78\u201388 with acute ischemic stroke, what was the minimum 72-hour laboratory instability score? Also compare cohort average critical lab events to general inpatients and report cohort LOS and in-hospital mortality.",
+  "final_sql": "with cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE LOWER(p.gender) = 'f'\n    AND p.anchor_age BETWEEN 78 AND 88\n    AND LOWER(dd.long_title) LIKE '%ischemic%'\n    AND LOWER(dd.long_title) LIKE '%stroke%'\n),\n\n-- 72-hour instability per cohort admission\ncohort_instability AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    SUM(\n      CASE\n        WHEN le.valuenum IS NOT NULL\n             AND le.ref_range_lower IS NOT NULL\n             AND le.ref_range_upper IS NOT NULL\n             AND le.charttime >= c.admittime\n             AND le.charttime < TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n             AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n        THEN 1\n        ELSE 0\n      END\n    ) AS instability_72h\n  FROM cohort AS c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.subject_id = c.subject_id\n   AND le.hadm_id = c.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n),\n\n-- LOS (in days) for the cohort admissions\ncohort_los AS (\n  SELECT\n    c.hadm_id,\n    TIMESTAMP_DIFF(COALESCE(c.dischtime, c.admittime), c.admittime, SECOND) / 86400.0 AS los_days\n  FROM cohort AS c\n),\n\n-- In-hospital mortality flag for the cohort admissions\ncohort_mortality AS (\n  SELECT\n    hadm_id,\n    CASE\n      WHEN deathtime IS NOT NULL OR hospital_expire_flag = 1 THEN 1\n      ELSE 0\n    END AS mortality\n  FROM cohort\n),\n\n-- General inpatient instability per admission (for comparison group)\ngeneral_instability AS (\n  SELECT\n    a.hadm_id,\n    SUM(\n      CASE\n        WHEN le.valuenum IS NOT NULL\n             AND le.ref_range_lower IS NOT NULL\n             AND le.ref_range_upper IS NOT NULL\n             AND le.charttime >= a.admittime\n             AND le.charttime < TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n             AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n        THEN 1\n        ELSE 0\n      END\n    ) AS instability_72h\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.subject_id = a.subject_id\n   AND le.hadm_id = a.hadm_id\n  GROUP BY a.hadm_id\n)\n\nSELECT\n  -- Minimum 72-hour lab instability across the specified cohort\n  (SELECT MIN(instability_72h) FROM cohort_instability) AS min_72h_lab_instability,\n\n  -- Average number of unstable labs in the 72h window for the cohort\n  (SELECT AVG(instability_72h) FROM cohort_instability) AS cohort_avg_critical_events,\n\n  -- Average number of unstable labs in the 72h window for all inpatients (general inpatient group)\n  (SELECT AVG(instability_72h) FROM general_instability) AS general_inpatient_avg_critical_events,\n\n  -- Cohort average length of stay (in days)\n  (SELECT AVG(los_days) FROM cohort_los) AS cohort_avg_los_days,\n\n  -- Cohort in-hospital mortality rate\n  (SELECT AVG(mortality) FROM cohort_mortality) AS cohort_in_hosp_mortality_rate;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"ischemic\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"ischemic\" at [1:12]\n\nLocation: US\nJob ID: 1b14d594-36c0-426e-a752-3d64733e6093\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

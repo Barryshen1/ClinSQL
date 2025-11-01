@@ -1,0 +1,28 @@
+{
+  "query": "I have a 45-year-old man. Among male inpatients 40\u201350 with hemorrhagic stroke, compute a 72\u2011hour lab instability score (count of unique abnormal labs), stratify into quartiles, and report LOS, mortality, and per\u2011lab abnormal rates versus general inpatients.",
+  "final_sql": "WITH hemorrhagic_stroke_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.los,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('431', '4320', '4321', '4329'))\n      OR\n      (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^I61|^I62'))\n    )\n),\n\nabnormal_labs_72hr AS (\n  SELECT\n    l.hadm_id,\n    l.itemid,\n    COUNT(DISTINCT l.itemid) OVER (PARTITION BY l.hadm_id) AS instability_score\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    hemorrhagic_stroke_cohort h\n  ON\n    l.hadm_id = h.hadm_id\n  WHERE\n    l.charttime IS NOT NULL\n    AND l.valuenum IS NOT NULL\n    AND l.charttime BETWEEN h.admittime AND DATETIME_ADD(h.admittime, INTERVAL 72 HOUR)\n    AND (\n      l.flag = 'abnormal'\n      OR l.valuenum < l.ref_range_lower\n      OR l.valuenum > l.ref_range_upper\n    )\n  GROUP BY\n    l.hadm_id, l.itemid\n),\n\ninstability_scores AS (\n  SELECT\n    h.hadm_id,\n    h.los,\n    h.hospital_expire_flag,\n    COALESCE(a.instability_score, 0) AS instability_score\n  FROM\n    hemorrhagic_stroke_cohort h\n  LEFT JOIN (\n    SELECT hadm_id, MAX(instability_score) AS instability_score\n    FROM abnormal_labs_72hr\n    GROUP BY hadm_id\n  ) a\n  ON h.hadm_id = a.hadm_id\n),\n\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM\n    instability_scores\n),\n\nlab_abnormal_rates AS (\n  SELECT\n    itemid,\n    COUNT(*) AS total_abnormal,\n    COUNT(DISTINCT hadm_id) AS patient_count\n  FROM\n    abnormal_labs_72hr\n  GROUP BY\n    itemid\n),\n\ngeneral_abnormal_labs AS (\n  SELECT\n    l.itemid,\n    COUNT(*) AS total_abnormal_general\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    l.hadm_id = a.hadm_id\n  WHERE\n    l.charttime IS NOT NULL\n    AND l.valuenum IS NOT NULL\n    AND l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND (\n      l.flag = 'abnormal'\n      OR l.valuenum < l.ref_range_lower\n      OR l.valuenum > l.ref_range_upper\n    )\n  GROUP BY\n    l.itemid\n)\n\n-- Final output\nSELECT\n  q.quartile,\n  COUNT(DISTINCT q.hadm_id) AS patient_count,\n  AVG(q.los) AS avg_los,\n  AVG(q.hospital_expire_flag) AS mortality_rate,\n  l.label,\n  lar.total_abnormal,\n  lar.patient_count AS lab_patient_count,\n  g.total_abnormal_general\nFROM\n  quartiles q\nLEFT JOIN\n  abnormal_labs_72hr a\nON\n  q.hadm_id = a.hadm_id\nLEFT JOIN\n  `physionet-data.mimiciv_3_1_hosp.d_labitems` l\nON\n  a.itemid = l.itemid\nLEFT JOIN\n  lab_abnormal_rates lar\nON\n  a.itemid = lar.itemid\nLEFT JOIN\n  general_abnormal_labs g\nON\n  a.itemid = g.itemid\nGROUP BY\n  q.quartile, l.label, lar.total_abnormal, lar.patient_count, g.total_abnormal_general\nORDER BY\n  q.quartile, lar.total_abnormal DESC;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name los not found inside a at [6:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [6:7]\n\nLocation: US\nJob ID: c9035553-7820-4de5-8968-3b7b19cf85bc\n",
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [6:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [6:7]\n\nLocation: US\nJob ID: fcb56fc4-0700-43ea-a8b1-3997cc62eab7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [6:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [6:7]\n\nLocation: US\nJob ID: 615cb42b-4b5d-4d40-ad5a-e299e86777a0\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [6:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [6:7]\n\nLocation: US\nJob ID: c9035553-7820-4de5-8968-3b7b19cf85bc\n"
+    }
+  ]
+}

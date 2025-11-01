@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 83-year-old man with sepsis. Among male ICU patients aged 78\u201388 with sepsis, what percentile rank does an instability score of 85 in the first 24 hours have? Also report mean ICU LOS and hospital mortality for quartile 4.",
+  "final_sql": "WITH sepsis_stays AS (\n  -- Step 1: Identify the cohort of ICU stays for male patients aged 78-88 with sepsis\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON icu.hadm_id = adm.hadm_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON icu.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND (p.anchor_age + EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) BETWEEN 78 AND 88\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = adm.hadm_id\n      AND (\n        d.icd_code LIKE 'A41%'      -- Sepsis (ICD-10)\n        OR d.icd_code LIKE 'R65.2%' -- Severe sepsis (ICD-10)\n        OR d.icd_code IN ('99591', '99592', '78552') -- Sepsis, Severe Sepsis, Septic Shock (ICD-9)\n      )\n    )\n),\n\ninstability_scores AS (\n  -- Step 2: Calculate the instability score for each stay in the cohort\n  -- Score is defined as the count of abnormal vital signs in the first 24 hours\n  SELECT\n    s.stay_id,\n    s.hadm_id,\n    s.subject_id,\n    COUNT(ce.itemid) AS instability_score\n  FROM sepsis_stays AS s\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON s.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN s.intime AND DATETIME_ADD(s.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n    AND (\n      -- Abnormal conditions for various vital signs\n      (ce.itemid = 220045 AND (ce.valuenum > 100 OR ce.valuenum < 60))     -- Heart Rate\n      OR (ce.itemid = 220179 AND ce.valuenum < 90)                        -- Non Invasive Blood Pressure systolic\n      OR (ce.itemid = 220052 AND ce.valuenum < 65)                        -- Arterial Blood Pressure mean\n      OR (ce.itemid = 220210 AND (ce.valuenum > 22 OR ce.valuenum < 10)) -- Respiratory Rate\n      OR (ce.itemid = 223762 AND (ce.valuenum > 38.3 OR ce.valuenum < 36)) -- Temperature C\n      OR (ce.itemid = 220277 AND ce.valuenum < 90)                        -- O2 saturation pulseoxymetry\n      OR (ce.itemid = 226758 AND ce.valuenum < 15)                        -- GCS Total (Corrected itemid)\n    )\n  GROUP BY\n    s.stay_id, s.hadm_id, s.subject_id\n),\n\nfinal_data AS (\n  -- Step 3: Combine scores with outcomes and assign quartiles\n  SELECT\n    sc.instability_score,\n    icu.los,\n    adm.hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY sc.instability_score) AS score_quartile\n  FROM instability_scores AS sc\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    ON sc.stay_id = icu.stay_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON sc.hadm_id = adm.hadm_id\n)\n\n-- Step 4: Calculate and present the final metrics\nSELECT\n  'Percentile rank of score 85' AS metric,\n  (\n    SELECT\n        ROUND(\n            SAFE_DIVIDE(\n                CAST(COUNTIF(instability_score < 85) AS FLOAT64),\n                (COUNT(instability_score) - 1)\n            ) * 100\n        , 2)\n    FROM final_data\n  ) AS value\n\nUNION ALL\n\nSELECT\n  'Mean ICU LOS (days) for Q4' AS metric,\n  ROUND(AVG(los), 2) AS value\nFROM final_data\nWHERE score_quartile = 4\n\nUNION ALL\n\nSELECT\n  'Hospital mortality rate (%) for Q4' AS metric,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100, 2) AS value\nFROM final_data\nWHERE score_quartile = 4;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [80:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [80:26]\n\nLocation: US\nJob ID: b09abcdf-2fe5-4a4c-81de-f10396f04359\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

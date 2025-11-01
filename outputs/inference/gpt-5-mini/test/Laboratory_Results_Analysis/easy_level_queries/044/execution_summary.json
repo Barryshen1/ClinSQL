@@ -1,0 +1,22 @@
+{
+  "query": "For a 94-year-old male stroke patient: among male ischemic stroke admissions, what's the IQR of serum glucose on discharge day?",
+  "final_sql": "WITH ischemic_adms AS (\n  -- Male, age 94 admissions that have a diagnosis consistent with ischemic stroke\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age = 94\n    -- text-based heuristic for ischemic stroke / cerebral infarction / CVA\n    AND (\n      (LOWER(d.long_title) LIKE '%ischemic%' AND (LOWER(d.long_title) LIKE '%stroke%' OR LOWER(d.long_title) LIKE '%infarct%' OR LOWER(d.long_title) LIKE '%cerebral%'))\n      OR LOWER(d.long_title) LIKE '%cerebral infarction%'\n      OR LOWER(d.long_title) LIKE '%cva%'\n    )\n),\n\nglucose_on_discharge AS (\n  -- For each ischemic admission, find glucose labs on the discharge day (<= dischtime) and take the last one\n  SELECT\n    g.hadm_id,\n    g.subject_id,\n    g.charttime,\n    g.valuenum AS glucose,\n    ROW_NUMBER() OVER (PARTITION BY g.hadm_id ORDER BY g.charttime DESC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS g\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS li\n    ON g.itemid = li.itemid\n  JOIN ischemic_adms AS ia\n    ON g.hadm_id = ia.hadm_id\n  WHERE g.charttime IS NOT NULL\n    -- same calendar day as discharge\n    AND DATE(g.charttime) = DATE(ia.dischtime)\n    -- not after discharge time\n    AND g.charttime <= ia.dischtime\n    -- glucose tests (label-based); require numeric value\n    AND LOWER(li.label) LIKE '%glucose%'\n    AND (\n      LOWER(COALESCE(li.fluid, '')) LIKE '%serum%'\n      OR LOWER(COALESCE(li.fluid, '')) LIKE '%plasma%'\n      OR LOWER(COALESCE(li.fluid, '')) LIKE '%blood%'\n      OR LOWER(li.label) LIKE '%serum%'\n    )\n    AND g.valuenum IS NOT NULL\n)\n\n-- Compute quartiles and IQR across one glucose value per admission (the last on discharge day)\nSELECT\n  q[OFFSET(1)] AS glucose_p25,\n  q[OFFSET(3)] AS glucose_p75,\n  q[OFFSET(3)] - q[OFFSET(1)] AS glucose_iqr,\n  (SELECT COUNT(*) FROM glucose_on_discharge WHERE rn = 1) AS n_admissions_with_glucose\nFROM (\n  SELECT APPROX_QUANTILES(glucose, 4) AS q\n  FROM glucose_on_discharge\n  WHERE rn = 1\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column q which is neither grouped nor aggregated at [53:3]; reason: invalidQuery, location: query, message: SELECT list expression references column q which is neither grouped nor aggregated at [53:3]\n\nLocation: US\nJob ID: fbad06ef-cca7-4bc3-84ad-bbfa75bc0db9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

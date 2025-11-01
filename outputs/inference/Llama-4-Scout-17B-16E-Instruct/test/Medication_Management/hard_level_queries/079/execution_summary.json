@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 94\u2011year\u2011old man admitted with hemorrhagic stroke. Among male inpatients aged 89\u201399 with hemorrhagic stroke, stratified into quintiles by medication complexity (unique drugs in first 7 hospital days), report LOS, inpatient mortality, and 30\u2011day readmission per quintile.",
+  "final_sql": "WITH \n  -- Filter and calculate medication complexity\n  patients_with_stroke AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      a.admittime,\n      a.dischtime,\n      p.anchor_age,\n      COUNT(DISTINCT pnd.drug) AS unique_drugs\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.prescriptions` pnd ON a.hadm_id = pnd.hadm_id\n    WHERE \n      p.anchor_age BETWEEN 89 AND 99\n      AND p.gender = 'M'\n      AND a.dischtime IS NOT NULL\n      AND EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n        WHERE di.hadm_id = a.hadm_id AND dd.long_title LIKE '%Hemorrhagic stroke%'\n      )\n    GROUP BY \n      a.subject_id, a.hadm_id, a.admittime, a.dischtime, p.anchor_age\n  ),\n\n  -- Calculate quintiles of medication complexity\n  patients_with_quintile AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      admittime,\n      dischtime,\n      anchor_age,\n      unique_drugs,\n      NTILE(5) OVER (ORDER BY unique_drugs) AS quintile\n    FROM \n      patients_with_stroke\n  ),\n\n  -- Calculate outcomes\n  outcomes AS (\n    SELECT \n      pwq.quintile,\n      TIMESTAMP_DIFF(pwq.dischtime, pwq.admittime, DAY) AS los,\n      IF(a.hospital_expire_flag = 1, 1, 0) AS inpatient_mortality,\n      CASE \n        WHEN EXISTS (\n          SELECT 1\n          FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n          WHERE a2.subject_id = pwq.subject_id \n          AND a2.admittime BETWEEN pwq.dischtime AND TIMESTAMP_ADD(pwq.dischtime, INTERVAL 30 DAY)\n        ) THEN 1\n        ELSE 0\n      END AS readmitted_within_30_days\n    FROM \n      patients_with_quintile pwq\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a ON pwq.hadm_id = a.hadm_id\n  )\n\n-- Group by quintile and calculate statistics\nSELECT \n  quintile,\n  AVG(los) AS avg_los,\n  AVG(inpatient_mortality) AS inpatient_mortality_rate,\n  AVG(readmitted_within_30_days) AS thirty_day_readmission_rate\nFROM \n  outcomes\nGROUP BY \n  quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [49:7]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [49:7]\n\nLocation: US\nJob ID: 9a953a94-f05a-4039-b67c-e35213acc248\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

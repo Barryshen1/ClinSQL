@@ -1,0 +1,32 @@
+WITH 
+  -- Identify patients of interest
+  patients_of_interest AS (
+    SELECT p.subject_id, p.anchor_age, p.gender, p.dod
+    FROM `physionet-data.mimiciv_3_1_hosp.patients` p
+    WHERE p.gender = 'M' AND p.anchor_age BETWEEN 68 AND 78
+  ),
+  
+  -- Identify PCI procedures
+  pci_procedures AS (
+    SELECT subject_id, hadm_id
+    FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd`
+    WHERE icd_code IN ('92980', '92981', '92982', '92983', '92984', '92985', '92986', '92987', '92988')  -- ICD-9 codes for PCI
+      OR icd_code IN ('33600', '33601', '33602', '33603', '33604', '33605', '33606', '33607', '33608', '33609', '33610', '33611', '33612', '33613', '33614', '33615', '33616', '33617', '33618', '33619', '33620', '33621', '33622', '33623', '33624', '33625', '33626', '33627', '33628', '33629', '33630', '33631', '33632', '33633', '33634', '33635', '33636', '33637', '33638', '33639', '33640', '33641', '33642', '33643', '33644', '33645', '33646', '33647', '33648', '33649', '33650', '33651', '33652', '33653', '33654', '33655', '33656', '33657', '33658', '33659', '33660', '33661', '33662', '33663', '33664', '33665', '33666', '33667', '33668', '33669', '33670', '33671', '33672', '33673', '33674', '33675', '33676', '33677', '33678', '33679', '33680', '33681', '33682', '33683', '33684', '33685', '33686', '33687', '33688', '33689', '33690', '33691', '33692', '33693', '33694', '33695', '33696', '33697', '33698', '33699')  -- ICD-10 codes for PCI
+  ),
+  
+  -- Calculate ICU LOS
+  icu_los AS (
+    SELECT i.subject_id, i.hadm_id, i.stay_id,
+           DATETIME_DIFF(i.outtime, i.intime, 'day') + 
+           (CASE WHEN i.outtime < i.intime THEN 1 ELSE 0 END) AS icu_los_days
+    FROM `physionet-data.mimiciv_3_1_icu.icustays` i
+  )
+
+-- Combine and calculate median ICU LOS
+SELECT 
+  APPROX_QUANTILES(il.icu_los_days, 1000)[500] AS median_icu_los_days
+FROM 
+  patients_of_interest poi
+  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON poi.subject_id = a.subject_id
+  JOIN pci_procedures pp ON a.hadm_id = pp.hadm_id
+  JOIN icu_los il ON a.hadm_id = il.hadm_id;

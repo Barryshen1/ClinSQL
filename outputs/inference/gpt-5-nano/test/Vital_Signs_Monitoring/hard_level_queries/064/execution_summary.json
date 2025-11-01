@@ -1,0 +1,28 @@
+{
+  "query": "For a 50-year-old male ICU patient with ARF: among male ICU patients 45\u201355, what is the 95th\u2011percentile composite instability score in the first 48 h? For the top quartile, compare hypotension (MAP<65), tachycardia, ICU LOS, and mortality to age\u2011matched cohort.",
+  "final_sql": "WITH ARF AS (\n  -- Select male patients aged 45-55 with ARF in the ICU\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = icu.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = icu.subject_id AND di.hadm_id = icu.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dic\n    ON dic.icd_code = di.icd_code AND dic.icd_version = di.icd_version\n  WHERE\n    UPPER(p.gender) = 'M'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND LOWER(dic.long_title) LIKE '%acute respiratory failure%'\n),\nVITALS AS (\n  -- Compute map_low, hr_tachy, rr_tachy over the first 48 hours\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.stay_id,\n    MAX(CASE\n          WHEN LOWER(di.label) LIKE '%mean arterial pressure%' OR LOWER(di.label) LIKE '%map%'\n               THEN CASE WHEN ce.valuenum IS NOT NULL AND ce.valuenum < 65 THEN 1 ELSE 0 END\n          ELSE 0\n        END) AS map_low,\n    MAX(CASE\n          WHEN LOWER(di.label) LIKE '%heart rate%' OR LOWER(di.label) LIKE '%hr%'\n               THEN CASE WHEN ce.valuenum IS NOT NULL AND ce.valuenum > 100 THEN 1 ELSE 0 END\n          ELSE 0\n        END) AS hr_tachy,\n    MAX(CASE\n          WHEN LOWER(di.label) LIKE '%respiratory rate%' OR LOWER(di.label) LIKE '%rr%'\n               THEN CASE WHEN ce.valuenum IS NOT NULL AND ce.valuenum > 28 THEN 1 ELSE 0 END\n          ELSE 0\n        END) AS rr_tachy\n  FROM ARF AS a\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ce.subject_id = a.subject_id\n   AND ce.hadm_id = a.hadm_id\n   AND ce.stay_id = a.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON di.itemid = ce.itemid\n  WHERE ce.charttime BETWEEN a.intime AND TIMESTAMP_ADD(a.intime, INTERVAL 48 HOUR)\n  GROUP BY a.subject_id, a.hadm_id, a.stay_id\n),\nARF_LOS_DEATH AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.stay_id,\n    icu.los AS icu_los,\n    IF(adm.deathtime IS NOT NULL, 1, 0) AS death_flag,\n    COALESCE(v.map_low, 0) AS map_low,\n    COALESCE(v.hr_tachy, 0) AS hr_tachy,\n    COALESCE(v.rr_tachy, 0) AS rr_tachy,\n    (COALESCE(v.map_low,0) + COALESCE(v.hr_tachy,0) + COALESCE(v.rr_tachy,0)) AS instability_score\n  FROM ARF a\n  LEFT JOIN VITALS v\n    ON v.subject_id = a.subject_id\n   AND v.hadm_id = a.hadm_id\n   AND v.stay_id = a.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON icu.subject_id = a.subject_id AND icu.hadm_id = a.hadm_id AND icu.stay_id = a.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON adm.hadm_id = a.hadm_id\n),\nP95 AS (\n  -- 95th percentile of the instability score\n  SELECT CAST(APPROX_QUANTILES(instability_score, 100)[OFFSET(94)] AS FLOAT64) AS instability_p95\n  FROM ARF_LOS_DEATH\n)\nSELECT\n  'instability_p95' AS metric,\n  instability_p95 AS value,\n  NULL AS pct_map_low,\n  NULL AS pct_hr_tachy,\n  NULL AS mean_icu_los,\n  NULL AS mortality_rate,\n  NULL AS group_label\nFROM P95\n\nUNION ALL\n\nSELECT\n  CASE WHEN quartile = 1 THEN 'Top quartile' ELSE 'Other quartiles' END AS metric,\n  NULL AS value,\n  AVG(CAST(map_low AS FLOAT64)) AS pct_map_low,\n  AVG(CAST(hr_tachy AS FLOAT64)) AS pct_hr_tachy,\n  AVG(icu_los) AS mean_icu_los,\n  AVG(CAST(death_flag AS FLOAT64)) AS mortality_rate,\n  NULL AS group_label\nFROM (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.stay_id,\n    icu.los AS icu_los,\n    -- ensure death_flag is numeric (1/0), not boolean\n    IF(adm.deathtime IS NOT NULL, 1, 0) AS death_flag,\n    COALESCE(v.map_low, 0) AS map_low,\n    COALESCE(v.hr_tachy, 0) AS hr_tachy,\n    COALESCE(v.rr_tachy, 0) AS rr_tachy,\n    (COALESCE(v.map_low,0) + COALESCE(v.hr_tachy,0) + COALESCE(v.rr_tachy,0)) AS instability_score,\n    NTILE(4) OVER (ORDER BY (COALESCE(v.map_low,0) + COALESCE(v.hr_tachy,0) + COALESCE(v.rr_tachy,0)) DESC) AS quartile\n  FROM ARF a\n  LEFT JOIN VITALS v\n    ON v.subject_id = a.subject_id AND v.hadm_id = a.hadm_id AND v.stay_id = a.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON icu.subject_id = a.subject_id AND icu.hadm_id = a.hadm_id AND icu.stay_id = a.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON adm.hadm_id = a.hadm_id\n) AS sub\nGROUP BY\n  CASE WHEN quartile = 1 THEN 'Top quartile' ELSE 'Other quartiles' END\nORDER BY metric;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword UNION at [93:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword UNION at [93:1]\n\nLocation: US\nJob ID: a0233a30-30a0-44a1-be2b-5c9e762761cf\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [96:12]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [96:12]\n\nLocation: US\nJob ID: 270276cf-0105-42a3-9597-e4e2125d9887\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

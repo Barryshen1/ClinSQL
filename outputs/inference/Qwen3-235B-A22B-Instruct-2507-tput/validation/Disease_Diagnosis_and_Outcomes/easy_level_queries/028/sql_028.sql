@@ -1,0 +1,24 @@
+SELECT
+  PERCENTILE_CONT(
+    DATETIME_DIFF(a.dischtime, a.admittime, DAY),
+    0.25
+  ) OVER() AS hospital_los_25th_percentile
+FROM
+  `physionet-data.mimiciv_3_1_hosp`.patients p
+JOIN
+  `physionet-data.mimiciv_3_1_hosp`.admissions a
+  ON p.subject_id = a.subject_id
+JOIN
+  `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di
+  ON a.hadm_id = di.hadm_id
+JOIN
+  `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d
+  ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version
+WHERE
+  p.gender = 'F'
+  AND p.anchor_age BETWEEN 67 AND 77
+  AND di.seq_num = 1
+  AND di.icd_version = 10
+  AND LOWER(d.long_title) LIKE '%pneumonia%'
+  AND a.dischtime IS NOT NULL
+LIMIT 1;

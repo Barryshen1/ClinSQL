@@ -1,0 +1,23 @@
+{
+  "query": "I have a 56\u2011year\u2011old man to evaluate. Among male Medicare patients aged 51\u201361 admitted via the ED with principal acute pancreatitis, what is the 30\u2011day readmission rate? Report median index LOS for readmitted vs non\u2011readmitted and percent stays >9 days.",
+  "final_sql": "WITH index_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_adm,\n    -- Compute LOS in days (as float)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND a.dischtime IS NOT NULL\n    AND a.admission_location LIKE '%EMERGENCY%'\n    AND a.insurance = 'Medicare'\n    AND d.seq_num = 1  -- primary diagnosis\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('5770','5771'))\n      OR \n      (d.icd_version = 10 AND d.icd_code LIKE 'K85%')\n    )\n),\nfiltered_index AS (\n  SELECT \n    hadm_id,\n    subject_id,\n    admittime,\n    dischtime,\n    los_days,\n    -- Check for readmission within 30 days\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = index_admissions.subject_id\n          AND a2.admittime > index_admissions.dischtime\n          AND a2.admittime <= index_admissions.dischtime + INTERVAL '30' DAY\n          AND a2.hadm_id != index_admissions.hadm_id\n      ) THEN 1 \n      ELSE 0 \n    END AS readmitted_30d\n  FROM index_admissions\n  WHERE age_at_adm BETWEEN 51 AND 61\n)\nSELECT\n  COUNT(*) AS total_index,\n  SUM(readmitted_30d) AS readmitted_count,\n  SAFE_DIVIDE(SUM(readmitted_30d), COUNT(*)) AS readmission_rate,\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los_days END, 100)[OFFSET(50)] AS median_los_nonreadmitted,\n  (COUNTIF(los_days > 9) * 100.0) / COUNT(*) AS percent_gt9\nFROM filtered_index;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"acute\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"acute\" at [1:16]\n\nLocation: US\nJob ID: 4f4a4469-85d4-4515-bfef-24dc636215f9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

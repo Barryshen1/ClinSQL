@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating an 85\u2011year\u2011old female inpatient with hepatic failure. Among female inpatients aged 80\u201390 with hepatic failure, calculate a 7\u2011day medication complexity score, stratify cohort into tertiles, and report LOS, in\u2011hospital mortality and 30\u2011day readmission rates per tertile.",
+  "final_sql": "with hepatic_flag AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dcode\n    ON dcode.icd_code = di.icd_code AND dcode.icd_version = di.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'Female'\n    AND (CASE\n           WHEN p.anchor_age IS NOT NULL AND p.anchor_year IS NOT NULL\n             THEN p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)\n           ELSE NULL\n         END) BETWEEN 80 AND 90\n),\n\nhepatic_cohort AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM hepatic_flag hf\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.subject_id = hf.subject_id AND a.hadm_id = hf.hadm_id\n),\n\n-- 7-day Medication Complexity Score (MCS7) per admission\nmcs_by_admit AS (\n  SELECT hc.subject_id, hc.hadm_id,\n         COALESCE(SUM(\n           1.0\n           + 0.5 *\n             IF(LOWER(p.route) IN ('iv','intravenous','intravenous push','intravenous infusion'), 2.0,\n             IF(LOWER(p.route) IN ('im','intramuscular'), 1.8,\n             IF(LOWER(p.route) IN ('po','oral','by mouth','orally'), 1.0,\n             IF(LOWER(p.route) LIKE '%inhal%', 1.2, 1.0))))\n           )\n           + 0.3 * LOG(1 + IFNULL(CAST(p.doses_per_24_hrs AS FLOAT64), 0))\n           + 0.2 * LOG(1 + IFNULL(CAST(p.dose_val_rx AS FLOAT64), 0))\n         ), 0) AS mcs7\n  FROM hepatic_cohort hc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    ON p.subject_id = hc.subject_id\n   AND p.hadm_id = hc.hadm_id\n   AND p.starttime BETWEEN hc.admittime AND TIMESTAMP_ADD(hc.admittime, INTERVAL 6 DAY)\n  GROUP BY hc.subject_id, hc.hadm_id\n),\n\n-- Attach tertile based on MCS7\nmcs_by_admit_with_tertile AS (\n  SELECT m.subject_id, m.hadm_id, m.mcs7,\n         NTILE(3) OVER (ORDER BY m.mcs7 ASC) AS tertile\n  FROM mcs_by_admit AS m\n),\n\n-- 30-day readmission flag for hepatic admissions\nreadmit AS (\n  SELECT hc.subject_id, hc.hadm_id,\n         CASE WHEN EXISTS (\n           SELECT 1\n           FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n           WHERE a2.subject_id = hc.subject_id\n             AND a2.admittime > hc.dischtime\n             AND a2.admittime <= TIMESTAMP_ADD(hc.dischtime, INTERVAL 30 DAY)\n         ) THEN 1 ELSE 0 END AS readmit30\n  FROM hepatic_cohort hc\n),\n\n-- Combine metrics per admission\nadmit_with_metrics AS (\n  SELECT t.tertile,\n         a.subject_id,\n         a.hadm_id,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days,\n         CASE WHEN a.hospital_expire_flag THEN 1 ELSE 0 END AS in_hosp_mortality_flag,\n         r.readmit30\n  FROM hepatic_cohort a\n  JOIN mcs_by_admit_with_tertile t\n    ON t.subject_id = a.subject_id\n   AND t.hadm_id = a.hadm_id\n  LEFT JOIN readmit r\n    ON r.subject_id = a.subject_id\n   AND r.hadm_id = a.hadm_id\n)\n\nSELECT\n  tertile,\n  COUNT(*) AS n_admissions,\n  AVG(los_days) AS mean_los_days,\n  AVG(in_hosp_mortality_flag) AS in_hosp_mortality_rate,\n  AVG(readmit30) AS readmission_rate\nFROM admit_with_metrics\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword AS at [38:16]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AS at [38:16]\n\nLocation: US\nJob ID: 9db077fd-8171-4e9c-96ad-87fac8c9929d\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:14]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:14]\n\nLocation: US\nJob ID: 6bcd7280-ed2e-424c-a5bf-f30aec7981bb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator CASE; all WHEN argument types must be BOOL but found: INT64; actual argument types (WHEN THEN) ELSE: (INT64 INT64) INT64 at [75:10]; reason: invalidQuery, location: query, message: No matching signature for operator CASE; all WHEN argument types must be BOOL but found: INT64; actual argument types (WHEN THEN) ELSE: (INT64 INT64) INT64 at [75:10]\n\nLocation: US\nJob ID: cf4ecaa8-ccac-4390-989d-feca6817bee6\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword AS at [38:16]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AS at [38:16]\n\nLocation: US\nJob ID: 9db077fd-8171-4e9c-96ad-87fac8c9929d\n"
+    }
+  ]
+}

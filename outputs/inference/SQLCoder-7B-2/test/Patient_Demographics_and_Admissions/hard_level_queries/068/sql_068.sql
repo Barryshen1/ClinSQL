@@ -1,0 +1,1 @@
+SELECT COUNT(DISTINCT a.hadm_id) AS num_admissions FROM admissions a JOIN patients p ON a.subject_id = p.subject_id JOIN diagnoses_icd d ON a.subject_id = d.subject_id WHERE p.gender = 'M' AND p.anchor_age = 48 AND p.anchor_year_group BETWEEN 43 AND 53 AND a.insurance = 'Medicare' AND d.icd_code = '260.0' AND a.admission_type = 'SNF';

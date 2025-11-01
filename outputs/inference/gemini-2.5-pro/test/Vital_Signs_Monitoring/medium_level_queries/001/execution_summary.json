@@ -1,0 +1,16 @@
+{
+  "query": "For my 50-year-old female patient, among female ICU patients aged 45\u201355, report counts of unique patients by per-stay average SBP over the first 24 hours: <140, 140\u2013159, \u2265160 mmHg.",
+  "final_sql": "WITH\n  -- Step 1: Identify the cohort of female patients aged 45-55 at admission.\n  patient_cohort AS (\n    SELECT\n      p.subject_id,\n      a.hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n      ON p.subject_id = a.subject_id\n    WHERE\n      p.gender = 'F'\n      AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 45 AND 55\n  ),\n  -- Step 2 & 3: Get SBP measurements for this cohort in the first 24 hours of their ICU stay.\n  first_24hr_sbp AS (\n    SELECT\n      icu.subject_id,\n      icu.stay_id,\n      ce.valuenum\n    FROM\n      `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN\n      patient_cohort AS cohort\n      ON icu.subject_id = cohort.subject_id AND icu.hadm_id = cohort.hadm_id\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n      ON icu.stay_id = ce.stay_id\n    WHERE\n      -- Filter for SBP measurements within the first 24 hours of the ICU stay\n      ce.charttime BETWEEN icu.intime AND DATETIME_ADD(icu.intime, INTERVAL 24 HOUR)\n      -- ITEMIDs for Systolic Blood Pressure (arterial, non-invasive, and ART)\n      AND ce.itemid IN (220050, 220179, 225309)\n      -- Ensure the value is a plausible number for averaging\n      AND ce.valuenum IS NOT NULL AND ce.valuenum > 0\n  ),\n  -- Step 4: Calculate the average SBP per ICU stay.\n  avg_sbp_per_stay AS (\n    SELECT\n      subject_id,\n      stay_id,\n      AVG(valuenum) AS avg_sbp\n    FROM\n      first_24hr_sbp\n    GROUP BY\n      subject_id,\n      stay_id\n  ),\n  -- Step 5: Categorize each stay's average SBP.\n  categorized_stays AS (\n    SELECT\n      subject_id,\n      CASE\n        WHEN avg_sbp < 140\n        THEN '<140 mmHg'\n        WHEN avg_sbp BETWEEN 140 AND 159\n        THEN '140-159 mmHg'\n        WHEN avg_sbp >= 160\n        THEN '>=160 mmHg'\n        ELSE NULL\n      END AS sbp_category\n    FROM\n      avg_sbp_per_stay\n  )\n-- Step 6: Count the number of unique patients in each category.\nSELECT\n  sbp_category,\n  COUNT(DISTINCT subject_id) AS number_of_patients\nFROM\n  categorized_stays\nWHERE\n  sbp_category IS NOT NULL\nGROUP BY\n  sbp_category\nORDER BY\n  -- Custom order to ensure logical sorting of categories\n  CASE\n    WHEN sbp_category = '<140 mmHg' THEN 1\n    WHEN sbp_category = '140-159 mmHg' THEN 2\n    WHEN sbp_category = '>=160 mmHg' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

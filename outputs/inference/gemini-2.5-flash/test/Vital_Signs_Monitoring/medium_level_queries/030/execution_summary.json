@@ -1,0 +1,28 @@
+{
+  "query": "For my 86\u2011year\u2011old female ICU patient: among female ICU patients 81\u201391, classify per\u2011stay mean temperature in first 24h (<36.0, 36.0\u201337.9, \u226538.0\u00b0C) and report N, mean, median, IQR, and MI rate (%).",
+  "final_sql": "WITH\n    -- 1. Identify all eligible ICU stays: Female patients aged 81-91\n    eligible_stays AS (\n        SELECT\n            s.subject_id,\n            s.hadm_id,\n            s.stay_id,\n            s.intime\n        FROM\n            `physionet-data.mimiciv_3_1_icu.icustays` s\n        INNER JOIN\n            `physionet-data.mimiciv_3_1_hosp.patients` p\n            ON s.subject_id = p.subject_id\n        WHERE\n            p.gender = 'F'\n            AND p.anchor_age BETWEEN 81 AND 91\n    ),\n    -- 2. Calculate the mean temperature in the first 24 hours for each eligible stay\n    per_stay_temp AS (\n        SELECT\n            es.stay_id,\n            AVG(ce.valuenum) AS mean_temp_24hr\n        FROM\n            eligible_stays es\n        INNER JOIN\n            `physionet-data.mimiciv_3_1_icu.chartevents` ce\n            ON es.stay_id = ce.stay_id\n        WHERE\n            ce.itemid = 223762 -- ItemID for Temperature C\n            AND ce.valuenum IS NOT NULL -- Exclude null values from averaging\n            -- Filter out implausible temperature values often found in chartevents\n            AND ce.valuenum > 0\n            AND ce.valuenum < 50\n            AND ce.charttime BETWEEN es.intime AND DATETIME_ADD(es.intime, INTERVAL 24 HOUR)\n        GROUP BY\n            es.stay_id\n    ),\n    -- 3. Combine eligible stays with their calculated mean temperature and classify them\n    cohort_with_temp_and_category AS (\n        SELECT\n            es.stay_id,\n            pst.mean_temp_24hr,\n            CASE\n                WHEN pst.mean_temp_24hr IS NULL THEN 'Missing Information'\n                WHEN pst.mean_temp_24hr < 36.0 THEN '<36.0 C'\n                WHEN pst.mean_temp_24hr >= 36.0 AND pst.mean_temp_24hr <= 37.9 THEN '36.0-37.9 C'\n                WHEN pst.mean_temp_24hr >= 38.0 THEN '>=38.0 C'\n                ELSE 'Other/Error' -- Fallback for any unexpected values, though unlikely with filters\n            END AS temp_category\n        FROM\n            eligible_stays es\n        LEFT JOIN\n            per_stay_temp pst\n            ON es.stay_id = pst.stay_id\n    ),\n    -- 4. Calculate overall missing information (MI) metrics\n    mi_metrics AS (\n        SELECT\n            COUNT(stay_id) AS total_eligible_stays_count,\n            SUM(CASE WHEN mean_temp_24hr IS NULL THEN 1 ELSE 0 END) AS missing_temp_stays_count,\n            ROUND(SUM(CASE WHEN mean_temp_24hr IS NULL THEN 1 ELSE 0 END) * 100.0 / COUNT(stay_id), 2) AS overall_mi_rate_pct\n        FROM\n            cohort_with_temp_and_category\n    )\n-- 5. Aggregate results by temperature category and include overall MI rate\nSELECT\n    cc.temp_category,\n    COUNT(cc.stay_id) AS N_stays,\n    ROUND(AVG(cc.mean_temp_24hr), 2) AS mean_temp,\n    -- PERCENTILE_CONT without OVER() clause acts as an aggregate function per group\n    ROUND(PERCENTILE_CONT(cc.mean_temp_24hr, 0.25), 2) AS q1_temp,\n    ROUND(PERCENTILE_CONT(cc.mean_temp_24hr, 0.5), 2) AS median_temp,\n    ROUND(PERCENTILE_CONT(cc.mean_temp_24hr, 0.75), 2) AS q3_temp,\n    -- Calculate IQR using the aggregate percentile functions\n    ROUND(\n        PERCENTILE_CONT(cc.mean_temp_24hr, 0.75) -\n        PERCENTILE_CONT(cc.mean_temp_24hr, 0.25),\n    2) AS iqr_temp,\n    mm.overall_mi_rate_pct\nFROM\n    cohort_with_temp_and_category cc\nCROSS JOIN\n    mi_metrics mm -- Cross join to include the overall MI rate in every result row\nGROUP BY\n    cc.temp_category,\n    mm.overall_mi_rate_pct -- All non-aggregated columns must be in GROUP BY\nORDER BY\n    CASE\n        WHEN cc.temp_category = '<36.0 C' THEN 1\n        WHEN cc.temp_category = '36.0-37.9 C' THEN 2\n        WHEN cc.temp_category = '>=38.0 C' THEN 3\n        WHEN cc.temp_category = 'Missing Information' THEN 4\n        ELSE 5\n    END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: bfedae08-0c6c-462f-8ef3-b4babf6dcdb3\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"calculated\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"calculated\" at [1:12]\n\nLocation: US\nJob ID: 0d2584d5-c48b-441e-89cd-b850f01db97f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references cc.mean_temp_24hr which is neither grouped nor aggregated at [70:27]; reason: invalidQuery, location: query, message: SELECT list expression references cc.mean_temp_24hr which is neither grouped nor aggregated at [70:27]\n\nLocation: US\nJob ID: aadbceea-9261-4841-a7ae-c931dd643d26\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: bfedae08-0c6c-462f-8ef3-b4babf6dcdb3\n"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 72-year-old man. Among male ICU stays aged 67\u201377, what percentile is a per-stay average temperature of 36.0\u00b0C measured over the first 24 hours?",
+  "final_sql": "WITH patient_icu_stays AS (\n  SELECT \n    s.stay_id,\n    s.intime,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM s.intime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND s.intime IS NOT NULL\n    AND p.anchor_age IS NOT NULL\n    AND p.anchor_year IS NOT NULL\n),\ntemperature_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%temperature%'\n    AND LOWER(unitname) LIKE '%c%'  -- ensure Celsius\n),\nstay_temps AS (\n  SELECT \n    p.stay_id,\n    AVG(CAST(c.valuenum AS FLOAT64)) AS avg_temp_24h,\n    p.age_at_admission\n  FROM patient_icu_stays p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON p.stay_id = c.stay_id\n  INNER JOIN temperature_items t\n    ON c.itemid = t.itemid\n  WHERE c.charttime >= p.intime\n    AND c.charttime < DATETIME_ADD(p.intime, INTERVAL 24 HOUR)\n    AND c.valuenum IS NOT NULL\n    AND c.valuenum BETWEEN 30 AND 43  -- physiologically plausible range\n  GROUP BY p.stay_id, p.age_at_admission\n  HAVING AVG(c.valuenum) IS NOT NULL\n),\npercentile_calc AS (\n  SELECT\n    COUNT(*) AS total_stays,\n    COUNTIF(avg_temp_24h < 36.0) AS count_below,\n    COUNTIF(ABS(avg_temp_24h - 36.0) < 0.001) AS count_equal\n  FROM stay_temps\n  WHERE age_at_admission >= 67 AND age_at_admission <= 77\n)\nSELECT\n  (count_below + 0.5 * count_equal) / total_stays * 100 AS percentile\nFROM percentile_calc;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: p at [43:9]; reason: invalidQuery, location: query, message: Unrecognized name: p at [43:9]\n\nLocation: US\nJob ID: 1893294f-b070-4749-a2d8-f2541a171545\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

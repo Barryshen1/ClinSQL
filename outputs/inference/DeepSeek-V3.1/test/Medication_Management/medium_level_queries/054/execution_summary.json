@@ -1,0 +1,28 @@
+{
+  "query": "For male inpatients aged 56\u201366 with diabetes and heart failure, report prevalence (%) of GLP-1 receptor agonist use in first 48 hours versus final 24 hours before discharge and net change.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 56 AND 66\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE di.icd_code LIKE 'E1%'  -- Diabetes codes (E10-E14)\n    )\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE di.icd_code LIKE 'I50%'  -- Heart failure\n    )\n    AND a.dischtime IS NOT NULL  -- Ensure we have discharge time\n),\n\nglp1_drugs AS (\n  -- Common GLP-1 agonists\n  SELECT 'semaglutide' AS drug_name UNION ALL\n  SELECT 'liraglutide' UNION ALL\n  SELECT 'dulaglutide' UNION ALL\n  SELECT 'exenatide' UNION ALL\n  SELECT 'lixisenatide'\n),\n\n-- Check prescriptions (HOSP)\nglp1_prescriptions AS (\n  SELECT \n    pr.subject_id,\n    pr.hadm_id,\n    pr.starttime,\n    pr.stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  CROSS JOIN glp1_drugs gd\n  WHERE LOWER(pr.drug) LIKE CONCAT('%', gd.drug_name, '%')\n),\n\n-- Check inputevents (ICU) for GLP-1 administrations\nglp1_inputs AS (\n  SELECT \n    ie.subject_id,\n    ie.hadm_id, -- Use hadm_id from inputevents for accurate join\n    ie.starttime,\n    ie.endtime  -- Corrected column name from endtime to endtime\n  FROM `physionet-data.mimiciv_3_1_icu.inputevents` ie\n  CROSS JOIN glp1_drugs gd\n  WHERE \n    LOWER(ie.ordercategorydescription) LIKE CONCAT('%', gd.drug_name, '%')\n    OR LOWER(ie.ordercomponenttypedescription) LIKE CONCAT('%', gd.drug_name, '%')\n),\n\n-- Combine all GLP-1 events (from both HOSP and ICU)\nglp1_events AS (\n  SELECT subject_id, hadm_id, starttime, endtime FROM glp1_prescriptions\n  UNION ALL\n  SELECT subject_id, hadm_id, starttime, endtime FROM glp1_inputs\n),\n\n-- For each admission, check if GLP-1 was used in first 48h or last 24h\nglp1_flags AS (\n  SELECT \n    c.hadm_id,\n    MAX(CASE \n          WHEN ge.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR) \n          THEN 1 ELSE 0 \n        END) AS glp1_first_48h,\n    MAX(CASE \n          WHEN ge.starttime BETWEEN DATETIME_SUB(c.dischtime, INTERVAL 24 HOUR) AND c.dischtime \n          THEN 1 ELSE 0 \n        END) AS glp1_last_24h\n  FROM cohort c\n  LEFT JOIN glp1_events ge\n    ON c.hadm_id = ge.hadm_id\n  GROUP BY c.hadm_id\n)\n\n-- Calculate prevalence and net change\nSELECT \n  COUNT(*) AS total_admissions,\n  ROUND(100.0 * SUM(glp1_first_48h) / COUNT(*), 2) AS prevalence_first_48h,\n  ROUND(100.0 * SUM(glp1_last_24h) / COUNT(*), 2) AS prevalence_last_24h,\n  ROUND(100.0 * SUM(glp1_last_24h) / COUNT(*), 2) - ROUND(100.0 * SUM(glp1_first_48h) / COUNT(*), 2) AS net_change\nFROM glp1_flags;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: endtime at [62:42]; reason: invalidQuery, location: query, message: Unrecognized name: endtime at [62:42]\n\nLocation: US\nJob ID: 638022a6-50a2-4d0a-9c1c-fdebded5ecc2\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: endtime at [63:42]; reason: invalidQuery, location: query, message: Unrecognized name: endtime at [63:42]\n\nLocation: US\nJob ID: 801b9b23-8cfe-4add-907f-0d882a13047d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: endtime at [61:42]; reason: invalidQuery, location: query, message: Unrecognized name: endtime at [61:42]\n\nLocation: US\nJob ID: 6981c011-e75d-48e3-bdcd-7370755e7d48\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: endtime at [62:42]; reason: invalidQuery, location: query, message: Unrecognized name: endtime at [62:42]\n\nLocation: US\nJob ID: 638022a6-50a2-4d0a-9c1c-fdebded5ecc2\n"
+    }
+  ]
+}

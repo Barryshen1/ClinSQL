@@ -1,0 +1,28 @@
+{
+  "query": "For a 55\u2011year\u2011old woman, among female patients 50\u201360 with ACS, report p25, p50, p75 diagnostic procedures per admission, stratified by LOS (1\u20134 vs 5\u20138 days) and primary vs secondary diagnosis.",
+  "final_sql": "WITH acs_dx AS (\n  -- diagnoses that we consider ACS based on diagnosis description (ICD-9 and ICD-10 labels)\n  SELECT di.subject_id, di.hadm_id, di.seq_num, di.icd_code, d.long_title\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%acute coronary%'\n     OR LOWER(d.long_title) LIKE '%myocardial%'\n     OR LOWER(d.long_title) LIKE '%unstable angina%'\n),\n\nadmissions_acs AS (\n  -- admissions for female patients age 50-60 that have an ACS diagnosis (primary or secondary)\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) + 1 AS los_days,\n    CASE\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) + 1 BETWEEN 1 AND 4 THEN '1-4'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) + 1 BETWEEN 5 AND 8 THEN '5-8'\n      ELSE NULL\n    END AS los_group,\n    CASE\n      WHEN MAX(CASE WHEN acs.seq_num = 1 THEN 1 ELSE 0 END) = 1 THEN 'primary'\n      WHEN MAX(CASE WHEN acs.seq_num > 1 THEN 1 ELSE 0 END) = 1 THEN 'secondary'\n      ELSE NULL\n    END AS diag_position\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  LEFT JOIN acs_dx acs\n    ON a.hadm_id = acs.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n  GROUP BY a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  HAVING\n    -- require at least one ACS dx (primary or secondary)\n    (MAX(CASE WHEN acs.seq_num = 1 THEN 1 ELSE 0 END) = 1\n     OR MAX(CASE WHEN acs.seq_num > 1 THEN 1 ELSE 0 END) = 1)\n),\n\nproc_counts AS (\n  -- count procedures per admission (treat each procedures_icd row as one procedure)\n  SELECT\n    ad.hadm_id,\n    ad.los_group,\n    ad.diag_position,\n    COUNT(pi.icd_code) AS num_procedures\n  FROM admissions_acs ad\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n    ON ad.hadm_id = pi.hadm_id\n  GROUP BY ad.hadm_id, ad.los_group, ad.diag_position\n)\n\nSELECT\n  los_group,\n  diag_position,\n  q[OFFSET(1)] AS p25_procedures_per_admission,\n  q[OFFSET(2)] AS p50_procedures_per_admission,\n  q[OFFSET(3)] AS p75_procedures_per_admission,\n  COUNT(*) AS admissions_in_stratum\nFROM (\n  SELECT\n    los_group,\n    diag_position,\n    APPROX_QUANTILES(num_procedures, 4) AS q\n  FROM proc_counts\n  WHERE los_group IS NOT NULL\n  GROUP BY los_group, diag_position\n) AS quantiles\nORDER BY los_group, diag_position;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column los_group which is neither grouped nor aggregated at [59:3]; reason: invalidQuery, location: query, message: SELECT list expression references column los_group which is neither grouped nor aggregated at [59:3]\n\nLocation: US\nJob ID: 528e2e05-2e5d-4fe7-842e-3440e0179e9f\n",
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: 1c6ff2d2-fc59-4c80-8b43-772abd30180f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_group which is neither grouped nor aggregated at [59:3]; reason: invalidQuery, location: query, message: SELECT list expression references column los_group which is neither grouped nor aggregated at [59:3]\n\nLocation: US\nJob ID: 015f2960-2520-4556-8a90-49bedf45d0d8\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_group which is neither grouped nor aggregated at [59:3]; reason: invalidQuery, location: query, message: SELECT list expression references column los_group which is neither grouped nor aggregated at [59:3]\n\nLocation: US\nJob ID: 528e2e05-2e5d-4fe7-842e-3440e0179e9f\n"
+    }
+  ]
+}

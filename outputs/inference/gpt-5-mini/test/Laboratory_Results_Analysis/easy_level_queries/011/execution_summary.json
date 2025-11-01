@@ -1,0 +1,16 @@
+{
+  "query": "For my 56-year-old male in ICU, what's the standard deviation of peak serum potassium per ICU stay (mEq/L)?",
+  "final_sql": "WITH\n-- ICU d_items potassium candidates (exclude urine)\nicu_pot_items AS (\n  SELECT itemid, LOWER(label) AS label, LOWER(COALESCE(unitname, '')) AS unitname\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%potassium%'\n    AND NOT LOWER(label) LIKE '%urine%'\n),\n\n-- HOSP d_labitems potassium candidates (exclude urine)\nhosp_pot_items AS (\n  SELECT itemid, LOWER(label) AS label, LOWER(COALESCE(fluid, '')) AS fluid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%potassium%'\n    AND NOT LOWER(label) LIKE '%urine%'\n),\n\n-- Potassium measurements within ICU stays from chartevents and labevents\npotassium_measurements AS (\n\n  -- ICU bedside measurements\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ic.stay_id,\n    ce.charttime,\n    ce.valuenum AS val,\n    LOWER(COALESCE(ce.valueuom, di.unitname)) AS uom,\n    'chartevent' AS source\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN icu_pot_items di\n    ON ce.itemid = di.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` ic\n    ON ce.subject_id = ic.subject_id\n   AND ce.hadm_id = ic.hadm_id\n   AND ce.charttime BETWEEN ic.intime AND ic.outtime\n  WHERE ce.valuenum IS NOT NULL\n    -- accept common potassium units or missing unit\n    AND (\n      LOWER(ce.valueuom) IN ('meq/l','mmol/l')\n      OR ce.valueuom IS NULL\n      OR di.unitname IN ('meq/l','mmol/l')\n    )\n\n  UNION ALL\n\n  -- Hospital lab measurements (link to icu stays by hadm_id and time)\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    ic.stay_id,\n    le.charttime,\n    le.valuenum AS val,\n    LOWER(COALESCE(le.valueuom, '')) AS uom,\n    'labevent' AS source\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN hosp_pot_items dl\n    ON le.itemid = dl.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` ic\n    ON le.subject_id = ic.subject_id\n   AND le.hadm_id = ic.hadm_id\n   AND le.charttime BETWEEN ic.intime AND ic.outtime\n  WHERE le.valuenum IS NOT NULL\n    -- accept common potassium units or missing unit\n    AND (\n      LOWER(le.valueuom) IN ('meq/l','mmol/l')\n      OR le.valueuom IS NULL\n    )\n),\n\n-- Peak potassium per ICU stay\npeaks AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    MAX(val) AS peak_k_mEq_per_L\n  FROM potassium_measurements\n  GROUP BY subject_id, hadm_id, stay_id\n)\n\n-- Final: standard deviation across stays for 56-year-old males\nSELECT\n  STDDEV_POP(p.peak_k_mEq_per_L) AS sd_peak_potassium_mEq_per_L,\n  COUNT(*) AS n_icustays\nFROM peaks p\nJOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n  ON p.subject_id = pt.subject_id\nWHERE pt.gender = 'M'\n  AND pt.anchor_age = 56;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

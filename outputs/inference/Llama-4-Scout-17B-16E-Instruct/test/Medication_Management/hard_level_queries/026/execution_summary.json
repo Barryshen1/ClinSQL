@@ -1,0 +1,28 @@
+{
+  "query": "I have an 81\u2011year\u2011old woman with pneumonia. Among female inpatients aged 76\u201386 with pneumonia, stratify admissions into tertiles by medication complexity (unique drugs in first 7 hospital days) and report counts, min/avg/max score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH \n-- Identify pneumonia patients\npneumonia_patients AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE dd.long_title LIKE '%Pneumonia%' \n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND a.admit_provider_id IS NOT NULL  -- Ensure we have admitting provider\n),\n\n-- Calculate medication complexity (unique drugs in first 7 days)\nmedication_complexity AS (\n  SELECT \n    pp.hadm_id,\n    COUNT(DISTINCT pr.drug) AS unique_drugs\n  FROM pneumonia_patients pp\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON pp.hadm_id = pr.hadm_id\n  WHERE pr.starttime BETWEEN pp.admittime AND TIMESTAMP_ADD(pp.admittime, INTERVAL 7 DAY)\n  GROUP BY pp.hadm_id\n),\n\n-- Calculate LOS, in-hospital mortality, and 30-day readmission\nadmission_outcomes AS (\n  SELECT \n    mc.hadm_id,\n    mc.unique_drugs,\n    ao.dischtime,\n    ao.admittime,\n    ao.hospital_expire_flag,\n    TIMESTAMP_DIFF(ao.dischtime, ao.admittime, DAY) AS los_days\n  FROM medication_complexity mc\n  JOIN pneumonia_patients ao ON mc.hadm_id = ao.hadm_id\n),\n\n-- Tertile calculation\ntertiles AS (\n  SELECT \n    hadm_id,\n    unique_drugs,\n    NTILE(3) OVER (ORDER BY unique_drugs) AS tertile\n  FROM medication_complexity\n),\n\n-- 30-day readmission calculation\nreadmissions AS (\n  SELECT \n    a1.hadm_id AS index_hadm_id,\n    COUNT(DISTINCT a2.subject_id) AS readmitted\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a1\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2 ON a1.subject_id = a2.subject_id\n  WHERE a1.dischtime IS NOT NULL \n    AND a2.admittime BETWEEN a1.dischtime AND TIMESTAMP_ADD(a1.dischtime, INTERVAL 30 DAY)\n  GROUP BY a1.hadm_id\n)\n\n-- Final aggregation\nSELECT \n  t.tertile,\n  COUNT(*) AS count,\n  MIN(t.unique_drugs) AS min_score,\n  AVG(t.unique_drugs) AS avg_score,\n  MAX(t.unique_drugs) AS max_score,\n  AVG(ao.los_days) AS mean_los,\n  SUM(CASE WHEN ao.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) * 100 AS in_hospital_mortality_pct,\n  COALESCE(r.readmitted / COUNT(DISTINCT t.hadm_id), 0) * 100 AS thirty_day_readmission_pct\nFROM tertiles t\nJOIN admission_outcomes ao ON t.hadm_id = ao.hadm_id\nLEFT JOIN readmissions r ON t.hadm_id = r.index_hadm_id\nGROUP BY t.tertile, r.readmitted;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name admissions not found inside p at [27:32]; reason: invalidQuery, location: query, message: Name admissions not found inside p at [27:32]\n\nLocation: US\nJob ID: 41e1dc35-1ad5-4bd6-8695-70d511b845df\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function DATE_DIFF\n  Argument types: DATETIME, DATETIME\n  Signature: DATE_DIFF(DATE, DATE, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(DATETIME, DATETIME, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(TIMESTAMP, TIMESTAMP, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments at [67:7]; reason: invalidQuery, location: query, message: No matching signature for function DATE_DIFF\n  Argument types: DATETIME, DATETIME\n  Signature: DATE_DIFF(DATE, DATE, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(DATETIME, DATETIME, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments\n  Signature: DATE_DIFF(TIMESTAMP, TIMESTAMP, DATE_TIME_PART)\n    Signature requires at least 3 arguments, found 2 arguments at [67:7]\n\nLocation: US\nJob ID: c3f43550-f811-4554-a8da-a4958ff03253\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

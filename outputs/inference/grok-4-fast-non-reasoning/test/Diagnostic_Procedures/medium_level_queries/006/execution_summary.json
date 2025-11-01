@@ -1,0 +1,28 @@
+{
+  "query": "For my 53-year-old male with sepsis (no shock), among men 48\u201358, give patient counts and mean ultrasounds/admission by LOS (1\u20134 vs 5\u20138 days), stratified by ICU vs no ICU.",
+  "final_sql": "WITH base_cohort AS (\n  -- Base admissions with demographics and LOS\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 AS los_days\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND a.hospital_expire_flag = 0  -- Optional: exclude expired if needed; remove if include all\n    AND DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 BETWEEN 1 AND 8\n),\n\nsepsis_cohort AS (\n  -- Filter for primary sepsis dx (no shock)\n  SELECT \n    bc.*\n  FROM \n    base_cohort bc\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON bc.subject_id = d.subject_id \n    AND CAST(bc.hadm_id AS STRING) = d.hadm_id\n  WHERE \n    d.seq_num = 1\n    AND d.icd_version = '10'\n    AND (\n      d.icd_code = 'R65.20' OR \n      d.icd_code LIKE 'A40.%' OR \n      d.icd_code LIKE 'A41.%'\n    )\n    AND d.icd_code NOT LIKE 'R65.21%'  -- Exclude severe sepsis with shock\n),\n\nicu_flag AS (\n  -- Add ICU stratification\n  SELECT \n    sc.*,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.transfers` t\n        WHERE t.subject_id = sc.subject_id \n          AND CAST(sc.hadm_id AS STRING) = t.hadm_id\n          AND t.careunit LIKE '%ICU%'\n      ) THEN 'ICU' \n      ELSE 'No ICU' \n    END AS icu_stratum\n  FROM \n    sepsis_cohort sc\n),\n\nultrasound_counts AS (\n  -- Count ultrasounds per admission\n  SELECT \n    uf.subject_id,\n    uf.hadm_id,\n    COUNT(DISTINCT pr.icd_code) AS ultrasound_count  -- Distinct codes per adm; or COUNT(*) for events\n  FROM \n    icu_flag uf\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n  ON uf.subject_id = pr.subject_id \n    AND CAST(uf.hadm_id AS STRING) = pr.hadm_id\n  WHERE \n    pr.icd_version = '10'\n    AND pr.icd_code LIKE 'BW[4-9]%'\n  GROUP BY \n    uf.subject_id, uf.hadm_id\n),\n\nfinal_cohort AS (\n  -- Combine with ultrasound counts (0 if none)\n  SELECT \n    uf.subject_id,\n    uf.hadm_id,\n    CASE \n      WHEN uf.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      ELSE '5-8 days'\n    END AS los_group,\n    uf.icu_stratum,\n    COALESCE(uc.ultrasound_count, 0) AS ultrasound_count\n  FROM \n    icu_flag uf\n  LEFT JOIN \n    ultrasound_counts uc\n  ON uf.subject_id = uc.subject_id AND uf.hadm_id = uc.hadm_id\n)\n\n-- Aggregate: counts and means\nSELECT \n  los_group,\n  icu_stratum,\n  COUNT(DISTINCT hadm_id) AS patient_counts,\n  ROUND(AVG(ultrasound_count), 2) AS mean_ultrasounds_per_admission\nFROM \n  final_cohort\nGROUP BY \n  los_group, icu_stratum\nORDER BY \n  los_group, icu_stratum;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for operator = for argument types: STRING, INT64\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [32:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: STRING, INT64\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [32:9]\n\nLocation: US\nJob ID: 9219b7d8-7396-4a2d-8d47-b433350b9a7f\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [33:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [33:9]\n\nLocation: US\nJob ID: 8f2e3d46-99cf-410f-bd0f-b7e9ff28c37e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [33:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [33:9]\n\nLocation: US\nJob ID: 94f2035d-8516-4e84-bf35-3bc90f25a71e\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: STRING, INT64\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [32:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: STRING, INT64\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [32:9]\n\nLocation: US\nJob ID: 9219b7d8-7396-4a2d-8d47-b433350b9a7f\n"
+    }
+  ]
+}

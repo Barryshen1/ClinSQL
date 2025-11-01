@@ -1,0 +1,22 @@
+{
+  "query": "I have a 53-year-old female inpatient. Among female inpatients 48\u201358, compare hemorrhagic stroke vs age\u2011matched controls: first 48\u2011hour medication complexity distribution, outcomes (LOS, mortality) for patients with \u22652 serotonergic drugs versus <2, and LOS/mortality for top complexity quartile.",
+  "final_sql": "WITH base_cohort AS (\n    SELECT \n        p.subject_id, \n        p.gender, \n        p.anchor_age,\n        a.hadm_id, \n        a.admittime, \n        a.dischtime, \n        a.hospital_expire_flag,\n        CASE \n            WHEN d.hadm_id IS NOT NULL THEN 1 \n            ELSE 0 \n        END AS hemorrhagic_stroke\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    LEFT JOIN (\n        SELECT DISTINCT hadm_id \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n        WHERE icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%'\n    ) d\n        ON a.hadm_id = d.hadm_id\n    WHERE p.gender = 'F' \n        AND p.anchor_age BETWEEN 48 AND 58\n),\n\nmeds_in_48h AS (\n    SELECT \n        bc.hadm_id,\n        COUNT(DISTINCT pr.drug) AS total_meds,\n        COUNT(DISTINCT CASE \n            WHEN LOWER(pr.drug) LIKE '%citalopram%' OR\n                 LOWER(pr.drug) LIKE '%escitalopram%' OR\n                 LOWER(pr.drug) LIKE '%fluoxetine%' OR\n                 LOWER(pr.drug) LIKE '%sertraline%' OR\n                 LOWER(pr.drug) LIKE '%paroxetine%' OR\n                 LOWER(pr.drug) LIKE '%fluvoxamine%' OR\n                 LOWER(pr.drug) LIKE '%venlafaxine%' OR\n                 LOWER(pr.drug) LIKE '%duloxetine%' OR\n                 LOWER(pr.drug) LIKE '%trazodone%' OR\n                 LOWER(pr.drug) LIKE '%sumatriptan%' OR\n                 LOWER(pr.drug) LIKE '%almotriptan%' OR\n                 LOWER(pr.drug) LIKE '%eletriptan%' OR\n                 LOWER(pr.drug) LIKE '%frovatriptan%' OR\n                 LOWER(pr.drug) LIKE '%naratriptan%' OR\n                 LOWER(pr.drug) LIKE '%rizatriptan%' OR\n                 LOWER(pr.drug) LIKE '%zolmitriptan%' \n            THEN pr.drug \n        END) AS serotonergic_meds\n    FROM base_cohort bc\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        ON bc.hadm_id = pr.hadm_id\n    WHERE pr.starttime BETWEEN bc.admittime AND DATETIME_ADD(bc.admittime, INTERVAL 48 HOUR)\n    GROUP BY bc.hadm_id\n),\n\nwith_meds AS (\n    SELECT \n        bc.*,\n        COALESCE(m.total_meds, 0) AS total_meds,\n        COALESCE(m.serotonergic_meds, 0) AS serotonergic_meds,\n        CASE \n            WHEN COALESCE(m.serotonergic_meds, 0) >= 2 THEN '>=2'\n            ELSE '<2'\n        END AS serotonergic_group,\n        DATETIME_DIFF(bc.dischtime, bc.admittime, DAY) AS los_days\n    FROM base_cohort bc\n    LEFT JOIN meds_in_48h m\n        ON bc.hadm_id = m.hadm_id\n),\n\nquartiles AS (\n    SELECT \n        hadm_id,\n        NTILE(4) OVER (ORDER BY total_meds) AS complexity_quartile\n    FROM with_meds\n)\n\nSELECT \n    wm.hemorrhagic_stroke,\n    wm.serotonergic_group,\n    q.complexity_quartile,\n    COUNT(*) AS num_patients,\n    AVG(wm.los_days) AS avg_los,\n    SUM(wm.hospital_expire_flag) AS mortality_count,\n    AVG(CAST(wm.hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM with_meds wm\nLEFT JOIN quartiles q\n    ON wm.hadm_id = q.hadm_id\nGROUP BY \n    wm.hemorrhagic_stroke,\n    wm.serotonergic_group,\n    q.complexity_quartile\nORDER BY \n    wm.hemorrhagic_stroke,\n    wm.serotonergic_group,\n    q.complexity_quartile;",
+  "execution_success": true,
+  "row_count": 15,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name icd_code not found inside d at [11:20]; reason: invalidQuery, location: query, message: Name icd_code not found inside d at [11:20]\n\nLocation: US\nJob ID: cc825ae3-5d07-49bf-83c6-c1e9c99e9655\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 15,
+      "error": null
+    }
+  ]
+}

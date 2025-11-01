@@ -1,0 +1,28 @@
+{
+  "query": "48\u2011year\u2011old female: among ICU patients aged 43\u201353 with acute respiratory failure, report the 95th\u2011percentile vital instability index in first 48 hours. For the cohort top quartile, compare MAP<65 hypotension and tachycardia episodes, ICU LOS, and mortality versus general ICU population.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los AS icu_los,\n    adm.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_dx\n    ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.anchor_age BETWEEN 43 AND 53\n    AND pat.gender = 'F'\n    AND LOWER(d_dx.long_title) LIKE '%acute respiratory failure%'\n),\n\nmap_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%mean arterial pressure%'\n),\n\nhr_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%heart rate%'\n),\n\nvitals AS (\n  SELECT\n    ce.stay_id,\n    COUNTIF(ce.itemid IN (SELECT itemid FROM map_itemids) AND ce.valuenum < 65) AS hypotension_episodes,\n    COUNTIF(ce.itemid IN (SELECT itemid FROM hr_itemids) AND ce.valuenum > 130) AS tachycardia_episodes\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    cohort co\n    ON ce.stay_id = co.stay_id\n  WHERE\n    ce.charttime >= co.intime\n    AND ce.charttime <= DATETIME_ADD(co.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY\n    ce.stay_id\n),\n\nvital_instability_index AS (\n  SELECT\n    co.stay_id,\n    COALESCE(v.hypotension_episodes, 0) + COALESCE(v.tachycardia_episodes, 0) AS vital_instability_index\n  FROM\n    cohort co\n  LEFT JOIN\n    vitals v\n    ON co.stay_id = v.stay_id\n),\n\npercentiles AS (\n  SELECT\n    APPROX_QUANTILES(vii.vital_instability_index, 100)[OFFSET(95)] AS p95_vii,\n    APPROX_QUANTILES(vii.vital_instability_index, 4)[OFFSET(3)] AS q3_vii\n  FROM\n    vital_instability_index AS vii\n),\n\ntop_quartile AS (\n  SELECT\n    co.stay_id,\n    co.icu_los,\n    co.hospital_expire_flag,\n    vi.vital_instability_index,\n    COALESCE(v.hypotension_episodes > 0, FALSE) AS had_hypotension,\n    COALESCE(v.tachycardia_episodes > 0, FALSE) AS had_tachycardia\n  FROM\n    cohort co\n  JOIN\n    vital_instability_index vi\n    ON co.stay_id = vi.stay_id\n  LEFT JOIN\n    vitals v\n    ON co.stay_id = v.stay_id\n  CROSS JOIN\n    percentiles p\n  WHERE\n    vi.vital_instability_index >= p.q3_vii\n),\n\ngeneral_population AS (\n  SELECT\n    co.stay_id,\n    co.icu_los,\n    co.hospital_expire_flag,\n    vi.vital_instability_index,\n    COALESCE(v.hypotension_episodes > 0, FALSE) AS had_hypotension,\n    COALESCE(v.tachycardia_episodes > 0, FALSE) AS had_tachycardia\n  FROM\n    cohort co\n  JOIN\n    vital_instability_index vi\n    ON co.stay_id = vi.stay_id\n  LEFT JOIN\n    vitals v\n    ON co.stay_id = v.stay_id\n)\n\nSELECT\n  'Top Quartile' AS group_name,\n  AVG(CAST(had_hypotension AS FLOAT64)) AS prop_hypotension,\n  AVG(CAST(had_tachycardia AS FLOAT64)) AS prop_tachycardia,\n  AVG(icu_los) AS avg_icu_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM\n  top_quartile\n\nUNION ALL\n\nSELECT\n  'General ICU Population' AS group_name,\n  AVG(CAST(had_hypotension AS FLOAT64)) AS prop_hypotension,\n  AVG(CAST(had_tachycardia AS FLOAT64)) AS prop_tachycardia,\n  AVG(icu_los) AS avg_icu_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM\n  general_population;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Invalid cast from BOOL to FLOAT64 at [121:12]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [121:12]\n\nLocation: US\nJob ID: 72c7eaa5-73ff-4ddf-ab9c-3ec07953bf4a\n",
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, vital_instability_index INT64> does not at [61:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, vital_instability_index INT64> does not at [61:22]\n\nLocation: US\nJob ID: 1e322f5c-e6d6-4e51-a0e4-9e6f8d061da5\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, vital_instability_index INT64> does not at [73:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, vital_instability_index INT64> does not at [73:22]\n\nLocation: US\nJob ID: 0b4f84f5-50c4-4d4d-8843-8b33d19d633f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [121:12]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [121:12]\n\nLocation: US\nJob ID: 72c7eaa5-73ff-4ddf-ab9c-3ec07953bf4a\n"
+    }
+  ]
+}

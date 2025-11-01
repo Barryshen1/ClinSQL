@@ -1,0 +1,22 @@
+{
+  "query": "I have a 48-year-old male inpatient. Among male inpatients aged 43\u201353 with a transplant diagnosis, compute medication complexity score over the first 7 hospital days, stratify into quartiles, and report per quartile: n, mean score, LOS, in-hospital mortality, and 30-day readmission",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: males aged 43-53 with transplant diagnosis\n  SELECT DISTINCT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY a.admittime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n    ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 43 AND 53\n    AND (d.icd_code LIKE 'Z94%' OR d.icd_code LIKE 'V42%')\n  QUALIFY rn = 1  -- First matching admission per patient\n),\n\nlos_readmit AS (\n  -- Add LOS and 30-day readmission flag\n  SELECT \n    c.*,\n    DATE_DIFF(DATE(c.dischtime), DATE(c.admittime), DAY) AS los,\n    CASE \n      WHEN c.hospital_expire_flag = 1 THEN 0\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = c.subject_id\n          AND a2.hadm_id != c.hadm_id\n          AND a2.admittime > c.dischtime\n          AND a2.admittime <= DATE_ADD(c.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 \n      ELSE 0 \n    END AS readmit_30d\n  FROM cohort c\n),\n\nmeds AS (\n  -- Medications in first 7 days from prescriptions\n  SELECT \n    lr.hadm_id,\n    LOWER(TRIM(pres.drug)) AS med_name,\n    pres.route,\n    pres.doses_per_24_hrs\n  FROM los_readmit lr\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n    ON lr.hadm_id = pres.hadm_id\n  WHERE pres.drug IS NOT NULL\n    AND pres.starttime >= lr.admittime\n    AND pres.starttime < TIMESTAMP_ADD(lr.admittime, INTERVAL 7 DAY)\n),\n\nmcs_scores AS (\n  -- Compute MCS per hadm_id\n  SELECT \n    lr.hadm_id,\n    lr.los,\n    lr.hospital_expire_flag,\n    lr.readmit_30d,\n    COALESCE(\n      SUM(\n        CASE \n          WHEN um.route IN ('PO', 'oral') AND um.doses_per_24_hrs <= 2 THEN 1\n          WHEN um.route IN ('IV', 'intravenous') OR um.doses_per_24_hrs > 2 THEN 2\n          ELSE 1  -- Default simple\n        END + \n        CASE \n          WHEN LOWER(um.med_name) LIKE ANY (\n            '%warfarin%', '%heparin%', '%cyclosporine%', '%tacrolimus%', \n            '%mycophenolate%', '%sirolimus%', '%chemotherapy%', '%prednisone%'\n          ) THEN 0.5 \n          ELSE 0 \n        END\n      ), 0\n    ) AS mcs_score\n  FROM los_readmit lr\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id, med_name, route, doses_per_24_hrs\n    FROM meds\n  ) um ON lr.hadm_id = um.hadm_id\n  GROUP BY lr.hadm_id, lr.los, lr.hospital_expire_flag, lr.readmit_30d\n),\n\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY mcs_score) AS quartile\n  FROM mcs_scores\n)\n\n-- Final aggregates per quartile\nSELECT \n  quartile,\n  COUNT(*) AS n,\n  ROUND(AVG(mcs_score), 2) AS mean_score,\n  ROUND(AVG(los), 2) AS mean_los,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_rate_pct,\n  ROUND(AVG(readmit_30d) * 100, 2) AS readmit_rate_pct\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword END but got keyword THEN at [40:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword END but got keyword THEN at [40:19]\n\nLocation: US\nJob ID: 4af833c3-d142-4896-b90e-0e735a64dd91\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

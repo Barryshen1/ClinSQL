@@ -1,0 +1,1 @@
+SELECT rs.subject_id, rs.risk_score, m.mortality_count, c.complication_count, l.average_length_of_stay, percent_rank() OVER (ORDER BY rs.risk_score) AS percentile_rank FROM risk_score rs JOIN mortality m ON rs.subject_id = m.subject_id JOIN complications c ON rs.subject_id = c.subject_id JOIN los l ON rs.subject_id = l.subject_id ORDER BY rs.subject_id NULLS LAST;

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 55-year-old female. For women aged 50\u201360 with sepsis excluding septic shock, give in-hospital mortality (%) for LOS \u22647 vs >7 days, absolute/relative difference, and median time-to-death.",
+  "final_sql": "WITH sepsis_hadm AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE (\n      -- ICD-9 codes for sepsis/severe sepsis\n      (d.icd_version = 9 AND (\n        d.icd_code LIKE '038%' OR\n        d.icd_code IN ('99591','99592')\n      ))\n      -- ICD-10 codes for sepsis\n      OR (d.icd_version = 10 AND (\n        d.icd_code LIKE 'A40%' OR\n        d.icd_code LIKE 'A41%' OR\n        d.icd_code = 'R6520' -- severe sepsis without septic shock\n      ))\n    )\n),\nshock_hadm AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE (\n      -- ICD-9 septic shock\n      (d.icd_version = 9 AND d.icd_code = '78552')\n      -- ICD-10 septic shock\n      OR (d.icd_version = 10 AND d.icd_code = 'R6521')\n      -- Also search text to be safe\n      OR LOWER(dd.long_title) LIKE '%septic shock%'\n    )\n),\nsepsis_no_shock AS (\n  SELECT s.hadm_id\n  FROM sepsis_hadm s\n  LEFT JOIN shock_hadm sh ON s.hadm_id = sh.hadm_id\n  WHERE sh.hadm_id IS NULL\n),\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE WHEN DATETIME_DIFF(a.dischtime, a.admittime, DAY) <= 7 THEN '<=7'\n         ELSE '>7' END AS los_group,\n    CASE WHEN a.hospital_expire_flag = 1\n         THEN DATETIME_DIFF(a.deathtime, a.admittime, DAY)\n    END AS days_to_death\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN sepsis_no_shock sns\n    ON a.hadm_id = sns.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n),\nmortality_stats AS (\n  SELECT\n    los_group,\n    COUNT(*) AS n_admissions,\n    SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS deaths,\n    100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_pct\n  FROM cohort\n  GROUP BY los_group\n),\ndiffs AS (\n  SELECT\n    m1.mortality_pct AS mort_le_7,\n    m2.mortality_pct AS mort_gt_7,\n    (m2.mortality_pct - m1.mortality_pct) AS abs_diff_pct_points,\n    (m2.mortality_pct - m1.mortality_pct) / m1.mortality_pct AS rel_diff\n  FROM mortality_stats m1\n  JOIN mortality_stats m2\n    ON m1.los_group = '<=7' AND m2.los_group = '>7'\n),\nmedian_ttd AS (\n  SELECT\n    APPROX_QUANTILES(days_to_death, 2)[OFFSET(1)] AS median_days_to_death\n  FROM cohort\n  WHERE hospital_expire_flag = 1\n    AND days_to_death IS NOT NULL\n)\nSELECT\n  ms.los_group,\n  ms.n_admissions,\n  ms.deaths,\n  ms.mortality_pct,\n  d.abs_diff_pct_points,\n  d.rel_diff,\n  mtd.median_days_to_death\nFROM mortality_stats ms\nCROSS JOIN diffs d\nCROSS JOIN median_ttd mtd\nORDER BY ms.los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name icd_code is ambiguous at [9:9]; reason: invalidQuery, location: query, message: Column name icd_code is ambiguous at [9:9]\n\nLocation: US\nJob ID: a8f2268c-1d20-42e4-a04f-ced31a6f2295\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

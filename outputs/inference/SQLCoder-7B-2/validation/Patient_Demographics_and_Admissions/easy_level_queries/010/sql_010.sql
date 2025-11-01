@@ -1,0 +1,1 @@
+SELECT percentiles.q AS percentile_25 FROM percentiles JOIN (SELECT icustays.los FROM icustays JOIN admissions ON icustays.subject_id = admissions.subject_id WHERE admissions.gender = 2 AND admissions.dod BETWEEN 2018-01-01 AND 2018-12-31 AND icustays.los IS NOT NULL) AS akis ON percentiles.q = akis.los;

@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 72-year-old female. Among female ICU patients aged 67\u201377, what percentile is a per-stay average HR of 110 bpm during the first 24 hours?",
+  "final_sql": "WITH\n-- Get female patients aged 67-77\nfemale_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age,\n    anchor_year,\n    EXTRACT(YEAR FROM CURRENT_DATE()) - anchor_year AS age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 67 AND 77\n),\n\n-- Get ICU stays for these patients\nicu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    female_patients p ON s.subject_id = p.subject_id\n),\n\n-- Get heart rate measurements in the first 24 hours of each ICU stay\nheart_rate_measurements AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.charttime,\n    c.valuenum AS heart_rate\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN\n    icu_stays s ON c.subject_id = s.subject_id AND c.hadm_id = s.hadm_id AND c.stay_id = s.stay_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` d ON c.itemid = d.itemid\n  WHERE\n    d.label = 'Heart Rate'\n    AND c.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR)\n    AND c.valuenum > 0  -- Exclude invalid values\n),\n\n-- Calculate average HR per ICU stay\navg_hr_per_stay AS (\n  SELECT\n    stay_id,\n    AVG(heart_rate) AS avg_heart_rate\n  FROM\n    heart_rate_measurements\n  GROUP BY\n    stay_id\n  HAVING\n    COUNT(heart_rate) > 0  -- Ensure at least one HR measurement\n),\n\n-- Calculate percentiles for all average HR values\npercentiles AS (\n  SELECT\n    avg_heart_rate,\n    PERCENT_RANK() OVER (ORDER BY avg_heart_rate) AS percentile\n  FROM\n    avg_hr_per_stay\n)\n\n-- Find the percentile for an average HR of 110 bpm\nSELECT\n  MAX(percentile) AS percentile_for_110\nFROM\n  percentiles\nWHERE\n  avg_heart_rate <= 110;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for analytic function PERCENT_RANK\n  Argument types: INT64\n  Signature: PERCENT_RANK()\n    Signature accepts at most 0 arguments, found 1 argument at [66:3]; reason: invalidQuery, location: query, message: No matching signature for analytic function PERCENT_RANK\n  Argument types: INT64\n  Signature: PERCENT_RANK()\n    Signature accepts at most 0 arguments, found 1 argument at [66:3]\n\nLocation: US\nJob ID: 670d49b7-4c84-4086-af06-35216639765f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

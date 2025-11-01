@@ -1,0 +1,28 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 45 AND 55\n),\n\n-- Identify injury-related ICD-10 codes (S00-T98)\ninjury_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE icd_version = 10\n    AND (\n      SUBSTR(icd_code, 1, 1) = 'S'\n      OR (\n        SUBSTR(icd_code, 1, 1) = 'T'\n        AND SAFE_CAST(SUBSTR(icd_code, 2, 2) AS INT64) IS NOT NULL\n        AND SAFE_CAST(SUBSTR(icd_code, 2, 2) AS INT64) BETWEEN 0 AND 98\n      )\n    )\n),\n\nmulti_trauma_admissions AS (\n  SELECT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN injury_codes ic\n    ON di.icd_code = ic.icd_code\n  GROUP BY di.hadm_id\n  HAVING COUNT(DISTINCT di.icd_code) >= 2\n),\n\n-- Medication count in first 7 days\nmedication_complexity AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.admittime,\n    pa.dischtime,\n    pa.hospital_expire_flag,\n    pa.deathtime,\n    COUNT(DISTINCT pr.drug) AS med_count\n  FROM patient_admissions pa\n  INNER JOIN multi_trauma_admissions mta\n    ON pa.hadm_id = mta.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.prescriptions pr\n    ON pa.hadm_id = pr.hadm_id\n    AND pr.starttime >= pa.admittime\n    AND pr.starttime <= DATETIME_ADD(pa.admittime, INTERVAL 7 DAY)\n  GROUP BY pa.subject_id, pa.hadm_id, pa.admittime, pa.dischtime, pa.hospital_expire_flag, pa.deathtime\n),\n\n-- Assign tertiles\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY med_count) AS complexity_tertile\n  FROM medication_complexity\n),\n\n-- Compute readmissions using JOIN instead of correlated subquery\nreadmissions AS (\n  SELECT\n    t.*,\n    -- Flag 30-day readmission\n    CASE\n      WHEN a_next.hadm_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS thirty_day_readmit\n  FROM tertiles t\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a_next\n    ON t.subject_id = a_next.subject_id\n    AND a_next.admittime > t.dischtime\n    AND a_next.admittime <= DATETIME_ADD(t.dischtime, INTERVAL 30 DAY)\n),\n\n-- Final aggregation by tertile\nsummary AS (\n  SELECT\n    complexity_tertile,\n    COUNT(*) AS admissions,\n    AVG(med_count) AS mean_med_count,\n    MIN(med_count) AS min_med_count,\n    MAX(med_count) AS max_med_count,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS mean_los_days,\n    AVG(hospital_expire_flag) * 100 AS mortality_pct,\n    AVG(thirty_day_readmit) * 100 AS thirty_day_readmission_pct\n  FROM readmissions\n  GROUP BY complexity_tertile\n)\n\nSELECT\n  complexity_tertile,\n  admissions,\n  ROUND(mean_med_count, 2) AS mean_med_count,\n  min_med_count,\n  max_med_count,\n  ROUND(mean_los_days, 2) AS mean_los_days,\n  ROUND(mortality_pct, 2) AS mortality_pct,\n  ROUND(thirty_day_readmission_pct, 2) AS thirty_day_readmission_pct\nFROM summary\nORDER BY complexity_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [97:9]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [97:9]\n\nLocation: US\nJob ID: 15a7c4f8-02c8-48ee-aa24-55ee4a701b28\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: b5c9fbdf-0d24-4c27-b117-371ef4371253\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

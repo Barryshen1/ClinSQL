@@ -1,0 +1,17 @@
+{
+  "query": "I have an 85\u2011year\u2011old woman. Among females 80\u201390 with heart failure, stratified ICU vs non\u2011ICU and LOS <8 vs \u22658 days, report in\u2011hospital mortality (%) and CKD and diabetes prevalence.",
+  "final_sql": "WITH patient_cohort AS (\n    SELECT\n        subject_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE\n        gender = 'F'\n        AND anchor_age BETWEEN 80 AND 90\n),\nadmissions_with_heart_failure AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag,\n        -- Calculate LOS in days\n        DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n        -- Check for ICU stay: if there's at least one icustay for this admission\n        CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END AS has_icu_stay\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` i\n        ON a.hadm_id = i.hadm_id\n    WHERE\n        a.subject_id IN (SELECT subject_id FROM patient_cohort)\n        AND a.dischtime IS NOT NULL  -- Only include completed admissions\n        -- Check for heart failure diagnosis in this admission\n        AND EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n            JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n                ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n            WHERE\n                d.hadm_id = a.hadm_id\n                AND dd.icd_version = 10\n                AND dd.icd_code LIKE 'I50%'  -- Heart failure ICD-10 codes\n        )\n),\nckd_diabetes_flags AS (\n    SELECT\n        hadm_id,\n        -- Check for CKD diagnosis in this admission\n        MAX(CASE WHEN dd.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS has_ckd,\n        -- Check for diabetes diagnosis in this admission\n        MAX(CASE WHEN dd.icd_code LIKE 'E11%' THEN 1 ELSE 0 END) AS has_diabetes\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n    WHERE\n        dd.icd_version = 10\n        AND (dd.icd_code LIKE 'N18%' OR dd.icd_code LIKE 'E11%')\n    GROUP BY\n        hadm_id\n)\nSELECT\n    CASE WHEN has_icu_stay = 1 THEN 'ICU' ELSE 'Non-ICU' END AS icu_status,\n    CASE WHEN los_days < 8 THEN '<8 days' ELSE '>=8 days' END AS los_category,\n    -- In-hospital mortality percentage\n    SUM(hospital_expire_flag) * 100.0 / COUNT(*) AS in_hospital_mortality_percent,\n    -- CKD prevalence percentage\n    AVG(has_ckd) * 100.0 AS ckd_prevalence_percent,\n    -- Diabetes prevalence percentage\n    AVG(has_diabetes) * 100.0 AS diabetes_prevalence_percent\nFROM\n    admissions_with_heart_failure a\nLEFT JOIN\n    ckd_diabetes_flags c\n    ON a.hadm_id = c.hadm_id\nGROUP BY\n    icu_status,\n    los_category\nORDER BY\n    icu_status,\n    los_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

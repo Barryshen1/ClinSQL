@@ -1,0 +1,22 @@
+{
+  "query": "I have a 95\u2011year\u2011old man. Among male patients aged 90\u2013100 admitted with ACS, what are counts, percentages, and mean length of stay for index Troponin T categorized as normal/borderline/elevated?",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 90 AND 100\n    AND a.hadm_id IS NOT NULL\n    AND d.seq_num = 1\n    AND (\n      (d.icd_version = 10 AND (d.icd_code = 'I200' OR d.icd_code LIKE 'I21%'))\n      OR\n      (d.icd_version = 9 AND (d.icd_code LIKE '410%' OR d.icd_code = '4111'))\n    )\n),\nindex_troponin AS (\n  SELECT\n    l.hadm_id,\n    l.valuenum AS index_valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON l.hadm_id = a.hadm_id\n  WHERE l.itemid = 50925\n    AND l.valuenum IS NOT NULL\n    AND l.valueuom = 'ng/mL'\n    AND l.charttime >= a.admittime\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY l.hadm_id\n    ORDER BY l.charttime ASC, l.labevent_id ASC\n  ) = 1\n)\nSELECT\n  troponin_category,\n  COUNT(*) AS count,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0), 2) AS mean_los_days\nFROM (\n  SELECT\n    e.hadm_id,\n    e.admittime,\n    e.dischtime,\n    CASE\n      WHEN it.index_valuenum <= 0.01 THEN 'normal'\n      WHEN it.index_valuenum <= 0.10 THEN 'borderline'\n      WHEN it.index_valuenum > 0.10 THEN 'elevated'\n      ELSE NULL\n    END AS troponin_category\n  FROM eligible_admissions e\n  LEFT JOIN index_troponin it\n    ON e.hadm_id = it.hadm_id\n)\nWHERE troponin_category IS NOT NULL\nGROUP BY troponin_category\nORDER BY\n  CASE troponin_category\n    WHEN 'normal' THEN 1\n    WHEN 'borderline' THEN 2\n    WHEN 'elevated' THEN 3\n  END\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:8]\n\nLocation: US\nJob ID: 77e9efdc-8f93-4e0c-aa4f-6386d127d388\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

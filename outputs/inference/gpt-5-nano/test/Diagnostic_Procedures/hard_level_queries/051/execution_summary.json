@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 95\u2011year\u2011old male ICU patient with sepsis. Among male ICU patients age 90\u2013100 with sepsis, what is the SD of diagnostic utilization in the first 24h? Also report p75, p95, in\u2011hospital mortality %, average LOS, and admissions versus overall ICU.",
+  "final_sql": "WITH cohort_stays AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.los,\n    a.deathtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON icu.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON icu.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = icu.subject_id\n   AND di.hadm_id = icu.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'Male'\n    AND p.anchor_age BETWEEN 90 AND 100\n    AND LOWER(dd.long_title) LIKE '%sepsis%'\n),\ncohort_with_death AS (\n  SELECT s.subject_id, s.hadm_id, s.stay_id, s.intime, s.los, s.deathtime\n  FROM cohort_stays s\n),\nlab_counts AS (\n  SELECT c.stay_id,\n         COUNT(le.labevent_id) AS diagnostic_count\n  FROM cohort_with_death c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.subject_id = c.subject_id\n   AND le.hadm_id = c.hadm_id\n   AND le.charttime >= c.intime\n   AND le.charttime < TIMESTAMP_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY c.stay_id\n),\nper_stay AS (\n  SELECT w.subject_id, w.hadm_id, w.stay_id, w.intime, w.los, w.deathtime,\n         COALESCE(lc.diagnostic_count, 0) AS diagnostic_count\n  FROM cohort_with_death w\n  LEFT JOIN lab_counts lc ON lc.stay_id = w.stay_id\n),\ntotals AS (\n  SELECT COUNT(*) AS total_icustays\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nmort_and_los AS (\n  SELECT\n    100.0 * SUM(CASE WHEN pw.deathtime IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*) AS in_hospital_mortality_percent,\n    AVG(pw.los) AS avg_los_icustay_hours,\n    COUNT(*) AS admissions_cohort\n  FROM per_stay pw\n),\nstats AS (\n  SELECT STDDEV_SAMP(diagnostic_count) AS sd_diagnostic_first24h,\n         APPROX_QUANTILES(diagnostic_count, 100) AS quantiles\n  FROM per_stay\n),\nfinal AS (\n  SELECT\n    s.sd_diagnostic_first24h,\n    s.quantiles[OFFSET(75)] AS p75_diagnostic_first24h,\n    s.quantiles[OFFSET(95)] AS p95_diagnostic_first24h,\n    m.in_hospital_mortality_percent,\n    m.avg_los_icustay_hours,\n    m.admissions_cohort,\n    t.total_icustays,\n    100.0 * m.admissions_cohort / t.total_icustays AS admissions_ratio_percent\n  FROM stats s\n  CROSS JOIN mort_and_los m\n  CROSS JOIN totals t\n)\nSELECT * FROM final;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [52:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [52:3]\n\nLocation: US\nJob ID: adc137d8-4f76-4a4b-80ec-b1dfbb752da3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references s.sd_diagnostic_first24h which is neither grouped nor aggregated at [69:3]; reason: invalidQuery, location: query, message: SELECT list expression references s.sd_diagnostic_first24h which is neither grouped nor aggregated at [69:3]\n\nLocation: US\nJob ID: 4d39417e-9cbf-4543-896f-b327d9dcf9fe\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

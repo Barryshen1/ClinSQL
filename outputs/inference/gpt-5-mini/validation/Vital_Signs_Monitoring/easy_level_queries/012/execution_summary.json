@@ -1,0 +1,22 @@
+{
+  "query": "I have a 54-year-old man. For male patients 49\u201359 in step\u2011down/IMC, what's the IQR of mean diastolic BP per stay?",
+  "final_sql": "WITH diastolic_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%diastol%'\n),\n\ndbp_events AS (\n  -- diastolic measurements from chartevents only (datetimesevents not present in this dataset)\n  SELECT subject_id, hadm_id, stay_id, charttime, valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents`\n  WHERE valuenum IS NOT NULL\n    AND itemid IN (SELECT itemid FROM diastolic_items)\n    AND valuenum BETWEEN 10 AND 200\n),\n\neligible_stays AS (\n  -- male patients age 49-59 and stays in units that look like step-down/IMC\n  SELECT icu.*\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING(subject_id)\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND (\n      LOWER(icu.first_careunit) LIKE '%step%'\n      OR LOWER(icu.first_careunit) LIKE '%stepdown%'\n      OR LOWER(icu.first_careunit) LIKE '%pcu%'\n      OR LOWER(icu.first_careunit) LIKE '%imc%'\n      OR LOWER(icu.first_careunit) LIKE '%progressive%'\n    )\n),\n\nper_stay_mean AS (\n  -- compute mean diastolic BP per eligible stay (only events within the stay)\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    AVG(e.valuenum) AS mean_dbp,\n    COUNT(*) AS n_obs\n  FROM eligible_stays s\n  JOIN dbp_events e\n    USING(stay_id, subject_id, hadm_id)\n  WHERE e.charttime BETWEEN s.intime AND s.outtime\n  GROUP BY s.subject_id, s.hadm_id, s.stay_id\n)\n\n-- compute Q1, Q3 and IQR across per-stay means\nSELECT\n  arr[OFFSET(1)] AS q1_mean_dbp,\n  arr[OFFSET(3)] AS q3_mean_dbp,\n  SAFE_CAST(arr[OFFSET(3)] - arr[OFFSET(1)] AS FLOAT64) AS iqr_mean_dbp,\n  (SELECT COUNT(*) FROM per_stay_mean) AS n_stays\nFROM (\n  SELECT APPROX_QUANTILES(mean_dbp, 4) AS arr\n  FROM per_stay_mean\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_icu.datetimesevents was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_icu.datetimesevents was not found in location US\n\nLocation: US\nJob ID: 24e65134-645f-4829-b208-7fbc1c2b10f6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

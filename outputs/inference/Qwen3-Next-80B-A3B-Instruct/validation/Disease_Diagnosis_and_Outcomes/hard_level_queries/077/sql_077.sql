@@ -1,0 +1,1 @@
+PERCENTILE_CONT(DATETIME_DIFF(c.deathtime, c.admittime, DAY), 0.5) AS median_survival_days_decedents;

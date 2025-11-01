@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating a 74\u2011year\u2011old female with intracranial hemorrhage. For female inpatients aged 69\u201379 with ICH, stratify admissions into quintiles by the composite risk score and report, per quintile: n, 30\u2011day mortality %, major complication %, and median survivor LOS.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    a.admission_type,\n    a.admission_location,\n    a.discharge_location,\n    a.insurance,\n    a.language,\n    a.marital_status,\n    a.race,\n    a.edregtime,\n    a.edouttime,\n    p.anchor_age,\n    p.gender,\n    CASE\n      WHEN i.stay_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS icu_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  ON\n    a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 69 AND 79\n    AND (\n      (d.icd_version = 9 AND d.icd_code = '431')\n      OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I61%')\n    )\n),\n\nrisk_score AS (\n  SELECT\n    hadm_id,\n    anchor_age,\n    icu_flag,\n    hospital_expire_flag,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los,\n    deathtime,\n    admittime,\n    CASE\n      WHEN deathtime IS NOT NULL AND DATETIME_DIFF(deathtime, admittime, DAY) <= 30 THEN 1\n      ELSE 0\n    END AS died_within_30_days,\n    anchor_age + (icu_flag * 10) AS composite_score\n  FROM\n    cohort\n),\n\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY composite_score) AS risk_quintile\n  FROM\n    risk_score\n),\n\nsurvivors AS (\n  SELECT\n    risk_quintile,\n    los\n  FROM\n    quintiles\n  WHERE\n    died_within_30_days = 0\n),\n\nmortality_stats AS (\n  SELECT\n    risk_quintile,\n    COUNT(*) AS n,\n    AVG(died_within_30_days) * 100 AS mortality_pct\n  FROM\n    quintiles\n  GROUP BY\n    risk_quintile\n),\n\nlos_stats AS (\n  SELECT\n    risk_quintile,\n    APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_survivor_los\n  FROM\n    survivors\n  GROUP BY\n    risk_quintile\n)\n\nSELECT\n  m.risk_quintile,\n  m.n,\n  ROUND(m.mortality_pct, 2) AS thirty_day_mortality_pct,\n  ROUND(l.median_survivor_los, 2) AS median_survivor_los\nFROM\n  mortality_stats m\nJOIN\n  los_stats l\nON\n  m.risk_quintile = l.risk_quintile\nORDER BY\n  m.risk_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [18:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [18:7]\n\nLocation: US\nJob ID: 0795cd5f-e5df-449f-8abb-65ec12f0abf9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

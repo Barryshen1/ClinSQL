@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 64\u2011year\u2011old female inpatient with DVT and high comorbidity burden. Among females 59\u201369 with DVT above the 75th comorbidity percentile, report cohort size, 30\u2011day mortality, major complication rate, median survival for decedents, and composite risk score quartiles.",
+  "final_sql": "WITH base_cohort AS (\n    SELECT \n        p.subject_id, \n        a.hadm_id,\n        a.admittime,\n        p.dod,\n        p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    WHERE \n        p.gender = 'F'\n        AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 59 AND 69\n        AND a.hadm_id IN (\n            SELECT hadm_id \n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n            WHERE \n                (icd_version = 9 AND icd_code LIKE '453%') OR\n                (icd_version = 10 AND icd_code LIKE 'I82%')\n        )\n),\ncomorbidity AS (\n    SELECT \n        bc.hadm_id,\n        COUNT(DISTINCT di.icd_code) AS comorbidity_index\n    FROM base_cohort bc\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON bc.hadm_id = di.hadm_id\n    GROUP BY bc.hadm_id\n),\np75_value AS (\n    SELECT \n        PERCENTILE_CONT(comorbidity_index, 0.75) AS p75\n    FROM comorbidity\n),\nfinal_cohort AS (\n    SELECT \n        c.hadm_id,\n        bc.admittime,\n        bc.dod,\n        c.comorbidity_index\n    FROM comorbidity c\n    INNER JOIN base_cohort bc\n        ON c.hadm_id = bc.hadm_id\n    CROSS JOIN p75_value\n    WHERE c.comorbidity_index >= p75_value.p75\n),\ncomplications AS (\n    SELECT \n        fc.hadm_id,\n        MAX(\n            CASE WHEN \n                (di.icd_version = 9 AND di.icd_code LIKE '4151%') OR\n                (di.icd_version = 10 AND di.icd_code LIKE 'I26%') OR\n                (di.icd_version = 9 AND (di.icd_code LIKE '430%' OR di.icd_code LIKE '431%' OR di.icd_code LIKE '432%')) OR\n                (di.icd_version = 10 AND (di.icd_code LIKE 'I60%' OR di.icd_code LIKE 'I61%' OR di.icd_code LIKE 'I62%')) OR\n                (di.icd_version = 9 AND di.icd_code LIKE '578%') OR\n                (di.icd_version = 10 AND di.icd_code IN ('K920', 'K921', 'K922'))\n            THEN 1 ELSE 0 END\n        ) AS has_complication\n    FROM final_cohort fc\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON fc.hadm_id = di.hadm_id\n    GROUP BY fc.hadm_id\n),\nmortality AS (\n    SELECT \n        hadm_id,\n        CASE WHEN dod IS NOT NULL AND DATE_DIFF(CAST(dod AS DATE), CAST(admittime AS DATE), DAY) <= 30 \n             THEN 1 ELSE 0 END AS died_30d\n    FROM final_cohort\n),\ndecedents_survival AS (\n    SELECT \n        hadm_id,\n        DATE_DIFF(CAST(dod AS DATE), CAST(admittime AS DATE), DAY) AS survival_days\n    FROM final_cohort\n    WHERE dod IS NOT NULL\n),\nquartiles_cte AS (\n    SELECT \n        PERCENTILE_CONT(comorbidity_index, 0.25) AS q1,\n        PERCENTILE_CONT(comorbidity_index, 0.5) AS median_com,\n        PERCENTILE_CONT(comorbidity_index, 0.75) AS q3_com\n    FROM final_cohort\n)\nSELECT\n    COUNT(*) AS cohort_size,\n    ROUND(AVG(CAST(m.died_30d AS FLOAT64)) * 100, 2) AS mortality_30d_rate,\n    ROUND(AVG(CAST(cp.has_complication AS FLOAT64)) * 100, 2) AS complication_rate,\n    (SELECT PERCENTILE_CONT(survival_days, 0.5) FROM decedents_survival) AS median_survival_days,\n    q.q1 AS q1_composite,  -- Fixed: Changed q1_com to q1\n    q.median_com AS median_composite,\n    q.q3_com AS q3_composite\nFROM final_cohort fc\nLEFT JOIN mortality m ON fc.hadm_id = m.hadm_id\nLEFT JOIN complications cp ON fc.hadm_id = cp.hadm_id\nCROSS JOIN quartiles_cte q;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references q.q1 which is neither grouped nor aggregated at [92:5]; reason: invalidQuery, location: query, message: SELECT list expression references q.q1 which is neither grouped nor aggregated at [92:5]\n\nLocation: US\nJob ID: 67777100-4e74-46b8-9b47-a80bd7ba1b96\n",
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Field offset 1 is out of bounds in STRUCT<quartiles ARRAY<INT64>> at [91:23]; reason: invalidQuery, location: query, message: Field offset 1 is out of bounds in STRUCT<quartiles ARRAY<INT64>> at [91:23]\n\nLocation: US\nJob ID: 3d175403-c5f9-4fcb-b1f7-40758c90dc42\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name q1_com not found inside q at [92:7]; reason: invalidQuery, location: query, message: Name q1_com not found inside q at [92:7]\n\nLocation: US\nJob ID: 3b1837f1-3753-485d-b3ad-0e9589a4e5d7\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references q.q1 which is neither grouped nor aggregated at [92:5]; reason: invalidQuery, location: query, message: SELECT list expression references q.q1 which is neither grouped nor aggregated at [92:5]\n\nLocation: US\nJob ID: 67777100-4e74-46b8-9b47-a80bd7ba1b96\n"
+    }
+  ]
+}

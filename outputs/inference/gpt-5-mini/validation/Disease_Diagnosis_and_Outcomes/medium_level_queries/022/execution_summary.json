@@ -1,0 +1,16 @@
+{
+  "query": "For a 55-year-old man, among male patients 50\u201360 with sepsis (no septic shock), report in\u2011hospital mortality (%) and median LOS by LOS \u22647 vs >7 days and day\u20111 ICU status.",
+  "final_sql": "WITH diag_text_flags AS (\n  -- For each hospital admission, flag whether any diagnosis mentions sepsis\n  -- and whether any diagnosis mentions septic shock (case-insensitive).\n  SELECT\n    d.hadm_id,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%sepsis%' OR LOWER(dd.long_title) LIKE '%septicemia%' THEN 1 ELSE 0 END) AS has_sepsis,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%septic shock%' THEN 1 ELSE 0 END) AS has_septic_shock\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  USING (icd_code, icd_version)\n  GROUP BY d.hadm_id\n),\n\ncohort AS (\n  -- Admissions for male patients aged 50-60 that have sepsis (by text) but not septic shock\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN\n    diag_text_flags dt\n    ON a.hadm_id = dt.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND dt.has_sepsis = 1\n    AND dt.has_septic_shock = 0\n),\n\ncohort_with_icu AS (\n  -- Attach a boolean indicating whether the admission had any ICU stay overlapping hospital day 1\n  SELECT\n    c.*,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` ic\n      WHERE ic.hadm_id = c.hadm_id\n        -- ICU stay starts before the end of hospital day 1 and continues past admission start\n        AND ic.intime < TIMESTAMP_ADD(c.admittime, INTERVAL 1 DAY)\n        AND ic.outtime > c.admittime\n    ) THEN TRUE ELSE FALSE END AS icu_day1\n  FROM cohort c\n)\n\nSELECT\n  CASE WHEN los_days <= 7 THEN '<=7 days' ELSE '>7 days' END AS los_bucket,\n  CASE WHEN icu_day1 THEN 'ICU on day 1' ELSE 'No ICU on day 1' END AS day1_icu_status,\n  COUNT(*) AS admissions_n,\n  SUM(hospital_expire_flag) AS deaths_n,\n  ROUND(100.0 * SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)), 2) AS in_hospital_mortality_pct,\n  -- approximate median LOS in days\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los_days\nFROM\n  cohort_with_icu\nGROUP BY\n  los_bucket,\n  day1_icu_status\nORDER BY\n  los_bucket,\n  day1_icu_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

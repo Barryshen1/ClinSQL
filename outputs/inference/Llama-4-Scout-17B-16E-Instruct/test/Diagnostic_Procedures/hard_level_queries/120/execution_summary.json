@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 79\u2011year\u2011old man. Among male ICU patients aged 74\u201384 admitted with upper GI bleeding, using first ICU stay, stratify first\u201172\u2011hour diagnostic intensity into quartiles and report mean procedure count, mean hospital LOS (days), and in\u2011hospital mortality per quartile.",
+  "final_sql": "WITH \n-- Patient and admission data\npatient_data AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    a.subject_id = p.subject_id\n),\n\n-- ICU stay data\nicu_stay_data AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    outtime\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays`\n),\n\n-- First ICU stay for each admission\nfirst_icu_stay AS (\n  SELECT \n    hadm_id,\n    MIN(intime) AS first_icu_intime,\n    MIN(stay_id) AS first_icu_stay_id\n  FROM \n    icu_stay_data\n  GROUP BY \n    hadm_id\n),\n\n-- Diagnostic and procedure events in the first 72 hours of ICU stay\nevents_72hrs AS (\n  SELECT \n    fis.first_icu_stay_id,\n    COUNT(CASE \n            WHEN itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE category = 'Procedure') THEN 1 \n          END) AS procedure_count_72hrs,\n    COUNT(DISTINCT CASE \n                      WHEN ce.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE category IN ('Lab', 'Vitals')) THEN ce.charttime \n                    END) AS diagnostic_events_72hrs\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN \n    icu_stay_data icu\n  ON \n    ce.subject_id = icu.subject_id AND ce.hadm_id = icu.hadm_id AND ce.stay_id = icu.stay_id\n  JOIN \n    first_icu_stay fis\n  ON \n    icu.hadm_id = fis.hadm_id AND icu.stay_id = fis.first_icu_stay_id\n  WHERE \n    ce.charttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 72 HOUR)\n  GROUP BY \n    fis.first_icu_stay_id\n),\n\n-- Upper GI bleed admissions for male patients aged 74-84\ntarget_population AS (\n  SELECT \n    pd.subject_id,\n    pd.hadm_id,\n    pd.anchor_age,\n    pd.gender,\n    pd.hospital_expire_flag,\n    pd.dischtime,\n    pd.deathtime,\n    fis.first_icu_stay_id,\n    DATEDIFF(pd.dischtime, pd.admittime) AS hospital_los_days\n  FROM \n    patient_data pd\n  JOIN \n    first_icu_stay fis\n  ON \n    pd.hadm_id = fis.hadm_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  ON \n    pd.hadm_id = di.hadm_id\n  WHERE \n    pd.gender = 'M' \n    AND pd.anchor_age BETWEEN 74 AND 84\n    AND di.icd_code LIKE 'K25%'  -- Adjusted for upper GI bleeding\n),\n\n-- Prepare data for quartile calculation\nquartile_data AS (\n  SELECT \n    tp.hadm_id,\n    COALESCE(e.procedure_count_72hrs, 0) AS procedure_count_72hrs,\n    tp.hospital_los_days,\n    tp.hospital_expire_flag\n  FROM \n    target_population tp\n  LEFT JOIN \n    events_72hrs e\n  ON \n    tp.first_icu_stay_id = e.first_icu_stay_id\n)\n\n-- Final calculation\nSELECT \n  de_quartile,\n  AVG(procedure_count_72hrs) AS mean_procedure_count,\n  AVG(hospital_los_days) AS mean_hospital_los_days,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS in_hospital_mortality\nFROM (\n  SELECT \n    hadm_id,\n    procedure_count_72hrs,\n    hospital_los_days,\n    hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY diagnostic_events_72hrs) AS de_quartile\n  FROM \n    quartile_data\n) AS subquery\nGROUP BY \n  de_quartile\nORDER BY \n  de_quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [82:5]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [82:5]\n\nLocation: US\nJob ID: e709e14e-dcbd-452b-99b5-aaa14b7ee3cf\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [97:160]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [97:160]\n\nLocation: US\nJob ID: dfb12cdc-8d37-4ae5-a804-8cc1eb23e1af\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: icu_stay_id; Did you mean stay_id? at [48:5]; reason: invalidQuery, location: query, message: Unrecognized name: icu_stay_id; Did you mean stay_id? at [48:5]\n\nLocation: US\nJob ID: 6d8bbaff-859e-4747-aa5f-afefb31d1f35\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [82:5]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [82:5]\n\nLocation: US\nJob ID: e709e14e-dcbd-452b-99b5-aaa14b7ee3cf\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "53\u2011year\u2011old female inpatient. Among female inpatients 48\u201358 with hemorrhagic stroke, what is the 90th\u2011percentile lab\u2011instability score (lab systems with critical values in first 72 h)? For patients \u2265P90 report mortality%, mean LOS, and avg critical labs/patient vs age\u2011matched cohort.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND (\n      (d.icd_version = 9 AND (d.icd_code LIKE '430%' OR d.icd_code LIKE '431%' OR d.icd_code LIKE '432%'))\n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%'))\n    )\n),\nfirst72_labs AS (\n  SELECT\n    le.hadm_id,\n    di.category,\n    le.flag\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` di\n    ON le.itemid = di.itemid\n  INNER JOIN cohort c\n    ON le.hadm_id = c.hadm_id\n  WHERE le.charttime >= c.admittime\n    AND le.charttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n    AND le.flag = 'abnormal'\n    AND le.valuenum IS NOT NULL\n    AND di.category IS NOT NULL\n),\nscores AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT category) AS lab_instability_score,\n    COUNT(*) AS num_critical_labs\n  FROM first72_labs\n  GROUP BY hadm_id\n),\nfull_cohort AS (\n  SELECT\n    c.*,\n    COALESCE(s.lab_instability_score, 0) AS score,\n    COALESCE(s.num_critical_labs, 0) AS num_crit_labs\n  FROM cohort c\n  LEFT JOIN scores s\n    ON c.hadm_id = s.hadm_id\n),\np90 AS (\n  SELECT APPROX_QUANTILES(score, 100)[OFFSET(90)] AS p90_score\n  FROM full_cohort\n),\naugmented AS (\n  SELECT\n    fc.*,\n    p90.p90_score,\n    CASE\n      WHEN fc.score >= p90.p90_score THEN 'high'\n      ELSE 'low'\n    END AS group_flag\n  FROM full_cohort fc\n  CROSS JOIN p90\n)\nSELECT\n  group_flag,\n  p90_score,\n  COUNT(*) AS num_patients,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100, 2) AS mortality_pct,\n  ROUND(AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0), 2) AS mean_los_days,\n  ROUND(AVG(num_crit_labs), 2) AS avg_critical_labs_per_patient\nFROM augmented\nGROUP BY group_flag, p90_score\nORDER BY\n  CASE WHEN group_flag = 'high' THEN 1 ELSE 2 END;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [17:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [17:8]\n\nLocation: US\nJob ID: 1c3b32ad-6b26-41a9-8882-d5fec10d9bfc\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 625cde76-3fad-40ea-9f44-c50e9fe49a08\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

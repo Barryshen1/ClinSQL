@@ -1,0 +1,16 @@
+{
+  "query": "For my 50-year-old female patient, among female ICU patients aged 45\u201355, report counts of unique patients by per-stay average SBP over the first 24 hours: <140, 140\u2013159, \u2265160 mmHg.",
+  "final_sql": "WITH sbp_data AS (\n  -- Identify SBP itemids\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%systolic%' \n    AND (LOWER(label) LIKE '%blood pressure%' OR LOWER(label) LIKE '%sbp%')\n),\nfirst_24h_sbp AS (\n  -- SBP readings in first 24h per stay\n  SELECT \n    ce.subject_id,\n    ce.stay_id,\n    ce.valuenum AS sbp\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN sbp_data si ON ce.itemid = si.itemid\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON ce.subject_id = icu.subject_id \n    AND ce.stay_id = icu.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON ce.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND icu.los >= 1\n    AND ce.charttime >= icu.intime\n    AND ce.charttime < DATETIME_ADD(icu.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL \n    AND ce.valuenum > 0\n),\nstay_averages AS (\n  -- Average SBP per stay\n  SELECT \n    subject_id,\n    stay_id,\n    AVG(sbp) AS avg_sbp_per_stay\n  FROM first_24h_sbp\n  GROUP BY subject_id, stay_id\n  HAVING avg_sbp_per_stay IS NOT NULL  -- Exclude stays with no readings\n),\npatient_averages AS (\n  -- Average across stays per patient\n  SELECT \n    subject_id,\n    AVG(avg_sbp_per_stay) AS avg_sbp\n  FROM stay_averages\n  GROUP BY subject_id\n  HAVING COUNT(stay_id) >= 1  -- At least one qualifying stay\n)\n-- Bin and count unique patients\nSELECT \n  CASE \n    WHEN avg_sbp < 140 THEN '<140 mmHg'\n    WHEN avg_sbp >= 140 AND avg_sbp < 160 THEN '140\u2013159 mmHg'\n    ELSE '>=160 mmHg'\n  END AS sbp_bin,\n  COUNT(DISTINCT subject_id) AS patient_count\nFROM patient_averages\nGROUP BY sbp_bin\nORDER BY \n  CASE sbp_bin\n    WHEN '<140 mmHg' THEN 1\n    WHEN '140\u2013159 mmHg' THEN 2\n    ELSE 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

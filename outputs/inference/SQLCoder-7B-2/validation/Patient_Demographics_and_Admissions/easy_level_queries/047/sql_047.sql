@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY icustays.los) AS percentile_25 FROM patients JOIN icustays ON patients.subject_id = icustays.subject_id WHERE patients.gender = 'F' AND patients.anchor_year = 87 AND patients.anchor_year_group BETWEEN 82 AND 92 AND icustays.los IS NOT NULL;

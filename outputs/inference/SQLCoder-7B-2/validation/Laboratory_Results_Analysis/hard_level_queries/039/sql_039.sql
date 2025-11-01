@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY ml.valuenum) AS percentile_75, AVG(CASE WHEN ml.flag = 'C' THEN 1 ELSE 0 END) AS avg_critical_events, AVG(ml.los) AS avg_los, AVG(CASE WHEN ml.dod IS NOT NULL THEN 1 ELSE 0 END) AS avg_mortality FROM male_labevents_72h_stable ml;

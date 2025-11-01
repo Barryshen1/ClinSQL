@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY COUNT(DISTINCT p.procedure_id)) AS seventy_five_percentile FROM physionet-data.mimiciv_3_1_hosp.procedureevents p JOIN physionet-data.mimiciv_3_1_icu.procedureevents i ON p.subject_id = i.subject_id AND p.hadm_id = i.hadm_id AND p.stay_id = i.stay_id WHERE p.itemid = 757071 AND i.itemid = 757071;

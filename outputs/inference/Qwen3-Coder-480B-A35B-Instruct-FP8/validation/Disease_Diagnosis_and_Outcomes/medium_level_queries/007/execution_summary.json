@@ -1,0 +1,22 @@
+{
+  "query": "For my 56\u2011year\u2011old patient: among female patients 51\u201361 with heart failure, ICU vs no ICU, LOS <8 vs \u22658 and comorbidity burden (low/med/high), report in\u2011hospital mortality rates, absolute/relative differences, MV/vaso/RRT prevalence.",
+  "final_sql": "WITH hf_admissions AS (\n  -- Identify admissions with primary heart failure diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) AS hosp_los_hours,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '428%')\n      OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n    )\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 51 AND 61\n),\n\ncomorbidities AS (\n  -- Count secondary diagnoses to estimate comorbidity burden\n  SELECT\n    hadm_id,\n    COUNT(*) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE seq_num > 1\n  GROUP BY hadm_id\n),\n\nicu_status AS (\n  -- Determine if patient had ICU stay\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN stay_id IS NOT NULL THEN 1 ELSE 0 END) AS had_icu\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\n\ninterventions AS (\n  -- Identify MV, vasopressors, RRT\n  SELECT\n    ce.hadm_id,\n    MAX(CASE WHEN di.label LIKE '%ventil%' THEN 1 ELSE 0 END) AS mechanical_ventilation,\n    MAX(CASE WHEN di.label LIKE '%norepinephrine%' OR di.label LIKE '%dopamine%' THEN 1 ELSE 0 END) AS vasopressor,\n    MAX(CASE WHEN di.label LIKE '%dialysis%' THEN 1 ELSE 0 END) AS rrt\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE\n    di.label LIKE '%ventil%'\n    OR di.label LIKE '%norepinephrine%'\n    OR di.label LIKE '%dopamine%'\n    OR di.label LIKE '%dialysis%'\n  GROUP BY ce.hadm_id\n),\n\nfinal_data AS (\n  SELECT\n    hf.hadm_id,\n    hf.hospital_expire_flag,\n    COALESCE(icu.had_icu, 0) AS had_icu,\n    CASE WHEN hf.hosp_los_hours < 192 THEN '<8' ELSE '>=8' END AS los_group,\n    CASE\n      WHEN COALESCE(cm.comorbidity_count, 0) < 3 THEN 'Low'\n      WHEN cm.comorbidity_count BETWEEN 3 AND 5 THEN 'Medium'\n      ELSE 'High'\n    END AS comorbidity_burden,\n    COALESCE(iv.mechanical_ventilation, 0) AS mechanical_ventilation,\n    COALESCE(iv.vasopressor, 0) AS vasopressor,\n    COALESCE(iv.rrt, 0) AS rrt\n  FROM hf_admissions hf\n  LEFT JOIN comorbidities cm ON hf.hadm_id = cm.hadm_id\n  LEFT JOIN icu_status icu ON hf.hadm_id = icu.hadm_id\n  LEFT JOIN interventions iv ON hf.hadm_id = iv.hadm_id\n)\n\nSELECT\n  had_icu,\n  los_group,\n  comorbidity_burden,\n  COUNT(*) AS total_patients,\n  SUM(hospital_expire_flag) AS deaths,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  AVG(mechanical_ventilation) AS mv_prevalence,\n  AVG(vasopressor) AS vaso_prevalence,\n  AVG(rrt) AS rrt_prevalence\nFROM final_data\nGROUP BY had_icu, los_group, comorbidity_burden\nORDER BY had_icu, los_group, comorbidity_burden;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [10:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [10:7]\n\nLocation: US\nJob ID: 98dce29b-1a0e-447b-9ac2-bf0a110e3d69\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

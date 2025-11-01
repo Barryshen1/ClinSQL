@@ -1,0 +1,22 @@
+{
+  "query": "For my 43-year-old female inpatient with T2D and heart failure, among females 38\u201348 with both diagnoses, report percentages initiated on insulin versus oral agents in first vs final 72h only.",
+  "final_sql": "WITH t2d_dx AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE REGEXP_CONTAINS(LOWER(long_title), r'type 2 diabetes|type ii diabetes')\n),\nhf_dx AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE REGEXP_CONTAINS(LOWER(long_title), r'heart failure')\n),\ncohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n),\ncohort_dx AS (\n  SELECT \n    c.subject_id, \n    c.hadm_id, \n    c.admittime, \n    c.dischtime\n  FROM cohort c\n  WHERE c.age_at_admit BETWEEN 38 AND 48\n  AND EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN t2d_dx ON di.icd_code = t2d_dx.icd_code \n                AND di.icd_version = t2d_dx.icd_version\n    WHERE di.subject_id = c.subject_id \n      AND di.hadm_id = c.hadm_id\n  )\n  AND EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN hf_dx ON di.icd_code = hf_dx.icd_code \n                AND di.icd_version = hf_dx.icd_version\n    WHERE di.subject_id = c.subject_id \n      AND di.hadm_id = c.hadm_id\n  )\n),\ninsulin_events AS (\n  SELECT subject_id, hadm_id, charttime AS admin_time\n  FROM `physionet-data.mimiciv_3_1_hosp.emar`\n  WHERE LOWER(medication) LIKE '%insulin%'\n  UNION ALL\n  SELECT subject_id, hadm_id, starttime AS admin_time\n  FROM `physionet-data.mimiciv_3_1_icu.inputevents`\n  WHERE itemid IN (\n    SELECT itemid \n    FROM `physionet-data.mimiciv_3_1_icu.d_items` \n    WHERE LOWER(label) LIKE '%insulin%'\n  )\n),\noral_events AS (\n  SELECT subject_id, hadm_id, charttime AS admin_time\n  FROM `physionet-data.mimiciv_3_1_hosp.emar`\n  WHERE REGEXP_CONTAINS(LOWER(medication), \n    r'metformin|glipizide|glyburide|glimepiride|pioglitazone|rosiglitazone|sitagliptin|saxagliptin|linagliptin|alogliptin|repaglinide|nateglinide|acarbose|miglitol|canagliflozin|dapagliflozin|empagliflozin|ertugliflozin')\n),\ncohort_meds AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    MAX(CASE WHEN i.admin_time BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR) THEN 1 ELSE 0 END) AS insulin_first_72h,\n    MAX(CASE WHEN o.admin_time BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR) THEN 1 ELSE 0 END) AS oral_first_72h,\n    MAX(CASE WHEN i.admin_time BETWEEN GREATEST(c.admittime, DATETIME_SUB(c.dischtime, INTERVAL 72 HOUR)) AND c.dischtime THEN 1 ELSE 0 END) AS insulin_final_72h,\n    MAX(CASE WHEN o.admin_time BETWEEN GREATEST(c.admittime, DATETIME_SUB(c.dischtime, INTERVAL 72 HOUR)) AND c.dischtime THEN 1 ELSE 0 END) AS oral_final_72h\n  FROM cohort_dx c\n  LEFT JOIN insulin_events i \n    ON c.subject_id = i.subject_id \n    AND c.hadm_id = i.hadm_id  -- Fixed: Added AND here\n  LEFT JOIN oral_events o \n    ON c.subject_id = o.subject_id \n    AND c.hadm_id = o.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n)\nSELECT \n  'First 72h' AS time_window,\n  COUNT(*) AS total_patients,\n  ROUND(100.0 * SUM(insulin_first_72h) / COUNT(*), 2) AS percent_insulin,\n  ROUND(100.0 * SUM(oral_first_72h) / COUNT(*), 2) AS percent_oral\nFROM cohort_meds\nUNION ALL\nSELECT \n  'Final 72h' AS time_window,\n  COUNT(*) AS total_patients,\n  ROUND(100.0 * SUM(insulin_final_72h) / COUNT(*), 2) AS percent_insulin,\n  ROUND(100.0 * SUM(oral_final_72h) / COUNT(*), 2) AS percent_oral\nFROM cohort_meds;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"c\" at [78:5]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"c\" at [78:5]\n\nLocation: US\nJob ID: 3d7d9b2c-71c6-4721-9dc9-171582cd0167\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

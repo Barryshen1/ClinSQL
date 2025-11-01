@@ -1,0 +1,28 @@
+{
+  "query": "I have a 42-year-old female. Among female ICU patients aged 37\u201347, what's the 75th percentile of mean temperature per stay?",
+  "final_sql": "WITH patient_cohort AS (\n    -- Step 1: Identify eligible female patients aged 37-47\n    SELECT\n        p.subject_id,\n        p.anchor_age\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 37 AND 47\n),\nicu_stays_filtered AS (\n    -- Step 2: Link eligible patients to their ICU stays\n    SELECT\n        pc.subject_id,\n        ic.stay_id\n    FROM\n        patient_cohort pc\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` ic\n        ON pc.subject_id = ic.subject_id\n),\ntemperature_measurements AS (\n    -- Step 3 & 4: Extract temperature measurements and standardize to Celsius\n    SELECT\n        isf.stay_id,\n        -- Standardize temperature to Celsius\n        CASE\n            WHEN ce.itemid = 223761 THEN ce.valuenum -- Already in Celsius\n            WHEN ce.itemid = 220210 THEN (ce.valuenum - 32) * 5 / 9 -- Convert Fahrenheit to Celsius\n            ELSE NULL\n        END AS temp_celsius\n    FROM\n        icu_stays_filtered isf\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON isf.stay_id = ce.stay_id\n    WHERE\n        ce.itemid IN (223761, 220210) -- Filter for Temperature C and Temperature F itemids\n        AND ce.valuenum IS NOT NULL -- Ensure a numeric value exists\n        -- Filter out physiologically implausible temperature values\n        AND (\n            (ce.itemid = 223761 AND ce.valuenum BETWEEN 25 AND 45) OR -- Reasonable range for Celsius\n            (ce.itemid = 220210 AND ce.valuenum BETWEEN 77 AND 113)    -- Reasonable range for Fahrenheit\n        )\n),\nmean_temp_per_stay AS (\n    -- Step 5: Calculate the mean temperature for each ICU stay\n    SELECT\n        stay_id,\n        AVG(temp_celsius) AS mean_temperature_celsius\n    FROM\n        temperature_measurements\n    GROUP BY\n        stay_id\n    HAVING\n        AVG(temp_celsius) IS NOT NULL -- Exclude stays where all temperature values were invalid\n)\n-- Step 6: Calculate the 75th percentile of these mean temperatures\nSELECT\n    APPROX_QUANTILES(mean_temperature_celsius, 100)[OFFSET(75)] AS p75_mean_temperature_celsius\nFROM\n    mean_temp_per_stay;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [61:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [61:5]\n\nLocation: US\nJob ID: 9d1cf056-de57-4640-b5f9-f04f9e67a166\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 58ed9f7d-1c83-4e5e-a840-5d7738906bbe\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

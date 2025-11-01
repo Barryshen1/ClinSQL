@@ -1,0 +1,28 @@
+{
+  "query": "For my 68-year-old male inpatient with acute pancreatitis, among male inpatients aged 63\u201373 with AP, what is the 90th percentile of the 72\u2011h lab\u2011instability score? For patients \u2265P90, report mortality, mean LOS, and per\u2011lab critical rates versus general inpatients.",
+  "final_sql": "WITH cohort_ap_male_63_73 AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    icu.stay_id,\n    icu.intime AS icu_intime,\n    a.hospital_expire_flag,\n    icu.los AS icu_los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` icu ON a.hadm_id = icu.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx ON a.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON dx.icd_code = d.icd_code AND dx.icd_version = d.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 63 AND 73\n    AND LOWER(d.long_title) LIKE '%acute pancreatitis%'\n),\n\nlab_instability_score AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.icu_intime,\n    COUNT(*) AS instability_score\n  FROM\n    cohort_ap_male_63_73 c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` le ON c.hadm_id = le.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON le.itemid = d.itemid\n  WHERE\n    le.charttime BETWEEN c.icu_intime AND DATETIME_ADD(c.icu_intime, INTERVAL 72 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND (\n      (d.label = 'WBC' AND (le.valuenum < 4 OR le.valuenum > 12)) OR\n      (d.label = 'Lactate' AND le.valuenum > 2) OR\n      (d.label = 'Creatinine' AND le.valuenum > 1.2) OR\n      (d.label = 'Bilirubin' AND le.valuenum > 1.2) OR\n      (d.label = 'AST' AND le.valuenum > 40) OR\n      (d.label = 'ALT' AND le.valuenum > 40)\n    )\n  GROUP BY\n    c.subject_id, c.hadm_id, c.stay_id, c.icu_intime\n),\n\nscore_percentile AS (\n  SELECT\n    PERCENTILE_CONT(instability_score, 0.9) OVER() AS p90_score\n  FROM\n    lab_instability_score\n  LIMIT 1\n),\n\npatients_p90 AS (\n  SELECT\n    lis.*,\n    c.hospital_expire_flag,\n    c.icu_los\n  FROM\n    lab_instability_score lis\n  JOIN\n    cohort_ap_male_63_73 c ON lis.stay_id = c.stay_id\n  CROSS JOIN\n    score_percentile sp\n  WHERE\n    lis.instability_score >= sp.p90_score\n),\n\ngeneral_inpatients AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    icu.stay_id,\n    icu.intime AS icu_intime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` icu ON a.hadm_id = icu.hadm_id\n),\n\ncritical_labs_p90 AS (\n  SELECT\n    'p90' AS cohort,\n    d.label AS lab_name,\n    COUNT(*) AS total_abnormal,\n    COUNT(DISTINCT lis.stay_id) AS patient_count\n  FROM\n    patients_p90 lis\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` le ON lis.hadm_id = le.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON le.itemid = d.itemid\n  WHERE\n    le.charttime BETWEEN lis.icu_intime AND DATETIME_ADD(lis.icu_intime, INTERVAL 72 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND (\n      (d.label = 'WBC' AND (le.valuenum < 4 OR le.valuenum > 12)) OR\n      (d.label = 'Lactate' AND le.valuenum > 2) OR\n      (d.label = 'Creatinine' AND le.valuenum > 1.2) OR\n      (d.label = 'Bilirubin' AND le.valuenum > 1.2) OR\n      (d.label = 'AST' AND le.valuenum > 40) OR\n      (d.label = 'ALT' AND le.valuenum > 40)\n    )\n  GROUP BY\n    d.label\n),\n\ncritical_labs_general AS (\n  SELECT\n    'general' AS cohort,\n    d.label AS lab_name,\n    COUNT(*) AS total_abnormal,\n    COUNT(DISTINCT gi.stay_id) AS patient_count\n  FROM\n    general_inpatients gi\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` le ON gi.hadm_id = le.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON le.itemid = d.itemid\n  WHERE\n    le.charttime BETWEEN gi.icu_intime AND DATETIME_ADD(gi.icu_intime, INTERVAL 72 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND (\n      (d.label = 'WBC' AND (le.valuenum < 4 OR le.valuenum > 12)) OR\n      (d.label = 'Lactate' AND le.valuenum > 2) OR\n      (d.label = 'Creatinine' AND le.valuenum > 1.2) OR\n      (d.label = 'Bilirubin' AND le.valuenum > 1.2) OR\n      (d.label = 'AST' AND le.valuenum > 40) OR\n      (d.label = 'ALT' AND le.valuenum > 40)\n    )\n  GROUP BY\n    d.label\n)\n\nSELECT * FROM critical_labs_p90\nUNION ALL\nSELECT * FROM critical_labs_general;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \"*\" at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \"*\" at [1:6]\n\nLocation: US\nJob ID: 2c8335da-70cc-4082-9cd1-c618153eb67a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name icu_intime not found inside lis at [102:30]; reason: invalidQuery, location: query, message: Name icu_intime not found inside lis at [102:30]\n\nLocation: US\nJob ID: b71b565e-dfcb-4343-874f-5dcea0a44426\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

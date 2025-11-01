@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH pe_hadm AS (\n  -- Admissions (hadm_id) with pulmonary embolism diagnoses (ICD-9 or ICD-10 or description match)\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE (\n    LOWER(d.long_title) LIKE '%pulmonary embol%'                     -- textual match\n    OR UPPER(di.icd_code) LIKE 'I26%'                                -- ICD-10 pulmonary embolism\n    OR UPPER(di.icd_code) LIKE '415%'                                -- ICD-9 pulmonary embolism codes (e.g., 415.1)\n  )\n),\n\nfirst_icustays AS (\n  -- Select first ICU stay per subject (earliest intime)\n  SELECT *\n  FROM (\n    SELECT i.*,\n           ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  )\n  WHERE rn = 1\n),\n\ncohort AS (\n  -- Join first icustay with patient and admission info, restrict to female 65-75 and PE admissions\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.outtime,\n    f.los,\n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM first_icustays f\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON f.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.subject_id = a.subject_id\n   AND f.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND f.hadm_id IN (SELECT hadm_id FROM pe_hadm)\n),\n\nicu_proc_counts AS (\n  -- Count procedures_icd entries occurring within 72 hours (3 days) of ICU admission date\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.intime,\n    c.outtime,\n    c.los,\n    c.anchor_age,\n    c.hospital_expire_flag,\n    COUNT(p.icd_code) AS proc_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    ON p.subject_id = c.subject_id\n   AND p.hadm_id = c.hadm_id\n   -- procedures_icd.chartdate is a DATE; compare to DATE(intime) through +3 days (72 hours)\n   AND p.chartdate BETWEEN DATE(c.intime) AND DATE_ADD(DATE(c.intime), INTERVAL 3 DAY)\n  GROUP BY\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.intime,\n    c.outtime,\n    c.los,\n    c.anchor_age,\n    c.hospital_expire_flag\n),\n\nquartiled AS (\n  -- Assign quartiles based on proc_count distribution\n  SELECT\n    ipc.*,\n    NTILE(4) OVER (ORDER BY proc_count) AS proc_count_quartile\n  FROM icu_proc_counts ipc\n)\n\n-- Final aggregation per quartile: N, mean procedure count, mean ICU LOS (days), hospital mortality (%)\nSELECT\n  proc_count_quartile AS quartile,\n  COUNT(*) AS n_patients,\n  ROUND(AVG(proc_count), 3) AS mean_procedure_count,\n  ROUND(AVG(los), 3) AS mean_icu_los_days,\n  ROUND(100.0 * AVG(hospital_expire_flag), 2) AS hospital_mortality_pct\nFROM quartiled\nGROUP BY proc_count_quartile\nORDER BY proc_count_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"PE\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"PE\" at [1:8]\n\nLocation: US\nJob ID: 3a8b6a31-4bdc-423d-808f-3ad98a5b806a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

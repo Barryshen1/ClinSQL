@@ -1,0 +1,28 @@
+{
+  "query": "For a 60-year-old woman: among female patients aged 55\u201365 admitted with AMI whose first hs\u2011TnT >0.01 ng/mL, report patient and admission counts and hs\u2011TnT mean, median, and IQR.",
+  "final_sql": "WITH troponin_items AS (\n  -- Identify troponin T lab itemids by label text (approximate; replace with curated itemid list if available)\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE (\n    LOWER(label) LIKE '%troponin t%' OR\n    LOWER(label) LIKE '%troponin-t%' OR\n    LOWER(label) LIKE '%high-sensitivity troponin t%' OR\n    LOWER(label) LIKE '%hs-tnt%' OR\n    LOWER(label) LIKE '%troponin t, hs%'\n  )\n),\nlab_values AS (\n  -- Pull troponin lab events and convert to ng/mL where possible\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.labevent_id,\n    le.valuenum,\n    le.valueuom,\n    CASE\n      WHEN le.valuenum IS NULL THEN NULL\n      WHEN LOWER(COALESCE(le.valueuom, '')) LIKE '%ng/l%' THEN le.valuenum / 1000.0\n      WHEN LOWER(COALESCE(le.valueuom, '')) LIKE '%pg/ml%' THEN le.valuenum / 1000.0\n      WHEN LOWER(COALESCE(le.valueuom, '')) LIKE '%pg/l%' THEN le.valuenum / 1000000.0\n      WHEN LOWER(COALESCE(le.valueuom, '')) LIKE '%ng/ml%' THEN le.valuenum\n      ELSE NULL\n    END AS hs_tnt_ng_ml\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n),\nfirst_troponin_per_adm AS (\n  -- Select the earliest troponin event per admission and require a convertible numeric value\n  SELECT subject_id, hadm_id, charttime, hs_tnt_ng_ml\n  FROM (\n    SELECT\n      lv.*,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC, labevent_id ASC) AS rn\n    FROM lab_values lv\n  )\n  WHERE rn = 1\n    AND hs_tnt_ng_ml IS NOT NULL\n),\nami_admissions AS (\n  -- Admissions that have an AMI diagnosis (approximate by d_icd_diagnoses.long_title text)\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n    AND di.icd_version = d.icd_version\n  WHERE\n    (\n      LOWER(d.long_title) LIKE '%myocardial infarction%' OR\n      LOWER(d.long_title) LIKE '%acute myocardial infarction%' OR\n      LOWER(d.long_title) LIKE '%ami%'\n    )\n),\neligible_first_troponin AS (\n  -- Join first troponin values to admissions/patients and AMI filter, apply age/gender, and apply threshold > 0.01 ng/mL\n  SELECT f.subject_id, f.hadm_id, f.hs_tnt_ng_ml\n  FROM first_troponin_per_adm f\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN ami_admissions am\n    ON f.hadm_id = am.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 55 AND 65\n    AND f.hs_tnt_ng_ml > 0.01\n),\nquartiles AS (\n  -- Compute approximate quartiles (returns array: [min, Q1, median, Q3, max])\n  SELECT APPROX_QUANTILES(hs_tnt_ng_ml, 4) AS qarr\n  FROM eligible_first_troponin\n)\nSELECT\n  COUNT(DISTINCT e.subject_id) AS patient_count,\n  COUNT(DISTINCT e.hadm_id) AS admission_count,\n  ROUND(AVG(e.hs_tnt_ng_ml), 6) AS hs_tnt_mean_ng_per_ml,\n  q.qarr[OFFSET(2)] AS hs_tnt_median_ng_per_ml,\n  q.qarr[OFFSET(1)] AS hs_tnt_q1_ng_per_ml,\n  q.qarr[OFFSET(3)] AS hs_tnt_q3_ng_per_ml,\n  q.qarr[OFFSET(3)] - q.qarr[OFFSET(1)] AS hs_tnt_iqr_ng_per_ml\nFROM eligible_first_troponin e\nCROSS JOIN quartiles q;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references q.qarr which is neither grouped nor aggregated at [84:3]; reason: invalidQuery, location: query, message: SELECT list expression references q.qarr which is neither grouped nor aggregated at [84:3]\n\nLocation: US\nJob ID: 301f870b-3942-4464-9688-b42b7b75db4e\n",
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: 6a96fb03-22e0-4f17-8f18-e2406bbb834f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: loinc_code at [3:25]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [3:25]\n\nLocation: US\nJob ID: d761ef36-2fda-41db-85b8-0b9e13895f13\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references q.qarr which is neither grouped nor aggregated at [84:3]; reason: invalidQuery, location: query, message: SELECT list expression references q.qarr which is neither grouped nor aggregated at [84:3]\n\nLocation: US\nJob ID: 301f870b-3942-4464-9688-b42b7b75db4e\n"
+    }
+  ]
+}

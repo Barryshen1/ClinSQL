@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id\n   AND a.hadm_id    = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code    = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 42 AND 52\n    AND LOWER(dd.long_title) LIKE '%deep vein thrombosi%'\n),\nlab_counts AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.hospital_expire_flag,\n    c.los_days,\n    COUNTIF(\n      le.valuenum IS NOT NULL\n      AND (le.valuenum < le.ref_range_lower\n           OR le.valuenum > le.ref_range_upper)\n    ) AS critical_labs\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.subject_id = le.subject_id\n   AND c.hadm_id    = le.hadm_id\n   AND le.charttime BETWEEN c.admittime\n                       AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.hospital_expire_flag, c.los_days\n),\nscores AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    hospital_expire_flag,\n    los_days,\n    critical_labs / 72.0 AS lab_instability_score\n  FROM lab_counts\n),\npct AS (\n  SELECT\n    APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(95)] AS p95\n  FROM scores\n),\ngroup_metrics AS (\n  SELECT\n    CASE\n      WHEN s.lab_instability_score >= p.p95 THEN '>=95th percentile'\n      ELSE '<95th percentile'\n    END AS patient_group,\n    AVG(s.hospital_expire_flag) AS mortality_rate,\n    AVG(s.los_days)            AS mean_los_days,\n    AVG(s.lab_instability_score) AS mean_critical_lab_rate\n  FROM scores s\n  CROSS JOIN pct p\n  GROUP BY patient_group\n),\noverall AS (\n  SELECT\n    'all_inpatients' AS patient_group,\n    NULL                AS mortality_rate,\n    NULL                AS mean_los_days,\n    AVG(s.lab_instability_score) AS mean_critical_lab_rate\n  FROM scores s\n)\nSELECT * FROM group_metrics\nUNION ALL\nSELECT * FROM overall\nORDER BY patient_group;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

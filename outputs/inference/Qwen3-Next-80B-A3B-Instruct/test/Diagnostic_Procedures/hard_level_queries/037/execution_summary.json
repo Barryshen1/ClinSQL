@@ -1,0 +1,22 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON p.subject_id = d.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  JOIN physionet-data.mimiciv_3_1_icu.icustays i ON p.subject_id = i.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a ON p.subject_id = a.subject_id AND d.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND (LOWER(di.long_title) LIKE '%sepsis%' OR LOWER(di.long_title) LIKE '%septicemia%')\n),\nnon_sepsis_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_icu.icustays i ON p.subject_id = i.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND p.subject_id NOT IN (SELECT subject_id FROM sepsis_cohort)\n),\nprocedures_first_24h AS (\n  SELECT\n    c.subject_id,\n    COUNT(pe.itemid) AS num_procedures\n  FROM (\n    SELECT subject_id, stay_id, intime FROM sepsis_cohort\n    UNION ALL\n    SELECT subject_id, stay_id, intime FROM non_sepsis_cohort\n  ) c\n  JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON c.stay_id = pe.stay_id\n    AND pe.starttime >= c.intime\n    AND pe.starttime <= DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY c.subject_id\n),\npercentiles AS (\n  SELECT\n    PERCENTILE_CONT(num_procedures, 0.75) OVER () AS p75_procedures,\n    PERCENTILE_CONT(num_procedures, 0.90) OVER () AS p90_procedures\n  FROM procedures_first_24h\n  LIMIT 1\n),\ncohort_summary AS (\n  SELECT\n    'Sepsis' AS cohort,\n    AVG(los) AS avg_icu_los,\n    AVG(hospital_expire_flag) AS avg_hospital_mortality\n  FROM sepsis_cohort\n  UNION ALL\n  SELECT\n    'Non-Sepsis' AS cohort,\n    AVG(los) AS avg_icu_los,\n    AVG(hospital_expire_flag) AS avg_hospital_mortality\n  FROM non_sepsis_cohort\n)\nSELECT\n  p.p75_procedures,\n  p.p90_procedures,\n  cs.cohort,\n  cs.avg_icu_los,\n  cs.avg_hospital_mortality\nFROM percentiles p\nCROSS JOIN cohort_summary cs\nORDER BY cs.cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword WHERE at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword WHERE at [1:1]\n\nLocation: US\nJob ID: 1387c6c9-8de1-4e52-9a02-96436c3e8f7d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

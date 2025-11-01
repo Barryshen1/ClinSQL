@@ -1,0 +1,28 @@
+{
+  "query": "For my hospitalized 69-year-old man: among men 64\u201374 given aspirin plus a P2Y12 inhibitor, median inpatient antiplatelet prescription duration (days)?",
+  "final_sql": "WITH patient_admissions AS (\n  -- Base cohort: men aged 64-74 with hospital admissions\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n),\nantiplatelet_prescriptions AS (\n  -- All antiplatelet prescriptions for cohort\n  SELECT \n    pa.subject_id,\n    pa.hadm_id,\n    pr.drug,\n    pr.starttime,\n    pr.stoptime,\n    pa.dischtime,\n    DATE_DIFF(\n      DATE(COALESCE(pr.stoptime, pa.dischtime)), \n      DATE(pr.starttime), \n      DAY\n    ) + 1 AS duration_days  -- Inclusive days to end of prescription or discharge\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON pa.subject_id = pr.subject_id \n    AND pa.hadm_id = pr.hadm_id\n  WHERE (LOWER(pr.drug) LIKE '%aspirin%' \n         OR LOWER(pr.drug) LIKE '%clopidogrel%' \n         OR LOWER(pr.drug) LIKE '%prasugrel%' \n         OR LOWER(pr.drug) LIKE '%ticagrelor%')\n    AND pr.starttime IS NOT NULL\n),\ncombo_therapy_adms AS (\n  -- Admissions with both aspirin AND a P2Y12 inhibitor\n  SELECT \n    subject_id,\n    hadm_id\n  FROM (\n    SELECT DISTINCT\n      subject_id,\n      hadm_id,\n      MAX(CASE WHEN LOWER(drug) LIKE '%aspirin%' THEN 1 ELSE 0 END) OVER (PARTITION BY subject_id, hadm_id) AS has_aspirin,\n      MAX(CASE WHEN LOWER(drug) LIKE '%clopidogrel%' OR LOWER(drug) LIKE '%prasugrel%' OR LOWER(drug) LIKE '%ticagrelor%' THEN 1 ELSE 0 END) OVER (PARTITION BY subject_id, hadm_id) AS has_p2y12\n    FROM antiplatelet_prescriptions\n  )\n  WHERE has_aspirin = 1 AND has_p2y12 = 1\n),\nadmission_durations AS (\n  -- Sum durations per qualifying admission (total antiplatelet exposure days)\n  SELECT \n    ct.hadm_id,\n    SUM(ap.duration_days) AS total_antiplatelet_days\n  FROM combo_therapy_adms ct\n  INNER JOIN antiplatelet_prescriptions ap\n    ON ct.subject_id = ap.subject_id \n    AND ct.hadm_id = ap.hadm_id\n  GROUP BY ct.hadm_id\n  HAVING total_antiplatelet_days > 0  -- Exclude zero-duration admissions\n)\n-- Compute median across admissions\nSELECT \n  APPROX_QUANTILES(total_antiplatelet_days, 2)[OFFSET(1)] AS median_duration_days\nFROM admission_durations;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [68:3]; reason: invalidQuery, location: query, message: No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [68:3]\n\nLocation: US\nJob ID: 9ad0dfeb-7c1b-4350-8969-b80ab0572522\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 18203c66-fbef-4d43-8ee6-90f1d8507ba2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

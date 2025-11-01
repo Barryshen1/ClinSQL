@@ -1,0 +1,16 @@
+{
+  "query": "For a 45-year-old male in ICU: among male ICU patients 40\u201350, report percent in per-stay mean SBP categories (<140; 140\u2013159; \u2265160 mmHg) during first 48 h and MI rate per category.",
+  "final_sql": "WITH patient_icu AS (\n  SELECT\n    p.subject_id,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    -- Estimate age at ICU admission\n    p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year) AS age_at_icu\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays i\n    ON p.subject_id = i.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year)) BETWEEN 40 AND 50\n),\n\nsystolic_bp_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu`.d_items\n  WHERE LOWER(label) LIKE '%sbp%'\n    OR LOWER(label) LIKE '%systolic blood pressure%'\n    OR LOWER(abbreviation) = 'sbp'\n),\n\nsbp_first_48h AS (\n  SELECT\n    ce.stay_id,\n    AVG(ce.valuenum) AS mean_sbp\n  FROM `physionet-data.mimiciv_3_1_icu`.chartevents ce\n  INNER JOIN systolic_bp_items sbp ON ce.itemid = sbp.itemid\n  INNER JOIN patient_icu pi ON ce.stay_id = pi.stay_id\n  WHERE ce.charttime >= pi.intime\n    AND ce.charttime <= DATETIME_ADD(pi.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0  -- Exclude implausible values\n  GROUP BY ce.stay_id\n),\n\nsbp_categories AS (\n  SELECT\n    stay_id,\n    CASE\n      WHEN mean_sbp < 140 THEN '<140'\n      WHEN mean_sbp < 160 THEN '140-159'\n      ELSE '>=160'\n    END AS sbp_group\n  FROM sbp_first_48h\n),\n\nmi_diagnoses AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (LOWER(d.long_title) LIKE '%myocardial infarction%'\n         OR (di.icd_version = 9 AND di.icd_code = '410')\n         OR (di.icd_version = 10 AND SUBSTR(di.icd_code, 1, 3) = 'I21'))\n),\n\nstay_with_outcome AS (\n  SELECT\n    sc.stay_id,\n    sc.sbp_group,\n    CASE WHEN mi.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS had_mi\n  FROM sbp_categories sc\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.icustays i ON sc.stay_id = i.stay_id\n  LEFT JOIN mi_diagnoses mi ON i.hadm_id = mi.hadm_id\n),\n\nsummary AS (\n  SELECT\n    sbp_group,\n    COUNT(*) AS stay_count,\n    AVG(CAST(had_mi AS FLOAT64)) AS mi_rate\n  FROM stay_with_outcome\n  GROUP BY sbp_group\n),\n\ntotals AS (\n  SELECT SUM(stay_count) AS total_stays\n  FROM summary\n)\n\nSELECT\n  s.sbp_group,\n  ROUND((s.stay_count / t.total_stays) * 100, 2) AS percent_in_category,\n  ROUND(s.mi_rate, 3) AS mi_rate\nFROM summary s\nCROSS JOIN totals t\nORDER BY s.sbp_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

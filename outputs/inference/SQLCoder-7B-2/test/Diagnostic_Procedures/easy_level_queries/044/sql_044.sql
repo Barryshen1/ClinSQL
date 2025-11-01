@@ -1,0 +1,1 @@
+SELECT stddev(p.subject_id) FROM patients p JOIN procedures_icd pi ON p.subject_id = pi.subject_id WHERE p.gender = 'M' AND p.anchor_age = 61 AND pi.icd_code = 'M07001' AND p.subject_id IN (SELECT subject_id FROM patients WHERE gender = 'M' AND anchor_age BETWEEN 56 AND 66);

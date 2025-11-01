@@ -1,0 +1,29 @@
+{
+  "query": "For a 93-year-old male admitted with pneumonia, among males aged 88\u201398 with pneumonia and ICU stay, report cohort size; composite risk score distribution (min, 25th, median, 75th, max); in-hospital mortality, AKI, ARDS rates; and median survival days for decedents.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Calculate age at admission: birth year = anchor_year - anchor_age\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 88 AND 98\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n      WHERE i.hadm_id = a.hadm_id\n    )\n),\npneumonia_admissions AS (\n  SELECT\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE dd.icd_version = 10\n    AND (dd.long_title LIKE '%pneumonia%' OR d.icd_code IN ('J12', 'J13', 'J15', 'J16', 'J17', 'J18'))\n),\naki_flags AS (\n  SELECT\n    d.hadm_id,\n    MAX(CASE WHEN dd.long_title LIKE '%acute kidney%' OR d.icd_code LIKE 'N17.%' THEN 1 ELSE 0 END) AS has_aki\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE dd.icd_version = 10\n  GROUP BY d.hadm_id\n),\nards_flags AS (\n  SELECT\n    d.hadm_id,\n    MAX(CASE WHEN dd.long_title LIKE '%ARDS%' OR d.icd_code = 'J98.4' OR dd.long_title LIKE '%adult respiratory distress syndrome%' THEN 1 ELSE 0 END) AS has_ards\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE dd.icd_version = 10\n  GROUP BY d.hadm_id\n),\ndrg_severity AS (\n  SELECT\n    drg.hadm_id,\n    MAX(drg.drg_severity) AS composite_risk_score\n  FROM `physionet-data.mimiciv_3_1_hosp.drgcodes` drg\n  GROUP BY drg.hadm_id\n),\ncohort AS (\n  SELECT\n    e.hadm_id,\n    e.subject_id,\n    e.age_at_admission,\n    e.hospital_expire_flag,\n    drg.composite_risk_score,\n    aki.has_aki,\n    ard.has_ards,\n    -- Survival days only for in-hospital deaths\n    IF(e.hospital_expire_flag = 1, DATEDIFF(e.dischtime, e.admittime), NULL) AS survival_days\n  FROM eligible_admissions e\n  INNER JOIN pneumonia_admissions p\n    ON e.hadm_id = p.hadm_id\n  LEFT JOIN drg_severity drg\n    ON e.hadm_id = drg.hadm_id\n  LEFT JOIN aki_flags aki\n    ON e.hadm_id = aki.hadm_id\n  LEFT JOIN ards_flags ard\n    ON e.hadm_id = ard.hadm_id\n)\nSELECT\n  COUNT(DISTINCT hadm_id) AS cohort_size,\n  IFNULL(APPROX_QUANTILES(composite_risk_score, 100, 0)[OFFSET(0)], 0) AS min_risk,\n  IFNULL(APPROX_QUANTILES(composite_risk_score, 100, 25)[OFFSET(0)], 0) AS p25_risk,\n  IFNULL(APPROX_QUANTILES(composite_risk_score, 100, 50)[OFFSET(0)], 0) AS median_risk,\n  IFNULL(APPROX_QUANTILES(composite_risk_score, 100, 75)[OFFSET(0)], 0) AS p75_risk,\n  IFNULL(APPROX_QUANTILES(composite_risk_score, 100, 100)[OFFSET(0)], 0) AS max_risk,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_rate,\n  AVG(has_aki) * 100 AS aki_rate,\n  AVG(has_ards) * 100 AS ards_rate,\n  IFNULL(PERCENTILE_CONT(survival_days, 0.5) OVER (), 0) AS median_survival_days\nFROM cohort;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [70:36]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [70:36]\n\nLocation: US\nJob ID: 3696d994-dd08-465d-b182-b97994d5ca2d\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:15]\n\nLocation: US\nJob ID: 874b4161-75da-4b06-ab27-db921f595715\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:15]\n\nLocation: US\nJob ID: 00bd0073-aa5a-4e9f-a1ba-f59b7bba2572\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [70:36]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [70:36]\n\nLocation: US\nJob ID: 3696d994-dd08-465d-b182-b97994d5ca2d\n"
+    }
+  ]
+}

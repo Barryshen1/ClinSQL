@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 66\u2011year\u2011old woman. Among female Medicare patients 61\u201371 admitted from SNF with a principal diagnosis of acute kidney injury, what's the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >6 days?",
+  "final_sql": "WITH index_admissions AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    p.anchor_age, \n    p.anchor_year,\n    p.gender,\n    adm.insurance,\n    adm.admission_location\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON adm.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag \n      ON adm.hadm_id = diag.hadm_id \n      AND adm.subject_id = diag.subject_id\n  WHERE \n    diag.seq_num = 1\n    AND p.gender = 'F'\n    AND adm.insurance = 'Medicare'\n    AND adm.admission_location = 'SNF'\n    AND adm.hospital_expire_flag = 0\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code LIKE '584%') \n      OR \n      (diag.icd_version = 10 AND diag.icd_code LIKE 'N17%')\n    )\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 61 AND 71\n),\n\nindex_adm_with_readmission_flag AS (\n  SELECT \n    *,\n    TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0 AS los_days,\n    CASE WHEN EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm2\n      WHERE \n        adm2.subject_id = ia.subject_id\n        AND adm2.hadm_id != ia.hadm_id\n        AND adm2.admittime > ia.dischtime\n        AND adm2.admittime <= TIMESTAMP_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmission_flag\n  FROM index_admissions ia\n),\n\noverall_stats AS (\n  SELECT \n    AVG(readmission_flag) * 100 AS readmission_rate,\n    AVG(CASE WHEN los_days > 6 THEN 1.0 ELSE 0.0 END) * 100 AS pct_index_stays_gt_6_days\n  FROM index_adm_with_readmission_flag\n),\n\nmedian_stats AS (\n  SELECT \n    readmission_flag,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los\n  FROM index_adm_with_readmission_flag\n  GROUP BY readmission_flag\n),\n\npivoted_medians AS (\n  SELECT \n    MAX(CASE WHEN readmission_flag = 1 THEN median_los END) AS median_los_readmitted,\n    MAX(CASE WHEN readmission_flag = 0 THEN median_los END) AS median_los_non_readmitted\n  FROM median_stats\n)\n\nSELECT \n  readmission_rate,\n  median_los_readmitted,\n  median_los_non_readmitted,\n  pct_index_stays_gt_6_days\nFROM overall_stats, pivoted_medians;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

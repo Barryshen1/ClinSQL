@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      USING (subject_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n),\naspirin_int AS (\n  -- Earliest start / latest stop for aspirin per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    MIN(starttime) AS aspirin_start,\n    MAX(stoptime)  AS aspirin_end\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    LOWER(drug) LIKE '%aspirin%'\n  GROUP BY\n    subject_id, hadm_id\n),\np2y12_int AS (\n  -- Earliest start / latest stop for P2Y12 inhibitor per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    MIN(starttime) AS p2y12_start,\n    MAX(stoptime)  AS p2y12_end\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    LOWER(drug) IN ('clopidogrel','prasugrel','ticagrelor','ticlopidine')\n  GROUP BY\n    subject_id, hadm_id\n),\ndual_therapy AS (\n  -- Join cohort to both drug intervals and compute overlap in days\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    -- Compute overlap interval\n    GREATEST(\n      TIMESTAMP_DIFF(\n        LEAST(a.aspirin_end, p.p2y12_end),\n        GREATEST(a.aspirin_start, p.p2y12_start),\n        DAY\n      ), 0\n    ) AS overlap_days\n  FROM\n    cohort c\n    JOIN aspirin_int a\n      USING(subject_id, hadm_id)\n    JOIN p2y12_int p\n      USING(subject_id, hadm_id)\n  WHERE\n    -- Ensure there is a positive overlap\n    a.aspirin_end   >= p.p2y12_start\n    AND p.p2y12_end >= a.aspirin_start\n)\n-- Final: median overlap duration in days\nSELECT\n  APPROX_QUANTILES(overlap_days, 2)[OFFSET(1)] AS median_dual_antiplatelet_days\nFROM\n  dual_therapy;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

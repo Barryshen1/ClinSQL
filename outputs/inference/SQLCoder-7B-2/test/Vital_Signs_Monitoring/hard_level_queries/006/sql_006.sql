@@ -1,0 +1,1 @@
+SELECT mp.subject_id, mp.hadm_id, mp.stay_id, mp.first_careunit, mp.last_careunit, mp.intime, mp.outtime, mp.los, mp.dod, mp.vital_instability_index, mcwd.decile_vital_instability_index FROM male_patients mp JOIN male_controls_with_decile mcwd ON mp.subject_id = mcwd.subject_id WHERE mp.vital_instability_index > mcwd.decile_vital_instability_index;

@@ -1,0 +1,28 @@
+{
+  "query": "Evaluating a 79‑year‑old man with hemorrhagic stroke. Among male ICU patients 74–84, what is the 90th‑percentile first‑48‑h instability (hours with fever>38.5°C, SpO2<90% or RR>20), and for the top decile report n, mean ICU LOS, mortality%, and mean hours fever, hypoxemia, tachypnea?",
+  "final_sql": "WITH population AS (\n  SELECT \n    ic.stay_id,\n    ic.hadm_id,\n    ic.intime,\n    ic.los,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ic\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm \n    ON ic.hadm_id = adm.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat \n    ON ic.subject_id = pat.subject_id\n  WHERE pat.gender = 'M'\n    AND (pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year)) BETWEEN 74 AND 84\n),\ncondition_events AS (\n  SELECT \n    pop.stay_id,\n    TIMESTAMP_DIFF(ce.charttime, pop.intime, HOUR) AS hour_bucket,\n    CASE ce.itemid\n      WHEN 223762 THEN 'fever'\n      WHEN 220277 THEN 'hypoxemia'\n      WHEN 220210 THEN 'tachypnea'\n    END AS condition\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN population pop \n    ON ce.stay_id = pop.stay_id\n  WHERE ce.charttime >= pop.intime \n    AND ce.charttime < TIMESTAMP_ADD(pop.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n    AND (\n      (ce.itemid = 223762 AND ce.valuenum > 38.5) OR\n      (ce.itemid = 220277 AND ce.valuenum < 90) OR\n      (ce.itemid = 220210 AND ce.valuenum > 20)\n    )\n),\ninstability_metrics AS (\n  SELECT \n    pop.stay_id,\n    pop.hadm_id,\n    pop.los,\n    pop.hospital_expire_flag,\n    COUNT(DISTINCT ce.hour_bucket) AS unstable_hours_total,\n    COUNT(DISTINCT CASE WHEN ce.condition = 'fever' THEN ce.hour_bucket END) AS unstable_hours_fever,\n    COUNT(DISTINCT CASE WHEN ce.condition = 'hypoxemia' THEN ce.hour_bucket END) AS unstable_hours_hypoxemia,\n    COUNT(DISTINCT CASE WHEN ce.condition = 'tachypnea' THEN ce.hour_bucket END) AS unstable_hours_tachypnea\n  FROM population pop\n  LEFT JOIN condition_events ce \n    ON pop.stay_id = ce.stay_id\n  GROUP BY pop.stay_id, pop.hadm_id, pop.los, pop.hospital_expire_flag\n),\nranked AS (\n  SELECT \n    *,\n    NTILE(10) OVER (ORDER BY unstable_hours_total DESC) AS decile\n  FROM instability_metrics\n),\np90_value AS (\n  SELECT \n    APPROX_QUANTILES(unstable_hours_total, 100)[OFFSET(90)] AS p90\n  FROM instability_metrics\n),\ntop_decile_summary AS (\n  SELECT \n    COUNT(*) AS n,\n    AVG(los) AS mean_los,\n    AVG(hospital_expire_flag) * 100 AS mortality_pct,\n    AVG(unstable_hours_fever) AS mean_fever_hours,\n    AVG(unstable_hours_hypoxemia) AS mean_hypoxemia_hours,\n    AVG(unstable_hours_tachypnea) AS mean_tachypnea_hours\n  FROM ranked\n  WHERE decile = 1\n)\nSELECT \n  p90_value.p90,\n  top_decile_summary.n,\n  top_decile_summary.mean_los,\n  top_decile_summary.mortality_pct,\n  top_decile_summary.mean_fever_hours,\n  top_decile_summary.mean_hypoxemia_hours,\n  top_decile_summary.mean_tachypnea_hours\nFROM p90_value\nCROSS JOIN top_decile_summary;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "qwen3-235b-a22b-thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [60:48]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [60:48]\n\nLocation: US\nJob ID: 753b71b7-48f7-47f3-a7ef-eeb085997dff\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [60:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [60:5]\n\nLocation: US\nJob ID: 90ef21f4-497d-4f79-9896-5b290d3772dd\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

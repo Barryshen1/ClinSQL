@@ -1,0 +1,28 @@
+{
+  "query": "For a 45-year-old male in ICU: among male ICU patients 40\u201350, report percent in per-stay mean SBP categories (<140; 140\u2013159; \u2265160 mmHg) during first 48 h and MI rate per category.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    icu.subject_id, \n    icu.hadm_id, \n    icu.stay_id,\n    icu.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE \n    pat.gender = 'M'\n    AND pat.anchor_age + (EXTRACT(YEAR FROM icu.intime) - pat.anchor_year) BETWEEN 40 AND 50\n),\nsbp_data AS (\n  SELECT \n    ce.stay_id,\n    AVG(ce.valuenum) AS mean_sbp\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN cohort \n    ON ce.stay_id = cohort.stay_id\n  WHERE \n    ce.itemid IN (220050, 220179)  -- ART SBP & NIBP SBP\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= cohort.intime\n    AND ce.charttime <= TIMESTAMP_ADD(cohort.intime, INTERVAL 48 HOUR)\n  GROUP BY ce.stay_id\n),\nsbp_categories AS (\n  SELECT \n    stay_id,\n    mean_sbp,\n    CASE \n      WHEN mean_sbp < 140 THEN '<140'\n      WHEN mean_sbp < 160 THEN '140-159'\n      ELSE '>=160'\n    END AS sbp_category\n  FROM sbp_data\n),\nmi_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '410%') \n    OR (icd_version = 10 AND (icd_code LIKE 'I21%' OR icd_code LIKE 'I22%'))\n),\ncombined AS (\n  SELECT \n    c.stay_id,\n    sc.sbp_category,\n    CASE WHEN mi.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS mi_flag\n  FROM cohort c\n  INNER JOIN sbp_categories sc \n    ON c.stay_id = sc.stay_id\n  LEFT JOIN mi_admissions mi \n    ON c.hadm_id = mi.hadm_id\n),\ncategory_totals AS (\n  SELECT \n    sbp_category,\n    COUNT(*) AS total_stays,\n    SUM(mi_flag) AS mi_stays\n  FROM combined\n  GROUP BY sbp_category\n),\noverall AS (\n  SELECT COUNT(*) AS total_cohort_stays\n  FROM combined\n)\nSELECT \n  ct.sbp_category,\n  ROUND(ct.total_stays * 100.0 / o.total_cohort_stays, 2) AS percent_of_stays,\n  ROUND(ct.mi_stays * 100.0 / ct.total_stays, 2) AS mi_rate_percent\nFROM category_totals ct, overall o\nORDER BY \n  CASE ct.sbp_category\n    WHEN '<140' THEN 1\n    WHEN '140-159' THEN 2\n    ELSE 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [13:2]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [13:2]\n\nLocation: US\nJob ID: 8734df14-bad5-4215-aa74-5cc0e062260d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [13:2]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [13:2]\n\nLocation: US\nJob ID: c3668c79-3043-4755-ac69-30be41f0bff6\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

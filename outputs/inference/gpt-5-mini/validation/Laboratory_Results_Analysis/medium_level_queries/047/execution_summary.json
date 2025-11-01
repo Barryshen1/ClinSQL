@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72-year-old woman admitted with ACS. For females aged 67\u201377 with ACS and initial Troponin T above the 99th percentile, report patient/admission counts and initial troponin mean, median, IQR.",
+  "final_sql": "WITH troponin_items AS (\n  -- Identify Troponin T related lab itemids by label (avoid referencing loinc_code which may not exist)\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n     OR LOWER(label) LIKE '%trop t%'\n     OR LOWER(label) LIKE '%troponin, t%'\n),\ntroponin_labs AS (\n  -- All Troponin T lab measurements with numeric values\n  SELECT\n    le.labevent_id,\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  WHERE le.itemid IN (SELECT itemid FROM troponin_items)\n    AND le.valuenum IS NOT NULL\n),\ninitial_troponin AS (\n  -- First (initial) Troponin T per hospital admission\n  SELECT\n    subject_id,\n    hadm_id,\n    val AS initial_val\n  FROM (\n    SELECT\n      tl.subject_id,\n      tl.hadm_id,\n      tl.valuenum AS val,\n      tl.charttime,\n      tl.labevent_id,\n      ROW_NUMBER() OVER (PARTITION BY tl.hadm_id ORDER BY tl.charttime ASC, tl.labevent_id ASC) AS rn\n    FROM troponin_labs tl\n  )\n  WHERE rn = 1\n),\nacs_admissions AS (\n  -- Admissions with any diagnosis matching ACS-like descriptions\n  SELECT DISTINCT d.hadm_id, d.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE LOWER(dicd.long_title) LIKE '%acute coronary%'\n     OR LOWER(dicd.long_title) LIKE '%myocardial infarction%'\n     OR LOWER(dicd.long_title) LIKE '%unstable angina%'\n     OR LOWER(dicd.long_title) LIKE '%stemi%'\n     OR LOWER(dicd.long_title) LIKE '%nstemi%'\n),\npatients_67_77_female AS (\n  -- Female patients in the requested age window\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 67 AND 77\n),\ninitial_all AS (\n  -- All initial troponin values (used to compute 99th percentile threshold)\n  SELECT initial_val\n  FROM initial_troponin\n  WHERE initial_val IS NOT NULL\n),\nthreshold_99 AS (\n  -- Approximate 99th percentile of initial troponin across all admissions with an initial value\n  SELECT APPROX_QUANTILES(initial_val, 100)[OFFSET(99)] AS val_99\n  FROM initial_all\n),\ncohort_candidates AS (\n  -- Admissions that meet: female age 67-77 AND ACS diagnosis AND have an initial troponin\n  SELECT a.hadm_id, a.subject_id, it.initial_val\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN patients_67_77_female p ON a.subject_id = p.subject_id\n  JOIN acs_admissions acs ON a.hadm_id = acs.hadm_id AND a.subject_id = acs.subject_id\n  JOIN initial_troponin it ON a.hadm_id = it.hadm_id\n),\nfiltered_cohort AS (\n  -- Filter to those with initial troponin > 99th percentile threshold\n  SELECT cc.*\n  FROM cohort_candidates cc\n  CROSS JOIN threshold_99 t\n  WHERE cc.initial_val > t.val_99\n),\nquartiles AS (\n  -- Compute quantiles on the filtered cohort once\n  SELECT APPROX_QUANTILES(initial_val, 100) AS q\n  FROM filtered_cohort\n)\nSELECT\n  (SELECT COUNT(DISTINCT subject_id) FROM filtered_cohort)                   AS patient_count,\n  (SELECT COUNT(DISTINCT hadm_id)    FROM filtered_cohort)                   AS admission_count,\n  (SELECT AVG(initial_val)           FROM filtered_cohort)                   AS mean_initial_troponin,\n  -- median (approx) and IQR (Q3 - Q1) from APPROX_QUANTILES\n  (SELECT q[OFFSET(50)] FROM quartiles)                                      AS median_initial_troponin,\n  ( (SELECT q[OFFSET(75)] FROM quartiles) - (SELECT q[OFFSET(25)] FROM quartiles) ) AS iqr_initial_troponin;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: loinc_code at [8:15]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [8:15]\n\nLocation: US\nJob ID: 0d862d40-30a9-4329-b97c-919dc77e1dc5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

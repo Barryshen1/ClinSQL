@@ -1,0 +1,22 @@
+{
+  "query": "For a 44-year-old man: among male ICU admissions aged 39\u201349 with DKA, stratify first ICU stay diagnostic intensity (distinct procedures in first 24 h) into quintiles and report number of stays, mean/min/max procedure count, mean ICU LOS (days) and hospital mortality%",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ie.los,\n    adm.hospital_expire_flag,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND ie.hadm_id IN (\n      SELECT DISTINCT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE \n        (icd_version = 10 AND icd_code IN ('E1010', 'E1011', 'E1110', 'E1111', 'E1310', 'E1311'))\n        OR\n        (icd_version = 9 AND icd_code IN ('25010', '25011', '25012', '25013'))\n    )\n),\nfirst_stay AS (\n  SELECT \n    *,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS stay_seq\n  FROM cohort\n),\nprocedures_first_24h AS (\n  SELECT \n    fs.stay_id,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedure_count\n  FROM first_stay fs\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON fs.stay_id = pe.stay_id\n    AND pe.starttime >= fs.intime\n    AND pe.starttime <= DATETIME_ADD(fs.intime, INTERVAL 24 HOUR)\n  WHERE fs.stay_seq = 1\n  GROUP BY fs.stay_id\n),\nwith_quintiles AS (\n  SELECT \n    fs.*,\n    COALESCE(pf.distinct_procedure_count, 0) AS distinct_procedure_count,\n    NTILE(5) OVER (ORDER BY COALESCE(pf.distinct_procedure_count, 0)) AS quintile\n  FROM first_stay fs\n  LEFT JOIN procedures_first_24h pf\n    ON fs.stay_id = pf.stay_id\n  WHERE fs.stay_seq = 1\n)\nSELECT \n  quintile,\n  COUNT(stay_id) AS num_stays,\n  AVG(distinct_procedure_count) AS mean_procedure_count,\n  MIN(distinct_procedure_count) AS min_procedure_count,\n  MAX(distinct_procedure_count) AS max_procedure_count,\n  AVG(los / 24.0) AS mean_icu_los_days,\n  100.0 * SUM(hospital_expire_flag) / COUNT(stay_id) AS hospital_mortality_percent\nFROM with_quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"procedureds_first_24h\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: procedureds_first_24h, message: Table \"procedureds_first_24h\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: b7907ab7-5253-48ee-93b3-ad7ce24861bc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

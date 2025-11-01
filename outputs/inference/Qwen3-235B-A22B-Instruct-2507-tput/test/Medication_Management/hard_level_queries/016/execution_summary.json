@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating an 85\u2011year\u2011old female inpatient with hepatic failure. Among female inpatients aged 80\u201390 with hepatic failure, calculate a 7\u2011day medication complexity score, stratify cohort into tertiles, and report LOS, in\u2011hospital mortality and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH hepatic_patients AS (\n  SELECT DISTINCT adm.hadm_id, adm.subject_id, adm.admittime, adm.dischtime, \n         adm.hospital_expire_flag, p.anchor_age, \n         DATETIME_ADD(adm.admittime, INTERVAL 7 DAY) AS day7_time\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON adm.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON adm.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 80 AND 90\n    AND diag.icd_version = 10\n    AND d_diag.icd_code IN ('K704', 'K711', 'K72', 'K720', 'K721', 'K767') -- hepatic failure codes\n    AND adm.admittime IS NOT NULL\n    AND adm.dischtime IS NOT NULL\n),\nmedication_complexity AS (\n  SELECT hp.hadm_id,\n         COUNT(DISTINCT pr.drug) AS unique_medications_7d\n  FROM hepatic_patients hp\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON hp.hadm_id = pr.hadm_id\n    AND pr.starttime IS NOT NULL\n    AND pr.starttime >= hp.admittime\n    AND pr.starttime < hp.day7_time\n  GROUP BY hp.hadm_id\n),\ncohort_with_score AS (\n  SELECT hp.*, COALESCE(mc.unique_medications_7d, 0) AS med_complexity_score\n  FROM hepatic_patients hp\n  LEFT JOIN medication_complexity mc ON hp.hadm_id = mc.hadm_id\n),\ntertiles AS (\n  SELECT *,\n         NTILE(3) OVER (ORDER BY med_complexity_score) AS tertile\n  FROM cohort_with_score\n),\nreadmissions AS (\n  SELECT t.*,\n         LEAD(t.admittime) OVER (PARTITION BY t.subject_id ORDER BY t.admittime) AS next_admittime\n  FROM tertiles t\n),\noutcomes AS (\n  SELECT *,\n         DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0 AS los_days,\n         CASE WHEN next_admittime IS NOT NULL \n                   AND DATETIME_DIFF(next_admittime, dischtime, DAY) <= 30 \n                   AND DATETIME_DIFF(next_admittime, dischtime, DAY) > 0 \n              THEN 1 ELSE 0 END AS thirty_day_readmission\n  FROM readmissions\n)\nSELECT \n  tertile,\n  AVG(los_days) AS avg_los,\n  AVG(hospital_expire_flag) AS in_hospital_mortality_rate,\n  AVG(thirty_day_readmission) AS thirty_day_readmission_rate,\n  COUNT(*) AS n\nFROM outcomes\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

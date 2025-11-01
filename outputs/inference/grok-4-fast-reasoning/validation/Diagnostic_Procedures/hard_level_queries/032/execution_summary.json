@@ -1,0 +1,28 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH first_stays AS (\n  -- Identify first ICU stay per patient\n  SELECT \n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    pat.gender,\n    pat.anchor_age,\n    pat.anchor_year,\n    -- Approximate age at admission\n    SAFE_CAST(pat.anchor_age + EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year AS INT64) AS age_at_adm\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE TRUE\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY icu.intime) = 1\n),\nbase_cohort AS (\n  -- Base cohort: females, age 66-76, first stay\n  SELECT \n    fs.*,\n    -- Flag sepsis: any relevant ICD code in the admission\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        WHERE diag.subject_id = fs.subject_id \n          AND diag.hadm_id = fs.hadm_id\n          AND (\n            (diag.icd_version = 9 AND (diag.icd_code LIKE '038%' OR diag.icd_code = '99591'))\n            OR (diag.icd_version = 10 AND (diag.icd_code LIKE 'A40%' OR diag.icd_code LIKE 'A41%' OR diag.icd_code LIKE 'R65%'))\n          )\n      ) THEN 1 \n      ELSE 0 \n    END AS has_sepsis\n  FROM first_stays fs\n  WHERE fs.gender = 'F'\n    AND fs.age_at_adm BETWEEN 66 AND 76\n),\nsepsis_cohort AS (\n  -- Sepsis subgroup\n  SELECT *\n  FROM base_cohort\n  WHERE has_sepsis = 1\n),\ncontrol_cohort AS (\n  -- Control subgroup (no sepsis)\n  SELECT *\n  FROM base_cohort\n  WHERE has_sepsis = 0\n),\nprocedure_counts AS (\n  -- Distinct procedures in first 48h for sepsis cohort\n  SELECT \n    sc.subject_id,\n    COUNT(DISTINCT pe.itemid) AS num_distinct_procedures\n  FROM sepsis_cohort sc\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON sc.subject_id = pe.subject_id\n    AND sc.hadm_id = pe.hadm_id\n    AND sc.stay_id = pe.stay_id\n  WHERE pe.starttime >= sc.intime\n    AND pe.starttime < TIMESTAMP_ADD(sc.intime, INTERVAL 48 HOUR)\n    AND pe.statusdescription != 'Canceled'\n  GROUP BY sc.subject_id\n),\np90_procedures AS (\n  -- 90th percentile (default to 0 if no procedures)\n  SELECT \n    APPROX_PERCENTILE_CONT(COALESCE(num_distinct_procedures, 0), 0.9) AS p90_num_procedures\n  FROM (\n    SELECT subject_id, num_distinct_procedures\n    FROM sepsis_cohort\n    LEFT JOIN procedure_counts USING (subject_id)\n  )\n),\ngroup_summaries AS (\n  -- LOS and mortality summaries\n  SELECT \n    'Sepsis Cohort' AS group_name,\n    has_sepsis,\n    COUNT(*) AS n_patients,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS mean_hospital_los_days,\n    SAFE_DIVIDE(SUM(CAST(hospital_expire_flag AS INT64)), COUNT(*)) * 100 AS mortality_rate_percent\n  FROM base_cohort\n  WHERE has_sepsis = 1\n  GROUP BY has_sepsis\n  \n  UNION ALL\n  \n  SELECT \n    'Control Cohort' AS group_name,\n    has_sepsis,\n    COUNT(*) AS n_patients,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS mean_hospital_los_days,\n    SAFE_DIVIDE(SUM(CAST(hospital_expire_flag AS INT64)), COUNT(*)) * 100 AS mortality_rate_percent\n  FROM base_cohort\n  WHERE has_sepsis = 0\n  GROUP BY has_sepsis\n)\n-- Final output: combine percentile with summaries\nSELECT \n  gs.group_name,\n  gs.n_patients,\n  gs.mean_hospital_los_days,\n  gs.mortality_rate_percent,\n  pp90.p90_num_procedures  -- Sepsis-specific 90th percentile of distinct procedures (first 48h)\nFROM group_summaries gs\nCROSS JOIN p90_procedures pp90\nORDER BY \n  CASE WHEN gs.group_name = 'Sepsis Cohort' THEN 1 ELSE 2 END\n;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: APPROX_PERCENTILE_CONT at [76:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE_CONT at [76:5]\n\nLocation: US\nJob ID: 5a2e58a0-ee17-45cf-a2bc-7f06e45a47c1\n",
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [36:14]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [36:14]\n\nLocation: US\nJob ID: 59c97335-5de3-463a-ae8a-70e32be322a2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 68ec4499-756a-48c0-a00a-d6ba2c5c462c\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE_CONT at [76:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE_CONT at [76:5]\n\nLocation: US\nJob ID: 5a2e58a0-ee17-45cf-a2bc-7f06e45a47c1\n"
+    }
+  ]
+}

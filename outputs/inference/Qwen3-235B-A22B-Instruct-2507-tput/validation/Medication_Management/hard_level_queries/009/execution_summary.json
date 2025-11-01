@@ -1,0 +1,22 @@
+{
+  "query": "I have an 89\u2011year\u2011old female inpatient with AKI. Among female admissions aged 84\u201394 with AKI, stratified into quintiles by medication complexity score over the entire admission, report per quintile: LOS, inpatient mortality %, 30\u2011day readmission %, and anticoagulant\u2013opioid coadministration counts.",
+  "final_sql": "WITH aki_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (\n    (icd_version = 9 AND icd_code IN ('5849'))  -- ICD-9: Acute kidney failure, unspecified\n    OR (icd_version = 10 AND icd_code IN ('N170', 'N171', 'N172', 'N178', 'N179'))\n  )\n),\ncohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 84 AND 94\n),\naki_admissions AS (\n  SELECT DISTINCT c.*\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON c.hadm_id = di.hadm_id\n  JOIN aki_codes ac ON di.icd_code = ac.icd_code\n),\nmedication_complexity AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT LOWER(drug)) AS drug_count\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  GROUP BY hadm_id\n),\nopioid_anticoagulant AS (\n  SELECT\n    hadm_id,\n    LOGICAL_OR(LOWER(drug) LIKE '%warfarin%' OR LOWER(drug) LIKE '%heparin%' OR\n               LOWER(drug) LIKE '%enoxaparin%' OR LOWER(drug) LIKE '%apixaban%' OR\n               LOWER(drug) LIKE '%rivaroxaban%' OR LOWER(drug) LIKE '%dabigatran%' OR\n               LOWER(drug) LIKE '%edoxaban%' OR LOWER(drug) LIKE '%dalteparin%') AS has_anticoagulant,\n    LOGICAL_OR(LOWER(drug) LIKE '%morphine%' OR LOWER(drug) LIKE '%fentanyl%' OR\n               LOWER(drug) LIKE '%hydromorphone%' OR LOWER(drug) LIKE '%oxycodone%' OR\n               LOWER(drug) LIKE '%hydrocodone%' OR LOWER(drug) LIKE '%codeine%' OR\n               LOWER(drug) LIKE '%oxymorphone%' OR LOWER(drug) LIKE '%meperidine%') AS has_opioid\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  GROUP BY hadm_id\n),\nreadmissions AS (\n  SELECT\n    a1.hadm_id,\n    CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND a2.admittime <= DATETIME_ADD(a1.dischtime, INTERVAL 30 DAY)\n),\ncohort_with_meds AS (\n  SELECT\n    aki.*,\n    mc.drug_count,\n    COALESCE(oa.has_anticoagulant, FALSE) AS has_anticoagulant,\n    COALESCE(oa.has_opioid, FALSE) AS has_opioid,\n    COALESCE(ra.readmitted_30d, 0) AS readmitted_30d\n  FROM aki_admissions aki\n  LEFT JOIN medication_complexity mc ON aki.hadm_id = mc.hadm_id\n  LEFT JOIN opioid_anticoagulant oa ON aki.hadm_id = oa.hadm_id\n  LEFT JOIN readmissions ra ON aki.hadm_id = ra.hadm_id\n),\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY drug_count) AS quintile\n  FROM cohort_with_meds\n)\nSELECT\n  quintile,\n  AVG(DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0) AS los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS inpatient_mortality_rate,\n  AVG(CAST(readmitted_30d AS FLOAT64)) AS readmission_30d_rate,\n  SUM(CASE WHEN has_anticoagulant AND has_opioid THEN 1 ELSE 0 END) AS anticoagulant_opioid_coadmin_count\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: BOOL_OR at [40:5]; reason: invalidQuery, location: query, message: Function not found: BOOL_OR at [40:5]\n\nLocation: US\nJob ID: f749cbdb-bdde-47a1-a5a3-10b8a636488b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

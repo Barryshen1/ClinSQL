@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY value) AS seventy_five_percentile FROM labevents WHERE subject_id = 100001 AND hadm_id IN (SELECT hadm_id FROM admissions WHERE patient_id = 100001 AND age >= 82 AND gender = 'F' AND ischemic_stroke = 'Y');

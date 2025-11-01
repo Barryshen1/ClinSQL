@@ -1,0 +1,23 @@
+{
+  "query": "I have a 56\u2011year\u2011old male in the ICU. Among male ICU patients aged 51\u201361, categorize first\u201148\u2011hour per\u2011stay average SpO2 (<90, 90\u201392, 93\u201395, >95) and report patient counts and AKI rates.",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT \n    subject_id,\n    anchor_year,\n    anchor_age,\n    gender\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 51 AND 61\n),\nicu_stays AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    CAST(p.anchor_year AS INT64) - p.anchor_age AS birth_year,\n    TIMESTAMP_DIFF(i.intime, DATE(CAST(p.anchor_year AS INT64) - p.anchor_age, 1, 1), YEAR) AS age_at_icu,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN patient_cohort p ON i.subject_id = p.subject_id\n),\nfirst_icu_stays AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    outtime,\n    birth_year,\n    age_at_icu\n  FROM icu_stays\n  WHERE rn = 1\n),\nspo2_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE category = 'Pulse oximetry'\n    AND label LIKE '%SpO2%'\n),\nspo2_data AS (\n  SELECT \n    f.subject_id,\n    f.stay_id,\n    c.valuenum AS spo2_value\n  FROM first_icu_stays f\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON f.subject_id = c.subject_id\n    AND f.stay_id = c.stay_id\n    AND c.charttime BETWEEN f.intime AND LEAST(TIMESTAMP_ADD(f.intime, INTERVAL 48 HOUR), f.outtime)\n  WHERE c.itemid IN (SELECT itemid FROM spo2_itemids)\n    AND c.valuenum IS NOT NULL\n),\navg_spo2_per_stay AS (\n  SELECT \n    subject_id,\n    stay_id,\n    AVG(spo2_value) AS avg_spo2\n  FROM spo2_data\n  GROUP BY subject_id, stay_id\n),\nspo2_categories AS (\n  SELECT \n    subject_id,\n    stay_id,\n    avg_spo2,\n    CASE \n      WHEN avg_spo2 < 90 THEN '<90'\n      WHEN avg_spo2 BETWEEN 90 AND 92 THEN '90-92'\n      WHEN avg_spo2 BETWEEN 93 AND 95 THEN '93-95'\n      WHEN avg_spo2 > 95 THEN '>95'\n      ELSE NULL \n    END AS spo2_category\n  FROM avg_spo2_per_stay\n),\naki_icd_codes AS (\n  SELECT * FROM UNNEST([\n    'R19.2', 'R19.3', 'R19.4', 'R19.5', 'R19.6', 'R19.7', 'R19.8', 'R19.9',\n    'N17.0', 'N17.1', 'N17.2', 'N17.3', 'N17.4', 'N17.5', 'N17.6', 'N17.7', 'N17.8', 'N17.9',\n    'N18.1', 'N18.2', 'N18.3', 'N18.4', 'N18.5', 'N18.6', 'N18.7', 'N18.8', 'N18.9',\n    'N19.0', 'N19.1', 'N19.2', 'N19.3', 'N19.4', 'N19.5', 'N19.6', 'N19.7', 'N19.8', 'N19.9'\n  ]) AS icd_code\n),\naki_flags AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN aki_icd_codes a ON d.icd_code = a.icd_code\n  WHERE d.icd_version = 10\n    AND d.hadm_id IN (SELECT hadm_id FROM first_icu_stays)\n),\nfinal_data AS (\n  SELECT \n    s.subject_id,\n    s.stay_id,\n    s.spo2_category,\n    COALESCE(CASE WHEN a.subject_id IS NOT NULL THEN 1 ELSE 0 END, 0) AS aki_flag\n  FROM spo2_categories s\n  LEFT JOIN first_icu_stays f \n    ON s.subject_id = f.subject_id AND s.stay_id = f.stay_id\n  LEFT JOIN aki_flags a \n    ON f.subject_id = a.subject_id AND f.hadm_id = a.hadm_id\n)\nSELECT \n  spo2_category,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  SUM(aki_flag) * 1.0 / COUNT(DISTINCT subject_id) AS aki_rate\nFROM final_data\nGROUP BY spo2_category\nORDER BY \n  CASE spo2_category\n    WHEN '<90' THEN 1\n    WHEN '90-92' THEN 2\n    WHEN '93-95' THEN 3\n    WHEN '>95' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected string literal 'R19' at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected string literal 'R19' at [1:6]\n\nLocation: US\nJob ID: c443ae5a-78e2-4754-a9c7-6793af1a0a4b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

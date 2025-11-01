@@ -1,0 +1,16 @@
+{
+  "query": "For my 94yo female ICU patient, among female ICU patients aged 89\u201399 report per-measurement temperature categories (<36, 36\u201337.9, \u226538\u00b0C) with mean, median, IQR, unique patient and measurement counts, MI rate.",
+  "final_sql": "WITH temp_items AS (\n  -- Identify itemids for temperature measurements\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%temp%'\n    AND param_type = 'Numeric'\n),\nfemale_aged_89_99 AS (\n  -- Get female ICU patients aged 89-99\n  SELECT DISTINCT icu.subject_id, icu.hadm_id, icu.stay_id\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 89 AND 99\n),\ntemp_measurements AS (\n  -- Get temperature measurements for these patients\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.itemid,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN temp_items ti ON ce.itemid = ti.itemid\n  JOIN female_aged_89_99 fa ON ce.subject_id = fa.subject_id AND ce.stay_id = fa.stay_id\n  WHERE ce.valuenum IS NULL OR (ce.valuenum >= 25 AND ce.valuenum <= 45) -- plausible temps in \u00b0C\n),\ncategorized_temps AS (\n  -- Categorize each measurement\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    charttime,\n    valuenum,\n    CASE\n      WHEN valuenum IS NULL THEN 'Missing'\n      WHEN valuenum < 36 THEN '<36'\n      WHEN valuenum >= 36 AND valuenum < 38 THEN '36\u201337.9'\n      WHEN valuenum >= 38 THEN '\u226538'\n      ELSE 'Other'\n    END AS temp_category\n  FROM temp_measurements\n)\nSELECT\n  temp_category,\n  COUNT(*) AS measurement_count,\n  COUNT(DISTINCT subject_id) AS unique_patient_count,\n  ROUND(AVG(valuenum), 2) AS mean_temp,\n  ROUND(APPROX_QUANTILES(valuenum, 2)[OFFSET(1)], 2) AS median_temp,\n  ROUND(APPROX_QUANTILES(valuenum, 4)[OFFSET(1)], 2) AS temp_25th_percentile,\n  ROUND(APPROX_QUANTILES(valuenum, 4)[OFFSET(3)], 2) AS temp_75th_percentile,\n  ROUND(\n    SAFE_DIVIDE(\n      SUM(CASE WHEN valuenum IS NULL THEN 1 ELSE 0 END),\n      COUNT(*)\n    ), 4\n  ) AS mi_rate\nFROM categorized_temps\nWHERE temp_category IN ('<36', '36\u201337.9', '\u226538', 'Missing')\nGROUP BY temp_category\nORDER BY\n  CASE temp_category\n    WHEN '<36' THEN 1\n    WHEN '36\u201337.9' THEN 2\n    WHEN '\u226538' THEN 3\n    WHEN 'Missing' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

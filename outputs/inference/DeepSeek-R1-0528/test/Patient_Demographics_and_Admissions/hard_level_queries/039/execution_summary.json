@@ -1,0 +1,22 @@
+{
+  "query": "I have a 70-year-old male patient. Among male Medicare patients aged 65\u201375 admitted from the ED with a principal diagnosis of acute respiratory failure, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent LOS >9 days?",
+  "final_sql": "WITH index_admissions AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_index\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id AND a.subject_id = d.subject_id\n  WHERE \n    p.gender = 'M'\n    AND a.admission_location = 'EMERGENCY ROOM'\n    AND a.insurance = 'Medicare'\n    AND d.seq_num = 1  -- Principal diagnosis\n    AND (\n      (d.icd_version = 9 AND d.icd_code = '51881') OR  -- ICD-9\n      (d.icd_version = 10 AND d.icd_code IN (\n        'J9600','J9601','J9602','J9620','J9621','J9622','J9690','J9691','J9692'  -- ICD-10\n      ))\n    )\n    AND a.hospital_expire_flag = 0  -- Exclude in-hospital deaths\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 65 AND 75\n),\n\nindex_with_readmit AS (\n  SELECT \n    *,\n    EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` r \n      WHERE \n        r.subject_id = i.subject_id \n        AND r.hadm_id != i.hadm_id \n        AND r.admittime > i.dischtime \n        AND r.admittime <= DATETIME_ADD(i.dischtime, INTERVAL 30 DAY)\n    ) AS readmitted_30d\n  FROM index_admissions i\n)\n\nSELECT \n  '30_day_readmission_rate' AS metric,\n  ROUND(AVG(IF(readmitted_30d, 1, 0)) * 100, 2) AS value  -- Fixed: Replaced invalid cast\nFROM index_with_readmit\nUNION ALL\nSELECT \n  'median_los_readmitted' AS metric,\n  ROUND(APPROX_QUANTILES(los_index, 2)[OFFSET(1)], 2) AS value\nFROM index_with_readmit\nWHERE readmitted_30d\nUNION ALL\nSELECT \n  'median_los_non_readmitted' AS metric,\n  ROUND(APPROX_QUANTILES(los_index, 2)[OFFSET(1)], 2) AS value\nFROM index_with_readmit\nWHERE NOT readmitted_30d\nUNION ALL\nSELECT \n  'percent_los_gt_9_days' AS metric,\n  ROUND(AVG(IF(los_index > 9, 1, 0)) * 100, 2) AS value\nFROM index_with_readmit;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [45:18]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [45:18]\n\nLocation: US\nJob ID: e5f97d9a-b27f-4813-8440-8a91f93fff18\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

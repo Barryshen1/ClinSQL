@@ -1,0 +1,28 @@
+{
+  "query": "I have a 54-year-old female with ACS. Among female ICU patients aged 49\u201359, what percentile is a first-24h composite vital instability score of 70? Also report ICU length of stay (mean days) and hospital mortality (%) for the top decile.",
+  "final_sql": "WITH \n  -- Filter patients and calculate ICU length of stay\n  icu_patients AS (\n    SELECT \n      i.subject_id,\n      i.hadm_id,\n      i.stay_id,\n      i.intime,\n      i.outtime,\n      p.gender,\n      p.anchor_age,\n      a.hospital_expire_flag\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p \n        ON i.subject_id = p.subject_id\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a \n        ON i.hadm_id = a.hadm_id\n    WHERE \n      p.gender = 'F' \n      AND p.anchor_age BETWEEN 49 AND 59\n  ),\n\n  -- Calculate composite vital instability score for the first 24 hours\n  vital_scores AS (\n    SELECT \n      ce.subject_id,\n      ce.stay_id,\n      AVG(CASE \n        WHEN ce.itemid = 220050 AND ce.valuenum > 100 THEN 1 \n        ELSE 0 \n      END) AS hr_score,\n      AVG(CASE \n        WHEN ce.itemid = 220179 AND ce.valuenum > 20 THEN 1 \n        ELSE 0 \n      END) AS rr_score,\n      AVG(CASE \n        WHEN ce.itemid = 220052 AND ce.valuenum > 140 THEN 1 \n        ELSE 0 \n      END) AS sbp_score\n    FROM \n      `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    JOIN \n      icu_patients ip \n        ON ce.subject_id = ip.subject_id AND ce.stay_id = ip.stay_id\n    WHERE \n      ce.charttime BETWEEN ip.intime AND TIMESTAMP_ADD(ip.intime, INTERVAL 24 HOUR)\n      AND ce.itemid IN (220050, 220179, 220052)\n    GROUP BY \n      ce.subject_id, ce.stay_id\n  ),\n\n  -- Combine ICU patient data with vital scores\n  patient_scores AS (\n    SELECT \n      ip.*,\n      COALESCE(vs.hr_score, 0) + COALESCE(vs.rr_score, 0) + COALESCE(vs.sbp_score, 0) AS vital_score\n    FROM \n      icu_patients ip\n    LEFT JOIN \n      vital_scores vs \n        ON ip.subject_id = vs.subject_id AND ip.stay_id = vs.stay_id\n  ),\n\n  -- Calculate statistics\n  patient_stats AS (\n    SELECT \n      ps.vital_score,\n      DATE_DIFF(TIMESTAMP(ps.outtime), TIMESTAMP(ps.intime), DAY) AS icu_los,\n      ps.hospital_expire_flag\n    FROM \n      patient_scores ps\n  )\n\n-- Calculate percentile of vital score 70 and statistics for top decile\nSELECT \n  APPROX_QUANTILES(vital_score, 1000)[700] AS percentile_70,\n  AVG(icu_los) AS mean_icu_los,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) * 100 AS hospital_mortality\nFROM \n  patient_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [68:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [68:24]\n\nLocation: US\nJob ID: de85c38b-c4f8-44a7-98b2-5e63acb008fc\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: intime at [46:25]; reason: invalidQuery, location: query, message: Unrecognized name: intime at [46:25]\n\nLocation: US\nJob ID: 550136b3-bf21-4474-aa0c-574fc3d0490b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 69\u2011year\u2011old man. In male patients aged 64\u201374 with sepsis (excluding septic shock), what are in\u2011hospital mortality rates by LOS quartile (Q1\u2013Q4), and CKD and diabetes prevalence per quartile?",
+  "final_sql": "WITH \n-- Step 1: Filter patients\npatients AS (\n  SELECT p.subject_id, p.gender, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 64 AND 74\n),\n\n-- Step 2: Identify sepsis patients excluding septic shock\nsepsis_patients AS (\n  SELECT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%Sepsis%' AND di.subject_id IN (SELECT subject_id FROM patients)\n  EXCEPT DISTINCT\n  SELECT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%Septic shock%' AND di.subject_id IN (SELECT subject_id FROM patients)\n),\n\n-- Step 3: Calculate LOS and in-hospital mortality\nadmissions_data AS (\n  SELECT a.hadm_id, a.admittime, a.dischtime, a.deathtime, a.hospital_expire_flag,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  WHERE a.hadm_id IN (SELECT hadm_id FROM sepsis_patients)\n),\n\n-- Step 4: Calculate LOS quartiles\nlos_quartiles AS (\n  SELECT \n    los_hours,\n    NTILE(4) OVER (ORDER BY los_hours) AS los_quartile\n  FROM admissions_data\n),\n\n-- Step 5: Assess CKD and diabetes prevalence\ncomorbidities AS (\n  SELECT di.subject_id, di.hadm_id,\n         MAX(CASE WHEN d.long_title LIKE '%Chronic kidney disease%' THEN 1 ELSE 0 END) AS ckd,\n         MAX(CASE WHEN d.long_title LIKE '%Diabetes mellitus%' THEN 1 ELSE 0 END) AS diabetes\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE di.hadm_id IN (SELECT hadm_id FROM sepsis_patients)\n  GROUP BY di.subject_id, di.hadm_id\n)\n\n-- Final query\nSELECT \n  lq.los_quartile,\n  COUNT(*) AS total_patients,\n  SUM(CASE WHEN ad.deathtime IS NOT NULL OR ad.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate,\n  SUM(c.ckd) / COUNT(*) AS ckd_prevalence,\n  SUM(c.diabetes) / COUNT(*) AS diabetes_prevalence\nFROM los_quartiles lq\nJOIN admissions_data ad ON lq.los_hours = ad.los_hours\nJOIN comorbidities c ON ad.hadm_id = c.hadm_id\nGROUP BY lq.los_quartile\nORDER BY lq.los_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

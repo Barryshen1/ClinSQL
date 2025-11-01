@@ -1,0 +1,16 @@
+{
+  "query": "For a 50\u2011year\u2011old woman: among female HF admissions aged 45\u201355, LOS 1\u20137 days, by primary vs secondary diagnosis and 1\u20133 vs 4\u20137 day stays, what are mean/min/max CT/MRI per admission?",
+  "final_sql": "WITH cohort AS (\n  -- Select admissions for female patients aged 45-55, LOS 1-7 days\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\n\nhf_admissions AS (\n  -- Identify HF admissions and diagnosis type (primary/secondary)\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.anchor_age,\n    c.gender,\n    c.los_days,\n    CASE\n      WHEN MIN(CASE WHEN d.seq_num = 1 THEN 1 ELSE 0 END) = 1 THEN 'Primary'\n      ELSE 'Secondary'\n    END AS hf_diag_type\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON c.hadm_id = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    (\n      -- ICD-10 HF: I50.x, ICD-9 HF: 428.x\n      (d.icd_version = 9 AND d.icd_code LIKE '428%')\n      OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n    )\n  GROUP BY\n    c.subject_id, c.hadm_id, c.anchor_age, c.gender, c.los_days\n),\n\nct_mri_procs AS (\n  -- Identify CT/MRI procedures per admission\n  SELECT\n    p.hadm_id,\n    COUNTIF(\n      LOWER(dp.long_title) LIKE '%ct%'\n      OR LOWER(dp.long_title) LIKE '%mri%'\n    ) AS ct_mri_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n      ON p.icd_code = dp.icd_code AND p.icd_version = dp.icd_version\n  WHERE\n    LOWER(dp.long_title) LIKE '%ct%'\n    OR LOWER(dp.long_title) LIKE '%mri%'\n  GROUP BY\n    p.hadm_id\n),\n\nfinal AS (\n  -- Merge HF admissions with CT/MRI counts (include zero counts)\n  SELECT\n    h.subject_id,\n    h.hadm_id,\n    h.anchor_age,\n    h.gender,\n    h.los_days,\n    h.hf_diag_type,\n    CASE\n      WHEN h.los_days BETWEEN 1 AND 3 THEN '1-3'\n      ELSE '4-7'\n    END AS los_bucket,\n    COALESCE(c.ct_mri_count, 0) AS ct_mri_count\n  FROM\n    hf_admissions h\n    LEFT JOIN ct_mri_procs c\n      ON h.hadm_id = c.hadm_id\n)\n\nSELECT\n  hf_diag_type,\n  los_bucket,\n  COUNT(*) AS n_admissions,\n  AVG(ct_mri_count) AS mean_ct_mri_per_admission,\n  MIN(ct_mri_count) AS min_ct_mri_per_admission,\n  MAX(ct_mri_count) AS max_ct_mri_per_admission\nFROM\n  final\nGROUP BY\n  hf_diag_type,\n  los_bucket\nORDER BY\n  hf_diag_type,\n  los_bucket;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

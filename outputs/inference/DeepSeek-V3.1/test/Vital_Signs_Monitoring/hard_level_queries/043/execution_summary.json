@@ -1,0 +1,28 @@
+{
+  "query": "For a 45\u2011year\u2011old man: among male ICU patients 40\u201350 with respiratory failure, in first 48 hours what are SD and 25/50/75/95th percentiles of Vital Instability Index? Compare hypotensive (MAP<65) and tachycardic burden, ICU LOS and mortality to respiratory\u2011failure patients.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id, \n        p.gender, \n        p.anchor_age,\n        ie.hadm_id,\n        ie.stay_id,\n        ie.intime,\n        ie.outtime,\n        ie.los AS icu_los,\n        adm.hospital_expire_flag AS mortality\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ie.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON ie.hadm_id = adm.hadm_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 40 AND 50\n        AND EXISTS (\n            SELECT 1 \n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n            WHERE ie.hadm_id = diag.hadm_id\n            AND (\n                (diag.icd_code LIKE 'J96%' AND diag.icd_version = 10)\n                OR (diag.icd_code = '518.81' AND diag.icd_version = 9)\n            )\n        )\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY ie.hadm_id ORDER BY ie.intime) = 1\n),\n\nmap_hr_events AS (\n    SELECT \n        c.stay_id,\n        ce.charttime,\n        CASE WHEN ce.itemid IN (456, 52, 6702, 443, 220052, 220181) THEN 'MAP' \n             WHEN ce.itemid IN (211, 220045) THEN 'HR' \n        END AS vital_type,\n        ce.valuenum\n    FROM cohort c\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON c.stay_id = ce.stay_id\n    WHERE ce.itemid IN (456, 52, 6702, 443, 220052, 220181, 211, 220045)\n        AND ce.valuenum IS NOT NULL\n        AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n),\n\nhourly_medians AS (\n    SELECT \n        stay_id,\n        DATETIME_TRUNC(charttime, HOUR) AS chart_hour,\n        vital_type,\n        APPROX_QUANTILES(valuenum, 100)[OFFSET(50)] AS median_value\n    FROM map_hr_events\n    GROUP BY stay_id, chart_hour, vital_type\n),\n\npivot_hourly AS (\n    SELECT \n        stay_id,\n        chart_hour,\n        MAX(CASE WHEN vital_type = 'MAP' THEN median_value END) AS median_map,\n        MAX(CASE WHEN vital_type = 'HR' THEN median_value END) AS median_hr\n    FROM hourly_medians\n    GROUP BY stay_id, chart_hour\n),\n\nvii_per_hour AS (\n    SELECT \n        stay_id,\n        chart_hour,\n        median_map,\n        median_hr,\n        (ABS(median_map - 90) + ABS(median_hr - 75)) / 2 AS vii\n    FROM pivot_hourly\n    WHERE median_map IS NOT NULL AND median_hr IS NOT NULL\n),\n\npatient_summary AS (\n    SELECT \n        stay_id,\n        AVG(vii) AS mean_vii,\n        COUNT(*) AS num_hours,\n        SUM(CASE WHEN median_map < 65 THEN 1 ELSE 0 END) / COUNT(median_map) AS hypotensive_burden,\n        SUM(CASE WHEN median_hr > 100 THEN 1 ELSE 0 END) / COUNT(median_hr) AS tachycardic_burden\n    FROM vii_per_hour\n    GROUP BY stay_id\n)\n\nSELECT \n    'Overall' AS subgroup,\n    COUNT(*) AS n_patients,\n    STDDEV(ps.mean_vii) AS vii_sd,\n    APPROX_QUANTILES(ps.mean_vii, 100)[OFFSET(25)] AS vii_p25,\n    APPROX_QUANTILES(ps.mean_vii, 100)[OFFSET(50)] AS vii_p50,\n    APPROX_QUANTILES(ps.mean_vii, 100)[OFFSET(75)] AS vii_p75,\n    APPROX_QUANTILES(ps.mean_vii, 100)[OFFSET(95)] AS vii_p95,\n    AVG(ps.hypotensive_burden) AS avg_hypotensive_burden,\n    AVG(ps.tachycardic_burden) AS avg_tachycardic_burden,\n    AVG(c.icu_los) AS avg_icu_los,\n    AVG(c.mortality) AS mortality_rate\nFROM cohort c\nINNER JOIN patient_summary ps\n    ON c.stay_id = ps.stay_id\nGROUP BY subgroup;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column valuenum which is neither grouped nor aggregated at [49:25]; reason: invalidQuery, location: query, message: SELECT list expression references column valuenum which is neither grouped nor aggregated at [49:25]\n\nLocation: US\nJob ID: 778e4c72-a9fa-419c-908a-902a6a16aad8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 3d4a620e-fd69-4d41-851d-b3935319d33b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

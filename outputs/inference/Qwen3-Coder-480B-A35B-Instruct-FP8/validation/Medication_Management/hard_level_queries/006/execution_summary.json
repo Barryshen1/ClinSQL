@@ -1,0 +1,22 @@
+{
+  "query": "For a 42\u2011year\u2011old man with a postoperative ICU admission, among male inpatients aged 37\u201347, compute medication complexity over the first 72 hours, stratify into quintiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per quintile and estimate his risk.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.los AS icu_los,\n    a.hospital_expire_flag,\n    a.admittime,\n    a.dischtime,\n    i.intime AS icu_intime,\n    i.outtime AS icu_outtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  ON\n    a.hadm_id = i.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND a.admission_location = 'POSTOPERATIVE'\n    AND i.intime >= a.admittime\n    AND i.outtime <= a.dischtime\n),\n\nfirst_icu AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    icu_los,\n    hospital_expire_flag,\n    admittime,\n    dischtime,\n    icu_intime,\n    icu_outtime,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY icu_intime) AS rn\n  FROM\n    cohort\n),\n\nmed_complexity AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.icu_los,\n    f.hospital_expire_flag,\n    f.admittime,\n    f.dischtime,\n    f.icu_intime,\n    f.icu_outtime,\n    COUNT(DISTINCT iv.itemid) AS med_complexity_count\n  FROM\n    first_icu f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.inputevents` iv\n  ON\n    f.stay_id = iv.stay_id\n    AND iv.starttime >= f.icu_intime\n    AND iv.starttime <= DATETIME_ADD(f.icu_intime, INTERVAL 72 HOUR)\n  WHERE\n    f.rn = 1\n  GROUP BY\n    f.subject_id, f.hadm_id, f.stay_id, f.icu_los, f.hospital_expire_flag,\n    f.admittime, f.dischtime, f.icu_intime, f.icu_outtime\n),\n\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY med_complexity_count) AS complexity_quintile\n  FROM\n    med_complexity\n),\n\nreadmissions AS (\n  SELECT\n    q.*,\n    LEAD(q.admittime) OVER (PARTITION BY q.subject_id ORDER BY q.admittime) AS next_admittime\n  FROM\n    quintiles q\n),\n\nthirty_day_readmit AS (\n  SELECT\n    *,\n    CASE\n      WHEN next_admittime IS NOT NULL\n        AND DATETIME_DIFF(next_admittime, dischtime, DAY) <= 30 THEN 1\n      ELSE 0\n    END AS readmit_30_days\n  FROM\n    readmissions\n),\n\nsummary_stats AS (\n  SELECT\n    complexity_quintile,\n    AVG(icu_los) AS avg_icu_los,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(readmit_30_days) AS readmit_30_rate\n  FROM\n    thirty_day_readmit\n  GROUP BY\n    complexity_quintile\n),\n\ntarget_patient AS (\n  SELECT\n    t.complexity_quintile,\n    t.icu_los,\n    t.hospital_expire_flag,\n    t.readmit_30_days\n  FROM\n    thirty_day_readmit t\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    t.subject_id = p.subject_id\n  WHERE\n    p.anchor_age = 42\n)\n\nSELECT\n  s.*,\n  t.icu_los AS target_icu_los,\n  t.hospital_expire_flag AS target_mortality,\n  t.readmit_30_days AS target_readmit\nFROM\n  summary_stats s\nLEFT JOIN\n  target_patient t\nON\n  s.complexity_quintile = t.complexity_quintile\nORDER BY\n  s.complexity_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name admission_location not found inside t at [31:11]; reason: invalidQuery, location: query, message: Name admission_location not found inside t at [31:11]\n\nLocation: US\nJob ID: eca0a376-078b-4940-81f5-595269202ab9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

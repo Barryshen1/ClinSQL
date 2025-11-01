@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 79-year-old man. Among men 74\u201384, what's the median of each stay's minimum temperature (\u00b0F)?",
+  "final_sql": "WITH temp_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%temp%' OR LOWER(label) LIKE '%temperature%'\n),\n\n-- per-stay temperature measurements converted to Fahrenheit\nstay_temps AS (\n  SELECT\n    icu.stay_id,\n    ce.charttime,\n    ce.valuenum AS raw_val,\n    ce.valueuom AS raw_uom,\n    CASE\n      WHEN ce.valuenum IS NULL THEN NULL\n      WHEN LOWER(IFNULL(ce.valueuom, '')) LIKE '%f%' THEN ce.valuenum\n      WHEN LOWER(IFNULL(ce.valueuom, '')) LIKE '%c%' THEN ce.valuenum * 9.0/5.0 + 32.0\n      WHEN ce.valuenum <= 45 THEN ce.valuenum * 9.0/5.0 + 32.0  -- likely Celsius\n      ELSE ce.valuenum  -- likely Fahrenheit\n    END AS temp_f\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = icu.stay_id\n  JOIN temp_items di\n    ON ce.itemid = di.itemid\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 74 AND 84\n    AND ce.valuenum IS NOT NULL\n),\n\n-- per-stay minimum temperature (\u00b0F)\nper_stay_min AS (\n  SELECT\n    stay_id,\n    MIN(temp_f) AS min_temp_f\n  FROM stay_temps\n  WHERE temp_f IS NOT NULL\n  GROUP BY stay_id\n),\n\n-- ordered list to compute exact median\nordered AS (\n  SELECT\n    min_temp_f,\n    ROW_NUMBER() OVER (ORDER BY min_temp_f) AS rn,\n    COUNT(*) OVER () AS cnt\n  FROM per_stay_min\n)\n\nSELECT\n  CASE\n    WHEN cnt = 0 THEN NULL\n    WHEN MOD(cnt, 2) = 1 THEN\n      (SELECT min_temp_f FROM ordered WHERE rn = (cnt + 1) / 2)\n    ELSE\n      (\n        (SELECT min_temp_f FROM ordered WHERE rn = cnt / 2)\n        + (SELECT min_temp_f FROM ordered WHERE rn = cnt / 2 + 1)\n      ) / 2.0\n  END AS median_min_temperature_f\nFROM ordered\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

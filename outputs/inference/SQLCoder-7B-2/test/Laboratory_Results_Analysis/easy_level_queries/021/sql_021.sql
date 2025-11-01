@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY value) AS seventy_fifth_percentile FROM labevents WHERE subject_id IN (SELECT subject_id FROM admissions WHERE gender = 'M' AND diagnosis_code = 'J450.0') AND itemid = 1510551;

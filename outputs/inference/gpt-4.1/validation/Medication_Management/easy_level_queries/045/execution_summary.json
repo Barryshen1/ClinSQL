@@ -1,0 +1,16 @@
+{
+  "query": "For my 62-year-old male inpatient, among male patients aged 57\u201367, what is the IQR of single inpatient DAPT prescription durations?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 57 AND 67\n),\ndapt_prescriptions AS (\n  SELECT\n    pr.subject_id,\n    pr.hadm_id,\n    pr.drug,\n    pr.starttime,\n    pr.stoptime,\n    CASE\n      WHEN LOWER(pr.drug) LIKE '%aspirin%' THEN 'aspirin'\n      WHEN LOWER(pr.drug) LIKE '%clopidogrel%' THEN 'p2y12'\n      WHEN LOWER(pr.drug) LIKE '%ticagrelor%' THEN 'p2y12'\n      WHEN LOWER(pr.drug) LIKE '%prasugrel%' THEN 'p2y12'\n      ELSE NULL\n    END AS dapt_class\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  WHERE\n    LOWER(pr.drug) LIKE '%aspirin%'\n    OR LOWER(pr.drug) LIKE '%clopidogrel%'\n    OR LOWER(pr.drug) LIKE '%ticagrelor%'\n    OR LOWER(pr.drug) LIKE '%prasugrel%'\n),\ndapt_admissions AS (\n  -- Only admissions with both aspirin and p2y12 prescribed\n  SELECT\n    c.subject_id,\n    c.hadm_id\n  FROM\n    cohort c\n    INNER JOIN dapt_prescriptions dp ON c.subject_id = dp.subject_id AND c.hadm_id = dp.hadm_id\n  GROUP BY\n    c.subject_id, c.hadm_id\n  HAVING\n    COUNT(DISTINCT dp.dapt_class) = 2\n),\ndapt_durations AS (\n  -- For each DAPT admission, get earliest start and latest stop among DAPT drugs\n  SELECT\n    da.subject_id,\n    da.hadm_id,\n    MIN(dp.starttime) AS dapt_start,\n    MAX(dp.stoptime) AS dapt_stop,\n    DATETIME_DIFF(MAX(dp.stoptime), MIN(dp.starttime), DAY) AS dapt_duration_days\n  FROM\n    dapt_admissions da\n    INNER JOIN dapt_prescriptions dp\n      ON da.subject_id = dp.subject_id AND da.hadm_id = dp.hadm_id\n  WHERE\n    dp.dapt_class IN ('aspirin', 'p2y12')\n    AND dp.starttime IS NOT NULL\n    AND dp.stoptime IS NOT NULL\n  GROUP BY\n    da.subject_id, da.hadm_id\n)\nSELECT\n  quantiles[OFFSET(1)] AS iqr_25th_percentile_days,\n  quantiles[OFFSET(3)] AS iqr_75th_percentile_days,\n  quantiles[OFFSET(3)] - quantiles[OFFSET(1)] AS iqr_days\nFROM (\n  SELECT\n    APPROX_QUANTILES(dapt_duration_days, 4) AS quantiles\n  FROM\n    dapt_durations\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

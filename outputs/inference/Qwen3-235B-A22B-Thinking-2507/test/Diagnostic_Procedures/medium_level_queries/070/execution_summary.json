@@ -1,0 +1,17 @@
+{
+  "query": "For a 64-year-old man, among males 59\u201369 with heart failure, give the 25th, 50th, and 75th percentiles of radiography/CT per admission for 1\u20134 vs 5\u20138 day stays, by ICU use.",
+  "final_sql": "WITH heart_failure_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND a.dischtime IS NOT NULL\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%heart failure%'\n    )\n),\nfiltered_admissions AS (\n  SELECT \n    hadm_id,\n    subject_id,\n    los_days\n  FROM heart_failure_admissions\n  WHERE age_at_admission BETWEEN 59 AND 69\n    AND los_days BETWEEN 1 AND 8\n),\nicu_use_flag AS (\n  SELECT \n    f.hadm_id,\n    CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END AS icu_use\n  FROM filtered_admissions f\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON f.hadm_id = i.hadm_id\n),\nradiology_counts AS (\n  SELECT \n    h.hadm_id,\n    COUNT(*) AS radiology_count\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n    ON h.hcpcs_cd = d.code\n  WHERE \n    LOWER(d.long_description) LIKE '%radiograph%'\n    OR LOWER(d.long_description) LIKE '%x-ray%'\n    OR LOWER(d.long_description) LIKE '%ct%'\n    OR LOWER(d.long_description) LIKE '%computed tomography%'\n  GROUP BY h.hadm_id\n),\nadmission_summary AS (\n  SELECT \n    f.hadm_id,\n    f.los_days,\n    i.icu_use,\n    COALESCE(r.radiology_count, 0) AS radiology_count\n  FROM filtered_admissions f\n  INNER JOIN icu_use_flag i\n    ON f.hadm_id = i.hadm_id\n  LEFT JOIN radiology_counts r\n    ON f.hadm_id = r.hadm_id\n)\nSELECT \n  icu_use,\n  CASE \n    WHEN los_days BETWEEN 1 AND 4 THEN '1-4'\n    WHEN los_days BETWEEN 5 AND 8 THEN '5-8'\n  END AS los_group,\n  APPROX_QUANTILES(radiology_count, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(radiology_count, 100)[OFFSET(50)] AS p50,\n  APPROX_QUANTILES(radiology_count, 100)[OFFSET(75)] AS p75\nFROM admission_summary\nGROUP BY icu_use, los_group\nORDER BY icu_use, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

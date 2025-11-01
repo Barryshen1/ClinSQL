@@ -1,0 +1,28 @@
+{
+  "query": "For a 65\u2011year\u2011old male with UGIB, what is the 95th percentile of the 48\u2011hour vital instability index among male ICU patients aged 60\u201370 with UGIB? For the top decile, compare tachycardia>100, MAP<65, tachypnea>20, ICU LOS and mortality to age\u2011matched controls.",
+  "final_sql": "WITH \n-- Identify UGIB patients\nugib_patients AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime,\n    p.anchor_age,\n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 60 AND 70\n    AND a.hadm_id IN (\n      SELECT \n        hadm_id\n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE \n        icd_code IN ('K92.0', 'K22.0', 'K31.0')  -- UGIB related ICD codes\n    )\n),\n\n-- Calculate vital instability index\nvital_instability AS (\n  SELECT \n    ce.subject_id, \n    ce.hadm_id, \n    ce.charttime,\n    CASE\n      WHEN ce.itemid = 220050 AND ce.valuenum > 100 THEN 1  -- Tachycardia > 100\n      WHEN ce.itemid = 220179 AND ce.valuenum < 65 THEN 1  -- MAP < 65\n      WHEN ce.itemid = 220052 AND ce.valuenum > 20 THEN 1  -- Tachypnea > 20\n      ELSE 0\n    END AS instability_score\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  WHERE \n    ce.itemid IN (220050, 220179, 220052)  -- Heart Rate, Mean Arterial Pressure, Respiratory Rate\n),\n\n-- Aggregate instability scores\ninstability_agg AS (\n  SELECT \n    subject_id, \n    hadm_id,\n    SUM(instability_score) / COUNT(charttime) AS avg_instability_score\n  FROM \n    vital_instability\n  GROUP BY \n    subject_id, \n    hadm_id\n),\n\n-- Calculate 95th percentile\npercentile_95 AS (\n  SELECT \n    APPROX_QUANTILES(avg_instability_score, 100)[OFFSET(95)] AS percentile_95_score\n  FROM \n    instability_agg\n),\n\n-- Identify top decile patients\ntop_decile_patients AS (\n  SELECT \n    subject_id, \n    hadm_id,\n    avg_instability_score\n  FROM \n    instability_agg\n  WHERE \n    avg_instability_score > (SELECT percentile_95_score FROM percentile_95)\n),\n\n-- Age-matched controls\ncontrols AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime,\n    p.anchor_age,\n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON \n    a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 60 AND 70\n    AND a.hadm_id NOT IN (\n      SELECT \n        hadm_id\n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE \n        icd_code IN ('K92.0', 'K22.0', 'K31.0')\n    )\n)\n\n-- Final comparison\nSELECT \n  'Top Decile UGIB Patients' AS group_name,\n  COUNT(DISTINCT tdp.hadm_id) AS num_patients,\n  AVG(CASE WHEN ce.itemid = 220050 AND ce.valuenum > 100 THEN 1 ELSE 0 END) AS tachycardia,\n  AVG(CASE WHEN ce.itemid = 220179 AND ce.valuenum < 65 THEN 1 ELSE 0 END) AS map_lt_65,\n  AVG(CASE WHEN ce.itemid = 220052 AND ce.valuenum > 20 THEN 1 ELSE 0 END) AS tachypnea,\n  AVG(i.los) AS icu_los,\n  SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(tdp.hadm_id) AS mortality\nFROM \n  top_decile_patients tdp\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON tdp.hadm_id = i.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON tdp.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON tdp.subject_id = ce.subject_id AND tdp.hadm_id = ce.hadm_id\n\nUNION ALL\n\nSELECT \n  'Age-matched Controls' AS group_name,\n  COUNT(DISTINCT c.hadm_id) AS num_patients,\n  AVG(CASE WHEN ce.itemid = 220050 AND ce.valuenum > 100 THEN 1 ELSE 0 END) AS tachycardia,\n  AVG(CASE WHEN ce.itemid = 220179 AND ce.valuenum < 65 THEN 1 ELSE 0 END) AS map_lt_65,\n  AVG(CASE WHEN ce.itemid = 220052 AND ce.valuenum > 20 THEN 1 ELSE 0 END) AS tachypnea,\n  AVG(i.los) AS icu_los,\n  SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(c.hadm_id) AS mortality\nFROM \n  controls c\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON c.hadm_id = i.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON c.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON c.subject_id = ce.subject_id AND c.hadm_id = ce.hadm_id;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [64:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [64:27]\n\nLocation: US\nJob ID: 85dd2df2-a950-40c8-85ef-0a3fa3103f38\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: FLOAT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [63:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: FLOAT64, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [63:5]\n\nLocation: US\nJob ID: d448687e-5ae4-43e1-a6e3-1f0ca5c639ae\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

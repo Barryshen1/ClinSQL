@@ -1,0 +1,28 @@
+{
+  "query": "For a 42-year-old woman, among female urgent/emergency admissions aged 37\u201347, report LOS mean, 25th/50th/75th percentiles and percentile rank of a 7\u2011day stay by discharge outcome (home/facility/in-hospital death).",
+  "final_sql": "WITH base AS (\n  SELECT\n    CASE\n      WHEN a.hospital_expire_flag = 1 THEN 'in_hospital_death'\n      WHEN LOWER(a.discharge_location) LIKE 'home%' THEN 'home'\n      ELSE 'facility'\n    END AS discharge_group,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND a.admission_type IN ('EMERGENCY','URGENT')\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\nbase_pos AS (\n  SELECT discharge_group, los_days\n  FROM base\n  WHERE los_days > 0\n),\nstats AS (\n  SELECT\n    discharge_group,\n    AVG(los_days) AS mean_los_days,\n    APPROX_QUANTILES(los_days, 4) AS quantiles\n  FROM base_pos\n  GROUP BY discharge_group\n),\np25_50_75 AS (\n  SELECT\n    discharge_group,\n    mean_los_days,\n    quantiles[OFFSET(1)] AS p25,\n    quantiles[OFFSET(2)] AS p50,\n    quantiles[OFFSET(3)] AS p75\n  FROM stats\n),\nseven AS (\n  SELECT\n    bp.discharge_group,\n    COUNT(*) AS total_n,\n    SUM(CASE WHEN bp.los_days < 7 THEN 1 ELSE 0 END) AS less_than_7,\n    SUM(CASE WHEN bp.los_days = 7 THEN 1 ELSE 0 END) AS equal_to_7\n  FROM base_pos bp\n  GROUP BY bp.discharge_group\n),\npr7 AS (\n  SELECT\n    s.discharge_group,\n    (s.less_than_7 + 0.5 * s.equal_to_7) / s.total_n AS pr7_of_7_days\n  FROM seven s\n)\nSELECT\n  t.discharge_group AS discharge_outcome,\n  t.mean_los_days,\n  t.p25,\n  t.p50,\n  t.p75,\n  pr7.pr7_of_7_days\nFROM p25_50_75 t\nLEFT JOIN pr7 pr7\n  ON t.discharge_group = pr7.discharge_group\nORDER BY discharge_outcome;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [48:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [48:5]\n\nLocation: US\nJob ID: f9f1f092-41b1-4492-856c-464b7d515595\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column discharge_group which is neither grouped nor aggregated at [31:12]; reason: invalidQuery, location: query, message: SELECT list expression references column discharge_group which is neither grouped nor aggregated at [31:12]\n\nLocation: US\nJob ID: 9a598163-560a-474c-bd96-635f741efcb4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

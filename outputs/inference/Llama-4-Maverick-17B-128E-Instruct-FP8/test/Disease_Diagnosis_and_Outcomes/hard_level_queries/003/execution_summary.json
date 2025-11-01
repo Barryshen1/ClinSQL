@@ -1,0 +1,28 @@
+{
+  "query": "I have a 75-year-old female inpatient with pulmonary embolism. For female inpatients aged 70\u201380 with PE, stratify into risk-score quintiles and report per quintile: 90\u2011day mortality, general 70\u201380 female 90\u2011day mortality (comparison), AKI and ARDS rates, and median survivor LOS",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort (females aged 70-80 with PE)\ncohort AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON a.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND d_diag.long_title LIKE '%Pulmonary embolism%'\n),\n\n-- Step 2: Calculate comorbidity count as a proxy for risk score\ncomorbidity_count AS (\n  SELECT diag.subject_id, diag.hadm_id, COUNT(DISTINCT diag.icd_code) as count_comorbidity\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  INNER JOIN cohort ON diag.hadm_id = cohort.hadm_id\n  GROUP BY diag.subject_id, diag.hadm_id\n),\n\n-- Step 3: Calculate risk score quintiles\nrisk_quintile AS (\n  SELECT subject_id, hadm_id, count_comorbidity,\n         NTILE(5) OVER (ORDER BY count_comorbidity) as risk_quintile\n  FROM comorbidity_count\n),\n\n-- Step 4: Calculate outcomes (90-day mortality, AKI, ARDS, LOS)\noutcomes AS (\n  SELECT \n    r.hadm_id,\n    r.risk_quintile,\n    -- 90-day mortality\n    CASE WHEN a.deathtime <= DATETIME_ADD(a.admittime, INTERVAL 90 DAY) OR p.dod <= DATETIME_ADD(a.admittime, INTERVAL 90 DAY) THEN 1 ELSE 0 END AS died_90d,\n    -- AKI (simplified using ICD codes)\n    EXISTS (SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag WHERE diag.hadm_id = a.hadm_id AND diag.icd_code LIKE 'N17%') AS aki,\n    -- ARDS (simplified using ICD codes)\n    EXISTS (SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag WHERE diag.hadm_id = a.hadm_id AND diag.icd_code LIKE 'J80%') AS ards,\n    -- LOS\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM risk_quintile r\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON r.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON r.subject_id = p.subject_id\n),\n\n-- Step 5: Aggregate outcomes by risk quintile\naggregated_outcomes AS (\n  SELECT \n    risk_quintile,\n    COUNT(CASE WHEN died_90d = 1 THEN 1 END) / COUNT(*) AS mortality_90d,\n    COUNT(CASE WHEN aki THEN 1 END) / COUNT(*) AS aki_rate,\n    COUNT(CASE WHEN ards THEN 1 END) / COUNT(*) AS ards_rate\n  FROM outcomes\n  GROUP BY risk_quintile\n),\n\n-- Calculate median LOS separately\nmedian_los AS (\n  SELECT DISTINCT risk_quintile,\n         PERCENTILE_CONT(los, 0.5) OVER (PARTITION BY risk_quintile) AS median_los\n  FROM outcomes\n),\n\n-- Comparison cohort for general 90-day mortality\ncomparison_cohort AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.deathtime, p.dod\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 70 AND 80\n),\ngeneral_mortality AS (\n  SELECT \n    COUNT(CASE WHEN (deathtime <= DATETIME_ADD(admittime, INTERVAL 90 DAY)) OR (dod <= DATETIME_ADD(admittime, INTERVAL 90 DAY)) THEN 1 END) / COUNT(*) AS general_mortality_90d\n  FROM comparison_cohort\n)\n\n-- Final query\nSELECT \n  ao.risk_quintile,\n  ao.mortality_90d,\n  gm.general_mortality_90d,\n  ao.aki_rate,\n  ao.ards_rate,\n  ml.median_los\nFROM aggregated_outcomes ao\nINNER JOIN median_los ml ON ao.risk_quintile = ml.risk_quintile\nCROSS JOIN general_mortality gm\nORDER BY ao.risk_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/e2c52031-f092-4b4e-9123-a0759848c039?maxResults=0&location=US&prettyPrint=false: Query error: SELECT list expression references column risk_quintile which is neither grouped nor aggregated at [50:5]\n\nLocation: US\nJob ID: e2c52031-f092-4b4e-9123-a0759848c039\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: f722aec7-ca3c-4887-b3b3-1a233a6d72b0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

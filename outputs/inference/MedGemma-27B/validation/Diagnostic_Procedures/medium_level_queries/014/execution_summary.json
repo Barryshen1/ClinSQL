@@ -1,0 +1,17 @@
+{
+  "query": "I'm evaluating an 88\u2011year\u2011old male. Among male patients 83\u201393 with ACS, stratified by 1\u20134 vs 5\u20137 day stay and primary vs secondary diagnosis, what are mean, min, max ultrasounds per admission?",
+  "final_sql": "WITH PatientACS AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON p.subject_id = d.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 83 AND 93\n    AND d.icd_code IN ('410', '411', '412', '413', '414', '420', '421', '422', '427', '428', '429') -- ACS ICD-10 codes\n),\nAdmissionACS AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_type\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN PatientACS AS pa\n    ON a.subject_id = pa.subject_id\n),\nUltrasoundCounts AS (\n  SELECT\n    a.hadm_id,\n    COUNT(hc.hcpcs_cd) AS ultrasound_count\n  FROM AdmissionACS AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.hcpcsevents` AS hc\n    ON a.hadm_id = hc.hadm_id\n  WHERE\n    hc.hcpcs_cd LIKE '76%' -- HCPCS codes starting with 76 are typically ultrasounds\n  GROUP BY\n    a.hadm_id\n),\nStayDuration AS (\n  SELECT\n    a.hadm_id,\n    -- Calculate stay duration in days\n    (TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) + 1) AS stay_duration_days\n  FROM AdmissionACS AS a\n),\nDiagnosisType AS (\n  SELECT\n    a.hadm_id,\n    CASE\n      WHEN d.seq_num = 1 THEN 'Primary'\n      ELSE 'Secondary'\n    END AS diagnosis_type\n  FROM AdmissionACS AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON a.hadm_id = d.hadm_id\n)\nSELECT\n  ud.hadm_id,\n  ud.ultrasound_count,\n  sd.stay_duration_days,\n  dt.diagnosis_type,\n  AVG(ud.ultrasound_count) OVER (PARTITION BY sd.stay_duration_days, dt.diagnosis_type) AS mean_ultrasounds,\n  MIN(ud.ultrasound_count) OVER (PARTITION BY sd.stay_duration_days, dt.diagnosis_type) AS min_ultrasounds,\n  MAX(ud.ultrasound_count) OVER (PARTITION BY sd.stay_duration_days, dt.diagnosis_type) AS max_ultrasounds\nFROM UltrasoundCounts AS ud\nJOIN StayDuration AS sd\n  ON ud.hadm_id = sd.hadm_id\nJOIN DiagnosisType AS dt\n  ON ud.hadm_id = dt.hadm_id\nWHERE\n  sd.stay_duration_days BETWEEN 1 AND 7\nGROUP BY\n  ud.hadm_id,\n  ud.ultrasound_count,\n  sd.stay_duration_days,\n  dt.diagnosis_type\nORDER BY\n  sd.stay_duration_days,\n  dt.diagnosis_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For a 42-year-old woman, among female urgent/emergency admissions aged 37\u201347, report LOS mean, 25th/50th/75th percentiles and percentile rank of a 7\u2011day stay by discharge outcome (home/facility/in-hospital death).",
+  "final_sql": "WITH patient_ages AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.admittime,\n    a.dischtime,\n    a.admission_type,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit,\n    -- Compute LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / (24 * 60 * 60) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND a.admission_type IN ('URGENT', 'EMERGENCY')\n),\ncohort AS (\n  SELECT *\n  FROM patient_ages\n  WHERE age_at_admit >= 37 AND age_at_admit <= 47\n    AND los_days >= 0  -- Ensure valid LOS\n),\ndischarge_groups AS (\n  SELECT\n    hadm_id,\n    los_days,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN discharge_location IN ('HOME', 'HOME WITH HOME HEALTH', 'HOME HEALTH CARE') THEN 'Home'\n      ELSE 'Facility'\n    END AS discharge_outcome\n  FROM cohort\n),\nstats_per_group AS (\n  SELECT\n    discharge_outcome,\n    AVG(los_days) AS mean_los,\n    APPROX_QUANTILES(los_days, 1000)[OFFSET(250)] AS p25_los,\n    APPROX_QUANTILES(los_days, 1000)[OFFSET(500)] AS p50_los,\n    APPROX_QUANTILES(los_days, 1000)[OFFSET(750)] AS p75_los,\n    -- Compute cumulative distribution to get percentile rank of 7-day stay\n    APPROX_QUANTILES(\n      CASE WHEN los_days <= 7 THEN 1 ELSE 0 END,  -- dummy for cume_dist logic\n      1000\n    )[OFFSET(500)] AS dummy  -- placeholder; instead, use ARRAY_AGG and UNNEST\n  FROM discharge_groups\n  GROUP BY discharge_outcome\n),\n-- Recompute percentile rank of 7-day stay using CUME_DIST via window function\npercentile_ranks AS (\n  SELECT\n    discharge_outcome,\n    -- Use CUME_DIST to compute fraction of stays <= 7 days\n    SAFE_DIVIDE(\n      COUNTIF(los_days <= 7),\n      COUNT(*)\n    ) AS percentile_rank_of_7day\n  FROM discharge_groups\n  GROUP BY discharge_outcome\n)\n-- Final select with all metrics\nSELECT\n  s.discharge_outcome,\n  ROUND(s.mean_los, 2) AS mean_los,\n  ROUND(s.p25_los, 2) AS p25_los,\n  ROUND(s.p50_los, 2) AS p50_los,\n  ROUND(s.p75_los, 2) AS p75_los,\n  ROUND(p.percentile_rank_of_7day * 100, 1) AS percentile_rank_of_7day_pct\nFROM stats_per_group s\nJOIN percentile_ranks p\n  ON s.discharge_outcome = p.discharge_outcome\nORDER BY\n  CASE discharge_outcome\n    WHEN 'Home' THEN 1\n    WHEN 'Facility' THEN 2\n    WHEN 'In-hospital death' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

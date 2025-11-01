@@ -1,0 +1,23 @@
+{
+  "query": "My 44-year-old female with heart failure: among females 39\u201349 with HF, report in-hospital mortality (%) and N by LOS (\u22645 vs >5) and comorbidity tertiles (Low/Med/High); include CKD and diabetes prevalence.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 39 AND 49\n),\nhf_admissions AS (\n  SELECT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%heart failure%'\n  GROUP BY d.hadm_id\n),\nadmissions_with_hf AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN patients_filtered p ON a.subject_id = p.subject_id\n  JOIN hf_admissions h ON a.hadm_id = h.hadm_id\n  WHERE a.dischtime IS NOT NULL AND a.admittime IS NOT NULL\n),\ncohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    -- Comorbidity count: distinct ICD codes excluding HF\n    COUNT(DISTINCT CASE WHEN LOWER(dd.long_title) NOT LIKE '%heart failure%' THEN d.icd_code END) AS comorbidity_count,\n    -- CKD flag\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%chronic kidney disease%' THEN 1 ELSE 0 END) AS ckd_flag,\n    -- Diabetes flag\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%diabetes%' THEN 1 ELSE 0 END) AS diabetes_flag\n  FROM admissions_with_hf a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  GROUP BY a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.hospital_expire_flag\n),\ncohort_with_tertiles AS (\n  SELECT \n    *,\n    CASE \n      WHEN NTILE(3) OVER (ORDER BY COALESCE(comorbidity_count, 0)) = 1 THEN 'Low'\n      WHEN NTILE(3) OVER (ORDER BY COALESCE(comorbidity_count, 0)) = 2 THEN 'Med'\n      ELSE 'High'\n    END AS comorbidity_tertile\n  FROM cohort\n),\nmortality_table AS (\n  SELECT \n    CASE \n      WHEN los <= 5 THEN '\u22645'\n      ELSE '>5'\n    END AS los_group,\n    comorbidity_tertile,\n    COUNT(*) AS n,\n    SUM(hospital_expire_flag) * 100.0 / COUNT(*) AS mortality_rate,\n    NULL AS ckd_prevalence,\n    NULL AS diabetes_prevalence\n  FROM cohort_with_tertiles\n  GROUP BY los_group, comorbidity_tertile\n),\nprevalence AS (\n  SELECT \n    (SELECT COUNT(*) FROM cohort WHERE ckd_flag = 1) * 100.0 / (SELECT COUNT(*) FROM cohort) AS ckd_prevalence,\n    (SELECT COUNT(*) FROM cohort WHERE diabetes_flag = 1) * 100.0 / (SELECT COUNT(*) FROM cohort) AS diabetes_prevalence\n)\nSELECT \n  los_group,\n  comorbidity_tertile,\n  n,\n  mortality_rate,\n  ckd_prevalence,\n  diabetes_prevalence\nFROM mortality_table\nUNION ALL\nSELECT \n  'Overall' AS los_group,\n  'Prevalence' AS comorbidity_tertile,\n  NULL,\n  NULL,\n  (SELECT ckd_prevalence FROM prevalence),\n  (SELECT diabetes_prevalence FROM prevalence);",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]\n\nLocation: US\nJob ID: 9d71d2d0-1248-463e-8e42-bfd267bb68f0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

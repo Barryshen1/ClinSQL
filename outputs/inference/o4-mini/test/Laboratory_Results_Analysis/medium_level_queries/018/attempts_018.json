@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH acs_admissions AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE (d.icd_version = 9\n         AND (d.icd_code LIKE '410%'    /* Acute MI */\n              OR d.icd_code = '4111'     /* Unstable angina */\n             )\n        )\n),\nelderly_males AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM acs_admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 90 AND 100\n),\ntroponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\nfirst_troponin AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.ref_range_upper,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n),\nindex_troponin AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum,\n    ref_range_upper,\n    CASE\n      WHEN valuenum <= ref_range_upper THEN 'normal'\n      WHEN valuenum <= 2 * ref_range_upper THEN 'borderline'\n      ELSE 'elevated'\n    END AS category\n  FROM first_troponin\n  WHERE rn = 1\n),\ncohort AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    e.admittime,\n    e.dischtime,\n    tt.valuenum,\n    tt.ref_range_upper,\n    tt.category,\n    TIMESTAMP_DIFF(e.dischtime, e.admittime, DAY) AS los_days\n  FROM elderly_males e\n  JOIN index_troponin tt\n    ON e.hadm_id = tt.hadm_id\n)\nSELECT\n  category,\n  COUNT(*) AS n_patients,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct_of_cohort,\n  ROUND(AVG(los_days), 2) AS mean_los_days\nFROM cohort\nGROUP BY category\nORDER BY category;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

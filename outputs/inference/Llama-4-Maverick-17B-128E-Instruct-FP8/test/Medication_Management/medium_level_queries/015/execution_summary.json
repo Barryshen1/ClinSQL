@@ -1,0 +1,22 @@
+{
+  "query": "47\u2011year\u2011old male: among inpatients 42\u201352 with diabetes + acute HF, report % prevalence antidiabetic classes Insulin, Metformin, Sulfonylurea, DPP\u20114, SGLT2, GLP\u20111, TZD in first 24h vs final 12h, net change (pp).",
+  "final_sql": "WITH \n-- Step 1: Identify patients with diabetes and acute HF\ncohort AS (\n  SELECT DISTINCT p.subject_id, p.gender, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON p.subject_id = diag.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 42 AND 52\n  AND d_diag.long_title LIKE '%Diabetes%' \n  AND EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag_hf\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag_hf ON diag_hf.icd_code = d_diag_hf.icd_code AND diag_hf.icd_version = d_diag_hf.icd_version\n    WHERE diag_hf.subject_id = p.subject_id AND d_diag_hf.long_title LIKE '%Heart failure%'\n  )\n),\n\n-- Step 2: Determine relevant hospital admissions\nadm AS (\n  SELECT a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN cohort ON a.subject_id = cohort.subject_id\n),\n\n-- Step 3: Extract medication data\nmeds AS (\n  SELECT \n    p.hadm_id,\n    CASE \n      WHEN LOWER(p.drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN LOWER(p.drug) LIKE '%metformin%' THEN 'Metformin'\n      WHEN LOWER(p.drug) LIKE '%sulfonylurea%' THEN 'Sulfonylurea'\n      WHEN LOWER(p.drug) LIKE '%sitagliptin%' OR LOWER(p.drug) LIKE '%saxagliptin%' OR LOWER(p.drug) LIKE '%linagliptin%' OR LOWER(p.drug) LIKE '%alogliptin%' THEN 'DPP-4'\n      WHEN LOWER(p.drug) LIKE '%canagliflozin%' OR LOWER(p.drug) LIKE '%dapagliflozin%' OR LOWER(p.drug) LIKE '%empagliflozin%' THEN 'SGLT2'\n      WHEN LOWER(p.drug) LIKE '%liraglutide%' OR LOWER(p.drug) LIKE '%exenatide%' OR LOWER(p.drug) LIKE '%dulaglutide%' OR LOWER(p.drug) LIKE '%semaglutide%' THEN 'GLP-1'\n      WHEN LOWER(p.drug) LIKE '%pioglitazone%' THEN 'TZD'\n      ELSE NULL\n    END AS med_class,\n    p.starttime,\n    p.stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN adm ON p.hadm_id = adm.hadm_id\n  WHERE p.starttime BETWEEN adm.admittime AND DATETIME_ADD(adm.admittime, INTERVAL 24 HOUR)\n  OR p.starttime BETWEEN DATETIME_SUB(adm.dischtime, INTERVAL 12 HOUR) AND adm.dischtime\n),\n\n-- Calculate prevalence in first 24h and final 12h\nprevalence AS (\n  SELECT \n    meds.hadm_id,\n    med_class,\n    CASE \n      WHEN meds.starttime BETWEEN adm.admittime AND DATETIME_ADD(adm.admittime, INTERVAL 24 HOUR) THEN 'First 24h' \n      ELSE 'Final 12h' \n    END AS period,\n    COUNT(DISTINCT meds.starttime) > 0 AS med_given\n  FROM meds\n  INNER JOIN adm ON meds.hadm_id = adm.hadm_id\n  GROUP BY meds.hadm_id, med_class, period\n)\n\n-- Final calculation\nSELECT \n  med_class,\n  SUM(CASE WHEN period = 'First 24h' AND med_given THEN 1 ELSE 0 END) / COUNT(DISTINCT hadm_id) AS prevalence_first_24h,\n  SUM(CASE WHEN period = 'Final 12h' AND med_given THEN 1 ELSE 0 END) / COUNT(DISTINCT hadm_id) AS prevalence_final_12h,\n  (SUM(CASE WHEN period = 'Final 12h' AND med_given THEN 1 ELSE 0 END) / COUNT(DISTINCT hadm_id)) - \n  (SUM(CASE WHEN period = 'First 24h' AND med_given THEN 1 ELSE 0 END) / COUNT(DISTINCT hadm_id)) AS net_change_pp\nFROM prevalence\nGROUP BY med_class\nORDER BY med_class;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [50:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [50:5]\n\nLocation: US\nJob ID: f774fc68-505f-4650-80e7-f8ac24a98ed9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH first_icu AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.subject_id = a.subject_id\n   AND i.hadm_id = a.hadm_id\n  WHERE i.stay_id = (\n      SELECT MIN(stay_id)\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` i2\n      WHERE i2.subject_id = i.subject_id\n    )\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 90 AND 100\n),\nhepatic_failure AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%hepatic failure%'\n),\nproc_counts AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    COUNT(DISTINCT pr.icd_code) AS proc_count,\n    f.los,\n    f.hospital_expire_flag\n  FROM first_icu f\n  JOIN hepatic_failure h\n    ON f.subject_id = h.subject_id\n   AND f.hadm_id = h.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n    ON f.subject_id = pr.subject_id\n   AND f.hadm_id = pr.hadm_id\n   AND pr.chartdate >= DATE(f.intime)\n   AND pr.chartdate <= DATE_ADD(DATE(f.intime), INTERVAL 3 DAY)\n  GROUP BY f.subject_id, f.hadm_id, f.stay_id, f.los, f.hospital_expire_flag\n),\nproc_quartiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    proc_count,\n    los,\n    hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY proc_count) AS proc_quartile\n  FROM proc_counts\n)\nSELECT\n  proc_quartile,\n  COUNT(DISTINCT subject_id) AS n_patients,\n  MIN(proc_count) AS min_procedures,\n  MAX(proc_count) AS max_procedures,\n  ROUND(AVG(proc_count),2) AS avg_procedures,\n  ROUND(AVG(los),2) AS mean_los_days,\n  ROUND(100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END)\n        / COUNT(*), 2) AS hosp_mortality_pct\nFROM proc_quartiles\nGROUP BY proc_quartile\nORDER BY proc_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

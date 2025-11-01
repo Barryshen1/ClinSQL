@@ -1,0 +1,22 @@
+{
+  "query": "I have a 48\u2011year\u2011old man. Among male patients aged 43\u201353 admitted with ACS and initial hs\u2011Troponin T >99th percentile (ULN), what are the median and IQR of initial values in ng/mL?",
+  "final_sql": "WITH \n-- Step 1: Identify hs-Troponin T lab itemid\nhs_troponin_t_itemid AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE label LIKE '%hs-Troponin T%' OR label LIKE '%Troponin T, high sensitivity%'\n),\n\n-- Step 2 & 3: Filter patients and identify ACS admissions\nacs_patients AS (\n  SELECT p.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 43 AND 53\n  AND dicd.long_title LIKE '%Acute coronary syndrome%'\n),\n\n-- Step 4: Get initial hs-Troponin T values\ninitial_hs_troponin_t AS (\n  SELECT ap.subject_id, ap.hadm_id, l.valuenum, \n         ROW_NUMBER() OVER (PARTITION BY ap.hadm_id ORDER BY l.charttime) as rn,\n         l.ref_range_upper\n  FROM acs_patients ap\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l ON ap.hadm_id = l.hadm_id\n  INNER JOIN hs_troponin_t_itemid h ON l.itemid = h.itemid\n  WHERE l.valuenum IS NOT NULL\n),\n\n-- Calculate ULN (Upper Limit of Normal) for hs-Troponin T\nuln_hs_troponin_t AS (\n  SELECT MAX(ref_range_upper) as uln\n  FROM initial_hs_troponin_t\n)\n\n-- Step 5: Calculate median and IQR\nSELECT \n  APPROX_QUANTILES(valuenum, 100)[OFFSET(50)] AS median,\n  APPROX_QUANTILES(valuenum, 100)[OFFSET(25)] AS q1,\n  APPROX_QUANTILES(valuenum, 100)[OFFSET(75)] AS q3\nFROM initial_hs_troponin_t\nWHERE rn = 1 AND valuenum > (SELECT uln FROM uln_hs_troponin_t);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: ref_range_upper at [36:41]; reason: invalidQuery, location: query, message: Unrecognized name: ref_range_upper at [36:41]\n\nLocation: US\nJob ID: f876828f-e070-4ddc-868e-94af34f531fa\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

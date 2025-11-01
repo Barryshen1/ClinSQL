@@ -1,0 +1,16 @@
+{
+  "query": "For my 64-year-old male patient with ACS, among males 59\u201369 what are p25/p50/p75 of diagnostic procedures per admission, stratified by 1\u20133 vs 4\u20137 days and primary vs secondary diagnosis?",
+  "final_sql": "WITH \n-- Step 1: Identify ACS patients and their primary/secondary diagnosis status\nacs_patients AS (\n  SELECT di.long_title, d.icd_code, d.subject_id, d.hadm_id, \n         CASE WHEN d.seq_num = 1 THEN 'Primary' ELSE 'Secondary' END AS diagnosis_type\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE di.long_title LIKE '%Acute coronary syndrome%' OR di.long_title LIKE '%Myocardial infarction%'\n),\n\n-- Step 2: Filter patients by age and gender\nfiltered_patients AS (\n  SELECT p.subject_id, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 59 AND 69\n),\n\n-- Step 3: Calculate LOS and count procedures\nadmission_details AS (\n  SELECT a.hadm_id, a.admittime, a.dischtime, \n         DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 AS los,\n         COUNT(p.icd_code) AS num_procedures\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` p ON a.hadm_id = p.hadm_id\n  GROUP BY a.hadm_id, a.admittime, a.dischtime\n),\n\n-- Step 4: Combine the information\ncombined_data AS (\n  SELECT ap.subject_id, ap.hadm_id, ap.diagnosis_type, ad.los, ad.num_procedures\n  FROM acs_patients ap\n  JOIN admission_details ad ON ap.hadm_id = ad.hadm_id\n  JOIN filtered_patients fp ON ap.subject_id = fp.subject_id\n),\n\n-- Step 5: Categorize LOS and calculate percentiles\nfinal_data AS (\n  SELECT diagnosis_type, \n         CASE WHEN los BETWEEN 1 AND 3 THEN '1-3 days'\n              WHEN los BETWEEN 4 AND 7 THEN '4-7 days'\n              ELSE 'More than 7 days'\n         END AS los_category,\n         num_procedures\n  FROM combined_data\n)\n\n-- Calculate p25, p50, p75 for num_procedures\nSELECT diagnosis_type, los_category, \n       APPROX_QUANTILES(num_procedures, 100)[OFFSET(25)] AS p25,\n       APPROX_QUANTILES(num_procedures, 100)[OFFSET(50)] AS p50,\n       APPROX_QUANTILES(num_procedures, 100)[OFFSET(75)] AS p75\nFROM final_data\nWHERE los_category IN ('1-3 days', '4-7 days')\nGROUP BY diagnosis_type, los_category\nORDER BY diagnosis_type, los_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

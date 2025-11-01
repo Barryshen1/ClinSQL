@@ -1,0 +1,16 @@
+{
+  "query": "I'm assessing a 58-year-old female. Among female patients aged 53\u201363 admitted to step-down/IMC who received invasive mechanical ventilation, what is the nighttime (00:00\u201306:00) SBP measured in mmHg standard deviation?",
+  "final_sql": "WITH female_age_cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n),\nstepdown_imc_admissions AS (\n  SELECT DISTINCT\n    subject_id,\n    hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.transfers`\n  WHERE\n    LOWER(careunit) LIKE '%stepdown%'\n    OR LOWER(careunit) LIKE '%imc%'\n),\nventilated_stays AS (\n  -- ICU procedureevents: invasive mechanical ventilation\n  SELECT DISTINCT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents` ce\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n      ON ce.itemid = di.itemid\n  WHERE\n    LOWER(di.label) LIKE '%ventilation%'\n    AND (\n      LOWER(di.label) LIKE '%invasive%'\n      OR LOWER(di.label) LIKE '%mechanical%'\n    )\n),\nqualifying_stays AS (\n  SELECT DISTINCT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN female_age_cohort fac\n      ON icu.subject_id = fac.subject_id\n      AND icu.hadm_id = fac.hadm_id\n    JOIN stepdown_imc_admissions sda\n      ON icu.subject_id = sda.subject_id\n      AND icu.hadm_id = sda.hadm_id\n    JOIN ventilated_stays vs\n      ON icu.subject_id = vs.subject_id\n      AND icu.hadm_id = vs.hadm_id\n      AND icu.stay_id = vs.stay_id\n),\nsbp_items AS (\n  -- Find SBP itemids in mmHg\n  SELECT\n    itemid\n  FROM\n    `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    (\n      LOWER(label) LIKE '%systolic%'\n      AND LOWER(label) LIKE '%blood%'\n      AND LOWER(label) LIKE '%pressure%'\n    )\n    OR LOWER(label) LIKE '%sbp%'\n    AND LOWER(unitname) = 'mmhg'\n),\nnighttime_sbp AS (\n  SELECT\n    ce.valuenum\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    JOIN qualifying_stays qs\n      ON ce.subject_id = qs.subject_id\n      AND ce.hadm_id = qs.hadm_id\n      AND ce.stay_id = qs.stay_id\n    JOIN sbp_items si\n      ON ce.itemid = si.itemid\n  WHERE\n    ce.valuenum IS NOT NULL\n    AND (\n      EXTRACT(HOUR FROM ce.charttime) >= 0\n      AND EXTRACT(HOUR FROM ce.charttime) < 6\n    )\n    AND (ce.valueuom = 'mmHg' OR ce.valueuom IS NULL) -- Some SBP may not have valueuom, but d_items already filtered\n)\nSELECT\n  STDDEV_SAMP(valuenum) AS nighttime_sbp_mmHg_stddev\nFROM\n  nighttime_sbp\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

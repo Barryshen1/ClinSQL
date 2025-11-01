@@ -1,0 +1,16 @@
+{
+  "query": "I have a 63-year-old female. Among female Medicare patients aged 58\u201368 admitted via the ED with a principal femoral neck fracture, what is the 30-day readmission rate, median index LOS for readmitted versus non\u2011readmitted, and percent of initial stays >8 days?",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- Compute age at admission\n    (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag\n    ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE\n    -- Female\n    p.gender = 'F'\n    -- Age 58-68 at admission\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 58 AND 68\n    -- Admitted via ED\n    AND a.admission_location = 'EMERGENCY ROOM'\n    -- Medicare\n    AND a.insurance = 'Medicare'\n    -- Principal diagnosis: femoral neck fracture\n    AND diag.seq_num = 1\n    AND LOWER(d_diag.long_title) LIKE '%femoral neck fracture%'\n),\n\n-- Add readmission flag\nindex_with_readmission AS (\n  SELECT\n    pa.*,\n    LEAD(pa.admittime) OVER (PARTITION BY pa.subject_id ORDER BY pa.admittime) AS next_admittime,\n    -- Flag if readmitted within 30 days\n    CASE\n      WHEN LEAD(pa.admittime) OVER (PARTITION BY pa.subject_id ORDER BY pa.admittime) IS NOT NULL\n        AND DATETIME_DIFF(LEAD(pa.admittime) OVER (PARTITION BY pa.subject_id ORDER BY pa.admittime), pa.dischtime, DAY) <= 30\n      THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM patient_admissions pa\n),\n\n-- Aggregate statistics\nsummary_stats AS (\n  SELECT\n    readmitted_30d,\n    los_days,\n    -- Flag if LOS > 8 days\n    CASE WHEN los_days > 8 THEN 1 ELSE 0 END AS los_gt_8\n  FROM index_with_readmission\n)\n\n-- Final output: metrics\nSELECT\n  -- 30-day readmission rate\n  ROUND(AVG(CAST(readmitted_30d AS FLOAT64)) * 100, 2) AS readmission_rate_30d_percent,\n  -- Median LOS for readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted_days,\n  -- Median LOS for non-readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los_days END, 100)[OFFSET(50)] AS median_los_non_readmitted_days,\n  -- Percent of index stays > 8 days\n  ROUND(AVG(CAST(los_gt_8 AS FLOAT64)) * 100, 2) AS percent_los_gt_8_days\nFROM summary_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

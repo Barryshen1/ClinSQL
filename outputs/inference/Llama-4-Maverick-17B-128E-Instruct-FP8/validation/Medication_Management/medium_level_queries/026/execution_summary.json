@@ -1,0 +1,16 @@
+{
+  "query": "For my 43-year-old female inpatient with T2D and heart failure, among females 38\u201348 with both diagnoses, report percentages initiated on insulin versus oral agents in first vs final 72h only.",
+  "final_sql": "WITH \n-- Step 1: Identify patients with T2D and heart failure\ndiabetes_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n  ON diag.icd_code = d_icd.icd_code AND diag.icd_version = d_icd.icd_version\n  WHERE d_icd.long_title LIKE '%Diabetes mellitus type 2%'\n),\nheart_failure_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n  ON diag.icd_code = d_icd.icd_code AND diag.icd_version = d_icd.icd_version\n  WHERE d_icd.long_title LIKE '%Heart failure%'\n),\ntarget_patients AS (\n  SELECT p.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 38 AND 48\n  AND a.hadm_id IN (SELECT hadm_id FROM diabetes_patients)\n  AND a.hadm_id IN (SELECT hadm_id FROM heart_failure_patients)\n),\n\n-- Step 2 & 3: Analyze medication initiation\nmedication_initiation AS (\n  SELECT tp.hadm_id, \n         CASE \n           WHEN LOWER(p.drug) LIKE '%insulin%' THEN 'Insulin'\n           WHEN LOWER(p.drug) LIKE '%metformin%' OR LOWER(p.drug) LIKE '%glipizide%' OR LOWER(p.drug) LIKE '%glyburide%' THEN 'Oral Agents'\n           ELSE 'Other'\n         END AS medication_type,\n         p.starttime,\n         tp.admittime,\n         tp.dischtime\n  FROM target_patients tp\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON tp.hadm_id = p.hadm_id\n  WHERE p.starttime BETWEEN tp.admittime AND tp.dischtime\n  AND (LOWER(p.drug) LIKE '%insulin%' OR LOWER(p.drug) LIKE '%metformin%' OR LOWER(p.drug) LIKE '%glipizide%' OR LOWER(p.drug) LIKE '%glyburide%')\n),\n\n-- Step 4: Calculate percentages\nmedication_timing AS (\n  SELECT hadm_id, medication_type,\n         CASE \n           WHEN starttime <= TIMESTAMP_ADD(admittime, INTERVAL 72 HOUR) THEN 'First 72h'\n           WHEN starttime >= TIMESTAMP_SUB(dischtime, INTERVAL 72 HOUR) THEN 'Last 72h'\n           ELSE 'In Between'\n         END AS timing\n  FROM medication_initiation\n),\nfirst_last_72h AS (\n  SELECT medication_type, timing, COUNT(DISTINCT hadm_id) AS count_hadm_id\n  FROM medication_timing\n  WHERE timing IN ('First 72h', 'Last 72h')\n  GROUP BY medication_type, timing\n)\n\nSELECT medication_type, timing, count_hadm_id,\n       SUM(count_hadm_id) OVER (PARTITION BY timing) AS total_in_timing,\n       ROUND(count_hadm_id / SUM(count_hadm_id) OVER (PARTITION BY timing) * 100, 2) AS percentage\nFROM first_last_72h\nORDER BY medication_type, timing;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

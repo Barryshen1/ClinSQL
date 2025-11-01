@@ -1,0 +1,22 @@
+{
+  "query": "I have an 89-year-old female patient. Among female patients aged 84\u201394 admitted with chest pain, what's the distribution of first troponin T (normal/borderline/elevated) with counts, percentages, and in-hospital mortality?",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, p.gender, p.anchor_age, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 84 AND 94\n    AND LOWER(dd.long_title) LIKE '%chest pain%'\n),\ntroponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\nfirst_troponin AS (\n  SELECT sub.subject_id, sub.hadm_id, sub.charttime, sub.valuenum, sub.valueuom,\n         sub.ref_range_lower, sub.ref_range_upper\n  FROM (\n    SELECT l.subject_id, l.hadm_id, l.charttime, l.valuenum, l.valueuom,\n           l.ref_range_lower, l.ref_range_upper,\n           ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n    JOIN troponin_items ti\n      ON l.itemid = ti.itemid\n    JOIN cohort c\n      ON l.hadm_id = c.hadm_id\n    WHERE l.valuenum IS NOT NULL\n  ) sub\n  WHERE rn = 1\n),\ncategorized AS (\n  SELECT f.subject_id, f.hadm_id,\n         CASE\n           WHEN f.ref_range_upper IS NOT NULL AND f.valuenum <= f.ref_range_upper\n             THEN 'normal'\n           WHEN f.ref_range_upper IS NOT NULL AND f.valuenum <= f.ref_range_upper * 1.2\n             THEN 'borderline'\n           WHEN f.ref_range_upper IS NOT NULL\n             THEN 'elevated'\n           ELSE 'unknown'\n         END AS troponin_category\n  FROM first_troponin f\n),\nfinal AS (\n  SELECT cat.troponin_category,\n         COUNT(*) AS num_admissions,\n         ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_admissions,\n         SUM(c.hospital_expire_flag) AS num_deaths,\n         ROUND(SUM(c.hospital_expire_flag) * 100.0 / COUNT(*), 2) AS pct_mortality\n  FROM categorized cat\n  JOIN cohort c\n    ON cat.hadm_id = c.hadm_id\n  GROUP BY cat.troponin_category\n)\nSELECT * \nFROM final\nORDER BY troponin_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: l at [20:10]; reason: invalidQuery, location: query, message: Unrecognized name: l at [20:10]\n\nLocation: US\nJob ID: 3887c883-9cd8-4100-a67b-4f455bfbae9b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For my 46\u2011year\u2011old male: among male patients aged 41\u201351 admitted with chest pain or AMI, report counts, percentages, and mean, median, IQR of initial Troponin T by category (normal/borderline/elevated).",
+  "final_sql": "WITH chest_ami_admissions AS (\n  -- Admissions with chest pain or acute MI (case-insensitive)\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%myocardial infarction%'\n     OR LOWER(dd.long_title) LIKE '%chest pain%'\n),\ntroponin_lab AS (\n  SELECT \n     ca.subject_id,\n     ca.hadm_id,\n     le.charttime,\n     le.valuenum,\n     LOWER(le.valueuom) AS unit\n  FROM chest_ami_admissions ca\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ca.subject_id = le.subject_id AND ca.hadm_id = le.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dil\n    ON le.itemid = dil.itemid\n  WHERE LOWER(dil.label) LIKE '%troponin t%'\n    AND le.valuenum IS NOT NULL\n),\ntroponin_ranked AS (\n  SELECT\n     subject_id,\n     hadm_id,\n     charttime,\n     valuenum,\n     unit,\n     ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n  FROM troponin_lab\n),\ninitial_troponin AS (\n  SELECT\n     subject_id,\n     hadm_id,\n     charttime,\n     valuenum,\n     unit,\n     CASE\n       WHEN unit IN ('ng/l','ng_per_l','ng per_l','ng per liter') THEN\n         CASE\n           WHEN valuenum <= 14 THEN 'normal'\n           WHEN valuenum <= 40 THEN 'borderline'\n           ELSE 'elevated'\n         END\n       WHEN unit IN ('ng/ml','ng_per_ml','ng per ml') THEN\n         CASE\n           WHEN valuenum <= 0.014 THEN 'normal'\n           WHEN valuenum <= 0.04 THEN 'borderline'\n           ELSE 'elevated'\n         END\n       ELSE NULL\n     END AS category\n  FROM troponin_ranked\n  WHERE rn = 1\n    AND (\n        (unit IN ('ng/l','ng_per_l','ng per_l','ng per liter') ) OR\n        (unit IN ('ng/ml','ng_per_ml','ng per ml') )\n    )\n),\ncohort AS (\n  SELECT it.subject_id,\n         it.hadm_id,\n         it.charttime,\n         it.valuenum,\n         it.unit,\n         it.category\n  FROM initial_troponin it\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON it.subject_id = p.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 41 AND 51\n)\nSELECT\n  category,\n  COUNT(*) AS n,\n  100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS pct,\n  AVG(valuenum) AS mean_troponin,\n  MAX(quantiles)[OFFSET(50)] AS median_troponin,\n  (MAX(quantiles)[OFFSET(75)] - MAX(quantiles)[OFFSET(25)]) AS iqr\nFROM (\n  SELECT category,\n         valuenum,\n         APPROX_QUANTILES(valuenum, 100) OVER (PARTITION BY category) AS quantiles\n  FROM cohort\n  WHERE category IS NOT NULL\n)\nGROUP BY category\nORDER BY category;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 MAX is not defined for arguments of type ARRAY<DOUBLE> at [83:3]; reason: invalidQuery, location: query, message: MAX is not defined for arguments of type ARRAY<DOUBLE> at [83:3]\n\nLocation: US\nJob ID: ecb4b8b8-cb14-43f8-bf2d-68340cc14853\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name subject_id not found inside ca at [21:38]; reason: invalidQuery, location: query, message: Name subject_id not found inside ca at [21:38]\n\nLocation: US\nJob ID: ac487089-e95c-4353-8d38-f7ca273c11db\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [83:3]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [83:3]\n\nLocation: US\nJob ID: 83a7d0ed-65b2-400c-b1cc-1b2d80f7a186\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 MAX is not defined for arguments of type ARRAY<DOUBLE> at [83:3]; reason: invalidQuery, location: query, message: MAX is not defined for arguments of type ARRAY<DOUBLE> at [83:3]\n\nLocation: US\nJob ID: ecb4b8b8-cb14-43f8-bf2d-68340cc14853\n"
+    }
+  ]
+}

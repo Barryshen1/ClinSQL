@@ -1,0 +1,29 @@
+{
+  "query": "For an 81\u2011year\u2011old female: among female Medicare patients aged 76\u201386 transferred from another hospital with principal AMI (ICD\u20119 410*/ICD\u201110 I21*), report 30\u2011day readmission rate; median index LOS for readmitted vs not; percent index stays >4 days.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 76 AND 86\n),\nadmissions_filtered AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    a.admission_type,\n    a.insurance,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN patients_filtered p ON a.subject_id = p.subject_id\n  WHERE a.admission_type = 'transfer from another hospital'\n    AND a.insurance LIKE '%Medicare%'\n    AND a.hospital_expire_flag = 0\n),\nprincipal_diagnoses AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    icd_code,\n    icd_version,\n    seq_num,\n    ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY seq_num) AS diag_rank\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code LIKE '410%')\n     OR (icd_version = 10 AND icd_code LIKE 'I21%')\n),\nindex_admissions AS (\n  SELECT \n    af.subject_id,\n    af.hadm_id,\n    af.admittime,\n    af.dischtime,\n    af.los,\n    af.hospital_expire_flag,\n    af.insurance,\n    af.admission_type\n  FROM admissions_filtered af\n  INNER JOIN principal_diagnoses pd \n    ON af.subject_id = pd.subject_id \n    AND af.hadm_id = pd.hadm_id\n    AND pd.diag_rank = 1  -- principal diagnosis\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY af.subject_id ORDER BY af.admittime) = 1\n),\nreadmission_check AS (\n  SELECT \n    ia.*,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = ia.subject_id\n        AND a2.admittime > ia.dischtime\n        AND a2.admittime <= DATE_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) AS readmitted\n  FROM index_admissions ia\n),\nindex_with_readmission AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los,\n    hospital_expire_flag,\n    insurance,\n    admission_type,\n    readmitted\n  FROM readmission_check\n),\n-- Compute medians for LOS by readmission group using APPROX_QUANTILES\nmedians AS (\n  SELECT \n    readmitted,\n    APPROX_QUANTILES(los, 100)[OFFSET(50)] AS median_los\n  FROM index_with_readmission\n  GROUP BY readmitted\n),\npivoted_medians AS (\n  SELECT\n    MAX(IF(readmitted, median_los, NULL)) AS median_los_readmitted,\n    MAX(IF(NOT readmitted, median_los, NULL)) AS median_los_not_readmitted\n  FROM medians\n),\n-- Compute overall metrics\nmetrics AS (\n  SELECT \n    COUNT(*) AS total_index_admissions,\n    SUM(CAST(readmitted AS INT)) AS readmitted_count,\n    SUM(CASE WHEN los > 4 THEN 1 ELSE 0 END) AS los_gt4_count,\n    (SUM(CAST(readmitted AS INT)) * 100.0 / NULLIF(COUNT(*), 0)) AS readmission_rate,\n    (SUM(CASE WHEN los > 4 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0)) AS percent_los_gt4\n  FROM index_with_readmission\n)\nSELECT \n  m.readmission_rate,\n  m.percent_los_gt4,\n  pm.median_los_readmitted,\n  pm.median_los_not_readmitted\nFROM metrics m\nCROSS JOIN pivoted_medians pm;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword TO at [1:17]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword TO at [1:17]\n\nLocation: US\nJob ID: b365a186-f39b-4d92-a7f5-d3169e65c0c9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [81:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [81:26]\n\nLocation: US\nJob ID: 74189865-e586-4a7b-8515-226516477c83\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

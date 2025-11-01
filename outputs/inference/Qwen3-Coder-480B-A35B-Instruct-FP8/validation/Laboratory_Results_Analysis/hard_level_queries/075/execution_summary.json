@@ -1,0 +1,28 @@
+{
+  "query": "As a consultant for a 47\u2011year\u2011old man, among male inpatients aged 42\u201352 with DVT, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u226595th percentile report mortality, mean LOS, and compare critical lab rates to all inpatients.",
+  "final_sql": "WITH cohort_dvt AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n  ON\n    d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 42 AND 52\n    AND LOWER(di.long_title) LIKE '%deep vein thrombosis%'\n),\n\nlab_scores AS (\n  SELECT\n    c.hadm_id,\n    c.subject_id,\n    c.admittime,\n    l.itemid,\n    l.valuenum,\n    l.charttime,\n    DATETIME_DIFF(l.charttime, c.admittime, HOUR) AS delta_hours\n  FROM\n    cohort_dvt c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  ON\n    c.hadm_id = l.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d\n  ON\n    l.itemid = d.itemid\n  WHERE\n    l.valuenum IS NOT NULL\n    AND DATETIME_DIFF(l.charttime, c.admittime, HOUR) BETWEEN 0 AND 72\n    AND LOWER(d.label) IN ('wbc', 'sodium', 'potassium', 'bicarbonate', 'creatinine', 'chloride', 'glucose', 'hematocrit', 'platelet count')\n),\n\nlab_stats AS (\n  SELECT\n    hadm_id,\n    itemid,\n    AVG(valuenum) AS mean_val,\n    STDDEV(valuenum) AS stddev_val\n  FROM\n    lab_scores\n  GROUP BY\n    hadm_id, itemid\n  HAVING\n    AVG(valuenum) > 0\n),\n\ninstability_scores AS (\n  SELECT\n    hadm_id,\n    AVG(CASE WHEN mean_val > 0 THEN stddev_val / mean_val ELSE NULL END) AS instability_score\n  FROM\n    lab_stats\n  GROUP BY\n    hadm_id\n),\n\npercentile_95 AS (\n  SELECT\n    PERCENTILE_CONT(instability_score, 0.95) OVER() AS p95_score\n  FROM\n    instability_scores\n  LIMIT 1\n),\n\nhigh_instability_cohort AS (\n  SELECT\n    i.hadm_id,\n    i.instability_score,\n    c.hospital_expire_flag,\n    c.los_days\n  FROM\n    instability_scores i\n  JOIN\n    cohort_dvt c\n  ON\n    i.hadm_id = c.hadm_id\n  CROSS JOIN\n    percentile_95 p\n  WHERE\n    i.instability_score >= p.p95_score\n),\n\nall_labs AS (\n  SELECT\n    l.hadm_id,\n    l.itemid,\n    l.flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  WHERE\n    l.flag IN ('abnormal', 'critical')\n),\n\ncritical_labs_high AS (\n  SELECT\n    COUNT(DISTINCT a.itemid) AS critical_count,\n    COUNT(*) AS total_labs\n  FROM\n    high_instability_cohort h\n  JOIN\n    all_labs a\n  ON\n    h.hadm_id = a.hadm_id\n),\n\ncritical_labs_all AS (\n  SELECT\n    COUNT(DISTINCT itemid) AS critical_count,\n    COUNT(*) AS total_labs\n  FROM\n    all_labs\n)\n\nSELECT\n  'High Instability Cohort (>=95th percentile)' AS cohort,\n  COUNT(*) AS patient_count,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  AVG(los_days) AS mean_los_days,\n  (SELECT critical_count FROM critical_labs_high) / NULLIF((SELECT total_labs FROM critical_labs_high), 0) AS critical_lab_rate\nFROM\n  high_instability_cohort\n\nUNION ALL\n\nSELECT\n  'All Inpatients' AS cohort,\n  NULL AS patient_count,\n  NULL AS mortality_rate,\n  NULL AS mean_los_days,\n  (SELECT critical_count FROM critical_labs_all) / NULLIF((SELECT total_labs FROM critical_labs_all), 0) AS critical_lab_rate;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"*\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"*\" at [1:8]\n\nLocation: US\nJob ID: 9343a177-8695-4650-bf21-54c9483965ea\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \".\" at [1:22]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \".\" at [1:22]\n\nLocation: US\nJob ID: 66c6498e-ecec-4703-9097-3976849935ab\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

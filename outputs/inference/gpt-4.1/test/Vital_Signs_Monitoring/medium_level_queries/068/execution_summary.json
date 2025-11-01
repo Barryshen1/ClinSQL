@@ -1,0 +1,22 @@
+{
+  "query": "I have a 46-year-old female in ICU. Among female ICU patients aged 41\u201351, what are patient counts and stroke rates for each per-measurement MAP category: <65, 65\u201374, 75\u201384, \u226585 mmHg?",
+  "final_sql": "WITH map_items AS (\n  -- Identify MAP itemids\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%mean arterial pressure%'\n),\ncohort AS (\n  -- Female ICU patients aged 41\u201351\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 41 AND 51\n),\nmap_measurements AS (\n  -- MAP measurements per ICU stay, categorized\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    CASE\n      WHEN ce.valuenum < 65 THEN '<65'\n      WHEN ce.valuenum >= 65 AND ce.valuenum < 75 THEN '65\u201374'\n      WHEN ce.valuenum >= 75 AND ce.valuenum < 85 THEN '75\u201384'\n      WHEN ce.valuenum >= 85 THEN '\u226585'\n      ELSE NULL\n    END AS map_category\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.subject_id = ce.subject_id\n    AND c.stay_id = ce.stay_id\n  WHERE ce.itemid IN (SELECT itemid FROM map_items)\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN (\n      SELECT intime FROM `physionet-data.mimiciv_3_1_icu.icustays` WHERE stay_id = c.stay_id\n    ) AND (\n      SELECT outtime FROM `physionet-data.mimiciv_3_1_icu.icustays` WHERE stay_id = c.stay_id\n    )\n),\nstroke_patients AS (\n  -- Identify ICU stays with stroke diagnosis\n  SELECT DISTINCT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON c.hadm_id = d.hadm_id\n  WHERE (\n    -- ICD-10: I60-I64\n    (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^I6[0-4]'))\n    -- ICD-9: 430\u2013434, 436\n    OR (d.icd_version = 9 AND (\n      REGEXP_CONTAINS(d.icd_code, r'^430')\n      OR REGEXP_CONTAINS(d.icd_code, r'^431')\n      OR REGEXP_CONTAINS(d.icd_code, r'^432')\n      OR REGEXP_CONTAINS(d.icd_code, r'^433')\n      OR REGEXP_CONTAINS(d.icd_code, r'^434')\n      OR REGEXP_CONTAINS(d.icd_code, r'^436')\n    ))\n  )\n),\nmap_patient_categories AS (\n  -- For each ICU stay, which MAP categories did the patient have?\n  SELECT DISTINCT\n    subject_id,\n    hadm_id,\n    stay_id,\n    map_category\n  FROM map_measurements\n  WHERE map_category IS NOT NULL\n)\nSELECT\n  map_category,\n  COUNT(DISTINCT mpc.stay_id) AS patient_count,\n  COUNT(DISTINCT CASE WHEN sp.stay_id IS NOT NULL THEN mpc.stay_id END) AS stroke_count,\n  SAFE_DIVIDE(\n    COUNT(DISTINCT CASE WHEN sp.stay_id IS NOT NULL THEN mpc.stay_id END),\n    COUNT(DISTINCT mpc.stay_id)\n  ) AS stroke_rate\nFROM map_patient_categories mpc\nLEFT JOIN stroke_patients sp\n  ON mpc.stay_id = sp.stay_id\nGROUP BY map_category\nORDER BY\n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65\u201374' THEN 2\n    WHEN '75\u201384' THEN 3\n    WHEN '\u226585' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [79:18]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [79:18]\n\nLocation: US\nJob ID: c2eb24b0-7ccb-401d-80c8-af57ddac6937\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

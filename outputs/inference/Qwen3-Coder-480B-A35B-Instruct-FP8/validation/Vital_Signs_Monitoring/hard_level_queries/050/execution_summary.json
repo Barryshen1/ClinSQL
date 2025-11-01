@@ -1,0 +1,28 @@
+{
+  "query": "For a 57-year-old female ICU patient: among female ICU patients aged 52\u201362 who received renal replacement therapy, what percentile is a first\u201172\u2011hour vital-sign instability score of 65? Also report mean ICU length of stay and mortality for the top decile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.los,\n    icu.intime,\n    icu.outtime,\n    adm.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  USING\n    (hadm_id)\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n  ON\n    icu.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 52 AND 62\n),\n\n-- Identify RRT patients\nrrt_patients AS (\n  SELECT DISTINCT\n    ce.stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di\n  ON\n    ce.itemid = di.itemid\n  WHERE\n    LOWER(di.label) LIKE '%dialysis%'\n    OR LOWER(di.label) LIKE '%crrt%'\n    OR LOWER(di.label) LIKE '%renal replacement%'\n),\n\n-- Define vital signs of interest\nvitals AS (\n  SELECT\n    itemid,\n    label\n  FROM\n    `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    LOWER(label) IN ('heart rate', 'systolic bp', 'diastolic bp', 'respiratory rate', 'temperature f', 'temperature c', 'gcs')\n),\n\n-- Compute instability score: count abnormal vitals in first 72h\nabnormal_vitals AS (\n  SELECT\n    ce.stay_id,\n    COUNT(*) AS instability_score\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    vitals v\n  ON\n    ce.itemid = v.itemid\n  JOIN\n    cohort c\n  ON\n    ce.stay_id = c.stay_id\n  JOIN\n    rrt_patients r\n  ON\n    ce.stay_id = r.stay_id\n  WHERE\n    ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    AND (\n      (v.label = 'heart rate' AND (ce.valuenum < 50 OR ce.valuenum > 130))\n      OR (v.label = 'systolic bp' AND (ce.valuenum < 90 OR ce.valuenum > 180))\n      OR (v.label = 'diastolic bp' AND (ce.valuenum < 60 OR ce.valuenum > 110))\n      OR (v.label = 'respiratory rate' AND (ce.valuenum < 10 OR ce.valuenum > 25))\n      OR (v.label LIKE 'temperature%' AND (ce.valuenum < 36 OR ce.valuenum > 38.5))\n      OR (v.label = 'gcs' AND ce.valuenum < 15)\n    )\n  GROUP BY\n    ce.stay_id\n),\n\n-- Add scores to cohort\nscored_cohort AS (\n  SELECT\n    c.*,\n    COALESCE(v.instability_score, 0) AS instability_score\n  FROM\n    cohort c\n  JOIN\n    rrt_patients r\n  ON\n    c.stay_id = r.stay_id\n  LEFT JOIN\n    abnormal_vitals v\n  ON\n    c.stay_id = v.stay_id\n),\n\n-- Percentile of score = 65\npercentile_65 AS (\n  SELECT\n    PERCENT_RANK() OVER (ORDER BY instability_score) * 100 AS percentile_rank_65\n  FROM\n    scored_cohort\n  WHERE\n    instability_score <= 65\n  ORDER BY\n    instability_score DESC\n  LIMIT 1\n),\n\n-- Top decile analysis\ndeciles AS (\n  SELECT\n    *,\n    NTILE(10) OVER (ORDER BY instability_score DESC) AS decile\n  FROM\n    scored_cohort\n),\n\ntop_decile_stats AS (\n  SELECT\n    AVG(los) AS mean_los_top_decile,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_top_decile\n  FROM\n    deciles\n  WHERE\n    decile = 1\n)\n\n-- Final output\nSELECT\n  (SELECT percentile_rank_65 FROM percentile_65) AS percentile_rank_of_65,\n  (SELECT mean_los_top_decile FROM top_decile_stats) AS mean_los_top_decile,\n  (SELECT mortality_top_decile FROM top_decile_stats) AS mortality_top_decile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column subject_id in USING clause is ambiguous on left side of join at [19:6]; reason: invalidQuery, location: query, message: Column subject_id in USING clause is ambiguous on left side of join at [19:6]\n\nLocation: US\nJob ID: bf21bb83-a103-4c56-ab6f-24eede4e50ca\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name instability_score is ambiguous at [104:35]; reason: invalidQuery, location: query, message: Column name instability_score is ambiguous at [104:35]\n\nLocation: US\nJob ID: a628d9da-e0e6-40cb-b5c1-51bc3618fb9c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

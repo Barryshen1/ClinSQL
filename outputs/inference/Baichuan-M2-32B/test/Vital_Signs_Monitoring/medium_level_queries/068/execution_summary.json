@@ -1,0 +1,17 @@
+{
+  "query": "I have a 46-year-old female in ICU. Among female ICU patients aged 41\u201351, what are patient counts and stroke rates for each per-measurement MAP category: <65, 65\u201374, 75\u201384, \u226585 mmHg?",
+  "final_sql": "WITH\n  patients_filtered AS (\n    SELECT subject_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE gender = 'F'\n      AND anchor_age BETWEEN 41 AND 51\n  ),\n  icu_stays AS (\n    SELECT \n      i.subject_id, \n      i.hadm_id, \n      i.intime, \n      i.outtime\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN patients_filtered p ON i.subject_id = p.subject_id\n  ),\n  map_measurements AS (\n    SELECT \n      m.subject_id,\n      m.hadm_id,\n      m.valuenum AS map_value\n    FROM `physionet-data.mimiciv_3_1_icu.chartevents` m\n    JOIN icu_stays i ON m.subject_id = i.subject_id\n      AND m.hadm_id = i.hadm_id\n      AND m.charttime BETWEEN i.intime AND i.outtime\n    WHERE m.itemid = 456  -- MAP itemid\n      AND m.valuenum IS NOT NULL\n      AND m.valuenum > 20 AND m.valuenum < 200  -- valid MAP range\n  ),\n  stroke_flags AS (\n    SELECT \n      p.subject_id,\n      MAX(CASE WHEN d.icd_code BETWEEN 'I60' AND 'I699' THEN 1 ELSE 0 END) AS has_stroke\n    FROM patients_filtered p\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      ON p.subject_id = d.subject_id\n      AND d.icd_version = 10\n    GROUP BY p.subject_id\n  ),\n  patient_map_categories AS (\n    SELECT \n      mm.subject_id,\n      mm.hadm_id,\n      CASE \n        WHEN mm.map_value < 65 THEN '<65'\n        WHEN mm.map_value BETWEEN 65 AND 74 THEN '65-74'\n        WHEN mm.map_value BETWEEN 75 AND 84 THEN '75-84'\n        WHEN mm.map_value >= 85 THEN '>=85'\n      END AS map_category\n    FROM map_measurements mm\n  ),\n  distinct_patients_per_category AS (\n    SELECT \n      p.subject_id,\n      p.map_category,\n      s.has_stroke\n    FROM patient_map_categories p\n    JOIN stroke_flags s ON p.subject_id = s.subject_id\n    GROUP BY p.subject_id, p.map_category, s.has_stroke\n  )\nSELECT \n  map_category,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  ROUND(100.0 * SUM(has_stroke) / COUNT(DISTINCT subject_id), 2) AS stroke_rate_percent\nFROM distinct_patients_per_category\nGROUP BY map_category\nORDER BY \n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65-74' THEN 2\n    WHEN '75-84' THEN 3\n    WHEN '>=85' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

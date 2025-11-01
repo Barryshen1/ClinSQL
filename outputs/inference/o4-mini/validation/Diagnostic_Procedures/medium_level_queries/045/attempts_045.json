@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH dvt_admissions AS (\n  -- Female patients aged 78-88 with a DVT diagnosis\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.hadm_id = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 78 AND 88\n    AND LOWER(dd.long_title) LIKE '%thrombosis%'\n    -- Only consider admissions with LOS between 1 and 8 days\n    AND DATE_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 8\n),\ndiag_counts AS (\n  -- Count noninvasive diagnostics per admission\n  SELECT\n    he.subject_id,\n    he.hadm_id,\n    COUNT(*) AS diag_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents` he\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` hc\n      ON he.hcpcs_cd = hc.code\n  WHERE\n    -- Filter for common noninvasive venous studies\n    LOWER(hc.long_description) LIKE '%ultrasound%'\n    OR LOWER(hc.long_description) LIKE '%duplex%'\n    OR LOWER(hc.long_description) LIKE '%venous%'\n  GROUP BY\n    he.subject_id,\n    he.hadm_id\n),\ncohort_with_counts AS (\n  -- Combine admissions, ICU flag, LOS group, and diag counts\n  SELECT\n    da.subject_id,\n    da.hadm_id,\n    da.los,\n    CASE\n      WHEN ds.hadm_id IS NOT NULL THEN 'ICU'\n      ELSE 'No ICU'\n    END AS icu_flag,\n    CASE\n      WHEN da.los BETWEEN 1 AND 4 THEN '1-4'\n      ELSE '5-8'\n    END AS los_group,\n    COALESCE(dc.diag_count, 0) AS diag_count\n  FROM\n    dvt_admissions da\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` ds\n      ON da.hadm_id = ds.hadm_id\n    LEFT JOIN diag_counts dc\n      ON da.hadm_id = dc.hadm_id\n)\n-- Final aggregation\nSELECT\n  icu_flag,\n  los_group,\n  COUNT(*) AS admissions,\n  ROUND(AVG(diag_count), 2) AS mean_noninvasive_diag_per_admission\nFROM\n  cohort_with_counts\nGROUP BY\n  icu_flag,\n  los_group\nORDER BY\n  icu_flag,\n  los_group;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

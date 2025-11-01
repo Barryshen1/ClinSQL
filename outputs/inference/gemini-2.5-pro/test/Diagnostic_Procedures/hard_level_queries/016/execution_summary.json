@@ -1,0 +1,16 @@
+{
+  "query": "I have a 93-year-old man. Among male patients aged 88\u201398 on their first ICU stay with pneumonia, stratify first 72-hour diagnostic procedure counts into quintiles and report average procedure count, average ICU LOS (days), and in-hospital mortality% per quintile.",
+  "final_sql": "WITH\n  pneumonia_admissions AS (\n    -- Step 1: Identify all hospital admissions with a pneumonia diagnosis.\n    SELECT DISTINCT\n      hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx\n      ON dx.icd_code = d_dx.icd_code\n      AND dx.icd_version = d_dx.icd_version\n    WHERE\n      LOWER(d_dx.long_title) LIKE '%pneumonia%'\n  ),\n\n  first_icu_stays AS (\n    -- Find the first ICU stay for every patient in the database.\n    SELECT\n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      los,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ),\n\n  patient_cohort AS (\n    -- Step 2: Define the patient cohort: Male, 88-98 years, first ICU stay, with pneumonia.\n    SELECT\n      p.subject_id,\n      a.hadm_id,\n      icu.stay_id,\n      icu.intime,\n      icu.los,\n      a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    INNER JOIN first_icu_stays AS icu\n      ON p.subject_id = icu.subject_id AND icu.rn = 1\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n      ON icu.hadm_id = a.hadm_id\n    INNER JOIN pneumonia_admissions AS pa\n      ON a.hadm_id = pa.hadm_id\n    WHERE\n      p.gender = 'M'\n      AND p.anchor_age BETWEEN 88 AND 98\n  ),\n\n  procedures_counted AS (\n    -- Step 3: Count procedures for each patient in the cohort within the first 72 hours of ICU admission.\n    SELECT\n      c.subject_id,\n      c.los,\n      c.hospital_expire_flag,\n      COUNT(proc.icd_code) AS procedure_count\n    FROM patient_cohort AS c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n      ON c.hadm_id = proc.hadm_id\n      -- Filter for procedures within the first 3 days of the ICU stay.\n      AND proc.chartdate >= DATE(c.intime)\n      AND proc.chartdate < DATE(TIMESTAMP_ADD(c.intime, INTERVAL 72 HOUR))\n    GROUP BY\n      c.subject_id,\n      c.los,\n      c.hospital_expire_flag\n  ),\n\n  quintiled_patients AS (\n    -- Step 4: Stratify patients into quintiles based on their procedure count.\n    SELECT\n      procedure_count,\n      los,\n      hospital_expire_flag,\n      NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n    FROM procedures_counted\n  )\n\n-- Final Step: Aggregate metrics per quintile.\nSELECT\n  quintile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(los) AS avg_icu_los_days,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_percent\nFROM quintiled_patients\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

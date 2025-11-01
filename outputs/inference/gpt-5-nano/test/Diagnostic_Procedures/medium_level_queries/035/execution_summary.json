@@ -1,0 +1,16 @@
+{
+  "query": "Consult: For my 48\u2011year\u2011old male, among AKI admissions aged 43\u201353, what are patient counts and mean MRI/CTs per admission for LOS 1\u20134 vs 5\u20137 days, stratified by primary vs secondary AKI?",
+  "final_sql": "WITH eligible AS (\n  SELECT a.hadm_id, a.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n),\n\n-- 2) Identify AKI presence per admission (primary vs any AKI)\naki_flags AS (\n  SELECT e.hadm_id,\n         MAX(CASE\n               WHEN di.seq_num = 1\n                    AND ((di.icd_version = 9 AND di.icd_code LIKE '584%')\n                         OR (di.icd_version = 10 AND di.icd_code LIKE 'N17%'))\n               THEN 1 ELSE 0 END) AS primary_aki_present,\n         MAX(CASE\n               WHEN ((di.icd_version = 9 AND di.icd_code LIKE '584%')\n                     OR (di.icd_version = 10 AND di.icd_code LIKE 'N17%'))\n               THEN 1 ELSE 0 END) AS any_aki_present\n  FROM eligible AS e\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = e.subject_id\n   AND di.hadm_id = e.hadm_id\n  GROUP BY e.hadm_id\n),\n\n-- 3) Build AKI cohort with LOS\naki_cohort AS (\n  SELECT a.hadm_id, a.subject_id,\n         CASE\n           WHEN af.primary_aki_present = 1 THEN 'Primary AKI'\n           WHEN af.any_aki_present = 1 THEN 'Secondary AKI'\n         END AS aki_group,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM eligible AS e\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.hadm_id = e.hadm_id\n   AND a.subject_id = e.subject_id\n  JOIN aki_flags AS af\n    ON af.hadm_id = a.hadm_id\n  WHERE af.primary_aki_present = 1 OR af.any_aki_present = 1\n),\n\n-- 4) Bucket LOS and keep only 1-4 or 5-7 days\ncohort AS (\n  SELECT hadm_id, subject_id, aki_group, los_days,\n         CASE\n           WHEN los_days BETWEEN 1 AND 4 THEN '1-4'\n           WHEN los_days BETWEEN 5 AND 7 THEN '5-7'\n         END AS los_bucket\n  FROM aki_cohort\n  WHERE los_days BETWEEN 1 AND 7\n    AND aki_group IS NOT NULL\n),\n\n-- 5) MRI/CT counts per admission from ICU procedureevents\nmri_counts AS (\n  SELECT pe.hadm_id, COUNT(*) AS mri_cts\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON di.itemid = pe.itemid\n  JOIN cohort AS c\n    ON c.hadm_id = pe.hadm_id\n  WHERE LOWER(di.label) LIKE '%mri%'\n     OR LOWER(di.label) LIKE '%ct%'\n  GROUP BY pe.hadm_id\n)\n\n-- 6) Final aggregation by AKI group and LOS bucket\nSELECT c.aki_group,\n       c.los_bucket,\n       COUNT(DISTINCT c.hadm_id) AS n_admissions,\n       COUNT(DISTINCT c.subject_id) AS n_patients,\n       IFNULL(AVG(m.mri_cts), 0) AS mean_mri_cts_per_admission\nFROM cohort AS c\nLEFT JOIN mri_counts AS m\n  ON m.hadm_id = c.hadm_id\nGROUP BY c.aki_group, c.los_bucket\nORDER BY c.aki_group, c.los_bucket;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

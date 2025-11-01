@@ -1,0 +1,16 @@
+{
+  "query": "For my 53-year-old male with sepsis (no shock), among men 48\u201358, give patient counts and mean ultrasounds/admission by LOS (1\u20134 vs 5\u20138 days), stratified by ICU vs no ICU.",
+  "final_sql": "WITH sepsis_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%sepsis%'\n    AND LOWER(long_title) NOT LIKE '%shock%'\n    AND LOWER(long_title) NOT LIKE '%severe sepsis%'\n),\nshock_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code IN ('R65.20', 'R65.21')\n    OR LOWER(long_title) LIKE '%septic shock%'\n    OR LOWER(long_title) LIKE '%severe sepsis%'\n),\npatient_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END AS had_icu,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON a.hadm_id = i.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n),\nsepsis_admissions AS (\n  SELECT pa.*\n  FROM patient_admissions pa\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN sepsis_codes sc ON di.icd_code = sc.icd_code AND di.icd_version = 10\n    WHERE di.hadm_id = pa.hadm_id\n  )\n  AND NOT EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN shock_codes sh ON di.icd_code = sh.icd_code AND di.icd_version = 10\n    WHERE di.hadm_id = pa.hadm_id\n  )\n),\nultrasound_procs AS (\n  SELECT pe.hadm_id, COUNT(*) AS ultrasound_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON pe.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%ultrasound%'\n    OR LOWER(di.category) LIKE '%ultrasound%'\n  GROUP BY pe.hadm_id\n),\nadmissions_with_us AS (\n  SELECT\n    sa.hadm_id,\n    sa.los_days,\n    sa.had_icu,\n    COALESCE(up.ultrasound_count, 0) AS ultrasound_count\n  FROM sepsis_admissions sa\n  LEFT JOIN ultrasound_procs up ON sa.hadm_id = up.hadm_id\n  WHERE sa.los_days BETWEEN 1 AND 8\n),\nstratified AS (\n  SELECT\n    had_icu,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 8 THEN '5-8 days'\n    END AS los_group,\n    ultrasound_count\n  FROM admissions_with_us\n)\nSELECT\n  had_icu,\n  los_group,\n  COUNT(*) AS patient_count,\n  AVG(ultrasound_count) AS mean_ultrasounds_per_admission\nFROM stratified\nGROUP BY had_icu, los_group\nORDER BY had_icu, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

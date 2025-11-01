@@ -1,0 +1,16 @@
+{
+  "query": "I have an 85-year-old female ICU patient. Among female ICU stays aged 80\u201390, what percentile is an ICU stay-average SpO2 of 88% (i.e., percent of stays with average \u226488)?",
+  "final_sql": "WITH spo2_items AS (\n  -- Identify itemids likely to represent SpO2 / pulse oximetry\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%spo2%'\n     OR LOWER(label) LIKE '%o2 sat%'\n     OR LOWER(label) LIKE '%oxygen saturation%'\n     OR LOWER(label) LIKE '%oximeter%'\n     OR LOWER(label) LIKE '%pulse ox%'\n),\nspo2_events AS (\n  -- Pull numeric SpO2 measurements from ICU chartevents for those itemids\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN spo2_items di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n    -- Restrict to plausible SpO2 range to reduce erroneous values\n    AND ce.valuenum BETWEEN 50 AND 100\n    -- Ensure the event is tied to an ICU stay\n    AND ce.stay_id IS NOT NULL\n),\nper_stay_avg AS (\n  -- Compute stay-level average SpO2 (only stays with at least one valid measurement)\n  SELECT\n    stay_id,\n    subject_id,\n    hadm_id,\n    AVG(valuenum) AS avg_spo2,\n    COUNT(*) AS n_obs\n  FROM spo2_events\n  GROUP BY stay_id, subject_id, hadm_id\n),\ncohort_stays AS (\n  -- Female patients aged 80-90 and their ICU stays\n  SELECT\n    icu.stay_id,\n    icu.subject_id,\n    icu.hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 80 AND 90\n)\n-- Calculate the percentile: percent of cohort stays with avg_spo2 <= 88\nSELECT\n  COUNT(*) AS total_stays_with_spo2,                               -- denominator\n  SUM(CASE WHEN psa.avg_spo2 <= 88 THEN 1 ELSE 0 END) AS num_leq_88, -- numerator\n  ROUND(\n    SAFE_DIVIDE(\n      SUM(CASE WHEN psa.avg_spo2 <= 88 THEN 1 ELSE 0 END),\n      COUNT(*)\n    ) * 100.0,\n    2\n  ) AS pct_stays_avg_spo2_leq_88\nFROM cohort_stays cs\nJOIN per_stay_avg psa\n  ON cs.stay_id = psa.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

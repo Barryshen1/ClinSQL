@@ -1,0 +1,22 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH index_admissions AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    p.anchor_age,\n    LOWER(adm.insurance) AS insurance,\n    LOWER(adm.admission_location) AS admission_location,\n    -- LOS in fractional days\n    TIMESTAMP_DIFF(adm.dischtime, adm.admittime, MINUTE) / 1440.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      USING(subject_id)\n    -- principal diagnosis (seq_num = 1)\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      ON adm.hadm_id = diag.hadm_id AND diag.seq_num = 1\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n      ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND LOWER(adm.insurance) LIKE '%medicare%'\n    AND (\n      LOWER(adm.admission_location) LIKE '%emergency%'\n      OR LOWER(adm.admission_location) LIKE '%ed%'\n    )\n    -- Text-based filter for principal lower GI bleeding diagnoses.\n    AND LOWER(d.long_title) LIKE '%gastrointestinal%hemorrhage%'\n    AND (\n      LOWER(d.long_title) LIKE '%lower%'\n      OR LOWER(d.long_title) LIKE '%rectal%'\n      OR LOWER(d.long_title) LIKE '%colon%'\n      OR LOWER(d.long_title) LIKE '%colonic%'\n      OR LOWER(d.long_title) LIKE '%sigmoid%'\n    )\n),\n\n-- Determine if each index admission has a readmission within 30 days after discharge\nindex_with_readmit_flag AS (\n  SELECT\n    ia.*,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = ia.subject_id\n        AND a2.admittime > ia.dischtime\n        AND a2.admittime <= TIMESTAMP_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmit_30_flag\n  FROM index_admissions ia\n)\n\n-- Final aggregations:\nSELECT\n  'Overall' AS group_label,\n  COUNT(*) AS n_index_admissions,\n  SUM(readmit_30_flag) AS n_readmitted_within_30d,\n  SAFE_DIVIDE(100.0 * SUM(readmit_30_flag), COUNT(*)) AS pct_readmitted_30d,\n  -- overall median LOS (approx)\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days_overall,\n  SAFE_DIVIDE(100.0 * SUM(CASE WHEN los_days > 6 THEN 1 ELSE 0 END), COUNT(*)) AS pct_los_gt_6d_overall\nFROM index_with_readmit_flag\n\nUNION ALL\n\nSELECT\n  CASE WHEN readmit_30_flag = 1 THEN 'Readmitted within 30 days' ELSE 'Not readmitted within 30 days' END AS group_label,\n  COUNT(*) AS n_index_admissions,\n  SUM(readmit_30_flag) AS n_readmitted_within_30d,\n  SAFE_DIVIDE(100.0 * SUM(readmit_30_flag), COUNT(*)) AS pct_readmitted_30d,\n  -- median LOS per group (approx)\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days_overall,\n  SAFE_DIVIDE(100.0 * SUM(CASE WHEN los_days > 6 THEN 1 ELSE 0 END), COUNT(*)) AS pct_los_gt_6d_overall\nFROM index_with_readmit_flag\nGROUP BY readmit_30_flag\nORDER BY group_label DESC;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"lower\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"lower\" at [1:16]\n\nLocation: US\nJob ID: 52681224-0e01-409a-828c-5a24534091de\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

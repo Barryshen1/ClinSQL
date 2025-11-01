@@ -1,0 +1,29 @@
+{
+  "query": "For my 67-year-old male patient, what's the interquartile range of the first recorded SpO2 among males aged 62\u201372?",
+  "final_sql": "WITH patient_icu_stays AS (\n    SELECT \n        p.subject_id,\n        i.stay_id,\n        i.intime,\n        i.outtime,\n        (p.anchor_year - p.anchor_age) AS birth_year,\n        EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age) AS age_at_icu\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n        ON i.subject_id = p.subject_id\n    WHERE p.gender = 'M'\n      AND i.intime IS NOT NULL\n      AND i.outtime IS NOT NULL\n      AND p.anchor_year IS NOT NULL\n      AND p.anchor_age IS NOT NULL\n),\nfirst_icu_stays AS (\n    SELECT \n        subject_id,\n        stay_id,\n        intime,\n        outtime,\n        age_at_icu\n    FROM (\n        SELECT \n            *,\n            ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n        FROM patient_icu_stays\n        WHERE age_at_icu BETWEEN 62 AND 72\n    )\n    WHERE rn = 1\n),\nspo2_measurements AS (\n    SELECT \n        f.subject_id,\n        f.stay_id,\n        f.intime,\n        f.outtime,\n        f.age_at_icu,\n        c.charttime,\n        c.valuenum AS spo2_value\n    FROM first_icu_stays f\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c \n        ON f.stay_id = c.stay_id\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` d \n        ON c.itemid = d.itemid\n        AND d.category = 'Vitals'\n        AND d.label LIKE '%SpO2%'\n    WHERE c.charttime BETWEEN f.intime AND f.outtime\n      AND c.valuenum IS NOT NULL\n      AND c.valuenum BETWEEN 0 AND 100\n),\nfirst_spo2_per_stay AS (\n    SELECT \n        spo2_value\n    FROM (\n        SELECT \n            *,\n            ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY charttime) AS rn\n        FROM spo2_measurements\n    )\n    WHERE rn = 1\n)\nSELECT \n    APPROX_QUANTILES(spo2_value, 4)[SAFE_OFFSET(3)] - APPROX_QUANTILES(spo2_value, 4)[SAFE_OFFSET(1)] AS iqr\nFROM first_spo2_per_stay;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got string literal 'Vitals' at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got string literal 'Vitals' at [1:15]\n\nLocation: US\nJob ID: b8633419-ca6f-478c-88bd-47064efe9816\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: c at [60:73]; reason: invalidQuery, location: query, message: Unrecognized name: c at [60:73]\n\nLocation: US\nJob ID: 64fec394-2b57-4272-b84b-9be54b7e2efc\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

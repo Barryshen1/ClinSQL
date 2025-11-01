@@ -1,0 +1,29 @@
+{
+  "query": "I have a 63\u2011year\u2011old man admitted for COPD exacerbation. Among male patients 58\u201368, stratified into tertiles by medication complexity during the first 72h, report for each tertile: n, min/max and mean complexity score, mean LOS, mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.`admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.`patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.`diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 58 AND 68\n    AND d.seq_num = 1\n    AND d.icd_version = 10\n    AND d.icd_code LIKE 'J44.%'\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.dischtime > a.admittime\n    AND p.anchor_year IS NOT NULL\n    AND p.anchor_age IS NOT NULL\n),\nmedication_complexity AS (\n  SELECT\n    c.hadm_id,\n    COUNT(DISTINCT pr.formulary_drug_cd) AS complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.`prescriptions` pr\n    ON c.subject_id = pr.subject_id\n    AND c.hadm_id = pr.hadm_id\n    AND pr.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.hadm_id\n),\nnext_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime, hadm_id) AS next_admittime\n  FROM `physionet-data.mimiciv_3_1_hosp`.`admissions`\n),\nreadmission_flags AS (\n  SELECT\n    c.hadm_id,\n    c.subject_id,\n    c.dischtime,\n    CASE \n      WHEN na.next_admittime IS NOT NULL \n        AND na.next_admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n      THEN 1 \n      ELSE 0 \n    END AS readmitted\n  FROM cohort c\n  LEFT JOIN next_admissions na\n    ON c.subject_id = na.subject_id AND c.hadm_id = na.hadm_id\n),\ncombined AS (\n  SELECT\n    c.hadm_id,\n    c.hospital_expire_flag,\n    COALESCE(mc.complexity_score, 0) AS complexity_score,\n    r.readmitted,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, SECOND) / 86400.0 AS los_days\n  FROM cohort c\n  INNER JOIN medication_complexity mc ON c.hadm_id = mc.hadm_id\n  INNER JOIN readmission_flags r ON c.hadm_id = r.hadm_id\n),\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM combined\n)\nSELECT\n  tertile,\n  COUNT(*) AS n,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  ROUND(AVG(complexity_score), 2) AS mean_complexity,\n  ROUND(AVG(los_days), 2) AS mean_los,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_percent,\n  ROUND(AVG(readmitted) * 100, 2) AS readmission_30d_percent\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"lower\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"lower\" at [1:12]\n\nLocation: US\nJob ID: b0dff53f-88a2-4f22-ae35-bf13622ab12e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXTRACT does not support arguments of type: INTERVAL at [66:25]; reason: invalidQuery, location: query, message: EXTRACT does not support arguments of type: INTERVAL at [66:25]\n\nLocation: US\nJob ID: c23b8473-590b-4224-bca0-a7dc52129cb8\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "89-year-old male ICU patient with ischemic stroke: among male ICU patients aged 84\u201394 with ischemic stroke, what percentile is a first 72 hours vital-sign instability score of 80? Also report ICU LOS and mortality for the top instability quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    s.stay_id,\n    s.subject_id,\n    s.hadm_id,\n    s.intime,\n    s.outtime,\n    s.los AS icu_los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON s.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON s.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM s.intime) - p.anchor_year + p.anchor_age) BETWEEN 84 AND 94\n    AND (\n      (dd.icd_version = 10 AND dd.icd_code LIKE 'I63%') OR\n      (dd.icd_version = 9 AND dd.icd_code LIKE '434%')\n    )\n),\nvital_signs_abnormal AS (\n  SELECT\n    ce.stay_id,\n    CASE\n      WHEN di.label LIKE '%heart rate%' AND (ce.valuenum < 50 OR ce.valuenum > 100) THEN 1\n      WHEN di.label LIKE '%systolic%' AND (ce.valuenum < 90 OR ce.valuenum > 180) THEN 1\n      WHEN di.label LIKE '%resp%' AND (ce.valuenum < 10 OR ce.valuenum > 25) THEN 1\n      WHEN LOWER(di.label) LIKE '%spo2%' AND ce.valuenum < 92 THEN 1\n      WHEN LOWER(di.label) LIKE '%temp%' AND (ce.valuenum < 36 OR ce.valuenum > 38) THEN 1\n      ELSE 0\n    END AS is_abnormal\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  INNER JOIN cohort c\n    ON ce.stay_id = c.stay_id\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime <= DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    AND di.category = 'Vital Signs'\n    AND ce.valuenum IS NOT NULL\n),\ninstability_score AS (\n  SELECT\n    stay_id,\n    SUM(is_abnormal) AS instability_score\n  FROM vital_signs_abnormal\n  GROUP BY stay_id\n),\nscore_percentiles AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 1000) AS quantiles\n  FROM instability_score\n),\npercentile_of_80 AS (\n  SELECT\n    quantiles[OFFSET(750)] AS q75,\n    (SELECT APPROX_COUNT_DISTINCT(instability_score) FROM instability_score WHERE instability_score <= 80) * 1.0 / COUNT(*) AS percentile_of_80\n  FROM score_percentiles\n),\ntop_quartile_outcomes AS (\n  SELECT\n    AVG(c.icu_los) AS avg_icu_los_top_quartile,\n    AVG(CAST(c.hospital_expire_flag AS FLOAT64)) AS mortality_rate_top_quartile\n  FROM cohort c\n  INNER JOIN instability_score s ON c.stay_id = s.stay_id\n  CROSS JOIN percentile_of_80 p\n  WHERE s.instability_score >= p.q75\n)\nSELECT\n  (SELECT percentile_of_80 FROM percentile_of_80) AS percentile_of_score_80,\n  (SELECT avg_icu_los_top_quartile FROM top_quartile_outcomes) AS avg_icu_los_top_quartile,\n  (SELECT mortality_rate_top_quartile FROM top_quartile_outcomes) AS mortality_rate_top_quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, instability_score INT64> does not at [56:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, instability_score INT64> does not at [56:22]\n\nLocation: US\nJob ID: 4435759a-697b-4a48-89ac-b893334644bd\n",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:15]\n\nLocation: US\nJob ID: 9039ce18-6142-4af9-b021-c6e97cb31562\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Ordering by expressions of type STRUCT is not allowed at [57:35]; reason: invalidQuery, location: query, message: Ordering by expressions of type STRUCT is not allowed at [57:35]\n\nLocation: US\nJob ID: 71842e02-2dba-4016-b876-dd3af0639c90\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, instability_score INT64> does not at [56:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, instability_score INT64> does not at [56:22]\n\nLocation: US\nJob ID: 4435759a-697b-4a48-89ac-b893334644bd\n"
+    }
+  ]
+}

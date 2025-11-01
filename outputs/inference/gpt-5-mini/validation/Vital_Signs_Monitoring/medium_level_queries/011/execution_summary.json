@@ -1,0 +1,16 @@
+{
+  "query": "I have a 59-year-old man. Among male ICU patients 54\u201364, categorize per-stay average RR during first 48 hours as <12, 12\u201320, 21\u201329, \u226530 and give n, mean, median, IQR.",
+  "final_sql": "WITH rr_itemids AS (\n  SELECT itemid, label, abbreviation\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%respirat%'  -- captures \"Respiratory Rate\", \"Resp Rate\", etc.\n     OR LOWER(label) LIKE '%resp rate%'\n     OR LOWER(abbreviation) = 'rr'\n),\n\nrr_events AS (\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN rr_itemids d ON ce.itemid = d.itemid\n  WHERE ce.valuenum IS NOT NULL\n),\n\n-- RR measurements that fall within the first 48 hours of the ICU stay\nfirst48_rr AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    re.charttime,\n    re.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN rr_events re\n    ON re.stay_id = s.stay_id\n   AND re.subject_id = s.subject_id\n   AND re.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 48 HOUR)\n),\n\n-- Per-stay average RR (only stays with at least one RR in first 48h)\nper_stay_avg AS (\n  SELECT\n    stay_id,\n    subject_id,\n    hadm_id,\n    AVG(valuenum) AS avg_rr\n  FROM first48_rr\n  GROUP BY stay_id, subject_id, hadm_id\n),\n\n-- Restrict to male patients aged 54-64 (inclusive)\neligible_stays AS (\n  SELECT psa.*\n  FROM per_stay_avg psa\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON psa.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n)\n\nSELECT\n  bin,\n  COUNT(*) AS n_stays,\n  ROUND(AVG(avg_rr), 2) AS mean_avg_rr,\n  ROUND( (APPROX_QUANTILES(avg_rr, 100))[OFFSET(50)], 2) AS median_avg_rr,\n  ROUND( (APPROX_QUANTILES(avg_rr, 100))[OFFSET(25)], 2) AS q1_avg_rr,\n  ROUND( (APPROX_QUANTILES(avg_rr, 100))[OFFSET(75)], 2) AS q3_avg_rr,\n  ROUND(\n    (APPROX_QUANTILES(avg_rr, 100))[OFFSET(75)]\n    - (APPROX_QUANTILES(avg_rr, 100))[OFFSET(25)]\n  , 2) AS iqr_avg_rr\nFROM (\n  SELECT\n    *,\n    CASE\n      WHEN avg_rr < 12 THEN '<12'\n      WHEN avg_rr >= 12 AND avg_rr < 21 THEN '12-20'\n      WHEN avg_rr >= 21 AND avg_rr < 30 THEN '21-29'\n      ELSE '>=30'\n    END AS bin,\n    CASE\n      WHEN avg_rr < 12 THEN 1\n      WHEN avg_rr >= 12 AND avg_rr < 21 THEN 2\n      WHEN avg_rr >= 21 AND avg_rr < 30 THEN 3\n      ELSE 4\n    END AS bin_order\n  FROM eligible_stays\n)\nGROUP BY bin, bin_order\nORDER BY bin_order;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

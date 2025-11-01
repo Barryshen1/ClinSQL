@@ -1,0 +1,16 @@
+{
+  "query": "I have a 52-year-old male to evaluate. In males 47\u201357 admitted for ischemic heart disease whose first Troponin\u2011T exceeded the 99th percentile (>0.014 ng/mL), what are the median and IQR?",
+  "final_sql": "WITH ischemic_hd_admissions AS (\n  -- Get admissions for males aged 47-57 with ischemic heart disease\n  SELECT\n    adm.subject_id,\n    adm.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions AS adm\n    INNER JOIN physionet-data.mimiciv_3_1_hosp.patients AS pat\n      ON adm.subject_id = pat.subject_id\n    INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd AS diag\n      ON adm.hadm_id = diag.hadm_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 47 AND 57\n    AND (\n      -- ICD-10: I20-I25 (ischemic heart disease)\n      (diag.icd_version = 10 AND REGEXP_CONTAINS(diag.icd_code, r'^I2[0-5]'))\n      -- ICD-9: 410-414 (ischemic heart disease)\n      OR (diag.icd_version = 9 AND REGEXP_CONTAINS(diag.icd_code, r'^41[0-4]'))\n    )\n),\ntroponin_t_items AS (\n  -- Get itemids for Troponin T\n  SELECT itemid\n  FROM physionet-data.mimiciv_3_1_hosp.d_labitems\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\nfirst_troponin_t AS (\n  -- For each qualifying admission, get the first Troponin T value\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum\n  FROM\n    physionet-data.mimiciv_3_1_hosp.labevents AS l\n    INNER JOIN troponin_t_items AS tti\n      ON l.itemid = tti.itemid\n    INNER JOIN ischemic_hd_admissions AS adm\n      ON l.subject_id = adm.subject_id AND l.hadm_id = adm.hadm_id\n  WHERE\n    l.valuenum IS NOT NULL\n),\nfirst_troponin_t_per_admission AS (\n  -- Get only the first Troponin T per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    charttime,\n    valuenum,\n    ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n  FROM first_troponin_t\n),\ntroponin_t_above_99th AS (\n  -- Only admissions where first Troponin T > 0.014 ng/mL\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum\n  FROM first_troponin_t_per_admission\n  WHERE rn = 1 AND valuenum > 0.014\n)\nSELECT\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(2)] AS median,\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(1)] AS q1,\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(3)] AS q3\nFROM troponin_t_above_99th\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

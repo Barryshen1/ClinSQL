@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating an 89-year-old woman. Among female patients aged 84\u201394 admitted with ACS whose initial Troponin I exceeded the 99th percentile ULN, report counts and mean, median, IQR.",
+  "final_sql": "WITH patients_with_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.admissions a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 84 AND 94\n),\nacs_admissions AS (\n  SELECT\n    pw.age_at_admit,\n    pw.hadm_id\n  FROM\n    patients_with_age pw\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  ON\n    pw.hadm_id = di.hadm_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n  ON\n    di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%' OR d.icd_code = 'I200')\n),\ntroponin_i_labevents AS (\n  SELECT\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp`.d_labitems dl\n  ON\n    le.itemid = dl.itemid\n  WHERE\n    LOWER(dl.label) = 'troponin i'\n    AND le.valuenum IS NOT NULL\n),\nfirst_troponin_i AS (\n  SELECT\n    hadm_id,\n    valuenum AS first_troponin_i\n  FROM\n    troponin_i_labevents\n  WHERE\n    rn = 1\n),\nacs_with_first_troponin AS (\n  SELECT\n    a.hadm_id,\n    a.age_at_admit,\n    f.first_troponin_i\n  FROM\n    acs_admissions a\n  INNER JOIN\n    first_troponin_i f\n  ON\n    a.hadm_id = f.hadm_id\n  WHERE\n    f.first_troponin_i > 0.04  -- Exceeds 99th percentile ULN\n)\nSELECT\n  COUNT(*) AS count_patients,\n  AVG(first_troponin_i) AS mean_troponin_i,\n  APPROX_QUANTILES(first_troponin_i, 100)[OFFSET(50)] AS median_troponin_i,\n  APPROX_QUANTILES(first_troponin_i, 100)[OFFSET(25)] AS q1_troponin_i,\n  APPROX_QUANTILES(first_troponin_i, 100)[OFFSET(75)] AS q3_troponin_i\nFROM\n  acs_with_first_troponin;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

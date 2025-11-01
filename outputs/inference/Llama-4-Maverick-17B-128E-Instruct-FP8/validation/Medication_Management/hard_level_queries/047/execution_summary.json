@@ -1,0 +1,28 @@
+{
+  "query": "I have a 53-year-old female inpatient. Among female inpatients 48\u201358, compare hemorrhagic stroke vs age\u2011matched controls: first 48\u2011hour medication complexity distribution, outcomes (LOS, mortality) for patients with \u22652 serotonergic drugs versus <2, and LOS/mortality for top complexity quartile.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort (female inpatients aged 48-58)\ncohort AS (\n  SELECT p.subject_id, a.hadm_id, a.admittime,\n         p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F' \n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 48 AND 58\n),\n\n-- Step 2: Determine hemorrhagic stroke patients\nhemorrhagic_stroke AS (\n  SELECT DISTINCT a.hadm_id\n  FROM cohort a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%hemorrhagic stroke%' OR dicd.long_title LIKE '%intracerebral hemorrhage%'\n),\n\n-- Step 3 & 4: Medication complexity and serotonergic drugs within first 48 hours\nmed_complexity AS (\n  SELECT c.hadm_id, \n         COUNT(DISTINCT p.drug) AS total_drugs,\n         SUM(CASE WHEN LOWER(p.drug) LIKE '%sertraline%' OR LOWER(p.drug) LIKE '%fluoxetine%' THEN 1 ELSE 0 END) AS serotonergic_drugs\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON c.hadm_id = p.hadm_id\n  WHERE p.starttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.hadm_id\n),\n\n-- Step 5: Outcomes (LOS, mortality)\noutcomes AS (\n  SELECT c.hadm_id,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los,\n         a.hospital_expire_flag AS hospital_mortality\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON c.hadm_id = a.hadm_id\n),\n\n-- Prepare final data with complexity percentile\nfinal_data AS (\n  SELECT \n    CASE WHEN hs.hadm_id IS NOT NULL THEN 'Hemorrhagic Stroke' ELSE 'Control' END AS group_category,\n    CASE WHEN mc.serotonergic_drugs >= 2 THEN '>= 2 Serotonergic Drugs' ELSE '< 2 Serotonergic Drugs' END AS serotonergic_category,\n    PERCENT_RANK() OVER (PARTITION BY CASE WHEN hs.hadm_id IS NOT NULL THEN 'Hemorrhagic Stroke' ELSE 'Control' END ORDER BY mc.total_drugs) AS complexity_percentile,\n    o.los AS avg_los,\n    o.hospital_mortality\n  FROM cohort c\n  LEFT JOIN hemorrhagic_stroke hs ON c.hadm_id = hs.hadm_id\n  JOIN med_complexity mc ON c.hadm_id = mc.hadm_id\n  JOIN outcomes o ON c.hadm_id = o.hadm_id\n)\n\n-- Final analysis\nSELECT \n  group_category,\n  serotonergic_category,\n  CASE WHEN complexity_percentile <= 0.75 THEN 'Bottom 75%' ELSE 'Top 25%' END AS complexity_group,\n  AVG(avg_los) AS avg_los,\n  AVG(hospital_mortality) AS avg_hospital_mortality\nFROM final_data\nGROUP BY group_category, serotonergic_category, \n         CASE WHEN complexity_percentile <= 0.75 THEN 'Bottom 75%' ELSE 'Top 25%' END\nORDER BY group_category, serotonergic_category;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function TIMESTAMP\n  Argument types: INT64, INT64, INT64\n  Signature: TIMESTAMP(STRING, [STRING])\n    Signature accepts at most 2 arguments, found 3 arguments\n  Signature: TIMESTAMP(DATE, [STRING])\n    Signature accepts at most 2 arguments, found 3 arguments\n  Signature: TIMESTAMP(DATETIME, [STRING])\n    Signature accepts at most 2 arguments, found 3 arguments\n  Signature: TIMESTAMP(TIMESTAMP)\n    Signature accepts at most 1 argument, found 3 arguments at [9:37]; reason: invalidQuery, location: query, message: No matching signature for function TIMESTAMP\n  Argument types: INT64, INT64, INT64\n  Signature: TIMESTAMP(STRING, [STRING])\n    Signature accepts at most 2 arguments, found 3 arguments\n  Signature: TIMESTAMP(DATE, [STRING])\n    Signature accepts at most 2 arguments, found 3 arguments\n  Signature: TIMESTAMP(DATETIME, [STRING])\n    Signature accepts at most 2 arguments, found 3 arguments\n  Signature: TIMESTAMP(TIMESTAMP)\n    Signature accepts at most 1 argument, found 3 arguments at [9:37]\n\nLocation: US\nJob ID: 069221c8-5021-4b95-a50a-7594794d77b0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in GROUP BY at [53:20]; reason: invalidQuery, location: query, message: Analytic function not allowed in GROUP BY at [53:20]\n\nLocation: US\nJob ID: a3d7e9bc-c843-4d80-84fe-8ca36d263cf5\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

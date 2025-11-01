@@ -1,0 +1,22 @@
+{
+  "query": "For a 55-year-old man: among males 50\u201360 with sepsis (excluding septic shock), report in-hospital mortality (%) with 95% CIs and median time-to-death among non-survivors (days) by LOS (<8 vs \u22658 days).",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.hadm_id,\n    p.subject_id,\n    -- Compute age at admission\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    -- Hospital LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n),\n-- Get all ICD diagnoses for each admission\ndiagnoses AS (\n  SELECT\n    di.hadm_id,\n    di.icd_code,\n    di.icd_version,\n    d_icd.long_title\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON di.icd_code = d_icd.icd_code AND di.icd_version = d_icd.icd_version\n),\n-- Identify sepsis admissions (with sepsis code) and exclude those with septic shock\nsepsis_candidates AS (\n  SELECT DISTINCT hadm_id\n  FROM diagnoses\n  WHERE (icd_version = 10 AND (\n    icd_code LIKE 'A41%' OR \n    icd_code LIKE 'A40%' OR \n    icd_code = 'T8144'))\n),\nseptic_shock_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM diagnoses\n  WHERE icd_version = 10 AND icd_code = 'R6521'\n),\nsepsis_no_shock AS (\n  SELECT sc.hadm_id\n  FROM sepsis_candidates sc\n  WHERE NOT EXISTS (\n    SELECT 1 FROM septic_shock_admissions ss WHERE ss.hadm_id = sc.hadm_id\n  )\n),\n-- Final cohort: sepsis without shock, male, age 50-60\ncohort AS (\n  SELECT\n    pa.hadm_id,\n    pa.subject_id,\n    pa.age_at_admission,\n    pa.admittime,\n    pa.dischtime,\n    pa.deathtime,\n    pa.hospital_expire_flag,\n    pa.los_days,\n    -- Time to death in days (for non-survivors)\n    CASE\n      WHEN pa.hospital_expire_flag = 1 THEN\n        DATETIME_DIFF(\n          COALESCE(pa.deathtime, pa.dischtime),\n          pa.admittime,\n          DAY\n        )\n      ELSE NULL\n    END AS days_to_death\n  FROM patient_admissions pa\n  INNER JOIN sepsis_no_shock sns ON pa.hadm_id = sns.hadm_id\n  WHERE pa.age_at_admission >= 50 AND pa.age_at_admission <= 60\n),\n-- Group by LOS category\ncohort_with_los_group AS (\n  SELECT\n    *,\n    CASE\n      WHEN los_days < 8 THEN '<8'\n      WHEN los_days >= 8 THEN '>=8'\n      ELSE NULL\n    END AS los_group\n  FROM cohort\n  WHERE los_days IS NOT NULL\n)\n-- Final aggregation\nSELECT\n  los_group,\n  COUNT(*) AS n_admissions,\n  SUM(hospital_expire_flag) AS n_deaths,\n  COUNT(*) - SUM(hospital_expire_flag) AS n_survivors,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_rate_percent,\n  -- 95% CI for proportion: normal approximation\n  ROUND(100.0 * (\n    (SUM(hospital_expire_flag) / COUNT(*)) - \n    1.96 * SQRT( (SUM(hospital_expire_flag) / COUNT(*)) * (1 - SUM(hospital_expire_flag) / COUNT(*)) / COUNT(*) )\n  ), 2) AS lower_95ci_percent,\n  ROUND(100.0 * (\n    (SUM(hospital_expire_flag) / COUNT(*)) + \n    1.96 * SQRT( (SUM(hospital_expire_flag) / COUNT(*)) * (1 - SUM(hospital_expire_flag) / COUNT(*)) / COUNT(*) )\n  ), 2) AS upper_95ci_percent,\n  -- Median time to death among non-survivors\n  APPROX_QUANTILES(days_to_death, 2)[OFFSET(1)] AS median_time_to_death_days\nFROM cohort_with_los_group\nGROUP BY los_group\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_group at [89:3]; reason: invalidQuery, location: query, message: Unrecognized name: los_group at [89:3]\n\nLocation: US\nJob ID: dec4e264-3814-4704-b049-02136a838ee4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

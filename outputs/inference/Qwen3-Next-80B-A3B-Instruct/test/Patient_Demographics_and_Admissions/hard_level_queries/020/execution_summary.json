@@ -1,0 +1,28 @@
+{
+  "query": "For an 81\u2011year\u2011old female: among female Medicare patients aged 76\u201386 transferred from another hospital with principal AMI (ICD\u20119 410*/ICD\u201110 I21*), report 30\u2011day readmission rate; median index LOS for readmitted vs not; percent index stays >4 days.",
+  "final_sql": "WITH index_admissions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.insurance,\n    p.anchor_age,\n    p.gender,\n    d.icd_code,\n    d.icd_version,\n    a.admission_location,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM \n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN \n    physionet-data.mimiciv_3_1_hosp.patients p \n    ON a.subject_id = p.subject_id\n  JOIN \n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d \n    ON a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'TRANSFER FROM OTHER HOSP'\n    AND d.seq_num = 1  -- principal diagnosis\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR \n      (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n    )\n),\nindexed_with_next AS (\n  SELECT \n    *,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n  FROM \n    index_admissions\n),\nreadmission_flag AS (\n  SELECT \n    *,\n    CASE \n      WHEN next_admittime IS NOT NULL \n        AND DATETIME_DIFF(next_admittime, dischtime, DAY) <= 30 \n      THEN 1 \n      ELSE 0 \n    END AS readmitted_30d\n  FROM \n    indexed_with_next\n)\nSELECT \n  AVG(readmitted_30d) AS thirty_day_readmission_rate,\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los_days END, 1000)[OFFSET(500)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los_days END, 1000)[OFFSET(500)] AS median_los_not_readmitted,\n  AVG(CASE WHEN los_days > 4 THEN 1.0 ELSE 0.0 END) * 100 AS percent_index_stays_over_4_days\nFROM \n  readmission_flag;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [55:41]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [55:41]\n\nLocation: US\nJob ID: f61246dd-2aa4-4a33-9d6f-af93785fd7bb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e82394f3-c10c-4af5-b5e2-511ae22dcde8\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

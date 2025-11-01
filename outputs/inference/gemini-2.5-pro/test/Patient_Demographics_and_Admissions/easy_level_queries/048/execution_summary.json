@@ -1,0 +1,16 @@
+{
+  "query": "I have an 84-year-old woman. Among female patients 79\u201389 with heart failure, what's the IQR of first-admission LOS (days)?",
+  "final_sql": "WITH\n  -- Step 1: Define the cohort of patients: females aged 79-89 with a heart failure diagnosis at any point.\n  hf_patient_cohort AS (\n    SELECT DISTINCT\n      pat.subject_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n      ON pat.subject_id = dx.subject_id\n    WHERE\n      pat.gender = 'F'\n      AND pat.anchor_age BETWEEN 79 AND 89\n      -- Heart Failure ICD-9 codes start with '428', ICD-10 codes with 'I50'\n      AND (\n        dx.icd_code LIKE '428%' OR dx.icd_code LIKE 'I50%'\n      )\n  ),\n  -- Step 2: For each patient in the cohort, find their first hospital admission and calculate its LOS.\n  first_admissions_los AS (\n    SELECT\n      TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    -- Ensure we only consider patients from our defined cohort\n    INNER JOIN hf_patient_cohort AS cohort\n      ON adm.subject_id = cohort.subject_id\n    -- Use QUALIFY to efficiently select only the first admission for each patient\n    QUALIFY\n      ROW_NUMBER()\n        OVER (PARTITION BY adm.subject_id ORDER BY adm.admittime ASC) = 1\n  ),\n  -- Step 3: Calculate the quantiles (min, Q1, median, Q3, max) for the LOS distribution.\n  los_quantiles AS (\n    SELECT\n      APPROX_QUANTILES(los_days, 4) AS quantiles\n    FROM first_admissions_los\n    -- Filter out invalid LOS values resulting from data errors\n    WHERE\n      los_days >= 0\n  )\n-- Step 4: Calculate the IQR (Q3 - Q1) from the quantiles.\nSELECT\n  -- The array is 0-indexed: [min, Q1, median, Q3, max]\n  -- Q3 is at offset 3, Q1 is at offset 1.\n  quantiles[OFFSET(3)] - quantiles[OFFSET(1)] AS los_iqr\nFROM los_quantiles;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

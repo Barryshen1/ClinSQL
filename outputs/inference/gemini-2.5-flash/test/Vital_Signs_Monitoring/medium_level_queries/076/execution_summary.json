@@ -1,0 +1,22 @@
+{
+  "query": "For my 53-year-old female ICU patient, among ICU stays aged 48\u201358, report percent distribution of per\u2011stay average HR in first 48h (<60; 60\u201399; 100\u2013119; \u2265120) and AKI rate by category.",
+  "final_sql": "WITH CohortStays AS (\n    -- Step 1: Identify the target patient cohort based on age and gender\n    SELECT\n        icustays.subject_id,\n        icustays.hadm_id,\n        icustays.stay_id,\n        icustays.intime,\n        icustays.outtime\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` icustays\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` patients\n        ON icustays.subject_id = patients.subject_id\n    WHERE\n        patients.gender = 'F'\n        AND patients.anchor_age BETWEEN 48 AND 58\n),\nAvgHR_First48h AS (\n    -- Step 2: Calculate the average Heart Rate (HR) for each ICU stay within the first 48 hours\n    SELECT\n        cs.stay_id,\n        AVG(ce.valuenum) AS avg_hr_48h\n    FROM\n        CohortStays cs\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON cs.subject_id = ce.subject_id\n        AND cs.stay_id = ce.stay_id\n    WHERE\n        ce.itemid = 220045 -- Itemid for Heart Rate in MIMIC-IV ICU d_items\n        AND ce.charttime BETWEEN cs.intime AND DATETIME_ADD(cs.intime, INTERVAL 48 HOUR)\n        AND ce.valuenum IS NOT NULL\n        AND ce.valuenum > 0\n    GROUP BY\n        cs.stay_id\n),\nAKI_AdmissionFlag AS (\n    -- Step 3: Determine if Acute Kidney Injury (AKI) diagnosis exists for each hospital admission\n    SELECT\n        cs.hadm_id,\n        MAX(CASE WHEN diagnoses_icd.icd_code LIKE 'N17%' THEN 1 ELSE 0 END) AS has_aki\n    FROM\n        CohortStays cs\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diagnoses_icd\n        ON cs.hadm_id = diagnoses_icd.hadm_id\n    GROUP BY\n        cs.hadm_id\n),\nCombinedStayData AS (\n    -- Step 4: Combine HR data and AKI flag for each ICU stay\n    SELECT\n        cs.subject_id,\n        cs.hadm_id,\n        cs.stay_id,\n        ah.avg_hr_48h,\n        COALESCE(af.has_aki, 0) AS has_aki_diagnosis -- Default to 0 if no AKI diagnosis was found for the admission\n    FROM\n        CohortStays cs\n    LEFT JOIN\n        AvgHR_First48h ah\n        ON cs.stay_id = ah.stay_id\n    LEFT JOIN\n        AKI_AdmissionFlag af\n        ON cs.hadm_id = af.hadm_id\n)\nSELECT\n    cd.hr_category,\n    COUNT(cd.stay_id) AS num_stays,\n    ROUND(COUNT(cd.stay_id) * 100.0 / SUM(COUNT(cd.stay_id)) OVER (), 2) AS percent_hr_distribution,\n    SUM(CASE WHEN cd.has_aki_diagnosis = 1 THEN 1 ELSE 0 END) AS num_aki_stays,\n    ROUND(SUM(CASE WHEN cd.has_aki_diagnosis = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(cd.stay_id), 2) AS aki_rate_percent_by_hr_category\nFROM\n    (\n        -- Categorize HR data for each stay\n        SELECT\n            stay_id,\n            CASE\n                WHEN avg_hr_48h IS NULL THEN 'No HR Data' -- Handle stays with no HR data in the first 48h\n                WHEN avg_hr_48h < 60 THEN '<60 bpm'\n                WHEN avg_hr_48h BETWEEN 60 AND 99 THEN '60-99 bpm'\n                WHEN avg_hr_48h BETWEEN 100 AND 119 THEN '100-119 bpm'\n                WHEN avg_hr_48h >= 120 THEN '>=120 bpm'\n                ELSE 'Unknown' -- Should not be reached if avg_hr_48h is not null and positive\n            END AS hr_category,\n            has_aki_diagnosis\n        FROM\n            CombinedStayData\n    ) AS cd\nWHERE\n    cd.hr_category != 'No HR Data' -- Exclude stays without HR data from the HR distribution report\nGROUP BY\n    cd.hr_category\nORDER BY\n    CASE cd.hr_category\n        WHEN '<60 bpm' THEN 1\n        WHEN '60-99 bpm' THEN 2\n        WHEN '100-119 bpm' THEN 3\n        WHEN '>=120 bpm' THEN 4\n        ELSE 5 -- For 'Unknown' if it ever appears\n    END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword NO at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword NO at [1:6]\n\nLocation: US\nJob ID: ffb35d32-3266-4d64-ba6d-9151cbd1ca80\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

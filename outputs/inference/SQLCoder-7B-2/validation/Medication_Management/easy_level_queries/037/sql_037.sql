@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY duration) AS percentile_duration FROM prescriptions p JOIN patients pt ON p.subject_id = pt.subject_id WHERE pt.gender = 'F' AND pt.anchor_age = 55 AND p.drug = 'ACE inhibitor';

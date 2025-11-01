@@ -1,0 +1,22 @@
+{
+  "query": "I have a 43-year-old female ICU patient. Among female ICU stays aged 38\u201348, what percentile is a per-stay average systolic BP of 120 mmHg over the first 24 hours?",
+  "final_sql": "WITH icu_population AS (\n    -- Step 1: Identify the target patient population (female, age 38-48, ICU stays)\n    SELECT\n        p.subject_id,\n        p.gender,\n        p.anchor_age,\n        ie.hadm_id,\n        ie.stay_id,\n        ie.intime\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie\n        ON p.subject_id = ie.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 38 AND 48\n),\navg_sbp_per_stay AS (\n    -- Step 2: Calculate average SBP for each eligible ICU stay within the first 24 hours\n    SELECT\n        ip.stay_id,\n        AVG(ce.valuenum) AS avg_sbp_24hr\n    FROM icu_population ip\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON ip.subject_id = ce.subject_id\n        AND ip.hadm_id = ce.hadm_id\n        AND ip.stay_id = ce.stay_id\n    WHERE\n        ce.itemid IN (220050, 220179) -- Common itemids for Systolic BP (Arterial and Non-Invasive)\n        AND ce.valuenum IS NOT NULL\n        AND ce.valuenum BETWEEN 10 AND 300 -- Filter for clinically plausible SBP values\n        AND ce.charttime >= ip.intime\n        AND ce.charttime < TIMESTAMP_ADD(ip.intime, INTERVAL 24 HOUR) -- First 24 hours of ICU stay\n    GROUP BY ip.stay_id\n    HAVING COUNT(ce.valuenum) > 0 -- Ensure at least one SBP measurement exists in the window\n),\npercentile_distribution AS (\n    -- Step 3: Calculate the cumulative distribution (percentile value from 0 to 1)\n    -- for each average SBP value across the target population.\n    SELECT\n        avg_sbp_24hr,\n        CUME_DIST() OVER (ORDER BY avg_sbp_24hr) AS percentile_value\n    FROM avg_sbp_per_stay\n)\n-- Step 4: Find the percentile of a per-stay average SBP of 120 mmHg\n-- This retrieves the highest percentile_value for any stay whose average SBP is <= 120 mmHg.\n-- If no such values exist (i.e., all avg_sbp are > 120), it will return 0.\nSELECT\n    COALESCE(MAX(pd.percentile_value), 0) * 100 AS percentile_for_120_mmHg\nFROM percentile_distribution AS pd\nWHERE pd.avg_sbp_24hr <= 120;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [40:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [40:1]\n\nLocation: US\nJob ID: 4b3ded76-3851-45ab-bd23-029dc7635af6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

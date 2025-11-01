@@ -1,0 +1,22 @@
+{
+  "query": "For my 55-year-old female inpatient: among women aged 50\u201360 with type 2 diabetes and heart failure admitted \u226572 hours, what were first 12\u2011hour GLP\u20111 initiation, final 72\u2011hour prevalence, and net percentage\u2011point change?",
+  "final_sql": "WITH\n-- Define GLP-1 drugs (common examples)\nglp1_drugs AS (\n  SELECT DISTINCT drug\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE LOWER(drug) LIKE '%exenatide%'\n     OR LOWER(drug) LIKE '%liraglutide%'\n     OR LOWER(drug) LIKE '%dulaglutide%'\n     OR LOWER(drug) LIKE '%semaglutide%'\n     OR LOWER(drug) LIKE '%lixisenatide%'\n     OR LOWER(drug) LIKE '%albiglutide%'\n),\n\n-- Get patients with type 2 diabetes and heart failure\ntarget_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag1\n    ON p.subject_id = diag1.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d1\n    ON diag1.icd_code = d1.icd_code AND diag1.icd_version = d1.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag2\n    ON p.subject_id = diag2.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d2\n    ON diag2.icd_code = d2.icd_code AND diag2.icd_version = d2.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND (d1.icd_code LIKE 'E11%' OR d1.long_title LIKE '%type 2 diabetes%')\n    AND (d2.icd_code LIKE 'I50%' OR d2.long_title LIKE '%heart failure%')\n),\n\n-- Get qualifying admissions (\u226572 hours)\nqualifying_admissions AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN target_patients tp ON a.subject_id = tp.subject_id\n  WHERE TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\n\n-- First 12-hour GLP-1 initiation\nfirst_12h_glp1 AS (\n  SELECT DISTINCT qa.subject_id, qa.hadm_id\n  FROM qualifying_admissions qa\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON qa.subject_id = p.subject_id AND qa.hadm_id = p.hadm_id\n  JOIN glp1_drugs g ON p.drug = g.drug\n  WHERE p.starttime BETWEEN qa.admittime\n    AND TIMESTAMP_ADD(qa.admittime, INTERVAL 12 HOUR)\n),\n\n-- Final 72-hour GLP-1 prevalence\nfinal_72h_glp1 AS (\n  SELECT DISTINCT qa.subject_id, qa.hadm_id\n  FROM qualifying_admissions qa\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON qa.subject_id = p.subject_id AND qa.hadm_id = p.hadm_id\n  JOIN glp1_drugs g ON p.drug = g.drug\n  WHERE p.starttime BETWEEN TIMESTAMP_SUB(qa.dischtime, INTERVAL 72 HOUR)\n    AND qa.dischtime\n),\n\n-- Counts for calculations\ncounts AS (\n  SELECT\n    COUNT(DISTINCT subject_id) AS total_patients,\n    COUNT(DISTINCT CASE WHEN CONCAT(CAST(subject_id AS STRING), '_', CAST(hadm_id AS STRING)) IN (\n      SELECT CONCAT(CAST(subject_id AS STRING), '_', CAST(hadm_id AS STRING)) FROM first_12h_glp1\n    ) THEN CONCAT(CAST(subject_id AS STRING), '_', CAST(hadm_id AS STRING)) END) AS first_12h_count,\n    COUNT(DISTINCT CASE WHEN CONCAT(CAST(subject_id AS STRING), '_', CAST(hadm_id AS STRING)) IN (\n      SELECT CONCAT(CAST(subject_id AS STRING), '_', CAST(hadm_id AS STRING)) FROM final_72h_glp1\n    ) THEN CONCAT(CAST(subject_id AS STRING), '_', CAST(hadm_id AS STRING)) END) AS final_72h_count\n  FROM qualifying_admissions\n)\n\n-- Final results\nSELECT\n  total_patients,\n  first_12h_count,\n  final_72h_count,\n  ROUND((first_12h_count / total_patients) * 100, 2) AS first_12h_percentage,\n  ROUND((final_72h_count / total_patients) * 100, 2) AS final_72h_percentage,\n  ROUND(((final_72h_count / total_patients) - (first_12h_count / total_patients)) * 100, 2) AS net_percentage_point_change\nFROM counts;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Subquery of type IN must have only one output column at [67:7]; reason: invalidQuery, location: query, message: Subquery of type IN must have only one output column at [67:7]\n\nLocation: US\nJob ID: b8ab77e2-3093-44da-9f59-be0160e96360\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

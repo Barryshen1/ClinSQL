@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.9) within GROUP (ORDER BY COUNT(DISTINCT pr.itemid)) AS percentile_90, AVG(m.los) AS avg_los, AVG(m.dod) AS avg_mortality FROM male_icu mi JOIN male_hosp mh ON mi.subject_id = mh.subject_id JOIN procedureevents pr ON pr.subject_id = mi.subject_id AND pr.charttime BETWEEN mi.intime AND mi.outtime;

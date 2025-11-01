@@ -1,0 +1,16 @@
+{
+  "query": "For my 82-year-old female ICU patient, among female ICU stays aged 77\u201387, what percentile is a 160 mmHg per-stay average systolic BP over the first 48 hours?",
+  "final_sql": "WITH\n  -- 1. Define the cohort of interest: female ICU patients aged 77-87 at admission.\n  cohort_stays AS (\n    SELECT\n      icu.stay_id,\n      icu.intime\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON icu.subject_id = pat.subject_id\n    WHERE\n      pat.gender = 'F'\n      AND (\n        -- Calculate age at the time of ICU admission\n        pat.anchor_age + DATETIME_DIFF(icu.intime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR)\n      ) BETWEEN 77 AND 87\n  ),\n\n  -- 2. Isolate all relevant systolic blood pressure measurements.\n  sbp_events AS (\n    SELECT\n      stay_id,\n      charttime,\n      valuenum\n    FROM `physionet-data.mimiciv_3_1_icu.chartevents`\n    WHERE\n      itemid IN (\n        220050, -- Arterial Blood Pressure systolic\n        220179  -- Non Invasive Blood Pressure systolic\n      )\n      AND valuenum IS NOT NULL\n      AND valuenum > 0 -- Basic data cleaning\n  ),\n\n  -- 3. For each stay in the cohort, calculate the average SBP over the first 48 hours.\n  avg_sbp_per_stay AS (\n    SELECT\n      cohort.stay_id,\n      AVG(sbp.valuenum) AS avg_sbp\n    FROM cohort_stays AS cohort\n    INNER JOIN sbp_events AS sbp\n      ON cohort.stay_id = sbp.stay_id\n    WHERE\n      -- Filter for measurements within the first 48 hours of the ICU stay\n      sbp.charttime BETWEEN cohort.intime AND DATETIME_ADD(cohort.intime, INTERVAL 48 HOUR)\n    GROUP BY\n      cohort.stay_id\n  )\n\n-- 4. Calculate the percentile of a 160 mmHg average SBP within the cohort's distribution.\nSELECT\n  -- The percentile is the percentage of stays with an average SBP less than or equal to the value of interest (160).\n  (COUNTIF(avg_sbp <= 160) * 100.0) / COUNT(stay_id) AS percentile_of_160_sbp\nFROM avg_sbp_per_stay;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

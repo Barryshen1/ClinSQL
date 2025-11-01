@@ -1,0 +1,23 @@
+{
+  "query": "For a 50\u2011year\u2011old woman: among female HF admissions aged 45\u201355, LOS 1\u20137 days, by primary vs secondary diagnosis and 1\u20133 vs 4\u20137 day stays, what are mean/min/max CT/MRI per admission?",
+  "final_sql": "WITH admissions_filtered AS (\n    SELECT \n        a.hadm_id,\n        a.subject_id,\n        a.admittime,\n        a.dischtime,\n        -- Compute hospital LOS in days\n        DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n        ON a.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n      AND (p.anchor_age - (p.anchor_year - EXTRACT(YEAR FROM a.admittime))) BETWEEN 45 AND 55\n      AND DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\nhf_diagnoses AS (\n    SELECT \n        d.hadm_id,\n        MAX(CASE WHEN d.seq_num = 1 THEN 1 ELSE 0 END) AS has_primary,\n        MAX(CASE WHEN d.seq_num > 1 THEN 1 ELSE 0 END) AS has_secondary\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd \n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n    WHERE \n        REGEXP_CONTAINS(LOWER(dd.long_title), r'heart failure| hf ')\n        AND d.hadm_id IN (SELECT hadm_id FROM admissions_filtered)\n    GROUP BY d.hadm_id\n    HAVING MAX(CASE WHEN d.seq_num = 1 THEN 1 ELSE 0 END) = 1 \n        OR MAX(CASE WHEN d.seq_num > 1 THEN 1 ELSE 0 END) = 1\n),\nimaging_counts AS (\n    SELECT \n        a.hadm_id,\n        COUNT(img.icd_code) AS imaging_count\n    FROM admissions_filtered a\n    LEFT JOIN (\n        SELECT \n            p.hadm_id,\n            p.icd_code\n        FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n        INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d \n            ON p.icd_code = d.icd_code AND p.icd_version = d.icd_version\n        WHERE \n            REGEXP_CONTAINS(LOWER(d.long_title), r'computed tomography|magnetic resonance imaging')\n    ) img ON a.hadm_id = img.hadm_id\n    GROUP BY a.hadm_id\n)\nSELECT \n    CASE \n        WHEN hf.has_primary = 1 THEN 'primary'\n        WHEN hf.has_secondary = 1 THEN 'secondary'\n    END AS diagnosis_type,\n    CASE \n        WHEN af.hospital_los BETWEEN 1 AND 3 THEN '1-3'\n        WHEN af.hospital_los BETWEEN 4 AND 7 THEN '4-7'\n    END AS los_group,\n    AVG(ic.imaging_count) AS mean_imaging,\n    MIN(ic.imaging_count) AS min_imaging,\n    MAX(ic.imaging_count) AS max_imaging\nFROM hf_diagnoses hf\nINNER JOIN admissions_filtered af ON hf.hadm_id = af.hadm_id\nINNER JOIN imaging_counts ic ON af.hadm_id = ic.hadm_id\nGROUP BY diagnosis_type, los_group\nORDER BY diagnosis_type, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"regulations\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"regulations\" at [1:12]\n\nLocation: US\nJob ID: 55f5ec5c-c679-4db8-a3f0-77978191f2d6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

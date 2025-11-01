@@ -1,0 +1,16 @@
+{
+  "query": "For an 81\u2011year\u2011old female: among female Medicare patients aged 76\u201386 transferred from another hospital with principal AMI (ICD\u20119 410*/ICD\u201110 I21*), report 30\u2011day readmission rate; median index LOS for readmitted vs not; percent index stays >4 days.",
+  "final_sql": "WITH index_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.admission_location,\n    a.insurance,\n    p.anchor_age,\n    p.gender,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS index_los,\n    a.dischtime AS index_dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'TRANSFER FROM HOSPITAL'\n    AND d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n    )\n    AND a.dischtime IS NOT NULL\n    AND a.deathtime IS NULL -- Exclude deaths during index stay\n),\n\nreadmissions AS (\n  SELECT\n    ia.*,\n    CASE\n      WHEN readmit.hadm_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS is_readmitted\n  FROM\n    index_admissions ia\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` readmit\n  ON\n    ia.subject_id = readmit.subject_id\n    AND readmit.admittime > ia.dischtime\n    AND readmit.admittime <= DATETIME_ADD(ia.dischtime, INTERVAL 30 DAY)\n    AND readmit.hadm_id != ia.hadm_id\n)\n\nSELECT\n  -- 30-day readmission rate\n  ROUND(\n    SUM(is_readmitted) * 100.0 / COUNT(*),\n    2\n  ) AS readmission_rate_pct,\n\n  -- Median LOS for readmitted vs not\n  APPROX_QUANTILES(\n    IF(is_readmitted = 1, index_los, NULL),\n    2\n  )[OFFSET(1)] AS median_los_readmitted,\n\n  APPROX_QUANTILES(\n    IF(is_readmitted = 0, index_los, NULL),\n    2\n  )[OFFSET(1)] AS median_los_not_readmitted,\n\n  -- Percent of index stays > 4 days\n  ROUND(\n    SUM(IF(index_los > 4, 1, 0)) * 100.0 / COUNT(*),\n    2\n  ) AS percent_stays_over_4_days\n\nFROM\n  readmissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

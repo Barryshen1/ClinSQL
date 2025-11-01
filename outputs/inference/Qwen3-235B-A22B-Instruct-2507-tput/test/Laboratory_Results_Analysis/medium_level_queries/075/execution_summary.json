@@ -1,0 +1,28 @@
+{
+  "query": "For my 46\u2011year\u2011old male: among male patients aged 41\u201351 admitted with chest pain or AMI, report counts, percentages, and mean, median, IQR of initial Troponin T by category (normal/borderline/elevated).",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 41 AND 51\n),\n\n-- Diagnoses: chest pain or AMI (ICD-9 and ICD-10)\ndiagnosis_filtered AS (\n  SELECT DISTINCT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.admittime,\n    pa.age_at_admission\n  FROM\n    patient_admissions pa\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  ON\n    pa.hadm_id = di.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n  ON\n    di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    LOWER(d.long_title) LIKE '%chest pain%'\n    OR LOWER(d.long_title) LIKE '%myocardial infarction%'\n    OR LOWER(d.long_title) LIKE '%acute mi%'\n    OR (d.icd_version = 9 AND d.icd_code LIKE '410%')\n    OR (d.icd_version = 10 AND d.icd_code = 'I21.9')\n    OR (d.icd_version = 9 AND d.icd_code IN ('786.50', '786.59'))\n    OR (d.icd_version = 10 AND d.icd_code = 'R07.9')\n),\n\n-- Get Troponin T lab events\ntroponin_lab AS (\n  SELECT\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n  ON\n    le.itemid = dli.itemid\n  WHERE\n    LOWER(dli.label) = 'troponin t'\n    AND le.valuenum IS NOT NULL\n    AND le.charttime IS NOT NULL\n),\n\n-- First Troponin T per admission\nfirst_troponin AS (\n  SELECT\n    hadm_id,\n    valuenum AS first_troponin_t\n  FROM\n    troponin_lab\n  WHERE\n    rn = 1\n),\n\n-- Combine with diagnosis-filtered admissions and categorize\ncategorized AS (\n  SELECT\n    df.hadm_id,\n    df.age_at_admission,\n    ft.first_troponin_t,\n    CASE\n      WHEN ft.first_troponin_t <= 0.014 THEN 'normal'\n      WHEN ft.first_troponin_t <= 0.050 THEN 'borderline'\n      ELSE 'elevated'\n    END AS troponin_category\n  FROM\n    diagnosis_filtered df\n  JOIN\n    first_troponin ft\n  ON\n    df.hadm_id = ft.hadm_id\n),\n\n-- Compute percentiles using window functions\npercentiles AS (\n  SELECT\n    troponin_category,\n    first_troponin_t,\n    PERCENTILE_CONT(first_troponin_t, 0.25) OVER (PARTITION BY troponin_category) AS p25,\n    PERCENTILE_CONT(first_troponin_t, 0.5) OVER (PARTITION BY troponin_category) AS p50,\n    PERCENTILE_CONT(first_troponin_t, 0.75) OVER (PARTITION BY troponin_category) AS p75\n  FROM\n    categorized\n)\n\n-- Final aggregation\nSELECT\n  troponin_category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(first_troponin_t), 4) AS mean_troponin_t,\n  ROUND(ANY_VALUE(p50), 4) AS median_troponin_t,\n  CONCAT(\n    ROUND(ANY_VALUE(p25), 4),\n    ' \u2013 ',\n    ROUND(ANY_VALUE(p75), 4)\n  ) AS iqr_troponin_t\nFROM\n  percentiles\nGROUP BY\n  troponin_category\nORDER BY\n  troponin_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column first_troponin_t which is neither grouped nor aggregated at [103:25]; reason: invalidQuery, location: query, message: SELECT list expression references column first_troponin_t which is neither grouped nor aggregated at [103:25]\n\nLocation: US\nJob ID: 08310728-0965-4b64-8d0d-0bc1aba0f6f7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [103:48]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [103:48]\n\nLocation: US\nJob ID: a682940b-8367-440e-8230-77804634ead4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

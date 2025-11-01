@@ -1,0 +1,22 @@
+{
+  "query": "I have a 95\u2011year\u2011old female inpatient with AMI. Among female AMI admissions aged 90\u2013100, what is the 75th\u2011percentile lab\u2011instability score in the first 48 hours? For \u2265P75 patients, report in\u2011hospital mortality, mean LOS, and critical lab rates versus all inpatients 90\u2013100.",
+  "final_sql": "WITH \n-- Step 1: Identify AMI patients and filter by age and gender\nami_patients AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 90 AND 100\n    AND icd.long_title LIKE '%Acute myocardial infarction%'\n),\n\n-- Step 2: Calculate lab-instability score for the first 48 hours\nlab_instability AS (\n  SELECT a.hadm_id, \n         -- Example: calculating standard deviation of a specific lab measurement (e.g., creatinine)\n         STDDEV(valuenum) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN ami_patients a ON l.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl ON l.itemid = dl.itemid\n  WHERE dl.label = 'Creatinine'  -- Example lab measurement\n    AND l.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n  GROUP BY a.hadm_id\n),\n\n-- Step 3: Calculate 75th percentile of lab-instability score\npercentiles AS (\n  SELECT APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(75)] AS p75_lab_instability\n  FROM lab_instability\n),\n\n-- Step 4: Analyze outcomes for \u2265P75 patients versus all inpatients\noutcomes AS (\n  SELECT \n    a.hadm_id,\n    a.deathtime IS NOT NULL OR a.hospital_expire_flag = 1 AS in_hospital_mortality,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los,\n    -- Example critical lab condition (e.g., creatinine > 2)\n    MAX(CASE WHEN l.valuenum > 2 AND dl.label = 'Creatinine' THEN 1 ELSE 0 END) AS critical_lab\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l ON a.hadm_id = l.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl ON l.itemid = dl.itemid\n  WHERE a.hadm_id IN (SELECT hadm_id FROM ami_patients)\n  GROUP BY a.hadm_id, a.deathtime, a.hospital_expire_flag, a.dischtime, a.admittime\n)\n\nSELECT \n  '>=P75' AS cohort,\n  COUNT(CASE WHEN in_hospital_mortality THEN 1 END) / COUNT(*) AS in_hospital_mortality_rate,\n  AVG(los) AS mean_los,\n  COUNT(CASE WHEN critical_lab = 1 THEN 1 END) / COUNT(*) AS critical_lab_rate\nFROM outcomes\nWHERE hadm_id IN (SELECT hadm_id FROM lab_instability WHERE lab_instability_score >= (SELECT p75_lab_instability FROM percentiles))\nUNION ALL\nSELECT \n  'All 90-100' AS cohort,\n  COUNT(CASE WHEN in_hospital_mortality THEN 1 END) / COUNT(*) AS in_hospital_mortality_rate,\n  AVG(los) AS mean_los,\n  COUNT(CASE WHEN critical_lab = 1 THEN 1 END) / COUNT(*) AS critical_lab_rate\nFROM outcomes;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name admittime not found inside a at [23:31]; reason: invalidQuery, location: query, message: Name admittime not found inside a at [23:31]\n\nLocation: US\nJob ID: f0aa0606-7e5f-47c2-9357-1d51de837b32\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

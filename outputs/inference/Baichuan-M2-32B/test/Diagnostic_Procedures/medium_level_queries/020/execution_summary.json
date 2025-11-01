@@ -1,0 +1,29 @@
+{
+  "query": "For my 77-year-old female with TIA: among females aged 72\u201382 with LOS 1\u20133 vs 4\u20137 days, what are admission counts and mean diagnostic imaging procedures per admission, by ICU use?",
+  "final_sql": "WITH patient_admissions AS (\n    SELECT \n        a.hadm_id,\n        a.subject_id,\n        a.admittime,\n        a.dischtime,\n        p.gender,\n        p.anchor_year,\n        p.anchor_age,\n        -- Compute birth date\n        DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), INTERVAL p.anchor_age YEAR) AS birth_date,\n        -- Compute age at admission\n        TIMESTAMP_DIFF(a.admittime, DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), INTERVAL p.anchor_age YEAR), YEAR) AS age_at_admission,\n        -- Compute LOS in days\n        DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n      AND TIMESTAMP_DIFF(a.admittime, DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), INTERVAL p.anchor_age YEAR), YEAR) BETWEEN 72 AND 82\n),\ntia_admissions AS (\n    SELECT DISTINCT\n        pa.hadm_id\n    FROM patient_admissions pa\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON pa.hadm_id = d.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n    WHERE dd.icd_code LIKE '435.9%' AND dd.icd_version = 9\n),\nicu_use AS (\n    SELECT \n        tia.hadm_id,\n        CASE WHEN i.stay_id IS NOT NULL THEN 'Yes' ELSE 'No' END AS icu_use\n    FROM tia_admissions tia\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON tia.hadm_id = i.hadm_id\n),\nimaging_procedures AS (\n    SELECT\n        p.hadm_id,\n        COUNT(DISTINCT p.seq_num) AS imaging_procedures_count\n    FROM tia_admissions tia\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` p ON tia.hadm_id = p.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp \n        ON p.icd_code = dp.icd_code \n        AND p.icd_version = dp.icd_version\n        AND dp.icd_version = 9\n        AND (dp.long_title LIKE '%CT%' \n             OR dp.long_title LIKE '%MRI%' \n             OR dp.long_title LIKE '%X-ray%' \n             OR dp.long_title LIKE '%Radiograph%' \n             OR dp.long_title LIKE '%Ultrasound%' \n             OR dp.long_title LIKE '%Scan%' \n             OR dp.long_title LIKE '%Fluoroscopy%' \n             OR dp.long_title LIKE '%Mammography%' \n             OR dp.long_title LIKE '%Angiography%' \n             OR dp.long_title LIKE '%Tomography%'\n             OR dp.long_title LIKE '%PET%' \n             OR dp.long_title LIKE '%SPECT%')\n    GROUP BY p.hadm_id\n),\nadmission_metrics AS (\n    SELECT\n        iu.hadm_id,\n        iu.icu_use,\n        pa.los_days,\n        COALESCE(ip.imaging_procedures_count, 0) AS imaging_procedures_count\n    FROM tia_admissions tia\n    INNER JOIN icu_use iu ON tia.hadm_id = iu.hadm_id\n    INNER JOIN patient_admissions pa ON tia.hadm_id = pa.hadm_id\n    LEFT JOIN imaging_procedures ip ON tia.hadm_id = ip.hadm_id\n    WHERE pa.los_days BETWEEN 1 AND 7\n)\nSELECT\n    icu_use,\n    CASE \n        WHEN los_days BETWEEN 1 AND 3 THEN '1-3 days'\n        WHEN los_days BETWEEN 4 AND 7 THEN '4-7 days'\n    END AS los_group,\n    COUNT(hadm_id) AS admission_count,\n    AVG(imaging_procedures_count) AS mean_imaging_per_admission\nFROM admission_metrics\nGROUP BY icu_use, los_group\nORDER BY icu_use, los_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 944a4fa3-13b0-4efe-aee8-915385da5ba4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 218d5a0d-9f5f-469f-b668-3f4e8d348fc3\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

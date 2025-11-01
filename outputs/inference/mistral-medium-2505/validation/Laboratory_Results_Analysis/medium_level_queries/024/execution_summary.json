@@ -1,0 +1,16 @@
+{
+  "query": "For a 69-year-old man: among male patients aged 64\u201374 admitted with chest pain whose first hs-Troponin T exceeded the 99th percentile, provide summary statistics and in-hospital mortality rate.",
+  "final_sql": "WITH\n-- Define chest pain ICD codes (ICD-10 and ICD-9)\nchest_pain_icd AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code IN ('R07.1', 'R07.2', 'R07.4', '786.50', '786.51', '786.52', '786.59')\n),\n\n-- Get admissions with chest pain diagnosis\nadmissions_with_chest_pain AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN chest_pain_icd c ON d.icd_code = c.icd_code AND d.icd_version = c.icd_version\n),\n\n-- Get male patients aged 64-74\neligible_patients AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 64 AND 74\n),\n\n-- Get first hs-Troponin T measurement per admission (assuming itemid 50912 for hs-Troponin T)\nfirst_hs_troponin AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY l.subject_id, l.hadm_id ORDER BY l.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON l.itemid = d.itemid\n  WHERE d.label = 'hs-Troponin T' AND l.valuenum IS NOT NULL\n),\n\n-- Filter for first hs-Troponin T > 14 ng/L (99th percentile)\nhigh_troponin_patients AS (\n  SELECT f.subject_id, f.hadm_id, f.charttime, f.valuenum\n  FROM first_hs_troponin f\n  WHERE f.rn = 1 AND f.valuenum > 14\n)\n\n-- Final cohort: eligible patients with chest pain and high troponin\nSELECT\n  COUNT(DISTINCT h.subject_id) AS patient_count,\n  COUNT(DISTINCT h.hadm_id) AS admission_count,\n  AVG(h.valuenum) AS avg_hs_troponin,\n  MIN(h.valuenum) AS min_hs_troponin,\n  MAX(h.valuenum) AS max_hs_troponin,\n  SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS in_hospital_deaths,\n  ROUND(\n    SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 /\n    COUNT(DISTINCT h.subject_id),\n    2\n  ) AS in_hospital_mortality_rate_percentage\nFROM high_troponin_patients h\nJOIN admissions_with_chest_pain a ON h.subject_id = a.subject_id AND h.hadm_id = a.hadm_id\nJOIN eligible_patients e ON h.subject_id = e.subject_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

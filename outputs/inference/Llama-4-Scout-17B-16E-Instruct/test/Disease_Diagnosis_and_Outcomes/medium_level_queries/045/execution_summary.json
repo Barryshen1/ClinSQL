@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating an 84-year-old woman. Among women 79\u201389 with community\u2011acquired or aspiration pneumonia, report in\u2011hospital mortality by LOS (\u22647 vs >7) and day\u20111 ICU, plus mech vent, vasopressor, and RRT prevalence.",
+  "final_sql": "WITH \n  -- Select target patients\n  target_patients AS (\n    SELECT \n      a.subject_id, \n      a.hadm_id, \n      p.anchor_age, \n      p.gender\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON \n      a.subject_id = p.subject_id\n    WHERE \n      p.gender = 'F' \n      AND p.anchor_age BETWEEN 79 AND 89\n  ),\n\n  -- Identify pneumonia types\n  pneumonia_patients AS (\n    SELECT \n      tp.subject_id, \n      tp.hadm_id\n    FROM \n      target_patients tp\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON \n      tp.hadm_id = d.hadm_id\n    WHERE \n      d.icd_code LIKE '481%'  -- Pneumonia, organism not specified\n      OR d.icd_code LIKE '482%'  -- Pneumonia due to bacteria\n      OR d.icd_code = '486'     -- Pneumonia, unspecified organism\n      OR d.icd_code LIKE '507%'  -- Pneumonitis due to solids and liquids (aspiration pneumonia)\n  ),\n\n  -- Calculate LOS and mortality\n  los_mortality AS (\n    SELECT \n      pp.hadm_id, \n      TIMESTAMP_DIFF(COALESCE(a.dischtime, a.deathtime), a.admittime, DAY) AS los,\n      a.hospital_expire_flag\n    FROM \n      pneumonia_patients pp\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON \n      pp.hadm_id = a.hadm_id\n  ),\n\n  -- ICU admissions on day 1\n  icu_day1 AS (\n    SELECT \n      hadm_id, \n      COUNT(stay_id) AS icu_admits\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays`\n    GROUP BY \n      hadm_id\n  ),\n\n  -- Mech vent, vasopressor, RRT\n  interventions AS (\n    SELECT \n      ce.subject_id, \n      ce.hadm_id, \n      ce.stay_id,\n      MAX(CASE WHEN ce.itemid = 220050 AND ce.value = 'Yes' THEN 1 ELSE 0 END) AS mech_vent,\n      MAX(CASE WHEN ce.itemid = 221050 AND ce.value = 'Yes' THEN 1 ELSE 0 END) AS vasopressor,\n      MAX(CASE WHEN ce.itemid = 221170 AND ce.value = 'Yes' THEN 1 ELSE 0 END) AS rrt\n    FROM \n      `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.icustays` is_stay\n    ON \n      ce.hadm_id = is_stay.hadm_id AND ce.stay_id = is_stay.stay_id\n    WHERE \n      ce.charttime BETWEEN is_stay.intime AND is_stay.intime + INTERVAL 1 DAY\n    GROUP BY \n      ce.subject_id, \n      ce.hadm_id, \n      ce.stay_id\n  )\n\nSELECT \n  CASE \n    WHEN lm.los <= 7 THEN '\u22647'\n    ELSE '>7'\n  END AS los_category,\n  AVG(lm.hospital_expire_flag) AS mortality_rate,\n  COUNT(DISTINCT lm.hadm_id) AS total_patients,\n  SUM(CASE WHEN id1.icu_admits > 0 THEN 1 ELSE 0 END) AS day1_icu_admits,\n  SUM(CASE WHEN i.mech_vent = 1 THEN 1 ELSE 0 END) AS mech_vent,\n  SUM(CASE WHEN i.vasopressor = 1 THEN 1 ELSE 0 END) AS vasopressor,\n  SUM(CASE WHEN i.rrt = 1 THEN 1 ELSE 0 END) AS rrt\nFROM \n  los_mortality lm\n  LEFT JOIN icu_day1 id1 ON lm.hadm_id = id1.hadm_id\n  LEFT JOIN interventions i ON lm.hadm_id = i.hadm_id\nGROUP BY \n  los_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [42:7]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [42:7]\n\nLocation: US\nJob ID: 600d1b9c-cd12-4e53-a98b-a4f1e244578d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

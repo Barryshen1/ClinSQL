@@ -1,0 +1,16 @@
+{
+  "query": "I have an 84-year-old woman. Among female patients 79\u201389 with heart failure, what's the IQR of first-admission LOS (days)?",
+  "final_sql": "WITH Patient_Cohort AS (\n    -- Step 1: Identify all unique patients conforming to the demographic and diagnosis criteria.\n    -- These are female patients, aged 79-89, who have had at least one heart failure diagnosis across any of their admissions.\n    SELECT DISTINCT\n        p.subject_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON p.subject_id = di.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 79 AND 89\n        AND (\n            (di.icd_version = 10 AND di.icd_code LIKE 'I50%') -- ICD-10 codes for Heart Failure\n            OR (di.icd_version = 9 AND di.icd_code LIKE '428%') -- ICD-9 codes for Heart Failure\n        )\n),\nFirst_Admission_LOS AS (\n    -- Step 2: For each patient in the cohort, find their very first hospital admission and calculate its Length of Stay (LOS).\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n        ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN\n        Patient_Cohort pc\n        ON a.subject_id = pc.subject_id\n    WHERE\n        a.dischtime IS NOT NULL AND a.admittime IS NOT NULL -- Exclude records with missing admission/discharge times\n        AND TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) >= 0 -- Ensure positive LOS (dischtime > admittime)\n)\n-- Step 3: Calculate the Interquartile Range (IQR) of the first admission LOS for the selected patient cohort.\nSELECT\n    PERCENTILE_CONT(los_days, 0.75) OVER() - PERCENTILE_CONT(los_days, 0.25) OVER() AS iqr_first_admission_los_days\nFROM\n    First_Admission_LOS\nWHERE\n    rn = 1 -- Select only the first admission for each patient in the cohort\nLIMIT 1; -- We only need one row as the IQR is a single value over the entire set;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

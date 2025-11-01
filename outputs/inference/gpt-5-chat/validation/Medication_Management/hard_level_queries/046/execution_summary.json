@@ -1,0 +1,16 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH trauma_dx AS (\n  SELECT\n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE\n    ( (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^(8|9)[0-9]{2}'))\n      OR (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^[ST]')) )\n  GROUP BY hadm_id\n  HAVING COUNT(DISTINCT icd_code) >= 2\n),\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN trauma_dx t\n    ON a.hadm_id = t.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 45 AND 55\n),\nmed_complexity AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.hadm_id = pr.hadm_id\n    AND pr.starttime >= c.admittime\n    AND pr.starttime < DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.subject_id, c.hadm_id\n),\ncohort_with_scores AS (\n  SELECT\n    c.*,\n    mc.complexity_score\n  FROM cohort c\n  JOIN med_complexity mc\n    ON c.subject_id = mc.subject_id\n    AND c.hadm_id = mc.hadm_id\n),\nreadmissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    dischtime,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\ncohort_with_readmit AS (\n  SELECT\n    cs.*,\n    CASE\n      WHEN DATETIME_DIFF(r.next_admit, cs.dischtime, DAY) <= 30\n           AND DATETIME_DIFF(r.next_admit, cs.dischtime, DAY) >= 0\n      THEN 1 ELSE 0\n    END AS readmit_30d\n  FROM cohort_with_scores cs\n  JOIN readmissions r\n    ON cs.subject_id = r.subject_id\n    AND cs.hadm_id = r.hadm_id\n),\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM cohort_with_readmit\n)\nSELECT\n  tertile,\n  COUNT(DISTINCT hadm_id) AS admissions,\n  ROUND(AVG(complexity_score),2) AS mean_score,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  ROUND(AVG(los_days),2) AS mean_los,\n  ROUND(100*AVG(hospital_expire_flag),2) AS mortality_percent,\n  ROUND(100*AVG(readmit_30d),2) AS readmit_30d_percent\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 67\u2011year\u2011old female with lower GI bleed, among females 62\u201372 what is mean number of non\u2011invasive diagnostics (imaging, ECG/EEG/PFT) per admission by LOS (1\u20133 vs 4\u20137 days) and ICU status?",
+  "final_sql": "WITH cohort AS (\n  -- Define the cohort: females aged 62\u201372\n  SELECT subject_id, anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age BETWEEN 62 AND 72\n),\n\nadmissions_with_los AS (\n  -- Get admissions with LOS and ICU status\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE\n      WHEN i.stay_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS icu_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN cohort c ON a.subject_id = c.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON a.hadm_id = i.hadm_id\n),\n\nlower_gi_admissions AS (\n  -- Identify admissions with lower GI bleed diagnosis\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%lower gastrointestinal hemorrhage%'\n),\n\nnoninvasive_procedures AS (\n  -- Identify non-invasive diagnostics (imaging, ECG/EEG/PFT)\n  SELECT\n    p.hadm_id,\n    COUNT(*) AS proc_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d ON p.icd_code = d.icd_code AND p.icd_version = d.icd_version\n  WHERE REGEXP_CONTAINS(LOWER(d.long_title), r'(ecg|eeg|pft|imaging|ct|mr|ultrasound|x-ray)')\n    AND LOWER(d.long_title) NOT LIKE '%invasive%'\n  GROUP BY p.hadm_id\n),\n\nadmissions_with_proc AS (\n  -- Combine admissions with procedure counts\n  SELECT\n    a.hadm_id,\n    a.los_days,\n    a.icu_flag,\n    COALESCE(p.proc_count, 0) AS proc_count\n  FROM admissions_with_los a\n  LEFT JOIN noninvasive_procedures p ON a.hadm_id = p.hadm_id\n  WHERE a.hadm_id IN (SELECT hadm_id FROM lower_gi_admissions)\n),\n\nlos_grouped AS (\n  -- Assign LOS group\n  SELECT *,\n    CASE\n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3 days'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7 days'\n      ELSE 'Other'\n    END AS los_group\n  FROM admissions_with_proc\n  WHERE los_days BETWEEN 1 AND 7\n)\n\n-- Final aggregation: mean number of diagnostics by LOS group and ICU status\nSELECT\n  los_group,\n  icu_flag,\n  AVG(proc_count) AS mean_diagnostics_per_admission\nFROM los_grouped\nGROUP BY los_group, icu_flag\nORDER BY los_group, icu_flag;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_group at [66:9]; reason: invalidQuery, location: query, message: Unrecognized name: los_group at [66:9]\n\nLocation: US\nJob ID: d3fba4fb-bcce-431a-a624-60c9af68ba65\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

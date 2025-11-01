@@ -1,0 +1,16 @@
+{
+  "query": "For my 64-year-old male inpatient, among male medicine-service admissions aged 59\u201369, provide LOS distribution (mean, 25th/50th/75th/90th percentiles) by discharge home, facility, and in-hospital death, and percent \u226410 days.",
+  "final_sql": "WITH admissions_filtered AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_adm\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.services` AS s\n    ON a.subject_id = s.subject_id AND a.hadm_id = s.hadm_id\n  WHERE LOWER(s.curr_service) LIKE '%medicine%'\n    AND p.gender = 'M'\n    AND p.anchor_age IS NOT NULL\n    AND p.anchor_year IS NOT NULL\n),\neligible AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    discharge_location,\n    hospital_expire_flag,\n    age_at_adm,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN LOWER(discharge_location) LIKE '%home%' THEN 'Home'\n      WHEN LOWER(discharge_location) LIKE '%facility%' OR\n           LOWER(discharge_location) LIKE '%snf%' OR\n           LOWER(discharge_location) LIKE '%rehab%' OR\n           LOWER(discharge_location) LIKE '%nursing%' THEN 'Facility'\n      ELSE NULL\n    END AS discharge_group\n  FROM admissions_filtered\n  WHERE age_at_adm BETWEEN 59 AND 69\n    AND dischtime IS NOT NULL\n    AND admittime < dischtime\n    AND CASE\n          WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n          ELSE discharge_location\n        END IS NOT NULL\n),\nlos_data AS (\n  SELECT\n    discharge_group,\n    TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0 AS los_days\n  FROM eligible\n  WHERE discharge_group IS NOT NULL\n),\ngrouped AS (\n  SELECT\n    discharge_group,\n    AVG(los_days) AS mean_los_days,\n    APPROX_QUANTILES(los_days, 100) AS quantiles,\n    SUM(CASE WHEN los_days <= 10 THEN 1 ELSE 0 END) AS count_le10,\n    COUNT(*) AS total\n  FROM los_data\n  GROUP BY discharge_group\n)\nSELECT\n  discharge_group,\n  mean_los_days,\n  quantiles[OFFSET(25)] AS p25_los_days,\n  quantiles[OFFSET(50)] AS p50_los_days,\n  quantiles[OFFSET(75)] AS p75_los_days,\n  quantiles[OFFSET(90)] AS p90_los_days,\n  SAFE_DIVIDE(count_le10, total) * 100 AS pct_le10\nFROM grouped\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

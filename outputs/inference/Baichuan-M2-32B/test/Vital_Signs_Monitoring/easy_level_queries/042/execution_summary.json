@@ -1,0 +1,23 @@
+{
+  "query": "For my 68-year-old female patient, among females aged 63\u201373 what is the SD of patients' maximum respiratory rate during stay?",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT \n    subject_id,\n    anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 63 AND 73\n),\nfirst_admissions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN eligible_patients p \n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n),\nicu_stays_with_rr AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    ce.charttime,\n    ce.valuenum AS resp_rate,\n    ce.valueuom\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON i.stay_id = ce.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE di.category = 'Vital Signs'\n    AND di.label IN ('Respiratory Rate', 'Respiratory Rate (Total)')\n    AND di.unitname IN ('breaths/minute', 'BPM', 'breaths/min')\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n),\nmax_rr_per_icu_stay AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    MAX(resp_rate) AS max_rr_stay\n  FROM icu_stays_with_rr\n  GROUP BY subject_id, hadm_id, stay_id\n),\nmax_rr_per_admission AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    MAX(max_rr_stay) AS max_rr_admission\n  FROM max_rr_per_icu_stay\n  GROUP BY subject_id, hadm_id\n),\nmax_rr_per_patient AS (\n  SELECT \n    f.subject_id,\n    f.hadm_id,\n    m.max_rr_admission\n  FROM first_admissions f\n  INNER JOIN max_rr_per_admission m\n    ON f.subject_id = m.subject_id\n    AND f.hadm_id = m.hadm_id\n  WHERE f.rn = 1\n)\nSELECT \n  STDDEV_POP(max_rr_admission) AS std_dev\nFROM max_rr_per_patient\nWHERE max_rr_admission IS NOT NULL;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stay\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stay\" at [1:10]\n\nLocation: US\nJob ID: 8c200cf2-e48a-4984-bc1f-b53db91c736a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

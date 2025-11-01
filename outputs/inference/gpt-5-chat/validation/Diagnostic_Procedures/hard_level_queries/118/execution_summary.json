@@ -1,0 +1,16 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH ami_hadm AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE ( (di.icd_version = 9 AND di.icd_code LIKE '410%')\n       OR (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%')) )\n),\nfirst_icu AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    ROW_NUMBER() OVER (PARTITION BY icu.hadm_id ORDER BY icu.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n)\n, cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    fi.stay_id,\n    fi.intime,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    p.anchor_age,\n    p.gender,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS hosp_los\n  FROM ami_hadm a\n  JOIN first_icu fi\n    ON a.subject_id = fi.subject_id\n   AND a.hadm_id = fi.hadm_id\n   AND fi.rn = 1\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON a.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n)\n, proc_counts AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    COUNT(pe.itemid) AS proc_count,\n    c.hosp_los,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.stay_id = pe.stay_id\n   AND pe.starttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.stay_id, c.hosp_los, c.hospital_expire_flag\n)\n, quartiles AS (\n  SELECT\n    pc.*,\n    NTILE(4) OVER (ORDER BY proc_count) AS proc_quartile\n  FROM proc_counts pc\n)\nSELECT\n  proc_quartile,\n  COUNT(*) AS n_patients,\n  ROUND(AVG(proc_count),2) AS mean_proc_count,\n  ROUND(AVG(hosp_los),2) AS mean_hosp_los_days,\n  ROUND(100 * AVG(hospital_expire_flag),2) AS mortality_percent\nFROM quartiles\nGROUP BY proc_quartile\nORDER BY proc_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

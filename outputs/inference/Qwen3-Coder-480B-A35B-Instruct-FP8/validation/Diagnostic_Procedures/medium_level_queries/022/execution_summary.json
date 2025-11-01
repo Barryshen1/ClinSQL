@@ -1,0 +1,22 @@
+{
+  "query": "As a 74-year-old female with heart failure, what are the mean non-invasive diagnostics per admission (imaging, ECG/EEG/PFT) for 1\u20134 vs 5\u20137\u2011day stays, stratified by ED/Urgent vs Elective?",
+  "final_sql": "WITH hf_admissions AS (\n  -- Identify admissions with heart failure diagnosis\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_type,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS hosp_los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%heart failure%'\n),\n\nfemale_patients AS (\n  -- Filter for 74-year-old females\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age = 74\n),\n\nfirst_icu_stays AS (\n  -- Get first ICU stay per admission\n  SELECT\n    stay_id,\n    hadm_id,\n    intime,\n    outtime,\n    DATE_DIFF(outtime, intime, DAY) AS icu_los\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays`\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) = 1\n),\n\nlos_groups AS (\n  -- Categorize ICU LOS\n  SELECT\n    hadm_id,\n    CASE\n      WHEN icu_los BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN icu_los BETWEEN 5 AND 7 THEN '5-7 days'\n      ELSE NULL\n    END AS los_group\n  FROM first_icu_stays\n  WHERE icu_los BETWEEN 1 AND 7\n),\n\nadmission_types AS (\n  -- Classify admission type\n  SELECT\n    hadm_id,\n    CASE\n      WHEN admission_type IN ('EMERGENCY', 'URGENT') THEN 'ED/Urgent'\n      WHEN admission_type = 'ELECTIVE' THEN 'Elective'\n      ELSE NULL\n    END AS adm_type\n  FROM hf_admissions\n),\n\nnoninvasive_procs AS (\n  -- Identify non-invasive diagnostic procedures\n  SELECT\n    p.hadm_id,\n    COUNT(*) AS proc_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n    ON p.icd_code = dp.icd_code AND p.icd_version = dp.icd_version\n  WHERE\n    REGEXP_CONTAINS(LOWER(dp.long_title), r'(ecg|eeg|pulmonary function|imaging|scan|ct|mri)')\n    AND LOWER(dp.long_title) NOT LIKE '%invasive%'\n  GROUP BY p.hadm_id\n)\n\n-- Final aggregation\nSELECT\n  lg.los_group,\n  `at`.adm_type,\n  AVG(COALESCE(np.proc_count, 0)) AS mean_diagnostics_per_admission\nFROM\n  hf_admissions ha\nJOIN\n  female_patients fp ON ha.subject_id = fp.subject_id\nJOIN\n  los_groups lg ON ha.hadm_id = lg.hadm_id\nJOIN\n  admission_types `at` ON ha.hadm_id = `at`.hadm_id\nLEFT JOIN\n  noninvasive_procs np ON ha.hadm_id = np.hadm_id\nGROUP BY\n  lg.los_group,\n  `at`.adm_type\nORDER BY\n  lg.los_group,\n  `at`.adm_type;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword AT at [86:3]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword AT at [86:3]\n\nLocation: US\nJob ID: 588bbb5d-396e-48d3-9850-7c83420e6c65\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

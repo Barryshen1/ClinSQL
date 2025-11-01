@@ -1,0 +1,28 @@
+{
+  "query": "Evaluating a 59-year-old male inpatient: among male inpatients aged 54\u201364 with heart failure, what is the 95th\u2011percentile laboratory instability score in first 48h? For patients \u2265that threshold, report in\u2011hospital mortality, mean LOS, and compare critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH target_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data`.mimiciv_3_1_hosp.patients p\n  INNER JOIN `physionet-data`.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data`.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data`.mimiciv_3_1_hosp.d_icd_diagnoses d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n    AND LOWER(d_icd.long_title) LIKE '%heart failure%'\n),\n\nlab_abnormal AS (\n  SELECT\n    t.subject_id,\n    t.hadm_id,\n    t.admittime,\n    l.charttime,\n    l.valuenum,\n    l.ref_range_lower,\n    l.ref_range_upper,\n    CASE\n      WHEN l.valuenum IS NOT NULL\n        AND l.ref_range_lower IS NOT NULL\n        AND l.ref_range_upper IS NOT NULL\n        AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n      THEN 1\n      ELSE 0\n    END AS is_abnormal,\n    CASE\n      WHEN l.valuenum IS NOT NULL\n        AND l.ref_range_lower IS NOT NULL\n        AND l.ref_range_upper IS NOT NULL\n        AND (l.valuenum < (l.ref_range_lower * 0.5) OR l.valuenum > (l.ref_range_upper * 2))\n      THEN 1\n      ELSE 0\n    END AS is_critical\n  FROM target_cohort t\n  INNER JOIN `physionet-data`.mimiciv_3_1_hosp.labevents l\n    ON t.subject_id = l.subject_id AND t.hadm_id = l.hadm_id\n  INNER JOIN `physionet-data`.mimiciv_3_1_hosp.d_labitems dl\n    ON l.itemid = dl.itemid\n  WHERE l.charttime >= t.admittime\n    AND l.charttime <= TIMESTAMP_ADD(t.admittime, INTERVAL 48 HOUR)\n    AND l.valuenum IS NOT NULL\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n),\n\ninstability_score AS (\n  SELECT\n    subject_id,\n    COUNT(*) AS instability_score,\n    SUM(is_critical) AS critical_lab_count\n  FROM lab_abnormal\n  GROUP BY subject_id\n),\n\npercentile_95 AS (\n  SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(95)] AS p95_threshold\n  FROM instability_score\n),\n\ngrouped_patients AS (\n  SELECT\n    i.subject_id,\n    i.instability_score,\n    i.critical_lab_count,\n    t.hospital_expire_flag,\n    TIMESTAMP_DIFF(t.dischtime, t.admittime, SECOND) / 86400.0 AS hospital_los,\n    CASE\n      WHEN i.instability_score >= (SELECT p95_threshold FROM percentile_95) THEN 'high'\n      ELSE 'control'\n    END AS group_label\n  FROM instability_score i\n  INNER JOIN target_cohort t ON i.subject_id = t.subject_id\n)\n\nSELECT\n  AVG(CASE WHEN group_label = 'high' THEN hospital_expire_flag ELSE NULL END) AS mortality_high,\n  AVG(CASE WHEN group_label = 'high' THEN hospital_los ELSE NULL END) AS los_mean_high,\n  AVG(CASE WHEN group_label = 'high' THEN CAST(critical_lab_count > 0 AS INT64) ELSE NULL END) AS critical_lab_rate_high,\n  AVG(CASE WHEN group_label = 'control' THEN CAST(critical_lab_count > 0 AS INT64) ELSE NULL END) AS critical_lab_rate_control\nFROM grouped_patients;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<subject_id INT64, instability_score INT64, critical_lab_count INT64> does not at [68:27]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<subject_id INT64, instability_score INT64, critical_lab_count INT64> does not at [68:27]\n\nLocation: US\nJob ID: 3b0fca34-27a9-4f10-90f4-13631a0930ca\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"the\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"the\" at [1:16]\n\nLocation: US\nJob ID: 2222fddc-abcb-496a-94ce-a81ff6311624\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [68:32]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [68:32]\n\nLocation: US\nJob ID: d5d05fcb-cb34-4e24-82fc-5eafbf844f45\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<subject_id INT64, instability_score INT64, critical_lab_count INT64> does not at [68:27]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<subject_id INT64, instability_score INT64, critical_lab_count INT64> does not at [68:27]\n\nLocation: US\nJob ID: 3b0fca34-27a9-4f10-90f4-13631a0930ca\n"
+    }
+  ]
+}

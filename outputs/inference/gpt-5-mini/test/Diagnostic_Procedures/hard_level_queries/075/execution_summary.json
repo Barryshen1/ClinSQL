@@ -1,0 +1,22 @@
+{
+  "query": "For a 44-year-old man: among male ICU admissions aged 39\u201349 with DKA, stratify first ICU stay diagnostic intensity (distinct procedures in first 24 h) into quintiles and report number of stays, mean/min/max procedure count, mean ICU LOS (days) and hospital mortality%",
+  "final_sql": "WITH\n-- Identify admissions that have a diagnosis mentioning \"ketoacidosis\" (DKA)\ndka_hadm AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  WHERE LOWER(COALESCE(dd.long_title, '')) LIKE '%ketoacidosis%'\n),\n\n-- First ICU stay per subject (by intime)\nfirst_icustays AS (\n  SELECT *\n  FROM (\n    SELECT *,\n           ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  )\n  WHERE rn = 1\n),\n\n-- Cohort: first ICU stays for male patients aged 39-49 with a DKA diagnosis on the hospital admission\ncohort_stays AS (\n  SELECT f.*,\n         p.gender,\n         p.anchor_age,\n         a.hospital_expire_flag,\n         a.admittime\n  FROM first_icustays f\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON f.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.hadm_id = a.hadm_id\n  JOIN dka_hadm d\n    ON f.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 39 AND 49\n),\n\n-- Count distinct procedure itemids in the first 24 hours of each first ICU stay\nproc_counts AS (\n  SELECT cs.stay_id,\n         COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM cohort_stays cs\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON pe.stay_id = cs.stay_id\n   AND pe.starttime IS NOT NULL\n   AND pe.starttime >= cs.intime\n   AND pe.starttime < TIMESTAMP_ADD(cs.intime, INTERVAL 24 HOUR)\n  GROUP BY cs.stay_id\n),\n\n-- Combine cohort stays with procedure counts (missing -> 0)\ncohort_with_counts AS (\n  SELECT cs.subject_id,\n         cs.hadm_id,\n         cs.stay_id,\n         COALESCE(pc.proc_count, 0) AS proc_count,\n         cs.los,\n         cs.hospital_expire_flag\n  FROM cohort_stays cs\n  LEFT JOIN proc_counts pc\n    ON cs.stay_id = pc.stay_id\n),\n\n-- Assign quintiles based on proc_count\ncohort_with_quintile AS (\n  SELECT *,\n         NTILE(5) OVER (ORDER BY proc_count) AS quintile\n  FROM cohort_with_counts\n)\n\n-- Aggregate statistics by quintile\nSELECT\n  quintile,\n  COUNT(*) AS num_stays,\n  ROUND(AVG(proc_count), 2) AS mean_proc_count,\n  MIN(proc_count) AS min_proc_count,\n  MAX(proc_count) AS max_proc_count,\n  ROUND(AVG(los), 3) AS mean_icu_los_days,\n  ROUND(100.0 * AVG(CAST(hospital_expire_flag AS FLOAT64)), 2) AS hospital_mortality_pct\nFROM cohort_with_quintile\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id is ambiguous inside cs at [58:13]; reason: invalidQuery, location: query, message: Name hadm_id is ambiguous inside cs at [58:13]\n\nLocation: US\nJob ID: 6b21574a-906c-4a01-936b-d84f354c214b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 44\u2011year\u2011old male with status epilepticus: among male inpatients 39\u201349, in the first 24 hours compare medication complexity and percentile rank, LOS and mortality for QT\u2011prolonging versus bleeding\u2011risk interactions vs general inpatients; report LOS and mortality for target top quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id\n   AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND (di.icd_code LIKE 'G41%' OR di.icd_code LIKE '345%') -- status epilepticus codes (ICD-10 and ICD-9)\n),\n\n-- 2) Medication exposure within first 24 hours: med_count_24h, QT-prolonging flag, Bleeding-risk flag\nmeds AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    COUNT(DISTINCT ph.medication) AS med_count_24h,\n    MAX(CASE\n          WHEN REGEXP_CONTAINS(LOWER(ph.medication),\n               '(ondansetron|ziprasidone|haloperidol|droperidol|amiodarone|quinidine|moxifloxacin|erythromycin)') THEN 1\n          ELSE 0\n        END) AS has_qt_prolong,\n    MAX(CASE\n          WHEN REGEXP_CONTAINS(LOWER(ph.medication),\n               '(warfarin|heparin|enoxaparin|fondaparinux|rivaroxaban|apixaban|dabigatran|clopidogrel|aspirin)') THEN 1\n          ELSE 0\n        END) AS has_bleed\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.pharmacy` ph\n    ON ph.hadm_id = c.hadm_id\n   AND ph.starttime >= c.admittime\n   AND ph.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR)\n  GROUP BY\n    c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag\n),\n\n-- 3) Compute percentile rank and quartile of med_count_24h per admission\nquart AS (\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.admittime,\n    m.dischtime,\n    m.hospital_expire_flag,\n    m.med_count_24h,\n    m.has_qt_prolong,\n    m.has_bleed,\n    PERCENT_RANK() OVER (ORDER BY m.med_count_24h DESC) AS med_percent_rank,\n    NTILE(4) OVER (ORDER BY m.med_count_24h DESC) AS med_quartile\n  FROM meds m\n)\n\n-- 4) Final aggregation on the top quartile (med_quartile = 1)\nSELECT\n  CASE\n     WHEN has_qt_prolong = 1 THEN 'QT_prolong'\n     WHEN has_bleed = 1 THEN 'Bleeding_risk'\n     ELSE 'General'\n  END AS group_label,\n  AVG(med_percent_rank) AS avg_med_percent_rank_top_quartile,\n  COUNT(*) AS n_top_quartile,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0) AS avg_los_days,\n  AVG(CASE WHEN hospital_expire_flag = 1 THEN 1.0 ELSE 0.0 END) AS mortality_rate\nFROM quart\nWHERE med_quartile = 1\nGROUP BY group_label\nORDER BY group_label;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"epilepticus\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"epilepticus\" at [1:13]\n\nLocation: US\nJob ID: c12c3aac-f541-49e0-aa7c-a794b58d626e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

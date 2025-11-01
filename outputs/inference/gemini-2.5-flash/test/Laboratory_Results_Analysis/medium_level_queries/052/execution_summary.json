@@ -1,0 +1,22 @@
+{
+  "query": "For an 81-year-old male, among male patients aged 76\u201386 admitted with AMI, what's the distribution of first Troponin I (\u22640.04 normal; 0.04\u20130.40 borderline; \u22650.40 elevated)? Provide counts, percentages, mean, median, IQR.",
+  "final_sql": "WITH cohort_admissions AS (\n    SELECT DISTINCT\n        adm.subject_id,\n        adm.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 76 AND 86 -- Age filtering\n        AND EXISTS ( -- Check if ANY diagnosis for this admission is AMI\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n            WHERE\n                diag.subject_id = adm.subject_id\n                AND diag.hadm_id = adm.hadm_id\n                AND (\n                       (diag.icd_version = 9 AND diag.icd_code LIKE '410%') -- ICD-9 for Acute MI\n                    OR (diag.icd_version = 10 AND (diag.icd_code LIKE 'I21%' OR diag.icd_code LIKE 'I22%')) -- ICD-10 for Acute/Subsequent MI\n                )\n        )\n),\nfirst_troponin AS (\n    SELECT\n        le.subject_id,\n        le.hadm_id,\n        le.valuenum,\n        le.charttime,\n        ROW_NUMBER() OVER (PARTITION BY le.subject_id, le.hadm_id ORDER BY le.charttime, le.labevent_id) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    INNER JOIN cohort_admissions AS ca\n        ON le.subject_id = ca.subject_id AND le.hadm_id = ca.hadm_id\n    WHERE\n        le.itemid = 51003 -- Item ID for Troponin I (confirmed by d_labitems lookup)\n        AND le.valuenum IS NOT NULL -- Ensure a numeric value exists\n        AND le.valuenum >= 0 -- Troponin values are typically non-negative\n),\ncleaned_first_troponin AS (\n    SELECT\n        valuenum,\n        CASE\n            WHEN valuenum <= 0.04 THEN 'Normal'\n            WHEN valuenum > 0.04 AND valuenum < 0.40 THEN 'Borderline'\n            WHEN valuenum >= 0.40 THEN 'Elevated'\n            ELSE 'Unknown' -- Should not be reached with valuenum >= 0 filter\n        END AS troponin_category\n    FROM first_troponin\n    WHERE rn = 1\n),\n-- CTE to calculate category-specific counts and percentages\ncategory_stats AS (\n    SELECT\n        troponin_category,\n        COUNT(valuenum) AS category_count,\n        ROUND(COUNT(valuenum) * 100.0 / SUM(COUNT(valuenum)) OVER(), 2) AS category_percentage\n    FROM cleaned_first_troponin\n    GROUP BY troponin_category\n),\n-- CTE to calculate overall statistics\noverall_stats AS (\n    SELECT\n        COUNT(valuenum) AS total_count_troponin,\n        ROUND(AVG(valuenum), 3) AS mean_troponin,\n        ROUND(APPROX_QUANTILES(valuenum, 100)[OFFSET(50)], 3) AS median_troponin, -- Median (50th percentile)\n        ROUND(APPROX_QUANTILES(valuenum, 100)[OFFSET(75)] - APPROX_QUANTILES(valuenum, 100)[OFFSET(25)], 3) AS iqr_troponin -- IQR (75th - 25th percentile)\n    FROM cleaned_first_troponin\n)\n-- Final SELECT statement to combine results\nSELECT\n    cs.troponin_category,\n    cs.category_count,\n    cs.category_percentage,\n    os.total_count_troponin,\n    os.mean_troponin,\n    os.median_troponin,\n    os.iqr_troponin\nFROM category_stats AS cs\nCROSS JOIN overall_stats AS os\nORDER BY\n    CASE cs.troponin_category\n        WHEN 'Normal' THEN 1\n        WHEN 'Borderline' THEN 2\n        WHEN 'Elevated' THEN 3\n        ELSE 4\n    END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [51:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [51:1]\n\nLocation: US\nJob ID: 7817b090-9728-4a33-8094-469e9fa68392\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

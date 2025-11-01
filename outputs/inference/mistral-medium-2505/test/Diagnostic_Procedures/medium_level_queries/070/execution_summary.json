@@ -1,0 +1,16 @@
+{
+  "query": "For a 64-year-old man, among males 59\u201369 with heart failure, give the 25th, 50th, and 75th percentiles of radiography/CT per admission for 1\u20134 vs 5\u20138 day stays, by ICU use.",
+  "final_sql": "WITH\n-- Get heart failure ICD codes (ICD-9 and ICD-10)\nheart_failure_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%heart failure%'\n),\n\n-- Get patients with heart failure (males 59-69)\nheart_failure_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON p.subject_id = d.subject_id\n  JOIN heart_failure_codes hf\n    ON d.icd_code = hf.icd_code\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n),\n\n-- Get radiography/CT HCPCS codes\nradiography_ct_codes AS (\n  SELECT code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_hcpcs`\n  WHERE LOWER(long_description) LIKE '%radiography%'\n     OR LOWER(long_description) LIKE '%ct%'\n     OR LOWER(long_description) LIKE '%computed tomography%'\n),\n\n-- Get admissions with duration and ICU use\nadmissions_with_icu AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS admission_duration,\n    CASE WHEN i.hadm_id IS NOT NULL THEN TRUE ELSE FALSE END AS had_icu_stay\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  WHERE a.subject_id IN (SELECT subject_id FROM heart_failure_patients)\n),\n\n-- Count radiography/CT procedures per admission\nradiography_counts AS (\n  SELECT\n    a.hadm_id,\n    a.admission_duration,\n    a.had_icu_stay,\n    COUNT(DISTINCT h.hcpcs_cd) AS radiography_ct_count\n  FROM admissions_with_icu a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n    ON a.hadm_id = h.hadm_id\n  LEFT JOIN radiography_ct_codes r\n    ON h.hcpcs_cd = r.code\n  GROUP BY a.hadm_id, a.admission_duration, a.had_icu_stay\n),\n\n-- Categorize admission durations\nduration_categories AS (\n  SELECT\n    hadm_id,\n    radiography_ct_count,\n    had_icu_stay,\n    CASE\n      WHEN admission_duration BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN admission_duration BETWEEN 5 AND 8 THEN '5-8 days'\n      ELSE NULL\n    END AS duration_category\n  FROM radiography_counts\n  WHERE admission_duration BETWEEN 1 AND 8\n)\n\n-- Calculate percentiles\nSELECT\n  duration_category,\n  had_icu_stay,\n  COUNT(hadm_id) AS admission_count,\n  PERCENTILE_CONT(radiography_ct_count, 0.25) OVER (PARTITION BY duration_category, had_icu_stay) AS percentile_25,\n  PERCENTILE_CONT(radiography_ct_count, 0.5) OVER (PARTITION BY duration_category, had_icu_stay) AS percentile_50,\n  PERCENTILE_CONT(radiography_ct_count, 0.75) OVER (PARTITION BY duration_category, had_icu_stay) AS percentile_75\nFROM duration_categories\nGROUP BY duration_category, had_icu_stay, hadm_id, radiography_ct_count\nORDER BY duration_category, had_icu_stay;",
+  "execution_success": true,
+  "row_count": 15046,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 15046,
+      "error": null
+    }
+  ]
+}

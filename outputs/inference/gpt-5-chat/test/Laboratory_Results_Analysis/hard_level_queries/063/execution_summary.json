@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 58\u2011year\u2011old woman. Among female inpatients aged 53\u201363 with pulmonary embolism, what is the 75th percentile of the 72\u2011hour lab instability score? For patients \u2265that threshold, report mortality (%), mean LOS (days), and compare critical\u2011lab rates to inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime,\n         pat.gender, pat.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.subject_id = dx.subject_id AND adm.hadm_id = dx.hadm_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 53 AND 63\n    AND (\n      (dx.icd_version = 9  AND dx.icd_code LIKE '4151%')\n      OR\n      (dx.icd_version = 10 AND dx.icd_code LIKE 'I26%')\n    )\n),\nlab_scores AS (\n  SELECT c.subject_id, c.hadm_id,\n         COUNTIF(flag IS NOT NULL) AS instability_score\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.subject_id = le.subject_id\n   AND c.hadm_id = le.hadm_id\n   AND le.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.subject_id, c.hadm_id\n),\np75_threshold AS (\n  SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(75)] AS p75_score\n  FROM lab_scores\n),\nsubset_ge_p75 AS (\n  SELECT ls.subject_id, ls.hadm_id, ls.instability_score, adm.hospital_expire_flag,\n         DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR)/24.0 AS los_days\n  FROM lab_scores ls\n  JOIN p75_threshold p\n    ON TRUE\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ls.subject_id = adm.subject_id AND ls.hadm_id = adm.hadm_id\n  WHERE ls.instability_score >= p.p75_score\n),\ncritical_rate_subset AS (\n  SELECT COUNTIF(LOWER(flag) = 'critical') / COUNT(*) AS crit_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN subset_ge_p75 s\n    ON le.subject_id = s.subject_id AND le.hadm_id = s.hadm_id\n),\ncritical_rate_all_inpatients AS (\n  SELECT COUNTIF(LOWER(flag) = 'critical') / COUNT(*) AS crit_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n  WHERE hadm_id IS NOT NULL\n),\nmortality_los AS (\n  SELECT \n    100.0 * COUNTIF(hospital_expire_flag = 1) / COUNT(*) AS mortality_pct,\n    AVG(los_days) AS mean_los_days\n  FROM subset_ge_p75\n)\nSELECT p.p75_score,\n       m.mortality_pct,\n       m.mean_los_days,\n       crs.crit_rate AS critical_lab_rate_subset,\n       cra.crit_rate AS critical_lab_rate_all_inpatients\nFROM p75_threshold p\nCROSS JOIN mortality_los m\nCROSS JOIN critical_rate_subset crs\nCROSS JOIN critical_rate_all_inpatients cra;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

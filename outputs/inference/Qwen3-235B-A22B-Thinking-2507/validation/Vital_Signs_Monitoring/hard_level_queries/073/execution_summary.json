@@ -1,0 +1,23 @@
+{
+  "query": "I am evaluating a 52-year-old woman with intracranial hemorrhage. Among female ICU patients aged 47\u201357 with ICH, what percentile does a first\u201172\u2011hour vital\u2011sign instability score of 75 represent? Also report average ICU length of stay and mortality for the top decile.",
+  "final_sql": "WITH patients_cohort AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 47 AND 57\n),\nich_diagnoses AS (\n  SELECT \n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n  WHERE \n    (icd_version = 9 AND icd_code IN ('430','431','432'))\n    OR \n    (icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('I60','I61','I62')))\n  GROUP BY hadm_id\n),\nicu_stays AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays i\n),\ncohort_base AS (\n  SELECT \n    p.subject_id,\n    p.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,\n    a.hospital_expire_flag\n  FROM patients_cohort p\n  INNER JOIN ich_diagnoses d ON p.hadm_id = d.hadm_id\n  INNER JOIN icu_stays i ON p.hadm_id = i.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON p.hadm_id = a.hadm_id\n),\n-- Calculate vital sign instability score (proxy: count of abnormal vital signs)\nvital_sign_scores AS (\n  SELECT \n    c.stay_id,\n    COUNT(*) AS score\n  FROM cohort_base c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.chartevents ce\n    ON c.stay_id = ce.stay_id\n  WHERE ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    -- Filter for common vital sign itemids\n    AND ce.itemid IN (\n      220045, -- Heart Rate\n      220179, -- Non Invasive Blood Pressure systolic\n      220050  -- Arterial Blood Pressure systolic\n    )\n    -- Count abnormal values as indicators of instability\n    AND (\n      (ce.itemid = 220045 AND (ce.valuenum < 60 OR ce.valuenum > 100)) OR\n      ((ce.itemid = 220179 OR ce.itemid = 220050) AND (ce.valuenum < 90 OR ce.valuenum > 160))\n    )\n  GROUP BY c.stay_id\n),\ncohort_with_score AS (\n  SELECT \n    c.*,\n    COALESCE(v.score, 0) AS score\n  FROM cohort_base c\n  LEFT JOIN vital_sign_scores v ON c.stay_id = v.stay_id\n),\ncohort_with_decile AS (\n  SELECT *,\n    NTILE(10) OVER (ORDER BY score DESC) AS decile\n  FROM cohort_with_score\n)\n\nSELECT \n  -- Calculate percentile of score 75\n  (SELECT COUNT(*) FROM cohort_with_score WHERE score <= 75) * 100.0 / COUNT(*) AS percentile_75,\n  -- Average ICU LOS for top decile\n  AVG(CASE WHEN decile = 1 THEN los ELSE NULL END) AS avg_los_top_decile,\n  -- Mortality rate for top decile\n  AVG(CASE WHEN decile = 1 THEN hospital_expire_flag ELSE NULL END) AS mortality_top_decile\nFROM cohort_with_decile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]\n\nLocation: US\nJob ID: b5c2c48d-bac9-4a27-b6a0-89c104c137c6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

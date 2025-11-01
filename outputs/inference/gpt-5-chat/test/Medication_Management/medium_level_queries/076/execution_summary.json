@@ -1,0 +1,22 @@
+{
+  "query": "For my 80-year-old female inpatient: among women aged 75\u201385 with diabetes and acute heart failure (admissions \u226536h), what percent had injectable GLP\u20111s started in first 24h versus final 12h? Report percentages only.",
+  "final_sql": "WITH cohort AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 75 AND 85\n    AND DATETIME_DIFF(a.dischtime, a.admittime, HOUR) >= 36\n),\ndx AS (\n  SELECT dx.hadm_id,\n         MAX(\n           CASE \n             WHEN ((dx.icd_version = 9 AND dx.icd_code LIKE '250%')\n               OR (dx.icd_version = 10 AND (dx.icd_code LIKE 'E10%' OR dx.icd_code LIKE 'E11%' OR dx.icd_code LIKE 'E13%' OR dx.icd_code LIKE 'E14%')))\n             THEN 1 ELSE 0 \n           END\n         ) AS has_diabetes,\n         MAX(\n           CASE \n             WHEN ((dx.icd_version = 9 AND (dx.icd_code LIKE '4282%' OR dx.icd_code LIKE '4283%'))\n               OR (dx.icd_version = 10 AND (dx.icd_code LIKE 'I50.2%' OR dx.icd_code LIKE 'I50.3%')))\n             THEN 1 ELSE 0 \n           END\n         ) AS has_ahf\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON dx.icd_code = d.icd_code AND dx.icd_version = d.icd_version\n  GROUP BY dx.hadm_id\n),\ncohort_with_dx AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN dx\n    ON c.hadm_id = dx.hadm_id\n  WHERE dx.has_diabetes = 1 AND dx.has_ahf = 1\n),\nglp1_prescriptions AS (\n  SELECT pr.subject_id, pr.hadm_id, pr.starttime, pr.route\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  WHERE LOWER(pr.drug) LIKE '%liraglutide%'\n     OR LOWER(pr.drug) LIKE '%exenatide%'\n     OR LOWER(pr.drug) LIKE '%dulaglutide%'\n     OR LOWER(pr.drug) LIKE '%semaglutide%'\n     OR LOWER(pr.drug) LIKE '%albiglutide%'\n),\nglp1_inj AS (\n  SELECT g.subject_id, g.hadm_id, g.starttime\n  FROM glp1_prescriptions g\n  WHERE LOWER(g.route) LIKE '%sc%' OR LOWER(g.route) LIKE '%subcut%'\n),\nearly_start AS (\n  SELECT DISTINCT c.hadm_id\n  FROM cohort_with_dx c\n  JOIN glp1_inj g\n    ON c.hadm_id = g.hadm_id\n   AND TIMESTAMP_DIFF(g.starttime, c.admittime, HOUR) BETWEEN 0 AND 24\n),\nlate_start AS (\n  SELECT DISTINCT c.hadm_id\n  FROM cohort_with_dx c\n  JOIN glp1_inj g\n    ON c.hadm_id = g.hadm_id\n   AND TIMESTAMP_DIFF(c.dischtime, g.starttime, HOUR) BETWEEN 0 AND 12\n)\nSELECT\n  ROUND(100 * COUNT(DISTINCT early_start.hadm_id) / COUNT(DISTINCT c.hadm_id), 2) AS pct_early_start,\n  ROUND(100 * COUNT(DISTINCT late_start.hadm_id) / COUNT(DISTINCT c.hadm_id), 2) AS pct_late_start\nFROM cohort_with_dx c\nLEFT JOIN early_start\n  ON c.hadm_id = early_start.hadm_id\nLEFT JOIN late_start\n  ON c.hadm_id = late_start.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name icd_code is ambiguous at [12:49]; reason: invalidQuery, location: query, message: Column name icd_code is ambiguous at [12:49]\n\nLocation: US\nJob ID: fb0da990-66c8-4a8e-bb12-5286dcc117f8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

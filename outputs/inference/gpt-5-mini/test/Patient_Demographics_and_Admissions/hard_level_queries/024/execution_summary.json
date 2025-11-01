@@ -1,0 +1,22 @@
+{
+  "query": "I have an 81-year-old man. Among male Medicare patients 76\u201386 admitted from the ED with a principal ischemic stroke, what are the 30-day all-cause readmission rate, median index LOS for readmitted vs non-readmitted, and percent index stays >5 days?",
+  "final_sql": "WITH index_admissions AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    -- fractional LOS in days\n    SAFE_DIVIDE(TIMESTAMP_DIFF(adm.dischtime, adm.admittime, MINUTE), 1440.0) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  USING (subject_id)\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n  ON\n    dx.hadm_id = adm.hadm_id\n    AND dx.seq_num = 1  -- principal diagnosis\n  WHERE\n    -- demographics & payer\n    UPPER(p.gender) = 'M'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND LOWER(COALESCE(adm.insurance, '')) LIKE '%medicare%'\n    -- admitted from ED (robust to variations)\n    AND LOWER(COALESCE(adm.admission_location, '')) LIKE '%emergency%'\n    -- principal ischemic stroke: ICD-10 I63* or ICD-9 433*/434*\n    AND (\n      (SAFE_CAST(dx.icd_version AS INT64) = 10 AND dx.icd_code LIKE 'I63%')\n      OR (SAFE_CAST(dx.icd_version AS INT64) = 9 AND (dx.icd_code LIKE '433%' OR dx.icd_code LIKE '434%'))\n    )\n    -- ensure valid times\n    AND adm.admittime IS NOT NULL\n    AND adm.dischtime IS NOT NULL\n),\n\nindex_with_readmit AS (\n  SELECT\n    ia.*,\n    -- readmitted within 30 days (any subsequent admission for same subject within 30 days after discharge)\n    EXISTS(\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = ia.subject_id\n        AND a2.admittime IS NOT NULL\n        AND a2.admittime > ia.dischtime\n        AND a2.admittime <= TIMESTAMP_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) AS readmitted\n  FROM index_admissions ia\n)\n\nSELECT\n  COUNT(*) AS total_index_admissions,\n  SUM(CASE WHEN readmitted THEN 1 ELSE 0 END) AS n_readmitted_30d,\n  100.0 * SAFE_DIVIDE(SUM(CASE WHEN readmitted THEN 1 ELSE 0 END), COUNT(*)) AS readmission_rate_pct_30d,\n  -- median LOS (approx) for readmitted group (days)\n  (SELECT\n     IFNULL(quantiles[OFFSET(1)], NULL)\n   FROM (\n     SELECT APPROX_QUANTILES(los_days, 2) AS quantiles\n     FROM index_with_readmit\n     WHERE readmitted\n   )\n  ) AS median_los_readmitted_days,\n  -- median LOS (approx) for non-readmitted group (days)\n  (SELECT\n     IFNULL(quantiles[OFFSET(1)], NULL)\n   FROM (\n     SELECT APPROX_QUANTILES(los_days, 2) AS quantiles\n     FROM index_with_readmit\n     WHERE NOT readmitted\n   )\n  ) AS median_los_nonreadmitted_days,\n  -- percent of index stays with LOS > 5 days\n  100.0 * SAFE_DIVIDE(SUM(CASE WHEN los_days > 5 THEN 1 ELSE 0 END), COUNT(*)) AS pct_index_los_gt_5\nFROM index_with_readmit;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function SAFE_CONVERT_BYTES_TO_STRING\n  Argument types: STRING\n  Signature: SAFE_CONVERT_BYTES_TO_STRING(BYTES)\n    Argument 1: Unable to coerce type STRING to expected type BYTES at [28:32]; reason: invalidQuery, location: query, message: No matching signature for function SAFE_CONVERT_BYTES_TO_STRING\n  Argument types: STRING\n  Signature: SAFE_CONVERT_BYTES_TO_STRING(BYTES)\n    Argument 1: Unable to coerce type STRING to expected type BYTES at [28:32]\n\nLocation: US\nJob ID: 79c21ef7-9ff4-45b9-9449-dd8207474002\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

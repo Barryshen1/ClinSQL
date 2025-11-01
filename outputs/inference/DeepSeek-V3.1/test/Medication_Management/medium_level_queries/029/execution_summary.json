@@ -1,0 +1,28 @@
+{
+  "query": "For my 74-year-old female inpatient: among women 69\u201379 with T2DM and heart failure, report percent receiving drug classes (insulin, metformin, sulfonylurea, DPP\u20114, SGLT2, GLP\u20111, TZD) in first and last 72 hours.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    DATETIME_ADD(adm.admittime, INTERVAL 72 HOUR) AS first72_end,\n    DATETIME_SUB(adm.dischtime, INTERVAL 72 HOUR) AS last72_start\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 69 AND 79\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE diag.subject_id = adm.subject_id\n        AND diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 10 AND diag.icd_code LIKE 'E11%') OR\n          (diag.icd_version = 9 AND diag.icd_code LIKE '250%' AND (diag.icd_code LIKE '%0' OR diag.icd_code LIKE '%2'))\n        )\n    )\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE diag.subject_id = adm.subject_id\n        AND diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 10 AND diag.icd_code LIKE 'I50%') OR\n          (diag.icd_version = 9 AND diag.icd_code LIKE '428%')\n        )\n    )\n),\ndrug_classes AS (\n  SELECT \n    em.subject_id,\n    em.hadm_id,\n    em.charttime,\n    em.medication,\n    c.admittime,\n    c.dischtime,\n    c.first72_end,\n    c.last72_start,\n    CASE\n      WHEN LOWER(em.medication) LIKE '%insulin%' THEN 'insulin'\n      WHEN LOWER(em.medication) LIKE '%metformin%' THEN 'metformin'\n      WHEN LOWER(em.medication) LIKE '%glyburide%' OR LOWER(em.medication) LIKE '%glipizide%' OR LOWER(em.medication) LIKE '%glimepiride%' THEN 'sulfonylurea'\n      WHEN LOWER(em.medication) LIKE '%sitagliptin%' OR LOWER(em.medication) LIKE '%saxagliptin%' OR LOWER(em.medication) LIKE '%linagliptin%' OR LOWER(em.medication) LIKE '%alogliptin%' THEN 'DPP-4'\n      WHEN LOWER(em.medication) LIKE '%canagliflozin%' OR LOWER(em.medication) LIKE '%dapagliflozin%' OR LOWER(em.medication) LIKE '%empagliflozin%' THEN 'SGLT2'\n      WHEN LOWER(em.medication) LIKE '%liraglutide%' OR LOWER(em.medication) LIKE '%dulaglutide%' OR LOWER(em.medication) LIKE '%semaglutide%' OR LOWER(em.medication) LIKE '%exenatide%' THEN 'GLP-1'\n      WHEN LOWER(em.medication) LIKE '%pioglitazone%' OR LOWER(em.medication) LIKE '%rosiglitazone%' THEN 'TZD'\n      ELSE NULL\n    END AS drug_class\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` em\n  INNER JOIN cohort c\n    ON em.hadm_id = c.hadm_id\n  WHERE em.charttime IS NOT NULL\n),\nfirst72 AS (\n  SELECT\n    hadm_id,\n    drug_class,\n    COUNT(DISTINCT subject_id) AS cnt_patients\n  FROM drug_classes\n  WHERE charttime BETWEEN admittime AND first72_end\n  GROUP BY hadm_id, drug_class\n),\nlast72 AS (\n  SELECT\n    hadm_id,\n    drug_class,\n    COUNT(DISTINCT subject_id) AS cnt_patients\n  FROM drug_classes\n  WHERE charttime >= last72_start AND charttime <= dischtime\n  GROUP BY hadm_id, drug_class\n),\ntotal_cohort AS (\n  SELECT COUNT(DISTINCT hadm_id) AS total\n  FROM cohort\n)\nSELECT\n  dc.drug_class,\n  ROUND(100.0 * COUNT(DISTINCT f72.hadm_id) / total, 2) AS first_72_hours_percent,\n  ROUND(100.0 * COUNT(DISTINCT l72.hadm_id) / total, 2) AS last_72_hours_percent\nFROM (\n  SELECT DISTINCT drug_class\n  FROM drug_classes\n  WHERE drug_class IS NOT NULL\n) dc\nCROSS JOIN total_cohort\nLEFT JOIN first72 f72 ON dc.drug_class = f72.drug_class\nLEFT JOIN last72 l72 ON dc.drug_class = l72.drug_class\nGROUP BY dc.drug_class, total\nORDER BY dc.drug_class;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: first72_end at [62:67]; reason: invalidQuery, location: query, message: Unrecognized name: first72_end at [62:67]\n\nLocation: US\nJob ID: f0a06a2b-474d-49fe-91c2-b5ca13c65e38\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: c at [65:27]; reason: invalidQuery, location: query, message: Unrecognized name: c at [65:27]\n\nLocation: US\nJob ID: 35460aa9-1fe6-4208-9dcb-a694cdc11d16\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

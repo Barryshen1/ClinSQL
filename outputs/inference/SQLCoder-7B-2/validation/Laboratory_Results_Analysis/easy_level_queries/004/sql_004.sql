@@ -1,0 +1,1 @@
+SELECT median(pd.platelet_count) AS median_platelet_count FROM patient_data pd WHERE pd.anchor_year_group = '2019A' AND pd.hadm_id IN (SELECT hadm_id FROM patient_data WHERE platelet_count IS NOT NULL AND stay_id IN (SELECT stay_id FROM patient_data WHERE platelet_count IS NOT NULL LIMIT 24));

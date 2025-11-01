@@ -1,0 +1,23 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH all_stays AS (\n  SELECT\n    i.stay_id,\n    i.intime,\n    i.los,\n    a.hospital_expire_flag,\n    -- Flag COPD exacerbation diagnosis (J440/J441 in ICD-10)\n    MAX(CASE WHEN d.icd_code IN ('J440', 'J441') AND d.icd_version = 10 THEN 1 ELSE 0 END) AS has_copd_exac\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  -- Compute age at admission\n  LEFT JOIN UNNEST([STRUCT(\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  )]) age_calc\n  -- Join diagnoses for COPD flag\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND age_calc.age BETWEEN 88 AND 98  -- Age 88-98 inclusive\n  GROUP BY i.stay_id, i.intime, i.los, a.hospital_expire_flag\n),\nindex_procedure_counts AS (\n  SELECT\n    p.stay_id,\n    COUNT(DISTINCT p.itemid) AS proc_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` p\n  INNER JOIN all_stays s\n    ON p.stay_id = s.stay_id\n  WHERE s.has_copd_exac = 1\n    AND p.starttime <= TIMESTAMP_ADD(s.intime, INTERVAL 72 HOUR)  -- Fixed: charttime -> starttime\n  GROUP BY p.stay_id\n),\nindex_los_mortality AS (\n  SELECT los, hospital_expire_flag\n  FROM all_stays\n  WHERE has_copd_exac = 1\n),\ncomparison_los_mortality AS (\n  SELECT los, hospital_expire_flag\n  FROM all_stays\n  WHERE has_copd_exac = 0\n),\nindex_proc_75th AS (\n  SELECT PERCENTILE_CONT(proc_count, 0.75) OVER () AS proc_75th\n  FROM index_procedure_counts\n  LIMIT 1\n)\nSELECT\n  'index' AS cohort,\n  (SELECT proc_75th FROM index_proc_75th) AS proc_75th,\n  AVG(los) AS mean_los,\n  AVG(hospital_expire_flag) AS mortality\nFROM index_los_mortality\nUNION ALL\nSELECT\n  'comparison' AS cohort,\n  NULL AS proc_75th,\n  AVG(los) AS mean_los,\n  AVG(hospital_expire_flag) AS mortality\nFROM comparison_los_mortality;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside p at [33:11]; reason: invalidQuery, location: query, message: Name charttime not found inside p at [33:11]\n\nLocation: US\nJob ID: 94e1c5c4-0747-4e3d-be21-cb2ea97e1691\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

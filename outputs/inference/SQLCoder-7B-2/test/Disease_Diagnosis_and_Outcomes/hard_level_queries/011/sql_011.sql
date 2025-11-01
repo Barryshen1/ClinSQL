@@ -1,0 +1,1 @@
+SELECT * FROM (SELECT * FROM physionet-data.mimiciv_3_1_hosp) AS h JOIN (SELECT * FROM physionet-data.mimiciv_3_1_icu) AS i ON h.subject_id = i.subject_id;

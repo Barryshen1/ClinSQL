@@ -1,0 +1,22 @@
+{
+  "query": "For a 47\u2011year\u2011old man: among male ICU patients aged 42\u201352 with AMI, what is the 90th percentile of diagnostic intensity (distinct procedures in first 72 ICU hours), and how do mean hospital LOS and in\u2011hospital mortality compare to age\u2011matched males?",
+  "final_sql": "WITH age_matched_male_icu AS (\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    a.hadm_id,\n    icu.stay_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    icu.intime,\n    icu.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON a.subject_id = icu.subject_id\n    AND a.hadm_id = icu.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 42 AND 52\n),\n\nami_flags AS (\n  SELECT DISTINCT diag.subject_id, diag.hadm_id, 1 AS ami_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON diag.icd_code = d.icd_code\n    AND diag.icd_version = d.icd_version\n  WHERE (\n      (diag.icd_version = 9 AND diag.icd_code LIKE '410%') OR\n      (diag.icd_version = 10 AND diag.icd_code LIKE 'I21%') OR\n      LOWER(d.long_title) LIKE '%acute myocardial infarction%'\n  )\n),\n\nprocedures_72h AS (\n  SELECT\n    stay.subject_id,\n    stay.hadm_id,\n    stay.stay_id,\n    COUNT(DISTINCT pe.itemid) AS distinct_proc_count_72h\n  FROM age_matched_male_icu stay\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON stay.subject_id = pe.subject_id\n    AND stay.hadm_id = pe.hadm_id\n    AND stay.stay_id = pe.stay_id\n    AND pe.starttime >= stay.intime\n    AND pe.starttime <= DATETIME_ADD(stay.intime, INTERVAL 72 HOUR)\n  GROUP BY stay.subject_id, stay.hadm_id, stay.stay_id\n),\n\ncombined AS (\n  SELECT\n    cohort.subject_id,\n    cohort.hadm_id,\n    cohort.stay_id,\n    proc.distinct_proc_count_72h,\n    IF(ami.ami_flag = 1, 1, 0) AS ami_flag,\n    cohort.admittime,\n    cohort.dischtime,\n    TIMESTAMP_DIFF(cohort.dischtime, cohort.admittime, HOUR)/24.0 AS hosp_los_days,\n    cohort.hospital_expire_flag\n  FROM age_matched_male_icu cohort\n  LEFT JOIN procedures_72h proc\n    ON cohort.subject_id = proc.subject_id\n    AND cohort.hadm_id = proc.hadm_id\n    AND cohort.stay_id = proc.stay_id\n  LEFT JOIN ami_flags ami\n    ON cohort.subject_id = ami.subject_id\n    AND cohort.hadm_id = ami.hadm_id\n)\n\nSELECT\n  metric_group,\n  COUNT(*) AS n_patients,\n  AVG(hosp_los_days) AS mean_hosp_los_days,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  CASE \n    WHEN metric_group = 'AMI' \n    THEN APPROX_QUANTILES(distinct_proc_count_72h, 100)[OFFSET(90)] \n  END AS p90_diag_intensity\nFROM (\n  SELECT *,\n    CASE WHEN ami_flag = 1 THEN 'AMI' ELSE 'Non-AMI' END AS metric_group\n  FROM combined\n) sub\nGROUP BY metric_group\nORDER BY metric_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column distinct_proc_count_72h which is neither grouped nor aggregated at [78:55]; reason: invalidQuery, location: query, message: SELECT list expression references column distinct_proc_count_72h which is neither grouped nor aggregated at [78:55]\n\nLocation: US\nJob ID: 7752672b-19f1-42a8-b0ee-ef9387aa615e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

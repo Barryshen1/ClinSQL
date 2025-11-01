@@ -1,0 +1,22 @@
+{
+  "query": "I have a 73-year-old male inpatient with intracranial hemorrhage transferred from ICU. For male patients aged 68\u201378 with ICH post\u2011ICU, report cohort size, 30\u2011day mortality, AKI and ARDS rates, composite risk score 25/50/75th percentiles, and median survival among decedents.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.deathtime,\n        adm.hospital_expire_flag,\n        -- Check for AKI during the admission\n        EXISTS (\n            SELECT 1 \n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag_aki\n            WHERE diag_aki.subject_id = adm.subject_id \n                AND diag_aki.hadm_id = adm.hadm_id \n                AND diag_aki.icd_code LIKE 'N17%' \n                AND diag_aki.icd_version = 10\n        ) AS aki,\n        -- Check for ARDS during the admission\n        EXISTS (\n            SELECT 1 \n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag_ards\n            WHERE diag_ards.subject_id = adm.subject_id \n                AND diag_ards.hadm_id = adm.hadm_id \n                AND diag_ards.icd_code = 'J80' \n                AND diag_ards.icd_version = 10\n        ) AS ards,\n        -- 30-day mortality: died in hospital and within 30 days of admission\n        CASE \n            WHEN adm.hospital_expire_flag = 1 \n                AND DATETIME_DIFF(adm.deathtime, adm.admittime, DAY) <= 30 THEN 1\n            ELSE 0\n        END AS mortality_30day,\n        -- Survival time in days for decedents\n        CASE \n            WHEN adm.hospital_expire_flag = 1 THEN DATETIME_DIFF(adm.deathtime, adm.admittime, DAY)\n            ELSE NULL\n        END AS survival_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    -- Ensure ICH diagnosis\n    WHERE EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag_ich\n        WHERE diag_ich.subject_id = adm.subject_id \n            AND diag_ich.hadm_id = adm.hadm_id \n            AND diag_ich.icd_code IN ('I60', 'I61', 'I62') \n            AND diag_ich.icd_version = 10\n    )\n    -- Age and gender\n    AND pat.anchor_age BETWEEN 68 AND 78\n    AND pat.gender = 'M'\n    -- Ensure ICU stay\n    AND EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n        WHERE icu.subject_id = adm.subject_id \n            AND icu.hadm_id = adm.hadm_id\n    )\n)\n\nSELECT \n    COUNT(*) AS cohort_size,\n    SUM(mortality_30day) AS mortality_30day_count,\n    AVG(CAST(mortality_30day AS FLOAT64)) * 100 AS mortality_30day_rate,\n    SUM(CAST(aki AS INT64)) AS aki_count,\n    AVG(CAST(aki AS INT64) * 100.0) AS aki_rate,\n    SUM(CAST(ards AS INT64)) AS ards_count,\n    AVG(CAST(ards AS INT64) * 100.0) AS ards_rate,\n    -- Median survival among decedents (only non-null values)\n    APPROX_QUANTILES(survival_days, 100) [SAFE_ORDINAL(50)] AS median_survival_days_decedents\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [74:14]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [74:14]\n\nLocation: US\nJob ID: 0a9bc9d8-9f3f-4300-8b45-fe52acb9fec8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

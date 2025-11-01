@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH first_stays AS (\n    SELECT\n        hadm_id,\n        stay_id,\n        intime,\n        los,\n        ROW_NUMBER() OVER(PARTITION BY hadm_id ORDER BY intime ASC) AS rn\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays`\n),\n\n-- Step 2: Build the cohort of female patients aged 65-75 with pulmonary embolism on their first ICU stay\npe_cohort AS (\n    SELECT DISTINCT\n        adm.hadm_id,\n        fs.stay_id,\n        fs.intime,\n        fs.los,\n        adm.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN\n        first_stays AS fs\n        ON adm.hadm_id = fs.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n        ON adm.hadm_id = dx.hadm_id\n    WHERE\n        fs.rn = 1 -- Filter for the first ICU stay\n        AND pat.gender = 'F'\n        -- Calculate age at admission and filter\n        AND (DATETIME_DIFF(adm.admittime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR) + pat.anchor_age) BETWEEN 65 AND 75\n        -- Filter for Pulmonary Embolism diagnosis codes\n        AND (\n            (dx.icd_version = 9 AND dx.icd_code LIKE '4151%')\n            OR (dx.icd_version = 10 AND dx.icd_code LIKE 'I26%')\n        )\n),\n\n-- Step 3: Count procedures for each patient within the first 72 hours of their ICU stay\npatient_procedure_counts AS (\n    SELECT\n        pe.hadm_id,\n        pe.los,\n        pe.hospital_expire_flag,\n        COUNT(proc.icd_code) AS procedure_count\n    FROM\n        pe_cohort AS pe\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n        ON pe.hadm_id = proc.hadm_id\n        -- Filter procedures to the first 72 hours of the ICU stay\n        AND proc.chartdate BETWEEN DATE(pe.intime) AND DATE(DATETIME_ADD(pe.intime, INTERVAL 72 HOUR))\n    GROUP BY\n        pe.hadm_id, pe.los, pe.hospital_expire_flag\n),\n\n-- Step 4: Assign a quartile to each patient based on their procedure count\npatient_quartiles AS (\n    SELECT\n        procedure_count,\n        los,\n        hospital_expire_flag,\n        NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n    FROM\n        patient_procedure_counts\n)\n\n-- Step 5: Aggregate metrics by quartile\nSELECT\n    quartile,\n    COUNT(*) AS N,\n    AVG(procedure_count) AS mean_procedure_count,\n    AVG(los) AS mean_icu_los_days,\n    AVG(hospital_expire_flag) * 100 AS hospital_mortality_pct\nFROM\n    patient_quartiles\nGROUP BY\n    quartile\nORDER BY\n    quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

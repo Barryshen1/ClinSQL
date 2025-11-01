@@ -1,0 +1,23 @@
+{
+  "query": "I have a 48-year-old male transferred from another hospital. Among males 43\u201353 transferred inpatients, report median and IQR LOS by discharge: home vs facility vs in-hospital death, and percent \u226410 days.",
+  "final_sql": "WITH base AS (\n    SELECT\n        a.hadm_id,\n        -- Compute age at admission\n        p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n        -- Compute LOS in days (as fractional)\n        DATETIME_DIFF(a.dischtime, a.admittime, MINUTE) / (24*60.0) AS los_days,\n        -- Define discharge group\n        CASE \n            WHEN a.hospital_expire_flag = 1 THEN 'In-hospital death'\n            WHEN a.discharge_location = 'HOME' THEN 'Home'\n            ELSE 'Facility'\n        END AS discharge_group\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    WHERE \n        p.gender = 'M'\n        AND a.admission_location = 'TRANSFER FROM HOSPITAL'\n        AND a.dischtime IS NOT NULL\n        -- Filter by age: 43 to 53 inclusive\n        AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 43 AND 53\n),\ngroup_stats AS (\n    SELECT\n        discharge_group,\n        APPROX_QUANTILES(los_days, 1000) AS quantiles\n    FROM base\n    GROUP BY discharge_group\n),\nquantiles_expanded AS (\n    SELECT\n        discharge_group,\n        quantiles[OFFSET(250)] AS q1,\n        quantiles[OFFSET(500)] AS median_los,\n        quantiles[OFFSET(750)] AS q3\n    FROM group_stats\n),\npercent_le_10 AS (\n    SELECT\n        discharge_group,\n        COUNTIF(los_days <= 10) * 100.0 / COUNT(*) AS percent_los_le_10\n    FROM base\n    GROUP BY discharge_group\n),\nall_groups AS (\n    SELECT 'Home' AS discharge_group\n    UNION ALL\n    SELECT 'Facility'\n    UNION ALL\n    SELECT 'In-hospital death'\n)\nSELECT\n    g.discharge_group,\n    q.median_los,\n    q.q3 - q.q1 AS iqr,\n    p.percent_los_le_10\nFROM all_groups g\nLEFT JOIN quantiles_expanded q ON g.discharge_group = q.discharge_group\nLEFT JOIN percent_le_10 p ON g.discharge_group = p.discharge_group\nORDER BY \n    CASE g.discharge_group\n        WHEN 'Home' THEN 1\n        WHEN 'Facility' THEN 2\n        WHEN 'In-hospital death' THEN 3\n    END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword WHERE at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword WHERE at [1:6]\n\nLocation: US\nJob ID: 48deed19-b389-4bf0-b095-3d911f6836b9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "Patient: 58-year-old female. Among females 53\u201363 with sepsis vs septic shock, for LOS \u22647 vs >7 days report N, in\u2011hospital mortality (%), median time\u2011to\u2011death (non\u2011survivors), absolute and relative mortality differences.",
+  "final_sql": "WITH patient_condition AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.gender,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    -- Determine condition: sepsis or septic shock\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n        WHERE d.hadm_id = a.hadm_id AND d.icd_code = 'R6521'\n      ) THEN 'septic shock'\n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n        WHERE d.hadm_id = a.hadm_id \n          AND (d.icd_code LIKE 'A40%' OR d.icd_code LIKE 'A41%' OR d.icd_code = 'R6520')\n      ) THEN 'sepsis'\n      ELSE NULL\n    END AS condition\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND a.dischtime IS NOT NULL  -- Only include discharged patients\n),\n\nfiltered_patients AS (\n  SELECT *\n  FROM patient_condition\n  WHERE age_at_admission BETWEEN 53 AND 63\n    AND condition IS NOT NULL\n),\n\nlos_groups AS (\n  SELECT \n    *,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days,\n    CASE \n      WHEN DATETIME_DIFF(dischtime, admittime, DAY) <= 7 THEN '\u22647'\n      ELSE '>7'\n    END AS los_group,\n    -- Time to death in days (for deceased patients only)\n    CASE \n      WHEN hospital_expire_flag = 1 \n      THEN DATETIME_DIFF(deathtime, admittime, HOUR) / 24.0 \n      ELSE NULL \n    END AS time_to_death_days\n  FROM filtered_patients\n),\n\ngrouped_stats AS (\n  SELECT \n    condition,\n    los_group,\n    COUNT(*) AS N,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    APPROX_QUANTILES(IF(hospital_expire_flag = 1, time_to_death_days, NULL), 100)[OFFSET(50)] AS median_time_to_death_days\n  FROM los_groups\n  GROUP BY condition, los_group\n),\n\n-- Calculate differences within each LOS group\ndiffs AS (\n  SELECT \n    los_group,\n    MAX(CASE WHEN condition = 'septic shock' THEN mortality_rate END) -\n    MAX(CASE WHEN condition = 'sepsis' THEN mortality_rate END) AS absolute_mortality_diff,\n    (MAX(CASE WHEN condition = 'septic shock' THEN mortality_rate END) -\n     MAX(CASE WHEN condition = 'sepsis' THEN mortality_rate END)) /\n    NULLIF(MAX(CASE WHEN condition = 'sepsis' THEN mortality_rate END), 0) AS relative_mortality_diff\n  FROM grouped_stats\n  GROUP BY los_group\n)\n\nSELECT \n  gs.condition,\n  gs.los_group,\n  gs.N,\n  gs.mortality_rate * 100 AS mortality_pct,\n  gs.median_time_to_death_days,\n  d.absolute_mortality_diff * 100 AS absolute_mortality_diff_pct,\n  d.relative_mortality_diff\nFROM grouped_stats gs\nLEFT JOIN diffs d ON gs.los_group = d.los_group\nORDER BY gs.los_group, gs.condition;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"vs\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"vs\" at [1:13]\n\nLocation: US\nJob ID: 37dc6c22-7a27-4a65-9335-2970559a3def\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

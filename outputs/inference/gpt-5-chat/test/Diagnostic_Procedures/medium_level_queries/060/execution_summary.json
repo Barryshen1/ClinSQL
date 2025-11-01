@@ -1,0 +1,22 @@
+{
+  "query": "Among male patients aged 49\u201359 with primary heart failure (patient is 54), for LOS 1\u20134 vs 5\u20137 days stratified by ICU use, what are admission counts and mean CT/MRI per admission?",
+  "final_sql": "WITH heart_failure_primary AS (\n  SELECT a.subject_id, a.hadm_id, p.gender, p.anchor_age,\n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND di.seq_num = 1\n    AND LOWER(dd.long_title) LIKE '%heart failure%'\n),\nlos_stratified AS (\n  SELECT subject_id, hadm_id,\n         CASE\n           WHEN los_days BETWEEN 1 AND 4 THEN 'LOS_1_4'\n           WHEN los_days BETWEEN 5 AND 7 THEN 'LOS_5_7'\n           ELSE NULL\n         END AS los_group\n  FROM heart_failure_primary\n  WHERE los_days BETWEEN 1 AND 7\n),\nicu_flagged AS (\n  SELECT ls.subject_id, ls.hadm_id, ls.los_group,\n         CASE WHEN icu.subject_id IS NOT NULL THEN 'ICU_Y' ELSE 'ICU_N' END AS icu_use\n  FROM los_stratified ls\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id, subject_id\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) icu\n    ON ls.hadm_id = icu.hadm_id\n),\nct_mri_counts AS (\n  SELECT hadm_id, COUNT(*) AS ctmri_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n    ON pi.icd_code = dp.icd_code AND pi.icd_version = dp.icd_version\n  WHERE LOWER(dp.long_title) LIKE '%ct%' \n     OR LOWER(dp.long_title) LIKE '%mri%'\n  GROUP BY hadm_id\n),\nfinal AS (\n  SELECT icu_flagged.los_group,\n         icu_flagged.icu_use,\n         COUNT(DISTINCT icu_flagged.hadm_id) AS admission_count,\n         AVG(IFNULL(ct_mri_counts.ctmri_count, 0)) AS mean_ctmri_per_admission\n  FROM icu_flagged\n  LEFT JOIN ct_mri_counts\n    ON icu_flagged.hadm_id = ct_mri_counts.hadm_id\n  WHERE icu_flagged.los_group IS NOT NULL\n  GROUP BY icu_flagged.los_group, icu_flagged.icu_use\n)\nSELECT * FROM final\nORDER BY los_group, icu_use;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: ctmri_counts; Did you mean ct_mri_counts? at [52:30]; reason: invalidQuery, location: query, message: Unrecognized name: ctmri_counts; Did you mean ct_mri_counts? at [52:30]\n\nLocation: US\nJob ID: caf2b8be-006c-4455-8c58-989d87fd0ce5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

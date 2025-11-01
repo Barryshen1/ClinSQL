@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 60\u2011year\u2011old woman. In female Medicare patients aged 55\u201365 admitted from the ED with principal cellulitis, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >7 days?",
+  "final_sql": "WITH\n-- Define cellulitis ICD codes (ICD-9 and ICD-10)\ncellulitis_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%cellulitis%'\n),\n\n-- Get female patients aged 55-65\neligible_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age,\n    anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 55 AND 65\n),\n\n-- Get their admissions with Medicare insurance and ED admission\npatient_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_location,\n    a.insurance,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS admission_seq\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN eligible_patients p ON a.subject_id = p.subject_id\n  WHERE a.insurance = 'Medicare'\n    AND a.admission_location = 'EMERGENCY ROOM ADMISSION'\n),\n\n-- Get first admission with principal diagnosis of cellulitis\nindex_admissions AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.admittime,\n    pa.dischtime,\n    pa.los_days,\n    pa.hospital_expire_flag\n  FROM patient_admissions pa\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON pa.hadm_id = di.hadm_id\n  JOIN cellulitis_codes cc ON di.icd_code = cc.icd_code\n  WHERE pa.admission_seq = 1  -- First admission for each patient\n    AND di.seq_num = 1  -- Principal diagnosis\n),\n\n-- Identify 30-day readmissions\nreadmissions AS (\n  SELECT\n    ia.subject_id,\n    ia.hadm_id AS index_hadm_id,\n    ia.los_days AS index_los,\n    ia.hospital_expire_flag,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` ra\n        WHERE ra.subject_id = ia.subject_id\n          AND ra.hadm_id != ia.hadm_id\n          AND ra.admittime BETWEEN ia.dischtime AND TIMESTAMP_ADD(ia.dischtime, INTERVAL 30 DAY)\n      ) THEN TRUE\n      ELSE FALSE\n    END AS is_readmitted\n  FROM index_admissions ia\n)\n\n-- Calculate final metrics\nSELECT\n  -- 30-day readmission rate\n  ROUND(100 * SUM(CASE WHEN is_readmitted THEN 1 ELSE 0 END) / COUNT(*), 2) AS readmission_rate_pct,\n\n  -- Median LOS for readmitted vs non-readmitted\n  ROUND(APPROX_QUANTILES(CASE WHEN is_readmitted THEN index_los ELSE NULL END, 100)[OFFSET(50)], 2) AS median_los_readmitted,\n  ROUND(APPROX_QUANTILES(CASE WHEN NOT is_readmitted THEN index_los ELSE NULL END, 100)[OFFSET(50)], 2) AS median_los_non_readmitted,\n\n  -- Percent of index stays >7 days\n  ROUND(100 * SUM(CASE WHEN index_los > 7 THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_index_stays_gt_7_days\n\nFROM readmissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

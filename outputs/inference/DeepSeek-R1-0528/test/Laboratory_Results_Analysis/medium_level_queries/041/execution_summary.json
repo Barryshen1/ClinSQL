@@ -1,0 +1,16 @@
+{
+  "query": "I have a 48\u2011year\u2011old man. Among male patients aged 43\u201353 admitted with ACS and initial hs\u2011Troponin T >99th percentile (ULN), what are the median and IQR of initial values in ng/mL?",
+  "final_sql": "WITH acs_admissions AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND (\n      (d.icd_version = 9 AND (d.icd_code LIKE '410%' OR d.icd_code IN ('4111', '41181')))\n      OR\n      (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%' OR d.icd_code LIKE 'I23%' OR d.icd_code IN ('I200', 'I240', 'I248', 'I249')))\n    )\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 43 AND 53\n),\ntroponin_tests AS (\n  SELECT\n    l.hadm_id,\n    l.charttime,\n    l.valuenum,\n    SAFE_CAST(l.ref_range_upper AS FLOAT64) AS uln\n  FROM acs_admissions aa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON aa.hadm_id = l.hadm_id\n  WHERE\n    l.itemid = 51003  -- hs-Troponin T\n    AND l.valuenum IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n),\nfirst_troponin AS (\n  SELECT\n    hadm_id,\n    valuenum,\n    uln\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n    FROM troponin_tests\n  )\n  WHERE rn = 1\n),\nfiltered_troponin AS (\n  SELECT\n    valuenum\n  FROM first_troponin\n  WHERE valuenum > uln\n),\nquantiles AS (\n  SELECT\n    APPROX_QUANTILES(valuenum, 100) AS percentiles\n  FROM filtered_troponin\n)\nSELECT\n  percentiles[OFFSET(50)] AS median_initial_troponin_ng_per_ml,\n  percentiles[OFFSET(75)] - percentiles[OFFSET(25)] AS iqr_initial_troponin_ng_per_ml\nFROM quantiles;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

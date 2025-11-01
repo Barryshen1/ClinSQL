@@ -1,0 +1,22 @@
+{
+  "query": "For my 49\u2011year\u2011old female patient: among female inpatients 44\u201354 with T2DM and heart failure, compare insulin vs oral agent prevalence (%) first 24h versus last 48h and report continued/initiated/discontinued counts.",
+  "final_sql": "WITH \n-- Define T2DM and heart failure ICD codes\nt2dm_icd AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE long_title LIKE '%Type 2 diabetes mellitus%'\n),\nheart_failure_icd AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE long_title LIKE '%Heart failure%'\n),\n\n-- Identify relevant patients\npatients_relevant AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n  AND p.anchor_age BETWEEN 44 AND 54\n  AND a.hadm_id IN (\n    SELECT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_code IN (SELECT icd_code FROM t2dm_icd)\n    OR icd_code IN (SELECT icd_code FROM heart_failure_icd)\n  )\n),\n\n-- Identify insulin and oral agent prescriptions in first 24h and last 48h\nprescriptions_with_admissions AS (\n  SELECT p.hadm_id, p.starttime, a.admittime, a.dischtime,\n         CASE WHEN p.drug LIKE '%insulin%' THEN 'insulin' \n              WHEN p.drug NOT LIKE '%insulin%' AND p.drug LIKE '%diabetes%' THEN 'oral_agent' \n              ELSE 'other' END AS drug_category\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN patients_relevant a ON p.hadm_id = a.hadm_id\n),\n\nfirst_24h AS (\n  SELECT hadm_id,\n         SUM(CASE WHEN drug_category = 'insulin' THEN 1 ELSE 0 END) AS insulin_count,\n         SUM(CASE WHEN drug_category = 'oral_agent' THEN 1 ELSE 0 END) AS oral_agent_count\n  FROM prescriptions_with_admissions\n  WHERE starttime BETWEEN admittime AND admittime + INTERVAL 1 DAY\n  GROUP BY hadm_id\n),\n\nlast_48h AS (\n  SELECT hadm_id,\n         SUM(CASE WHEN drug_category = 'insulin' THEN 1 ELSE 0 END) AS insulin_count,\n         SUM(CASE WHEN drug_category = 'oral_agent' THEN 1 ELSE 0 END) AS oral_agent_count\n  FROM prescriptions_with_admissions\n  WHERE starttime BETWEEN dischtime - INTERVAL 2 DAY AND dischtime\n  GROUP BY hadm_id\n)\n\n-- Final calculation\nSELECT \n  COALESCE(f.insulin_count, 0) AS first_24h_insulin_count,\n  COALESCE(f.oral_agent_count, 0) AS first_24h_oral_agent_count,\n  COALESCE(l.insulin_count, 0) AS last_48h_insulin_count,\n  COALESCE(l.oral_agent_count, 0) AS last_48h_oral_agent_count\nFROM \n  (SELECT hadm_id, insulin_count, oral_agent_count FROM first_24h) f\nFULL OUTER JOIN \n  (SELECT hadm_id, insulin_count, oral_agent_count FROM last_48h) l\nON f.hadm_id = l.hadm_id;",
+  "execution_success": true,
+  "row_count": 3703,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: admittime at [50:25]; reason: invalidQuery, location: query, message: Unrecognized name: admittime at [50:25]\n\nLocation: US\nJob ID: 5f0036cd-34b7-4752-b86a-b8171f4652db\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3703,
+      "error": null
+    }
+  ]
+}

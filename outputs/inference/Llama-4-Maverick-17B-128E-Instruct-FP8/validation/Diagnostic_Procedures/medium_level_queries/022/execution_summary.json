@@ -1,0 +1,22 @@
+{
+  "query": "As a 74-year-old female with heart failure, what are the mean non-invasive diagnostics per admission (imaging, ECG/EEG/PFT) for 1\u20134 vs 5\u20137\u2011day stays, stratified by ED/Urgent vs Elective?",
+  "final_sql": "WITH \n-- Step 1: Filter patients based on age and gender\ncohort AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age = 74\n),\n\n-- Step 2: Identify heart failure patients\nheart_failure AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Heart failure%'\n),\n\n-- Step 3: Admission details\nadmissions_details AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_type,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN cohort ON a.subject_id = cohort.subject_id\n  JOIN heart_failure ON a.hadm_id = heart_failure.hadm_id\n),\n\n-- Step 4: Non-invasive diagnostics count\ndiagnostics_count AS (\n  SELECT \n    hadm_id, \n    COUNT(CASE WHEN type = 'imaging' THEN 1 END) AS imaging_count,\n    COUNT(CASE WHEN type = 'ecg_eeg' THEN 1 END) AS ecg_eeg_count,\n    COUNT(CASE WHEN type = 'pft' THEN 1 END) AS pft_count\n  FROM (\n    -- Imaging (using hcpcsevents as a proxy)\n    SELECT hadm_id, 'imaging' AS type\n    FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n    WHERE hadm_id IN (SELECT hadm_id FROM admissions_details)\n\n    UNION ALL\n\n    -- ECG/EEG (using chartevents in ICU as a proxy)\n    SELECT hadm_id, 'ecg_eeg'\n    FROM `physionet-data.mimiciv_3_1_icu.chartevents`\n    WHERE itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%ECG%' OR label LIKE '%EEG%')\n    AND hadm_id IN (SELECT hadm_id FROM admissions_details)\n\n    UNION ALL\n\n    -- PFT (assuming it's in labevents, adjust as necessary)\n    SELECT hadm_id, 'pft'\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n    WHERE itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` WHERE label LIKE '%PFT%')\n    AND hadm_id IN (SELECT hadm_id FROM admissions_details)\n  )\n  GROUP BY hadm_id\n)\n\n-- Final query\nSELECT \n  admission_type,\n  CASE \n    WHEN los BETWEEN 1 AND 4 THEN '1-4 days'\n    WHEN los BETWEEN 5 AND 7 THEN '5-7 days'\n  END AS los_category,\n  AVG(imaging_count) AS mean_imaging,\n  AVG(ecg_eeg_count) AS mean_ecg_eeg,\n  AVG(pft_count) AS mean_pft\nFROM admissions_details\nJOIN diagnostics_count ON admissions_details.hadm_id = diagnostics_count.hadm_id\nWHERE los BETWEEN 1 AND 7\nGROUP BY admission_type, los_category\nORDER BY admission_type, los_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: ecg_eeg_count at [66:70]; reason: invalidQuery, location: query, message: Unrecognized name: ecg_eeg_count at [66:70]\n\nLocation: US\nJob ID: b3bf3cbd-9d05-4ee1-9d14-b2f89103729f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

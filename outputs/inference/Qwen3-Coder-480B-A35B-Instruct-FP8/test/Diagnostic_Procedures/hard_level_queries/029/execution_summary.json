@@ -1,0 +1,22 @@
+{
+  "query": "For my 73\u2011year\u2011old male patient: among male ICU patients 68\u201378 who received vasopressors within 72 hours, stratify 72\u2011hour diagnostic load (labs + imaging, repeats included) into quartiles and report average procedure count, hospital LOS, in\u2011hospital mortality, and 30\u2011day readmission rates.",
+  "final_sql": "WITH cohort AS (\n  -- Step 1: Identify male patients aged 68\u201378 with ICU stays\n  SELECT DISTINCT\n    p.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    DATETIME_ADD(i.intime, INTERVAL 72 HOUR) AS intime_72,\n    i.outtime,\n    a.dischtime,\n    a.admittime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n),\n\nvaso AS (\n  -- Step 2: Identify ICU stays with vasopressor use within 72 hours\n  SELECT DISTINCT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.intime,\n    c.intime_72\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.inputevents` iv\n    ON c.stay_id = iv.stay_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON iv.itemid = d.itemid\n  WHERE\n    d.category = 'VASOPRESSORS'\n    AND iv.starttime BETWEEN c.intime AND c.intime_72\n),\n\ndiagnostic_load AS (\n  -- Step 3: Count labs and imaging procedures within 72 hours\n  SELECT\n    v.stay_id,\n    COUNT(DISTINCT l.labevent_id) AS lab_count,\n    COUNT(DISTINCT pr.seq_num) AS imaging_count\n  FROM\n    vaso v\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON v.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN v.intime AND v.intime_72\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n    ON v.hadm_id = pr.hadm_id\n    AND pr.chartdate BETWEEN DATE(v.intime) AND DATE(v.intime_72)\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dpr\n    ON pr.icd_code = dpr.icd_code\n    AND (\n      UPPER(dpr.long_title) LIKE '%CT%'\n      OR UPPER(dpr.long_title) LIKE '%MRI%'\n      OR UPPER(dpr.long_title) LIKE '%XRAY%'\n      OR UPPER(dpr.long_title) LIKE '%ULTRASOUND%'\n    )\n  GROUP BY\n    v.stay_id\n),\n\nquartiles AS (\n  -- Step 4: Stratify into quartiles by diagnostic load\n  SELECT\n    dl.stay_id,\n    NTILE(4) OVER (ORDER BY (dl.lab_count + dl.imaging_count)) AS diagnostic_quartile\n  FROM\n    diagnostic_load dl\n),\n\nprocedure_counts AS (\n  -- Step 5: Count procedures per stay\n  SELECT\n    pr.hadm_id,\n    COUNT(*) AS procedure_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n  GROUP BY\n    pr.hadm_id\n),\n\nreadmissions AS (\n  -- Step 6: Identify 30-day readmissions\n  SELECT\n    a1.subject_id,\n    a1.hadm_id AS first_hadm,\n    a2.hadm_id AS readmit_hadm\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a1\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND DATETIME_DIFF(a2.admittime, a1.dischtime, DAY) <= 30\n)\n\n-- Final aggregation\nSELECT\n  q.diagnostic_quartile,\n  AVG(pc.procedure_count) AS avg_procedure_count,\n  AVG(DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0) AS avg_hospital_los_days,\n  AVG(a.hospital_expire_flag) AS in_hospital_mortality_rate,\n  AVG(CASE WHEN r.readmit_hadm IS NOT NULL THEN 1 ELSE 0 END) AS readmission_30day_rate\nFROM\n  quartiles q\nJOIN\n  cohort c\n  ON q.stay_id = c.stay_id\nJOIN\n  `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON c.hadm_id = a.hadm_id\nLEFT JOIN\n  procedure_counts pc\n  ON a.hadm_id = pc.hadm_id\nLEFT JOIN\n  readmissions r\n  ON a.hadm_id = r.first_hadm\nGROUP BY\n  q.diagnostic_quartile\nORDER BY\n  q.diagnostic_quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unsupported subquery with table in join predicate.; reason: invalidQuery, location: query, message: Unsupported subquery with table in join predicate.\n\nLocation: US\nJob ID: 0387da4c-9615-4533-a747-e79807ef9667\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

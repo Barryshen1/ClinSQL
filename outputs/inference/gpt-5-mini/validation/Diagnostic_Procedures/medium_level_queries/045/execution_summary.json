@@ -1,0 +1,22 @@
+{
+  "query": "For an 83-year-old female with DVT: among females 78\u201388, give counts and mean noninvasive diagnostics per admission by LOS (1\u20134 vs 5\u20138 days), stratified by ICU versus no ICU?",
+  "final_sql": "WITH dvt_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n        WHERE i.hadm_id = a.hadm_id\n      ) THEN 'ICU'\n      ELSE 'No ICU'\n    END AS icu_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 78 AND 88\n    -- admission has at least one DVT diagnosis (text search on diagnosis description)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n       AND d.icd_version = dd.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          LOWER(dd.long_title) LIKE '%deep vein%'\n          OR LOWER(dd.long_title) LIKE '%venous thrombosis%'\n          OR LOWER(dd.long_title) LIKE '%dvt%'\n        )\n    )\n),\n\n-- Aggregate HCPCS imaging/diagnostic events per admission (operational definition using keywords)\nhcpcs_imaging_counts AS (\n  SELECT\n    he.hadm_id,\n    COUNT(1) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` he\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh\n    ON he.hcpcs_cd = dh.code\n  WHERE (\n    LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%ultrasound%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%doppler%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%duplex%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%venous%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%ct%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%computed tomography%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%x-ray%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%radiograph%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%mri%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%magnetic resonance%'\n    OR LOWER(COALESCE(dh.short_description, he.short_description, '')) LIKE '%vascular%'\n  )\n  GROUP BY he.hadm_id\n)\n\n-- Combine and compute final summaries\nSELECT\n  ca.icu_flag,\n  ca.los_bucket,\n  COUNT(1) AS admissions_count,\n  ROUND(AVG(ca.imaging_count), 2) AS mean_noninvasive_diagnostics_per_admission\nFROM (\n  SELECT\n    da.subject_id,\n    da.hadm_id,\n    da.anchor_age,\n    da.gender,\n    da.admittime,\n    da.dischtime,\n    da.los_days,\n    da.icu_flag,\n    -- LOS bucket: only keep 1-4 and 5-8\n    CASE\n      WHEN da.los_days BETWEEN 1 AND 4 THEN '1-4'\n      WHEN da.los_days BETWEEN 5 AND 8 THEN '5-8'\n      ELSE NULL\n    END AS los_bucket,\n    COALESCE(hic.imaging_count, 0) AS imaging_count\n  FROM dvt_admissions da\n  LEFT JOIN hcpcs_imaging_counts hic\n    ON da.hadm_id = hic.hadm_id\n) ca\nWHERE ca.los_bucket IS NOT NULL\nGROUP BY ca.icu_flag, ca.los_bucket\nORDER BY ca.icu_flag, ca.los_bucket;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"DVT\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"DVT\" at [1:8]\n\nLocation: US\nJob ID: 71ed447b-3046-4310-ba53-c20fe2f6b136\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

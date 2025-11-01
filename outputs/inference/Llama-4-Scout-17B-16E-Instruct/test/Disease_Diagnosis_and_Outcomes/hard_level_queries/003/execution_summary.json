@@ -1,0 +1,28 @@
+{
+  "query": "I have a 75-year-old female inpatient with pulmonary embolism. For female inpatients aged 70\u201380 with PE, stratify into risk-score quintiles and report per quintile: 90\u2011day mortality, general 70\u201380 female 90\u2011day mortality (comparison), AKI and ARDS rates, and median survivor LOS",
+  "final_sql": "WITH \n-- Identify patients of interest\npatients_of_interest AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND a.hadm_id IN (\n      SELECT \n        hadm_id\n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE \n        icd_code LIKE '415.1%'  -- Pulmonary embolism ICD-9 code\n        OR icd_code LIKE 'I26.%'  -- Pulmonary embolism ICD-10 code\n    )\n),\n\n-- Calculate 90-day mortality\nmortality AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    CASE \n      WHEN hospital_expire_flag = 1 OR (deathtime IS NOT NULL AND TIMESTAMP_DIFF(deathtime, admittime, DAY) <= 90) THEN 1\n      ELSE 0\n    END AS ninety_day_mortality\n  FROM \n    patients_of_interest\n),\n\n-- Identify AKI and ARDS\naki_ards AS (\n  SELECT \n    ce.subject_id,\n    ce.hadm_id,\n    CASE \n      WHEN ce.itemid = 220050 AND ce.valuenum > 1.5 THEN 1  -- AKI based on creatinine\n      ELSE 0\n    END AS aki,\n    CASE \n      WHEN ce.itemid = 220179 AND ce.valuenum > 300 THEN 1  -- ARDS based on P/F ratio\n      ELSE 0\n    END AS ards\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN \n    patients_of_interest poi ON ce.subject_id = poi.subject_id AND ce.hadm_id = poi.hadm_id\n),\n\n-- Calculate LOS\nlos AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los\n  FROM \n    patients_of_interest\n  WHERE \n    hospital_expire_flag = 0 AND deathtime IS NULL  -- Survivor\n),\n\n-- Combined data\ncombined_data AS (\n  SELECT \n    poi.hadm_id,\n    m.ninety_day_mortality,\n    COALESCE(aki.aki, 0) AS aki,\n    COALESCE(aki.ards, 0) AS ards,\n    COALESCE(l.los, 0) AS los\n  FROM \n    patients_of_interest poi\n  LEFT JOIN \n    mortality m ON poi.hadm_id = m.hadm_id\n  LEFT JOIN \n    aki_ards aki ON poi.hadm_id = aki.hadm_id\n  LEFT JOIN \n    los l ON poi.hadm_id = l.hadm_id\n),\n\n-- Calculate risk quintiles and statistics\nquintile_stats AS (\n  SELECT \n    NTILE(5) OVER (ORDER BY cd.hadm_id) AS risk_quintile,\n    cd.ninety_day_mortality,\n    cd.aki,\n    cd.ards,\n    cd.los\n  FROM \n    combined_data cd\n)\n\nSELECT \n  risk_quintile,\n  AVG(ninety_day_mortality) AS ninety_day_mortality_rate,\n  -- General 70\u201380 female 90\u2011day mortality for comparison\n  (SELECT \n     AVG(ninety_day_mortality)\n   FROM \n     mortality\n   WHERE \n     hadm_id IN (\n       SELECT \n         hadm_id\n       FROM \n         patients_of_interest\n     )) AS general_ninety_day_mortality,\n  AVG(aki) AS aki_rate,\n  AVG(ards) AS ards_rate,\n  PERCENTILE_CONT(0.5)(los) OVER (PARTITION BY risk_quintile) AS median_survivor_los\nFROM \n  quintile_stats\nGROUP BY \n  risk_quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Double function call parentheses at [123:23]; reason: invalidQuery, location: query, message: Syntax error: Double function call parentheses at [123:23]\n\nLocation: US\nJob ID: 50d25e8c-3063-47b4-bf10-193e67801594\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [94:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [94:24]\n\nLocation: US\nJob ID: c602dc36-126d-4816-83c6-8505c2293fe9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [111:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [111:24]\n\nLocation: US\nJob ID: e5ad3ce0-6746-4a6c-991c-52953ba77e3d\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Double function call parentheses at [123:23]; reason: invalidQuery, location: query, message: Syntax error: Double function call parentheses at [123:23]\n\nLocation: US\nJob ID: 50d25e8c-3063-47b4-bf10-193e67801594\n"
+    }
+  ]
+}

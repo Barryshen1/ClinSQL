@@ -1,0 +1,28 @@
+{
+  "query": "For an 84-year-old man: among male ICU patients aged 79\u201389 with pulmonary embolism, what is the 75th percentile of diagnostic utilization score in first 24h, and how do their ICU LOS and in\u2011hospital mortality compare to the general ICU population?",
+  "final_sql": "WITH\n-- Get male patients aged 79-89 with pulmonary embolism\npe_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.intime AS icu_intime,\n    i.outtime AS icu_outtime,\n    i.los AS icu_los,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 79 AND 89\n    AND d.icd_code LIKE 'I26%'  -- Pulmonary embolism ICD-10 codes\n    AND d.icd_version = 10\n),\n\n-- Get diagnostic tests in first 24 hours of ICU admission\ndiagnostic_tests AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    COUNT(DISTINCT l.itemid) AS num_lab_tests,\n    0 AS num_micro_tests\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    pe_patients p\n    ON l.subject_id = p.subject_id AND l.hadm_id = p.hadm_id\n  WHERE\n    l.charttime BETWEEN p.icu_intime AND TIMESTAMP_ADD(p.icu_intime, INTERVAL 24 HOUR)\n  GROUP BY\n    l.subject_id, l.hadm_id\n\n  UNION ALL\n\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    0 AS num_lab_tests,\n    COUNT(DISTINCT m.test_itemid) AS num_micro_tests\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.microbiologyevents` m\n  JOIN\n    pe_patients p\n    ON m.subject_id = p.subject_id AND m.hadm_id = p.hadm_id\n  WHERE\n    m.charttime BETWEEN p.icu_intime AND TIMESTAMP_ADD(p.icu_intime, INTERVAL 24 HOUR)\n  GROUP BY\n    m.subject_id, m.hadm_id\n),\n\n-- Aggregate diagnostic tests per patient\npe_diagnostic_scores AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.stay_id,\n    p.icu_los,\n    p.hospital_expire_flag,\n    SUM(COALESCE(dt.num_lab_tests, 0) + COALESCE(dt.num_micro_tests, 0)) AS diagnostic_utilization_score\n  FROM\n    pe_patients p\n  LEFT JOIN\n    diagnostic_tests dt\n    ON p.subject_id = dt.subject_id AND p.hadm_id = dt.hadm_id\n  GROUP BY\n    p.subject_id, p.hadm_id, p.stay_id, p.icu_los, p.hospital_expire_flag\n),\n\n-- Get general ICU population for comparison\ngeneral_icu_population AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.los AS icu_los,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n)\n\n-- Final results\nSELECT\n  'PE Patients' AS cohort,\n  PERCENTILE_CONT(diagnostic_utilization_score, 0.75) OVER() AS percentile_75_diagnostic_score,\n  AVG(icu_los) AS avg_icu_los,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate\nFROM\n  pe_diagnostic_scores\n\nUNION ALL\n\nSELECT\n  'General ICU Population' AS cohort,\n  NULL AS percentile_75_diagnostic_score,\n  AVG(icu_los) AS avg_icu_los,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate\nFROM\n  general_icu_population;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column diagnostic_utilization_score which is neither grouped nor aggregated at [101:19]; reason: invalidQuery, location: query, message: SELECT list expression references column diagnostic_utilization_score which is neither grouped nor aggregated at [101:19]\n\nLocation: US\nJob ID: 56871b8c-a2b2-402a-890d-42f9486c3f77\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: stay_id at [40:27]; reason: invalidQuery, location: query, message: Unrecognized name: stay_id at [40:27]\n\nLocation: US\nJob ID: dd5e63ce-c691-4226-a4f6-69b1c9d677ba\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Subquery of type IN must have only one output column at [40:7]; reason: invalidQuery, location: query, message: Subquery of type IN must have only one output column at [40:7]\n\nLocation: US\nJob ID: 14af7e10-a9b5-44de-ae53-6250d9a30eb7\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column diagnostic_utilization_score which is neither grouped nor aggregated at [101:19]; reason: invalidQuery, location: query, message: SELECT list expression references column diagnostic_utilization_score which is neither grouped nor aggregated at [101:19]\n\nLocation: US\nJob ID: 56871b8c-a2b2-402a-890d-42f9486c3f77\n"
+    }
+  ]
+}

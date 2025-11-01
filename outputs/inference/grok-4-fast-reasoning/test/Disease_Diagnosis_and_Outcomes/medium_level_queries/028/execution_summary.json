@@ -1,0 +1,22 @@
+{
+  "query": "For my 48\u2011year\u2011old male with heart failure, among male patients aged 43\u201353 with HF, what is in\u2011hospital mortality (%) stratified by LOS quartiles (Q1\u2013Q4) and comorbidity burden (low/medium/high)?",
+  "final_sql": "WITH base_admissions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND a.dischtime IS NOT NULL\n    AND a.admittime IS NOT NULL\n),\nhf_admissions AS (\n  SELECT DISTINCT ba.*\n  FROM base_admissions ba\n  WHERE EXISTS (\n    SELECT 1 \n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE d.hadm_id = ba.hadm_id\n      AND (\n        (d.icd_version = 9 AND d.icd_code LIKE '428%') \n        OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n      )\n  )\n),\ncohort AS (\n  SELECT \n    ha.subject_id,\n    ha.hadm_id,\n    ha.hospital_expire_flag,\n    ha.gender,\n    ha.anchor_age,\n    ha.los_days,\n    COUNT(d.icd_code) AS num_diagnoses\n  FROM hf_admissions ha\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON ha.hadm_id = d.hadm_id\n  GROUP BY \n    ha.subject_id, ha.hadm_id, ha.hospital_expire_flag, \n    ha.gender, ha.anchor_age, ha.los_days\n),\nstratified AS (\n  SELECT \n    c.*,\n    NTILE(4) OVER (ORDER BY c.los_days ASC) AS los_quartile,\n    NTILE(3) OVER (ORDER BY c.num_diagnoses ASC) AS comorb_tertile\n  FROM cohort c\n  WHERE c.los_days > 0\n)\nSELECT \n  CASE \n    WHEN los_quartile = 1 THEN 'Q1'\n    WHEN los_quartile = 2 THEN 'Q2'\n    WHEN los_quartile = 3 THEN 'Q3'\n    ELSE 'Q4'\n  END AS los_quartile,\n  CASE \n    WHEN comorb_tertile = 1 THEN 'low'\n    WHEN comorb_tertile = 2 THEN 'medium'\n    ELSE 'high'\n  END AS comorbidity_burden,\n  COUNT(*) AS n_admissions,\n  SUM(hospital_expire_flag) AS n_deaths,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct\nFROM stratified\nGROUP BY los_quartile, comorb_tertile\nORDER BY los_quartile, comorb_tertile;",
+  "execution_success": true,
+  "row_count": 12,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:10]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [25:10]\n\nLocation: US\nJob ID: b85cb4b5-8c40-4add-8836-e0b209c79117\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 12,
+      "error": null
+    }
+  ]
+}

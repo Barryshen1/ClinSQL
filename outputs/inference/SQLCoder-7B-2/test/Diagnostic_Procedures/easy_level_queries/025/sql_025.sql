@@ -1,0 +1,1 @@
+SELECT MIN(COUNT(DISTINCT p.procedure_id)) AS min_procedures FROM physionet-data.mimiciv_3_1_hosp.patients p JOIN physionet-data.mimiciv_3_1_hosp.procedures_icd pi ON p.subject_id = pi.subject_id WHERE p.gender = 'F' AND EXTRACT(YEAR FROM AGE(p.dob)) = 45 AND EXTRACT(YEAR FROM AGE(p.dob)) BETWEEN 40 AND 50 AND pi.icd_code = '477050';

@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating an 87-year-old woman admitted with pneumonia. Among female inpatients aged 82\u201392 with pneumonia, stratified into quintiles by the study\u2019s composite risk score, report for each quintile: 30\u2011day mortality, cardiovascular and neurologic complication rates, and median LOS among survivors.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    p.dod,\n    a.hospital_expire_flag,\n    (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) AS calculated_age,\n    NTILE(5) OVER (ORDER BY (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age)) AS quintile,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    -- 30-day mortality flag\n    CASE \n      WHEN a.deathtime IS NOT NULL \n           AND a.deathtime <= TIMESTAMP_ADD(a.admittime, INTERVAL 30 DAY) THEN 1\n      WHEN a.deathtime IS NULL \n           AND p.dod IS NOT NULL \n           AND DATE(p.dod) <= DATE_ADD(DATE(a.admittime), INTERVAL 30 DAY) THEN 1\n      ELSE 0 \n    END AS mortality_30d,\n    -- Cardiovascular complication flag (secondary diagnoses)\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        WHERE di.hadm_id = a.hadm_id \n          AND di.icd_version = 10\n          AND di.seq_num > 1\n          AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%' OR di.icd_code LIKE 'I50%')\n      ) THEN 1 ELSE 0 \n    END AS has_cardio,\n    -- Neurologic complication flag (secondary diagnoses)\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        WHERE di.hadm_id = a.hadm_id \n          AND di.icd_version = 10\n          AND di.seq_num > 1\n          AND (di.icd_code LIKE 'I63%' OR di.icd_code LIKE 'G40%' OR di.icd_code LIKE 'G41%')\n      ) THEN 1 ELSE 0 \n    END AS has_neuro\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd \n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 82 AND 92\n    AND d.seq_num = 1\n    AND d.icd_version = 10\n    AND LOWER(dd.long_title) LIKE '%pneumonia%'\n),\nmetrics AS (\n  SELECT \n    quintile,\n    COUNT(*) AS n_patients,\n    SUM(mortality_30d) / COUNT(*) AS mortality_rate,\n    SUM(has_cardio) / COUNT(*) AS cardio_rate,\n    SUM(has_neuro) / COUNT(*) AS neuro_rate\n  FROM cohort\n  GROUP BY quintile\n),\nsurvivor_los AS (\n  SELECT \n    quintile,\n    APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_los\n  FROM cohort\n  WHERE mortality_30d = 0\n  GROUP BY quintile\n)\nSELECT \n  m.quintile,\n  m.n_patients,\n  m.mortality_rate,\n  m.cardio_rate,\n  m.neuro_rate,\n  s.median_los\nFROM metrics m\nLEFT JOIN survivor_los s \n  ON m.quintile = s.quintile\nORDER BY m.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [70:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [70:26]\n\nLocation: US\nJob ID: a957da18-9f3b-4813-94cc-7a9b4bab1a1a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [54:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [54:9]\n\nLocation: US\nJob ID: 29112d65-cc7a-4537-981b-6bca8f911ed9\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "Male patient, 94. Among male ICU patients aged 89\u201399, what is the 95th\u2011percentile 48\u2011hour instability score for ischemic stroke? For the top instability quartile, compare ischemic stroke versus general ICU: N, mean instability, mean abnormal episodes, mean ICU LOS (hrs), and mortality.",
+  "final_sql": "WITH patient_stay AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year) AS age,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    i.los AS icu_los_days,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays i ON p.subject_id = i.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON i.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year)) BETWEEN 89 AND 99\n),\nstroke_diagnoses AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (di.icd_version = 10 AND d.icd_code LIKE 'I63%')\n     OR (di.icd_version = 9 AND d.icd_code IN ('43401', '43411'))  -- Note: ICD-9 codes in MIMIC are stored without dots\n),\ncohort AS (\n  SELECT \n    ps.*,\n    CASE WHEN sd.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS ischemic_stroke\n  FROM patient_stay ps\n  LEFT JOIN stroke_diagnoses sd ON ps.hadm_id = sd.hadm_id\n),\ninstability_metrics AS (\n  SELECT \n    c.stay_id,\n    c.hadm_id,\n    c.ischemic_stroke,\n    c.icu_los_days,\n    c.hospital_expire_flag,\n    COUNT(DISTINCT ce.itemid) AS instability_score,  -- distinct vitals/measurements in first 48h\n    COUNTIF(ce.warning = 1) AS abnormal_episodes\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.chartevents ce \n    ON c.stay_id = ce.stay_id \n    AND ce.charttime >= c.intime \n    AND ce.charttime < DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n    AND ce.value IS NOT NULL  -- valid measurements only\n  GROUP BY c.stay_id, c.hadm_id, c.ischemic_stroke, c.icu_los_days, c.hospital_expire_flag\n),\ninstability_percentiles AS (\n  SELECT\n    ischemic_stroke,\n    PERCENTILE_CONT(instability_score, 0.95) OVER() AS p95_instability\n  FROM instability_metrics\n  WHERE ischemic_stroke = 1\n  LIMIT 1\n),\noverall_stats AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY instability_score DESC) AS instability_quartile\n  FROM instability_metrics\n),\ntop_quartile AS (\n  SELECT *\n  FROM overall_stats\n  WHERE instability_quartile = 1  -- top 25% most unstable\n)\nSELECT\n  'ischemic_stroke' AS group_type,\n  ischemic_stroke,\n  COUNT(*) AS N,\n  AVG(instability_score) AS mean_instability,\n  AVG(abnormal_episodes) AS mean_abnormal_episodes,\n  AVG(icu_los_days * 24) AS mean_icu_los_hours,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM top_quartile\nGROUP BY ischemic_stroke\n\nUNION ALL\n\nSELECT\n  '95th_percentile_instability' AS group_type,\n  CAST(NULL AS INT64) AS ischemic_stroke,\n  CAST(NULL AS INT64) AS N,\n  p95_instability AS mean_instability,\n  CAST(NULL AS FLOAT64) AS mean_abnormal_episodes,\n  CAST(NULL AS FLOAT64) AS mean_icu_los_hours,\n  CAST(NULL AS FLOAT64) AS mortality_rate\nFROM instability_percentiles\n;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected string literal 'I63' at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected string literal 'I63' at [1:6]\n\nLocation: US\nJob ID: c4bfe501-5797-4659-b9e6-8e5f8fef8553\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

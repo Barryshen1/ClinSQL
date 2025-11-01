@@ -1,0 +1,28 @@
+{
+  "query": "89-year-old woman with DKA. Among female inpatients 84\u201394 with DKA during first 48h, compare those with vs without hyperkalemia\u2011risk drug interactions: mean medication complexity and percentile, LOS and mortality; report LOS and mortality for top complexity quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ie.los,\n    adm.hospital_expire_flag,\n    pat.anchor_age\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays ie\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON ie.hadm_id = adm.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients pat\n    ON ie.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 84 AND 94\n    AND ie.intime = (\n      SELECT MIN(intime)\n      FROM physionet-data.mimiciv_3_1_icu.icustays\n      WHERE hadm_id = ie.hadm_id\n    )\n),\n\n-- DKA diagnosis during ICU stay\ndkas AS (\n  SELECT DISTINCT\n    cohort.subject_id,\n    cohort.hadm_id,\n    cohort.stay_id,\n    cohort.los,\n    cohort.hospital_expire_flag\n  FROM\n    cohort\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd dx\n    ON cohort.hadm_id = dx.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d\n    ON dx.icd_code = d.icd_code AND dx.icd_version = d.icd_version\n  WHERE\n    LOWER(d.long_title) LIKE '%ketoacidosis%'\n),\n\n-- Medications in first 48h of ICU stay\nmeds AS (\n  SELECT DISTINCT\n    cohort.stay_id,\n    di.label AS med_name,\n    di.itemid\n  FROM\n    cohort\n  JOIN\n    physionet-data.mimiciv_3_1_icu.inputevents iv\n    ON cohort.stay_id = iv.stay_id\n  JOIN\n    physionet-data.mimiciv_3_1_icu.d_items di\n    ON iv.itemid = di.itemid\n  WHERE\n    iv.starttime BETWEEN cohort.intime AND cohort.intime + INTERVAL 48 HOUR\n    AND di.category IN ('Fluids/Intake', 'Medications', 'Antibiotics')\n),\n\n-- Medication complexity (count distinct meds)\nmed_complexity AS (\n  SELECT\n    stay_id,\n    COUNT(DISTINCT itemid) AS med_count\n  FROM\n    meds\n  GROUP BY\n    stay_id\n),\n\n-- Hyperkalemia-risk drugs (example itemids or labels)\nhyperkalemia_drugs AS (\n  SELECT itemid\n  FROM physionet-data.mimiciv_3_1_icu.d_items\n  WHERE LOWER(label) IN (\n    'spironolactone',\n    'eplerenone',\n    'lisinopril',\n    'enalapril',\n    'furosemide',\n    'hydrochlorothiazide',\n    'ibuprofen',\n    'naproxen',\n    'kcl',\n    'potassium chloride'\n  )\n),\n\n-- Patients with hyperkalemia-risk meds\npatients_with_risk AS (\n  SELECT DISTINCT\n    meds.stay_id\n  FROM\n    meds\n  JOIN\n    hyperkalemia_drugs hkd\n    ON meds.itemid = hkd.itemid\n),\n\n-- Final cohort with complexity and risk flag\nfinal_cohort AS (\n  SELECT\n    c.stay_id,\n    c.los,\n    c.hospital_expire_flag,\n    COALESCE(mc.med_count, 0) AS med_count,\n    CASE WHEN pr.stay_id IS NOT NULL THEN 1 ELSE 0 END AS has_risk_drug\n  FROM\n    dkas c\n  LEFT JOIN\n    med_complexity mc\n    ON c.stay_id = mc.stay_id\n  LEFT JOIN\n    patients_with_risk pr\n    ON c.stay_id = pr.stay_id\n),\n\n-- Quartile of medication complexity\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY med_count) AS med_complexity_quartile\n  FROM\n    final_cohort\n),\n\n-- Aggregate stats\nsummary_stats AS (\n  SELECT\n    has_risk_drug,\n    AVG(med_count) AS mean_med_count,\n    APPROX_QUANTILES(med_count, 100)[OFFSET(50)] AS median_med_count,\n    AVG(los) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM\n    quartiles\n  GROUP BY\n    has_risk_drug\n),\n\n-- Top quartile outcomes\ntop_quartile_outcomes AS (\n  SELECT\n    has_risk_drug,\n    AVG(los) AS mean_los_top_quartile,\n    AVG(hospital_expire_flag) AS mortality_top_quartile\n  FROM\n    quartiles\n  WHERE\n    med_complexity_quartile = 4\n  GROUP BY\n    has_risk_drug\n)\n\n-- Final output\nSELECT\n  s.has_risk_drug,\n  s.mean_med_count,\n  s.median_med_count,\n  s.mean_los,\n  s.mortality_rate,\n  t.mean_los_top_quartile,\n  t.mortality_top_quartile\nFROM\n  summary_stats s\nJOIN\n  top_quartile_outcomes t\n  ON s.has_risk_drug = t.has_risk_drug\nORDER BY\n  s.has_risk_drug;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside iv at [62:8]; reason: invalidQuery, location: query, message: Name charttime not found inside iv at [62:8]\n\nLocation: US\nJob ID: 64090b79-81d8-4521-a7e5-ab21e0441ffb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside c at [110:7]; reason: invalidQuery, location: query, message: Name los not found inside c at [110:7]\n\nLocation: US\nJob ID: 4db3eec7-6756-4589-8381-73b22bb896e6\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 67-year-old female ICU patient. Among female ICU patients aged 62\u201372, show first-24h per-measurement temperature categories (<36.0 / 36.0\u201337.9 / \u226538.0\u00b0C) with mean, median, IQR and AKI rate.",
+  "final_sql": "WITH first_icu AS (\n  SELECT *\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  WHERE first_careunit IS NOT NULL  -- Ensure valid ICU stay\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) = 1\n),\npatients_icu AS (\n  SELECT \n    f.subject_id,\n    f.stay_id,\n    f.hadm_id,\n    f.intime,\n    p.gender,\n    p.anchor_age\n  FROM first_icu f\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON f.subject_id = p.subject_id\n  WHERE p.gender = 'F' \n    AND p.anchor_age BETWEEN 62 AND 72\n),\nbaseline_creat AS (\n  SELECT \n    pi.subject_id,\n    pi.stay_id,\n    pi.intime,\n    MIN(le.valuenum) AS baseline_creat\n  FROM patients_icu pi\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON pi.subject_id = le.subject_id \n    AND pi.hadm_id = le.hadm_id\n  WHERE le.itemid = 50912  -- Creatinine\n    AND le.valuenum BETWEEN 0.1 AND 10\n    AND le.charttime < pi.intime \n    AND le.charttime >= TIMESTAMP_SUB(pi.intime, INTERVAL 48 HOUR)\n  GROUP BY pi.subject_id, pi.stay_id, pi.intime\n  HAVING baseline_creat IS NOT NULL\n),\npost_creat AS (\n  SELECT \n    pi.subject_id,\n    pi.stay_id,\n    MAX(le.valuenum) AS max_post_creat\n  FROM patients_icu pi\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON pi.subject_id = le.subject_id \n    AND pi.hadm_id = le.hadm_id\n  WHERE le.itemid = 50912\n    AND le.valuenum BETWEEN 0.1 AND 10\n    AND le.charttime >= pi.intime \n    AND le.charttime < TIMESTAMP_ADD(pi.intime, INTERVAL 48 HOUR)\n  GROUP BY pi.subject_id, pi.stay_id\n  HAVING max_post_creat IS NOT NULL\n),\naki AS (\n  SELECT \n    pi.subject_id,\n    pi.stay_id,\n    CASE \n      WHEN bc.baseline_creat IS NULL OR pc.max_post_creat IS NULL THEN NULL\n      WHEN pc.max_post_creat >= bc.baseline_creat * 1.5 \n        OR pc.max_post_creat >= bc.baseline_creat + 0.3 THEN 1\n      ELSE 0 \n    END AS has_aki\n  FROM patients_icu pi\n  LEFT JOIN baseline_creat bc ON pi.subject_id = bc.subject_id AND pi.stay_id = bc.stay_id\n  LEFT JOIN post_creat pc ON pi.subject_id = pc.subject_id AND pi.stay_id = pc.stay_id\n),\ntemps AS (\n  SELECT \n    pi.*,\n    ce.charttime,\n    CASE \n      WHEN ce.itemid = 678 THEN (ce.valuenum - 32) * 5 / 9  -- F to C\n      ELSE ce.valuenum \n    END AS temp_c\n  FROM patients_icu pi\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON pi.subject_id = ce.subject_id \n    AND pi.hadm_id = ce.hadm_id \n    AND pi.stay_id = ce.stay_id\n  WHERE ce.itemid IN (676, 678)  -- Temperature C or F\n    AND ce.valuenum IS NOT NULL \n    AND ce.valuenum > 0\n    AND ce.charttime >= pi.intime \n    AND ce.charttime < TIMESTAMP_ADD(pi.intime, INTERVAL 1 DAY)\n    AND CASE \n      WHEN ce.itemid = 678 THEN (ce.valuenum - 32) * 5 / 9  -- F to C\n      ELSE ce.valuenum \n    END BETWEEN 20 AND 45  -- Plausible range for temp_c\n)\nSELECT \n  CASE \n    WHEN temp_c < 36.0 THEN '<36.0'\n    WHEN temp_c >= 36.0 AND temp_c < 38.0 THEN '36.0\u201337.9'\n    ELSE '>=38.0'\n  END AS temp_category,\n  COUNT(*) AS n_measurements,\n  ROUND(AVG(temp_c), 2) AS mean_temp_c,\n  ROUND(APPROX_QUANTILES(temp_c, 4)[OFFSET(2)], 2) AS median_temp_c,\n  ROUND(APPROX_QUANTILES(temp_c, 4)[OFFSET(1)], 2) AS q1_temp_c,\n  ROUND(APPROX_QUANTILES(temp_c, 4)[OFFSET(3)], 2) AS q3_temp_c,\n  ROUND(APPROX_QUANTILES(temp_c, 4)[OFFSET(3)] - APPROX_QUANTILES(temp_c, 4)[OFFSET(1)], 2) AS iqr_temp_c,\n  -- AKI rate: average among patients with measurements in this category who have AKI data\n  ROUND(AVG(CASE WHEN a.has_aki IS NOT NULL THEN a.has_aki ELSE NULL END), 3) AS aki_rate\nFROM temps t\nLEFT JOIN aki a ON t.subject_id = a.subject_id AND t.stay_id = a.stay_id\nGROUP BY temp_category\nORDER BY \n  CASE temp_category\n    WHEN '<36.0' THEN 1\n    WHEN '36.0\u201337.9' THEN 2\n    ELSE 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: temp_c at [37:9]; reason: invalidQuery, location: query, message: Unrecognized name: temp_c at [37:9]\n\nLocation: US\nJob ID: 6dfe5563-b2f7-438b-bc2c-623a6b087cbf\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e945173f-68bd-46e7-83d2-381b14a29ece\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

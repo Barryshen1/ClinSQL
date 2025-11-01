@@ -1,0 +1,22 @@
+{
+  "query": "For a 55-year-old man: among males 50\u201360 with sepsis (excluding septic shock), report in-hospital mortality (%) with 95% CIs and median time-to-death among non-survivors (days) by LOS (<8 vs \u22658 days).",
+  "final_sql": "WITH sepsis_hadm AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code\n   AND d.icd_version = di.icd_version\n  WHERE LOWER(di.long_title) LIKE '%sepsis%'\n),\nshock_hadm AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code\n   AND d.icd_version = di.icd_version\n  WHERE LOWER(di.long_title) LIKE '%septic shock%'\n),\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    TIMESTAMP_DIFF(a.deathtime, a.admittime, DAY) AS time_to_death_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING (subject_id)\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND a.hadm_id IN (SELECT hadm_id FROM sepsis_hadm)\n    AND a.hadm_id NOT IN (SELECT hadm_id FROM shock_hadm)\n),\nagg AS (\n  SELECT\n    CASE WHEN los_days < 8 THEN '<8' ELSE '>=8' END AS los_group,\n    COUNT(1) AS n,\n    SUM(IF(hospital_expire_flag = 1, 1, 0)) AS deaths,\n    SAFE_DIVIDE(SUM(IF(hospital_expire_flag = 1, 1, 0)), COUNT(1)) AS p,\n    -- median time-to-death among non-survivors (days). APPROX_QUANTILES ignores NULLs.\n    APPROX_QUANTILES(\n      IF(hospital_expire_flag = 1, time_to_death_days, NULL),\n      2\n    )[OFFSET(1)] AS median_time_to_death_days\n  FROM cohort\n  GROUP BY los_group\n)\nSELECT\n  los_group,\n  n AS admissions,\n  deaths,\n  -- mortality percent\n  ROUND(100 * p, 3) AS mortality_pct,\n  -- 95% CI using normal approximation, clamped to [0,1], reported as percent\n  CASE\n    WHEN n > 0 THEN ROUND(100 * GREATEST(0, p - 1.96 * SQRT(SAFE_DIVIDE(p * (1 - p), n))), 3)\n    ELSE NULL\n  END AS mortality_ci_lower_pct,\n  CASE\n    WHEN n > 0 THEN ROUND(100 * LEAST(1, p + 1.96 * SQRT(SAFE_DIVIDE(p * (1 - p), n))), 3)\n    ELSE NULL\n  END AS mortality_ci_upper_pct,\n  -- median time-to-death among non-survivors (days); NULL if no deaths in group\n  median_time_to_death_days\nFROM agg\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:13]\n\nLocation: US\nJob ID: 06e75f3d-7f1d-46a1-b2dd-b89cc82533ef\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "As a 74-year-old female with heart failure, what are the mean non-invasive diagnostics per admission (imaging, ECG/EEG/PFT) for 1\u20134 vs 5\u20137\u2011day stays, stratified by ED/Urgent vs Elective?",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    CASE\n      -- stay_bucket: 1-4 days vs 5-7 days\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 5 AND 7 THEN '5-7'\n      ELSE NULL\n    END AS stay_bucket,\n    CASE\n      -- ED_Urgent vs Elective\n      WHEN a.admission_type IN ('EMERGENCY','URGENT') THEN 'ED_Urgent'\n      WHEN a.admission_type = 'ELECTIVE' THEN 'Elective'\n      ELSE NULL\n    END AS ed_group\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND (\n      (di.icd_version = 9 AND di.icd_code LIKE '428%')\n      OR (di.icd_version = 10 AND di.icd_code LIKE 'I50%')\n    )\n    AND p.anchor_age BETWEEN 73 AND 75\n    AND a.dischtime IS NOT NULL\n    -- Only keep admissions that map to a valid stay bucket and a known ED/elective grouping\n    AND ( (TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) >= 1) )\n)\n\n, icu_chart_counts AS (\n  SELECT\n    ea.hadm_id,\n    ea.stay_bucket,\n    ea.ed_group,\n    SUM(CASE\n          WHEN LOWER(di_item.category) LIKE '%imaging%' OR LOWER(di_item.label) LIKE '%imaging%'\n          THEN 1 ELSE 0 END) AS imaging_count,\n    SUM(CASE\n          WHEN LOWER(di_item.category) LIKE '%ecg%' OR LOWER(di_item.label) LIKE '%ecg%' OR LOWER(di_item.label) LIKE '%ekg%'\n          THEN 1 ELSE 0 END) AS ecg_count,\n    SUM(CASE\n          WHEN LOWER(di_item.category) LIKE '%eeg%' OR LOWER(di_item.label) LIKE '%eeg%'\n          THEN 1 ELSE 0 END) AS eeg_count,\n    SUM(CASE\n          WHEN LOWER(di_item.category) LIKE '%pulmonary function%' OR LOWER(di_item.label) LIKE '%pft%' OR LOWER(di_item.label) LIKE '%spirometry%' OR LOWER(di_item.category) LIKE '%pulmonary function test%'\n          THEN 1 ELSE 0 END) AS pft_count\n  FROM eligible_admissions ea\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON icu.hadm_id = ea.hadm_id AND icu.subject_id = ea.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = icu.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di_item\n    ON di_item.itemid = ce.itemid\n  WHERE ce.charttime BETWEEN ea.admittime AND ea.dischtime\n  GROUP BY ea.hadm_id, ea.stay_bucket, ea.ed_group\n)\n\nSELECT\n  stay_bucket,\n  ed_group,\n  AVG(imaging_count) AS mean_imaging,\n  AVG(ecg_count) AS mean_ecg,\n  AVG(eeg_count) AS mean_eeg,\n  AVG(pft_count) AS mean_pft\nFROM icu_chart_counts\nWHERE ed_group IS NOT NULL AND stay_bucket IS NOT NULL\nGROUP BY stay_bucket, ed_group\nORDER BY stay_bucket, ed_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]\n\nLocation: US\nJob ID: 833a89a7-caca-41bc-94cd-5dbac9df97b7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT percent_rank() OVER (ORDER BY AVG(value)) AS percentile_rank FROM labevents JOIN icustays ON labevents.subject_id = icustays.subject_id WHERE itemid = 101 AND value = 36.0 AND EXTRACT(YEAR FROM charttime) = 2020 AND subject_id IN (SELECT subject_id FROM patients WHERE gender = 'M' AND EXTRACT(YEAR FROM age(CURRENT_DATE, DOB)) BETWEEN 85 AND 95) GROUP BY subject_id;

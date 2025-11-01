@@ -1,0 +1,16 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH target_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 88 AND 98\n),\n\ncopd_admissions AS (\n  SELECT DISTINCT tp.subject_id, hadm_id\n  FROM target_patients tp\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n    ON tp.subject_id = di.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_code IN ('491.21', 'J44.1')\n),\n\nicu_stays_target AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    DATETIME_DIFF(icu.outtime, icu.intime, HOUR) / 24.0 AS icu_los_days,\n    adm.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN copd_admissions ca\n    ON icu.hadm_id = ca.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n),\n\nprocedures_first_72h AS (\n  SELECT\n    ist.stay_id,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedures\n  FROM icu_stays_target ist\n  JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON ist.stay_id = pe.stay_id\n  WHERE pe.starttime >= ist.intime\n    AND pe.starttime <= DATETIME_ADD(ist.intime, INTERVAL 72 HOUR)\n  GROUP BY ist.stay_id\n),\n\npercentile_75 AS (\n  SELECT\n    APPROX_QUANTILES(distinct_procedures, 100)[OFFSET(75)] AS p75_distinct_procedures\n  FROM procedures_first_72h\n),\n\nall_icu_stays_age_matched AS (\n  SELECT\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    DATETIME_DIFF(icu.outtime, icu.intime, HOUR) / 24.0 AS icu_los_days,\n    adm.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN target_patients tp\n    ON icu.subject_id = tp.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n),\n\ntarget_stats AS (\n  SELECT\n    AVG(icu_los_days) AS mean_icu_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM icu_stays_target\n),\n\nall_stats AS (\n  SELECT\n    AVG(icu_los_days) AS mean_icu_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM all_icu_stays_age_matched\n)\n\nSELECT\n  (SELECT p75_distinct_procedures FROM percentile_75) AS p75_distinct_procedures_72h,\n  ts.mean_icu_los AS target_mean_icu_los,\n  ts.mortality_rate AS target_mortality_rate,\n  als.mean_icu_los AS all_mean_icu_los,\n  als.mortality_rate AS all_mortality_rate\nFROM target_stats ts\nCROSS JOIN all_stats als;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

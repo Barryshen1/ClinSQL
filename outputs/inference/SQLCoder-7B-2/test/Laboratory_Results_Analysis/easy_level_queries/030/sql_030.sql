@@ -1,0 +1,1 @@
+SELECT MIN(l.value) AS min_troponin_level FROM labevents l JOIN patients p ON l.subject_id = p.subject_id JOIN admissions a ON l.hadm_id = a.hadm_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dob)) = 57 AND l.itemid = 87164886 AND a.admission_type = 'ACS';

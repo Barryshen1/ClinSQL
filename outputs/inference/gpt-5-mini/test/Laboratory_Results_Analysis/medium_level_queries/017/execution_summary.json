@@ -1,0 +1,22 @@
+{
+  "query": "I have a 52-year-old male to evaluate. In males 47\u201357 admitted for ischemic heart disease whose first Troponin\u2011T exceeded the 99th percentile (>0.014 ng/mL), what are the median and IQR?",
+  "final_sql": "WITH troponin_t_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n     OR LOWER(label) LIKE '%troponin-t%'\n),\ntroponin_events AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    LOWER(COALESCE(le.valueuom, '')) AS valueuom\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_t_itemids it ON le.itemid = it.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND LOWER(COALESCE(le.valueuom, '')) LIKE '%ng%'  -- limit to ng (e.g., ng/mL)\n),\nfirst_troponin_per_adm AS (\n  -- take the earliest troponin event during the admission\n  SELECT\n    t.subject_id,\n    t.hadm_id,\n    t.charttime,\n    t.valuenum AS first_troponin\n  FROM (\n    SELECT\n      te.*,\n      ROW_NUMBER() OVER (PARTITION BY te.subject_id, te.hadm_id ORDER BY te.charttime ASC) AS rn\n    FROM troponin_events te\n  ) t\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON t.hadm_id = a.hadm_id\n    AND t.subject_id = a.subject_id\n    -- ensure the lab occurred during the admission\n    AND t.charttime >= a.admittime\n    AND t.charttime <= a.dischtime\n  WHERE t.rn = 1\n),\nihd_diagnoses AS (\n  -- admissions with any diagnosis code for ischemic heart disease:\n  -- ICD-9 prefixes 410-414, ICD-10 prefixes I20-I25\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE (\n      d.icd_version = 9\n      AND SUBSTR(d.icd_code, 1, 3) IN ('410','411','412','413','414')\n    )\n    OR (\n      d.icd_version = 10\n      AND UPPER(SUBSTR(d.icd_code, 1, 3)) IN ('I20','I21','I22','I23','I24','I25')\n    )\n),\neligible_admissions AS (\n  -- link patients, admissions with IHD diagnoses and age/gender filters\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN ihd_diagnoses id ON a.subject_id = id.subject_id AND a.hadm_id = id.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 47 AND 57\n)\nSELECT\n  cnt.n_admissions,\n  q.q[OFFSET(25)] AS q1_troponin_ng_per_mL,\n  q.q[OFFSET(50)] AS median_troponin_ng_per_mL,\n  q.q[OFFSET(75)] AS q3_troponin_ng_per_mL,\n  SAFE_CAST(q.q[OFFSET(75)] - q.q[OFFSET(25)] AS FLOAT64) AS iqr_troponin_ng_per_mL\nFROM (\n  SELECT APPROX_QUANTILES(ft.first_troponin, 100) AS q\n  FROM first_troponin_per_adm ft\n  JOIN eligible_admissions ea USING (subject_id, hadm_id)\n  WHERE ft.first_troponin > 0.014  -- above the 99th percentile threshold given\n) q\nCROSS JOIN (\n  SELECT COUNT(1) AS n_admissions\n  FROM first_troponin_per_adm ft\n  JOIN eligible_admissions ea USING (subject_id, hadm_id)\n  WHERE ft.first_troponin > 0.014\n) cnt;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column q which is neither grouped nor aggregated at [67:3]; reason: invalidQuery, location: query, message: SELECT list expression references column q which is neither grouped nor aggregated at [67:3]\n\nLocation: US\nJob ID: 28328287-07b1-46de-b0a3-33e4e20df203\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

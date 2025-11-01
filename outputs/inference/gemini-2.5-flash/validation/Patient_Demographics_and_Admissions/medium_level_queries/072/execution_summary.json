@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old man. Among male medicine inpatients aged 74\u201384, report mean and median LOS and proportion with LOS \u22645 days, stratified by discharge home, hospice, and in\u2011hospital death.",
+  "final_sql": "WITH TargetAdmissions AS (\n    -- Select relevant admissions and patient demographics\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime,\n        ad.hospital_expire_flag,\n        ad.discharge_location,\n        p.gender,\n        p.anchor_age,\n        -- Calculate Length of Stay in fractional days\n        DATETIME_DIFF(ad.dischtime, ad.admittime, HOUR) / 24.0 AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON ad.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M' -- Male patients\n        AND p.anchor_age BETWEEN 74 AND 84 -- Aged 74-84\n        AND ad.dischtime > ad.admittime -- Ensure valid discharge time for LOS calculation\n),\nMedicineAdmissions AS (\n    -- Identify admissions where the *first* service was a medicine service\n    -- This assumes 'medicine inpatients' refers to the primary service type upon admission.\n    SELECT\n        s.hadm_id\n    FROM (\n        SELECT\n            s_inner.hadm_id,\n            s_inner.curr_service,\n            ROW_NUMBER() OVER (PARTITION BY s_inner.hadm_id ORDER BY s_inner.transfertime) AS rn\n        FROM\n            `physionet-data.mimiciv_3_1_hosp.services` AS s_inner\n    ) AS s\n    WHERE\n        s.rn = 1 -- Only consider the first service for the admission\n        AND s.curr_service IN ('MED', 'CMED', 'GENMED', 'TRAUMED', 'GPM', 'OBSMED') -- Common medicine service types in MIMIC-IV\n)\nSELECT\n    CASE\n        WHEN ta.hospital_expire_flag = 1 THEN 'In-hospital Death'\n        WHEN ta.discharge_location IN ('Hospice', 'Hospice - Home', 'Hospice - Medical Facility') THEN 'Hospice'\n        WHEN ta.discharge_location IN ('Home', 'Home Health Care') THEN 'Discharge Home'\n        -- Any other discharge_location not explicitly asked for is implicitly excluded by the WHERE clause below\n        ELSE 'Other_Discharge_Type_Excluded' -- Placeholder for outcomes to be filtered out\n    END AS discharge_outcome_category,\n    COUNT(DISTINCT ta.hadm_id) AS num_admissions,\n    ROUND(AVG(ta.los_days), 2) AS mean_los_days,\n    APPROX_QUANTILES(ta.los_days, 100)[OFFSET(50)] AS median_los_days,\n    ROUND(COUNTIF(ta.los_days <= 5) * 100.0 / COUNT(ta.hadm_id), 2) AS proportion_los_le_5_percent\nFROM\n    TargetAdmissions AS ta\nINNER JOIN\n    MedicineAdmissions AS ma\n    ON ta.hadm_id = ma.hadm_id\nWHERE\n    -- Filter to include only the specified discharge outcomes (home, hospice, in-hospital death)\n    (ta.hospital_expire_flag = 1\n    OR ta.discharge_location IN ('Hospice', 'Hospice - Home', 'Hospice - Medical Facility')\n    OR ta.discharge_location IN ('Home', 'Home Health Care'))\nGROUP BY\n    discharge_outcome_category\nORDER BY\n    discharge_outcome_category;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

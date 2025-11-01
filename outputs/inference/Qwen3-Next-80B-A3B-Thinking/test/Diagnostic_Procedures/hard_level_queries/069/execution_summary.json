@@ -1,0 +1,23 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH pe_patients AS (\n  SELECT \n    d.subject_id, \n    d.hadm_id, \n    p.gender, \n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON d.subject_id = p.subject_id\n  WHERE \n    di.long_title LIKE '%pulmonary embolism%'\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 44 AND 54\n),\nicu_first_stay AS (\n  SELECT \n    i.subject_id, \n    i.hadm_id, \n    i.stay_id, \n    i.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN pe_patients p \n    ON i.subject_id = p.subject_id AND i.hadm_id = p.hadm_id\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) = 1\n),\nprocedure_count AS (\n  SELECT \n    f.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM icu_first_stay f\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON f.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN f.intime AND f.intime + INTERVAL '72' HOUR\n  GROUP BY f.stay_id\n),\nadmissions_data AS (\n  SELECT \n    a.hadm_id,\n    a.hospital_expire_flag,\n    EXTRACT(DAY FROM (a.dischtime - a.admittime)) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN icu_first_stay f \n    ON a.hadm_id = f.hadm_id\n),\ncombined AS (\n  SELECT \n    pc.procedure_count,\n    ad.los_days,\n    ad.hospital_expire_flag,\n    NTILE(5) OVER (ORDER BY pc.procedure_count) AS quintile\n  FROM procedure_count pc\n  JOIN icu_first_stay f \n    ON pc.stay_id = f.stay_id\n  JOIN admissions_data ad \n    ON f.hadm_id = ad.hadm_id\n)\nSELECT \n  quintile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(los_days) AS avg_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent\nFROM combined\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [36:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [36:3]\n\nLocation: US\nJob ID: 8d5e8928-2d9e-4fcd-92a3-2c16d5ba5332\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

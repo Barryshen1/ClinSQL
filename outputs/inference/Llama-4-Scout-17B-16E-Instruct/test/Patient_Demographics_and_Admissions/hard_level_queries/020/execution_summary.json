@@ -1,0 +1,28 @@
+{
+  "query": "For an 81\u2011year\u2011old female: among female Medicare patients aged 76\u201386 transferred from another hospital with principal AMI (ICD\u20119 410*/ICD\u201110 I21*), report 30\u2011day readmission rate; median index LOS for readmitted vs not; percent index stays >4 days.",
+  "final_sql": "WITH \n  -- Define admissions of interest\n  admissions_of_interest AS (\n    SELECT \n      a.hadm_id,\n      a.subject_id,\n      a.admittime,\n      a.dischtime,\n      a.deathtime,\n      a.admission_type,\n      a.admit_provider_id,\n      a.admission_location,\n      a.discharge_location,\n      a.insurance,\n      a.language,\n      a.marital_status,\n      a.race,\n      a.edregtime,\n      a.edouttime,\n      a.hospital_expire_flag,\n      p.gender,\n      p.anchor_age,\n      p.anchor_year,\n      p.dod,\n      CASE \n        WHEN a.admission_type = 'Transfer in' THEN TRUE\n        ELSE FALSE\n      END AS transferred_in\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n    WHERE \n      p.gender = 'F'\n      AND p.anchor_age BETWEEN 76 AND 86\n      AND a.insurance LIKE '%Medicare%'\n      AND (a.admission_type = 'Transfer in')\n  ),\n  \n  -- Identify principal AMI\n  ami_admissions AS (\n    SELECT \n      hadm_id,\n      subject_id\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      (icd_code LIKE '410%' AND icd_version = 9) \n      OR (icd_code LIKE 'I21%' AND icd_version = 10)\n    AND seq_num = 1\n  ),\n  \n  -- Merge admissions of interest with AMI\n  merged_data AS (\n    SELECT \n      aoi.hadm_id,\n      aoi.subject_id,\n      aoi.dischtime,\n      aoi.admittime,\n      TIMESTAMPDIFF(DAY, aoi.admittime, aoi.dischtime) AS los\n    FROM \n      admissions_of_interest aoi\n    INNER JOIN \n      ami_admissions ami \n      ON aoi.hadm_id = ami.hadm_id\n  ),\n  \n  -- Identify readmissions within 30 days\n  readmissions AS (\n    SELECT \n      hadm_id,\n      MIN(admittime) AS readmit_time\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions`\n    GROUP BY \n      hadm_id\n  ),\n  \n  -- Flag readmitted patients\n  flagged_readmissions AS (\n    SELECT \n      md.hadm_id,\n      CASE \n        WHEN r.readmit_time IS NOT NULL AND r.readmit_time <= TIMESTAMP_ADD(md.dischtime, INTERVAL 30 DAY) THEN TRUE\n        ELSE FALSE\n      END AS readmitted\n    FROM \n      merged_data md\n    LEFT JOIN \n      readmissions r \n      ON md.hadm_id = r.hadm_id\n  )\n\nSELECT \n  COUNT(DISTINCT CASE WHEN readmitted THEN hadm_id END) / \n    COUNT(DISTINCT hadm_id) AS thirty_day_readmission_rate,\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY los) AS median_los_overall,\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY los) FILTER (WHERE readmitted) AS median_los_readmitted,\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY los) FILTER (WHERE NOT readmitted) AS median_los_not_readmitted,\n  AVG(CAST(los > 4 AS INT64)) * 100 AS percent_stays_greater_than_four_days\nFROM \n  flagged_readmissions\nCROSS JOIN \n  merged_data\nON \n  flagged_readmissions.hadm_id = merged_data.hadm_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got keyword WITHIN at [98:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [98:24]\n\nLocation: US\nJob ID: 6e06f352-a7c4-4175-b06e-d1d15e215155\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [69:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [69:24]\n\nLocation: US\nJob ID: 66198b0d-501a-4020-9736-9709a8602998\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword SELECT at [4:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword SELECT at [4:1]\n\nLocation: US\nJob ID: b4b175dd-53d9-4fc1-8c50-4eddc6f7c37d\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [98:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [98:24]\n\nLocation: US\nJob ID: 6e06f352-a7c4-4175-b06e-d1d15e215155\n"
+    }
+  ]
+}

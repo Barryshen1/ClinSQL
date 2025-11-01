@@ -1,0 +1,17 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 45 AND 55\n),\n\ntrauma_diagnoses AS (\n  SELECT DISTINCT\n    c.hadm_id\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON c.hadm_id = d.hadm_id\n  WHERE (d.icd_version = 9 AND d.icd_code BETWEEN '800' AND '999')\n     OR (d.icd_version = 10 AND (d.icd_code LIKE 'S%' OR d.icd_code LIKE 'T%'))\n),\n\ncohort_with_trauma AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN trauma_diagnoses td\n    ON c.hadm_id = td.hadm_id\n),\n\nmedication_complexity AS (\n  SELECT\n    c.hadm_id,\n    COUNT(DISTINCT p.drug) AS complexity_score\n  FROM cohort_with_trauma c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n    AND p.starttime >= c.admittime\n    AND p.starttime <= c.admittime + INTERVAL '7' DAY\n  GROUP BY c.hadm_id\n),\n\nreadmission AS (\n  SELECT\n    a1.hadm_id,\n    CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmitted_30d\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND a2.admittime <= a1.dischtime + INTERVAL '30' DAY\n  WHERE a1.hadm_id IN (SELECT hadm_id FROM cohort_with_trauma)\n),\n\nlos AS (\n  SELECT\n    hadm_id,\n    DATE_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE hadm_id IN (SELECT hadm_id FROM cohort_with_trauma)\n),\n\nall_data AS (\n  SELECT\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    mc.complexity_score,\n    r.readmitted_30d,\n    l.los_days\n  FROM cohort_with_trauma c\n  LEFT JOIN medication_complexity mc ON c.hadm_id = mc.hadm_id\n  LEFT JOIN readmission r ON c.hadm_id = r.hadm_id\n  LEFT JOIN los l ON c.hadm_id = l.hadm_id\n),\n\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM all_data\n)\n\nSELECT\n  tertile,\n  COUNT(hadm_id) AS admissions,\n  AVG(complexity_score) AS mean_score,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) * 100 AS mortality_percent,\n  AVG(readmitted_30d) * 100 AS readmission_30d_percent\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

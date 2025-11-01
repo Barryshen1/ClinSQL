@@ -1,0 +1,22 @@
+{
+  "query": "Consult: 70-year-old woman admitted for lower GI bleeding. For women 65\u201375 with lower GI bleed within first 72 hours, what is the 25th percentile lab instability score? Compare critical lab-event frequency with general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH lower_gi_bleed_admissions AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.deathtime, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 65 AND 75\n    AND (\n      diag.icd_code LIKE 'K55%' OR\n      diag.icd_code LIKE 'K57%' OR\n      diag.icd_code LIKE 'K62%' OR\n      diag.icd_code LIKE 'K92%'\n    )\n),\n\n-- Lab instability score for cohort: count abnormal labs in first 72h\ncohort_lab_instability AS (\n  SELECT\n    lgb.subject_id,\n    lgb.hadm_id,\n    COUNTIF(\n      lab.flag = 'abnormal'\n      AND TIMESTAMP_DIFF(lab.charttime, lgb.admittime, HOUR) BETWEEN 0 AND 72\n    ) AS lab_instability_score\n  FROM lower_gi_bleed_admissions lgb\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` lab\n    ON lgb.hadm_id = lab.hadm_id\n  GROUP BY lgb.subject_id, lgb.hadm_id\n),\n\n-- LOS and mortality for cohort\ncohort_los_mortality AS (\n  SELECT\n    lgb.subject_id,\n    lgb.hadm_id,\n    TIMESTAMP_DIFF(lgb.dischtime, lgb.admittime, HOUR)/24.0 AS los_days,\n    IF(lgb.hospital_expire_flag = 1 OR lgb.deathtime IS NOT NULL, 1, 0) AS mortality\n  FROM lower_gi_bleed_admissions lgb\n),\n\n-- General inpatient lab instability score (all admissions, all ages/genders)\ngeneral_lab_instability AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    COUNTIF(\n      lab.flag = 'abnormal'\n      AND TIMESTAMP_DIFF(lab.charttime, adm.admittime, HOUR) BETWEEN 0 AND 72\n    ) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` lab\n    ON adm.hadm_id = lab.hadm_id\n  GROUP BY adm.subject_id, adm.hadm_id\n)\n\n-- Final output: 25th percentile, comparison, LOS, mortality\nSELECT\n  -- Cohort stats\n  (SELECT APPROX_QUANTILES(lab_instability_score, 4)[OFFSET(1)] FROM cohort_lab_instability) AS cohort_lab_instability_25th_percentile,\n  AVG(cli.lab_instability_score) AS cohort_lab_instability_mean,\n  (SELECT APPROX_QUANTILES(lab_instability_score, 2)[OFFSET(1)] FROM cohort_lab_instability) AS cohort_lab_instability_median,\n  AVG(clm.los_days) AS cohort_los_mean,\n  (SELECT APPROX_QUANTILES(los_days, 2)[OFFSET(1)] FROM cohort_los_mortality) AS cohort_los_median,\n  SUM(clm.mortality)/COUNT(*) AS cohort_mortality_rate,\n\n  -- General inpatient stats\n  (SELECT APPROX_QUANTILES(lab_instability_score, 4)[OFFSET(1)] FROM general_lab_instability) AS general_lab_instability_25th_percentile,\n  (SELECT AVG(lab_instability_score) FROM general_lab_instability) AS general_lab_instability_mean,\n  (SELECT APPROX_QUANTILES(lab_instability_score, 2)[OFFSET(1)] FROM general_lab_instability) AS general_lab_instability_median\n\nFROM cohort_lab_instability cli\nLEFT JOIN cohort_los_mortality clm\n  ON cli.subject_id = clm.subject_id AND cli.hadm_id = clm.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected string literal 'K55' at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected string literal 'K55' at [1:6]\n\nLocation: US\nJob ID: a3da5844-ae52-4f57-8912-4187132c02ee\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

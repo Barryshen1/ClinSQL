@@ -1,0 +1,16 @@
+{
+  "query": "For a 45-year-old woman: among female inpatients aged 40\u201350 with ARDS, what is the 75th-percentile laboratory-instability score (first 72 h)? For patients at/above this threshold, report mortality, mean LOS, and compare average critical lab events per patient to age-matched non-ARDS inpatients.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 40 AND 50\n),\n\nards_cohort AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code = '51882') OR  -- ICD-9: 518.82\n    (icd_version = 10 AND icd_code = 'J80')      -- ICD-10: J80\n),\n\nlab_events AS (\n  SELECT \n    l.hadm_id,\n    l.flag,\n    CASE \n      WHEN l.flag = 'abnormal' THEN 1\n      WHEN l.flag = 'critically abnormal' THEN 2\n      ELSE 0 \n    END AS instability_points,\n    CASE \n      WHEN l.flag = 'critically abnormal' THEN 1 \n      ELSE 0 \n    END AS critical_event\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN base_cohort b \n    ON l.hadm_id = b.hadm_id\n  WHERE \n    l.charttime BETWEEN b.admittime AND DATETIME_ADD(b.admittime, INTERVAL 72 HOUR)\n),\n\nlab_summary AS (\n  SELECT \n    hadm_id,\n    COALESCE(SUM(instability_points), 0) AS instability_score,\n    COALESCE(SUM(critical_event), 0) AS critical_lab_events\n  FROM lab_events\n  GROUP BY hadm_id\n),\n\nards_with_lab AS (\n  SELECT \n    b.*, \n    l.instability_score,\n    l.critical_lab_events\n  FROM base_cohort b\n  INNER JOIN ards_cohort a \n    ON b.hadm_id = a.hadm_id\n  LEFT JOIN lab_summary l \n    ON b.hadm_id = l.hadm_id\n),\n\npercentile_75 AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 100)[OFFSET(75)] AS p75\n  FROM ards_with_lab\n),\n\nards_high_risk AS (\n  SELECT \n    a.*\n  FROM ards_with_lab a\n  CROSS JOIN percentile_75 p\n  WHERE a.instability_score >= p.p75\n),\n\nnon_ards_with_lab AS (\n  SELECT \n    b.*, \n    COALESCE(l.critical_lab_events, 0) AS critical_lab_events\n  FROM base_cohort b\n  LEFT JOIN lab_summary l \n    ON b.hadm_id = l.hadm_id\n  WHERE NOT EXISTS (\n    SELECT 1 \n    FROM ards_cohort a \n    WHERE a.hadm_id = b.hadm_id\n  )\n)\n\nSELECT \n  (SELECT p75 FROM percentile_75) AS instability_score_75th_percentile,\n  (SELECT AVG(hospital_expire_flag) FROM ards_high_risk) AS mortality_rate,\n  (SELECT AVG(DATETIME_DIFF(dischtime, admittime, DAY)) FROM ards_high_risk) AS mean_los_days,\n  (SELECT AVG(critical_lab_events) FROM ards_high_risk) AS avg_critical_events_ards_high,\n  (SELECT AVG(critical_lab_events) FROM non_ards_with_lab) AS avg_critical_events_control\nFROM ards_high_risk\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

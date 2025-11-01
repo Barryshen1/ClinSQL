@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 66\u2011year\u2011old woman. Among female Medicare patients 61\u201371 admitted from SNF with a principal diagnosis of acute kidney injury, what's the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >6 days?",
+  "final_sql": "WITH eligible_patients AS (\n  -- Filter patients: female, Medicare, age 61-71\n  SELECT DISTINCT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 61 AND 71\n    AND dod IS NULL  -- Exclude deceased patients entirely for clean cohort\n),\naki_codes AS (\n  -- ICD-10 codes for AKI (principal diagnosis) - refined to relevant codes\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_version = '10'\n    AND (icd_code LIKE 'N17.%'  -- Acute kidney failure\n         OR icd_code LIKE 'T79.5%')  -- Traumatic anuria/oliguria\n),\nindex_admissions AS (\n  -- Qualifying index admissions: from SNF, no in-hospital death, principal AKI dx\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN eligible_patients p ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id AND d.seq_num = 1\n  INNER JOIN aki_codes aki ON d.icd_code = aki.icd_code AND d.icd_version = '10'\n  WHERE a.admission_location = 'SNF'\n    AND a.hospital_expire_flag = 0\n),\nreadmissions AS (\n  -- Flag first readmission within 30 days per patient\n  SELECT \n    i.subject_id,\n    i.hadm_id AS index_hadm_id,\n    i.admittime AS index_admittime,\n    i.dischtime AS index_dischtime,\n    i.los_days AS index_los,\n    MIN(r.hadm_id) OVER (PARTITION BY i.subject_id) AS readm_hadm_id,\n    MIN(r.admittime) OVER (PARTITION BY i.subject_id) AS first_readm_time\n  FROM index_admissions i\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` r \n    ON i.subject_id = r.subject_id \n    AND r.admittime > i.dischtime \n    AND r.admittime <= DATE_ADD(i.dischtime, INTERVAL 30 DAY)\n    AND r.hospital_expire_flag = 0  -- Exclude death on readmission\n),\nflagged_cohorts AS (\n  -- Determine readmitted status\n  SELECT \n    *,\n    CASE \n      WHEN first_readm_time IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS readmitted\n  FROM readmissions\n)\nSELECT \n  -- Readmission rate\n  SAFE_DIVIDE(SUM(readmitted), COUNT(*)) AS readmission_rate,\n  \n  -- Median LOS for readmitted\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY index_los) OVER (ORDER BY readmitted) FILTER (WHERE readmitted = 1) AS median_los_readmitted,\n  No, wait\u2014actually, for conditional percentiles in BigQuery, better to use separate aggregations:\n  \n  Actually, the cleanest fix is:\n  \n  PERCENTILE_CONT(index_los, 0.5) IGNORE NULLS \n  FILTER (WHERE readmitted = 1) AS median_los_readmitted,\n  \n  PERCENTILE_CONT(index_los, 0.5) IGNORE NULLS \n  FILTER (WHERE readmitted = 0) AS median_los_non_readmitted,\n  \n  -- % index stays >6 days\n  SAFE_DIVIDE(SUM(CASE WHEN index_los > 6 THEN 1 ELSE 0 END), COUNT(*)) * 100 AS pct_stays_over_6_days\n\nFROM flagged_cohorts;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got keyword WITHIN at [64:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [64:24]\n\nLocation: US\nJob ID: b3c21872-5689-4032-9b54-af399a103a42\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [78:44]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [78:44]\n\nLocation: US\nJob ID: c156adf9-c944-4af6-b56a-f98f1cdcfcd3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [64:32]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [64:32]\n\nLocation: US\nJob ID: 6315f292-bbe7-42e5-8cf7-98fb18072f1e\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [64:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [64:24]\n\nLocation: US\nJob ID: b3c21872-5689-4032-9b54-af399a103a42\n"
+    }
+  ]
+}

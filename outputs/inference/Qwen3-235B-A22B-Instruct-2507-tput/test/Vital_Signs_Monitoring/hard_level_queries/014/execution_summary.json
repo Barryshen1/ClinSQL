@@ -1,0 +1,22 @@
+{
+  "query": "For a 93\u2011year\u2011old male ICU patient on RRT: among male ICU patients aged 88\u201398, what percentile is an instability score of 85 in the first 72 hours, and what are ICU LOS and hospital mortality for the most unstable quartile?",
+  "final_sql": "WITH patients_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    (EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age)) AS age_at_icu,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.los AS icu_los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age)) BETWEEN 88 AND 98\n),\n-- Get RRT patients\nrrt_procedures AS (\n  SELECT DISTINCT pe.stay_id\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON pe.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%dialysis%'\n     OR LOWER(di.label) LIKE '%crrt%'\n     OR LOWER(di.label) LIKE '%renal replacement%'\n),\ncohort AS (\n  SELECT pa.*\n  FROM patients_age pa\n  INNER JOIN rrt_procedures rrt\n    ON pa.stay_id = rrt.stay_id\n),\n-- Extract instability score within first 72 hours\ninstability_scores AS (\n  SELECT\n    c.stay_id,\n    c.hadm_id,\n    c.icu_los,\n    MAX(ce.valuenum) AS instability_score\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE di.label = 'Instability Score'\n    AND ce.charttime >= c.intime\n    AND ce.charttime <= DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY c.stay_id, c.hadm_id, c.icu_los\n),\n-- Compute percentile of 85\npercentile_calc AS (\n  SELECT\n    SUM(CASE WHEN instability_score <= 85 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS percentile_of_85\n  FROM instability_scores\n),\n-- Assign quartiles (descending: most unstable first)\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY instability_score DESC) AS instability_quartile\n  FROM instability_scores\n),\n-- Top quartile outcomes\ntop_quartile_outcomes AS (\n  SELECT\n    AVG(q.icu_los) AS median_icu_los, -- Using AVG; for median use APPROX_QUANTILES if needed\n    AVG(CAST(a.hospital_expire_flag AS FLOAT64)) AS hospital_mortality_rate\n  FROM quartiles q\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON q.hadm_id = a.hadm_id\n  WHERE q.instability_quartile = 1\n)\n-- Final output\nSELECT\n  p.percentile_of_85,\n  t.median_icu_los,\n  t.hospital_mortality_rate\nFROM percentile_calc p\nCROSS JOIN top_quartile_outcomes t;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"specific\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"specific\" at [1:8]\n\nLocation: US\nJob ID: 795a832c-525f-4882-b48a-bc6d96b87070\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

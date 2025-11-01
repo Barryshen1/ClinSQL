@@ -1,0 +1,23 @@
+{
+  "query": "Male, 75, with heart failure: among male ICU patients 70\u201380 with heart failure, what is diagnostic intensity in first 72 ICU hours (mean, median, 75th and 95th percentiles)? Compare to general ICU population; report mean ICU LOS and hospital mortality.",
+  "final_sql": "WITH \n-- Step 1: Get heart failure hadm_ids\nheart_failure_hadm AS (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n        (icd_version = 9 AND icd_code LIKE '428%')\n        OR (icd_version = 10 AND icd_code LIKE 'I50%')\n),\n-- Step 2: Base ICU stays with demographics and flags\nbase_stays AS (\n    SELECT \n        i.stay_id,\n        i.hadm_id,\n        i.subject_id,\n        i.intime,\n        i.los,\n        p.gender,\n        p.anchor_age,\n        p.anchor_year,\n        a.hospital_expire_flag,\n        -- Compute age at ICU admission\n        p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year) AS age,\n        -- Flag for heart failure\n        CASE WHEN hf.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_heart_failure\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON i.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON i.hadm_id = a.hadm_id\n    LEFT JOIN heart_failure_hadm hf\n        ON i.hadm_id = hf.hadm_id\n),\n-- Step 3: Diagnostic counts per stay\nlab_events_in_window AS (\n    SELECT \n        i.stay_id,\n        COUNT(*) AS lab_count\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n        ON i.hadm_id = l.hadm_id\n        AND l.charttime >= i.intime\n        AND l.charttime < TIMESTAMP_ADD(i.intime, INTERVAL 72 HOUR)\n    GROUP BY i.stay_id\n),\nmicro_events_in_window AS (\n    SELECT \n        i.stay_id,\n        COUNT(*) AS micro_count\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.microbiologyevents` m\n        ON i.hadm_id = m.hadm_id\n        AND m.charttime >= i.intime\n        AND m.charttime < TIMESTAMP_ADD(i.intime, INTERVAL 72 HOUR)\n    GROUP BY i.stay_id\n),\ndiagnostic_counts AS (\n    SELECT \n        i.stay_id,\n        COALESCE(l.lab_count, 0) + COALESCE(m.micro_count, 0) AS total_diagnostic\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    LEFT JOIN lab_events_in_window l ON i.stay_id = l.stay_id\n    LEFT JOIN micro_events_in_window m ON i.stay_id = m.stay_id\n),\n-- Step 4: Combine base_stays with diagnostic_counts\nstay_data AS (\n    SELECT \n        b.*,\n        d.total_diagnostic\n    FROM base_stays b\n    LEFT JOIN diagnostic_counts d\n        ON b.stay_id = d.stay_id\n)\n-- Now compute aggregates for target and general\nSELECT \n    'target' AS group_label,\n    AVG(total_diagnostic) AS mean_diagnostic,\n    APPROX_QUANTILES(total_diagnostic, 1000)[OFFSET(500)] AS median_diagnostic,\n    APPROX_QUANTILES(total_diagnostic, 1000)[OFFSET(750)] AS p75_diagnostic,\n    APPROX_QUANTILES(total_diagnostic, 1000)[OFFSET(950)] AS p95_diagnostic,\n    AVG(los) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate\nFROM stay_data\nWHERE \n    gender = 'M'\n    AND age BETWEEN 70 AND 80\n    AND has_heart_failure = 1\n\nUNION ALL\n\nSELECT \n    'general' AS group_label,\n    AVG(total_diagnostic) AS mean_diagnostic,\n    APPROX_QUANTILES(total_diagnostic, 1000)[OFFSET(500)] AS median_diagnostic,\n    APPROX_QUANTILES(total_diagnostic, 1000)[OFFSET(750)] AS p75_diagnostic,\n    APPROX_QUANTILES(total_diagnostic, 1000)[OFFSET(950)] AS p95_diagnostic,\n    AVG(los) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate\nFROM stay_data;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]\n\nLocation: US\nJob ID: dcd349b2-0365-4cb5-be96-1578c8ebf499\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT percent_rank() OVER (ORDER BY avg_temperature) AS percentile_rank FROM male_icu_patients_with_37_5_temperature;

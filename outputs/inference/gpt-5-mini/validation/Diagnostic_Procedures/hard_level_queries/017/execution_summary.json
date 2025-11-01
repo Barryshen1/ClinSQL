@@ -1,0 +1,22 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH first_icu AS (\n  -- pick the first ICU stay for each subject\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.los,\n    ROW_NUMBER() OVER (PARTITION BY s.subject_id ORDER BY s.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n),\n\ncohort AS (\n  -- restrict to first ICU stay, male patients age 83-93, and admissions with sepsis diagnosis\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.los,\n    p.anchor_age,\n    p.gender,\n    a.hospital_expire_flag\n  FROM first_icu f\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = f.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.hadm_id = f.hadm_id\n  WHERE f.rn = 1\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 83 AND 93\n    AND EXISTS (\n      -- require at least one diagnosis for the admission whose long_title mentions \"sepsis\"\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON dx.icd_code = dd.icd_code\n       AND dx.icd_version = dd.icd_version\n      WHERE dx.hadm_id = f.hadm_id\n        AND LOWER(dd.long_title) LIKE '%sepsis%'\n    )\n),\n\nproc_counts AS (\n  -- count distinct procedure icd_code within first 72 hours of ICU intime (per admission)\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.intime,\n    c.los,\n    c.hospital_expire_flag,\n    COALESCE(pc.proc_count, 0) AS proc_count\n  FROM cohort c\n  LEFT JOIN (\n    -- aggregate procedures per admission but only those occurring within 72 hours of ICU intime\n    SELECT\n      p.hadm_id,\n      COUNT(DISTINCT p.icd_code) AS proc_count\n    FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    JOIN cohort c2\n      ON p.hadm_id = c2.hadm_id\n     -- compare dates to avoid TIMESTAMP vs DATETIME mismatches;\n     -- include procedures on the same calendar day as intime through the day of the 72-hour cutoff\n    WHERE DATE(p.chartdate) BETWEEN DATE(c2.intime) AND DATE(TIMESTAMP_ADD(c2.intime, INTERVAL 72 HOUR))\n      AND p.icd_code IS NOT NULL\n    GROUP BY p.hadm_id\n  ) pc\n  ON pc.hadm_id = c.hadm_id\n),\n\nwith_quartile AS (\n  -- assign quartiles based on proc_count\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY proc_count) AS quartile\n  FROM proc_counts\n)\n\n-- final aggregation per quartile\nSELECT\n  quartile,\n  COUNT(*) AS n_patients,\n  ROUND(AVG(proc_count), 3) AS mean_proc_count,\n  ROUND(AVG(los), 3) AS mean_icu_los_days,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_pct\nFROM with_quartile\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator >= for argument types: TIMESTAMP, DATETIME\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [64:10]; reason: invalidQuery, location: query, message: No matching signature for operator >= for argument types: TIMESTAMP, DATETIME\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {TIMESTAMP, DATETIME} at [64:10]\n\nLocation: US\nJob ID: 637fe046-2cd9-424f-a1d8-ec0314c5cafb\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

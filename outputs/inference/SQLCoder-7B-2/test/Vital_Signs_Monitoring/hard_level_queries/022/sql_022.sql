@@ -1,0 +1,1 @@
+SELECT percentile_rank() OVER (ORDER BY instability_score) AS percentile_rank, avg_length_of_stay, avg_mortality_rate FROM patient_data WHERE instability_score = 85 ORDER BY percentile_rank NULLS LAST;

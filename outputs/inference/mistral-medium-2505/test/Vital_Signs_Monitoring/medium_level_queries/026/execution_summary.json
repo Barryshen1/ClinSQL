@@ -1,0 +1,16 @@
+{
+  "query": "I have a 73-year-old male. Among male ICU stays aged 68\u201378, what percentile is a per-stay average respiratory rate of 12 breaths/min during the first 48 hours?",
+  "final_sql": "WITH\n-- Get respiratory rate itemid (220210 is known to be respiratory rate)\nrespiratory_rate_item AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE label = 'Respiratory Rate'\n),\n\n-- Get male ICU stays with age between 68-78 at ICU admission\nmale_icu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime AS icu_intime,\n    p.gender,\n    -- Calculate age at ICU admission\n    EXTRACT(YEAR FROM s.intime) - p.anchor_year + p.anchor_age AS age_at_icu_admission\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM s.intime) - p.anchor_year + p.anchor_age) BETWEEN 68 AND 78\n),\n\n-- Get respiratory rate measurements in first 48 hours of ICU stay\nrespiratory_rates AS (\n  SELECT\n    m.stay_id,\n    ce.charttime,\n    ce.valuenum AS respiratory_rate\n  FROM male_icu_stays m\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON m.stay_id = ce.stay_id\n  JOIN respiratory_rate_item rri\n    ON ce.itemid = rri.itemid\n  WHERE ce.charttime BETWEEN m.icu_intime\n    AND TIMESTAMP_ADD(m.icu_intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\n\n-- Calculate average respiratory rate per ICU stay\navg_respiratory_rates AS (\n  SELECT\n    stay_id,\n    AVG(respiratory_rate) AS avg_respiratory_rate\n  FROM respiratory_rates\n  GROUP BY stay_id\n  HAVING COUNT(respiratory_rate) > 0  -- Ensure we have at least one measurement\n),\n\n-- Calculate percentiles\npercentiles AS (\n  SELECT\n    avg_respiratory_rate,\n    PERCENT_RANK() OVER (ORDER BY avg_respiratory_rate) AS percentile\n  FROM avg_respiratory_rates\n)\n\n-- Find the percentile for 12 breaths/min\nSELECT\n  ROUND(percentile * 100, 2) AS percentile_for_12_bpm\nFROM percentiles\nWHERE avg_respiratory_rate = 12;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

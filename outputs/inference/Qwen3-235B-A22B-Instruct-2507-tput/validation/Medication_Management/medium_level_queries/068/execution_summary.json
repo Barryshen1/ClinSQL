@@ -1,0 +1,28 @@
+{
+  "query": "For my 88\u2011year\u2011old female inpatient, among females 83\u201393 with T2DM and HF, report % initiating basal, bolus, basal\u2013bolus, sliding\u2011scale insulin first 48h versus final 12h and net change.",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 83 AND 93\n),\nt2dm_diagnosis AS (\n  SELECT di.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%diabetes mellitus type 2%'\n     OR LOWER(d.long_title) LIKE '%type 2 diabetes%'\n     OR (d.icd_code LIKE 'E11%' AND di.icd_version = 10)\n),\nhf_diagnosis AS (\n  SELECT di.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%heart failure%'\n     OR LOWER(d.long_title) LIKE '%congestive heart failure%'\n     OR LOWER(d.long_title) LIKE '%cardiomyopathy%'\n     OR (d.icd_code IN ('I50', 'I50.9') AND di.icd_version = 10)\n),\nqualified_patients AS (\n  SELECT pc.subject_id\n  FROM patient_cohort pc\n  INNER JOIN t2dm_diagnosis t2 ON pc.subject_id = t2.subject_id\n  INNER JOIN hf_diagnosis hf ON pc.subject_id = hf.subject_id\n),\ninsulin_prescriptions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.starttime,\n    p.drug,\n    -- Classify insulin type\n    CASE\n      WHEN LOWER(p.drug) LIKE '%basal%' OR LOWER(p.drug) LIKE '%long-acting%' THEN 'basal'\n      WHEN LOWER(p.drug) LIKE '%bolus%' OR LOWER(p.drug) LIKE '%short-acting%' OR LOWER(p.drug) LIKE '%rapid-acting%' THEN 'bolus'\n      WHEN (LOWER(p.drug) LIKE '%basal%' OR LOWER(p.drug) LIKE '%long-acting%') \n           AND (LOWER(p.drug) LIKE '%bolus%' OR LOWER(p.drug) LIKE '%short-acting%') THEN 'basal-bolus'\n      WHEN LOWER(p.drug) LIKE '%sliding scale%' THEN 'sliding-scale'\n      ELSE 'other'\n    END AS insulin_type\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON p.hadm_id = a.hadm_id\n  INNER JOIN qualified_patients qp ON a.subject_id = qp.subject_id\n  WHERE LOWER(p.drug) LIKE '%insulin%'\n    AND p.starttime IS NOT NULL\n),\ninsulin_timing AS (\n  SELECT \n    ip.subject_id,\n    ip.hadm_id,\n    ip.insulin_type,\n    CASE \n      WHEN ip.starttime <= TIMESTAMP_ADD(ip.admittime, INTERVAL 48 HOUR) THEN 'first_48h'\n      ELSE NULL \n    END AS in_first_48h,\n    CASE \n      WHEN ip.starttime >= TIMESTAMP_SUB(ip.dischtime, INTERVAL 12 HOUR) THEN 'final_12h'\n      ELSE NULL \n    END AS in_final_12h\n  FROM insulin_prescriptions ip\n),\naggregated AS (\n  SELECT\n    insulin_type,\n    COUNT(DISTINCT CASE WHEN in_first_48h = 'first_48h' THEN subject_id END) AS first_48h_count,\n    COUNT(DISTINCT CASE WHEN in_final_12h = 'final_12h' THEN subject_id END) AS final_12h_count,\n    (SELECT COUNT(*) FROM qualified_patients) AS total_patients\n  FROM insulin_timing\n  WHERE insulin_type IN ('basal', 'bolus', 'basal-bolus', 'sliding-scale')\n  GROUP BY insulin_type\n)\nSELECT\n  insulin_type,\n  ROUND(100.0 * first_48h_count / total_patients, 2) AS pct_first_48h,\n  ROUND(100.0 * final_12h_count / total_patients, 2) AS pct_final_12h,\n  ROUND(100.0 * (final_12h_count - first_48h_count) / total_patients, 2) AS net_change_pct\nFROM aggregated\nORDER BY insulin_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]\n\nLocation: US\nJob ID: 3ddcab28-3e6c-4c7c-92cb-adedc6033598\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"DATETIME_ADD\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"DATETIME_ADD\" at [1:1]\n\nLocation: US\nJob ID: 6bb96cfb-28d4-429a-b98f-016e7972901a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

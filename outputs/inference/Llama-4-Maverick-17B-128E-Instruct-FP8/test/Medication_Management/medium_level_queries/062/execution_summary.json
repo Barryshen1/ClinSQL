@@ -1,0 +1,22 @@
+{
+  "query": "For my 55-year-old female patient: among female inpatients 50\u201360 with diabetes and heart failure, report initiation rates of injectable GLP\u20111s in first 72h versus final 72h, with absolute and relative change.",
+  "final_sql": "WITH \n-- Step 1: Identify patients with diabetes and heart failure\ndiabetes_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON diag.icd_code = d_icd.icd_code AND diag.icd_version = d_icd.icd_version\n  WHERE d_icd.long_title LIKE '%Diabetes%' AND diag.icd_version = 9  \n),\nheart_failure_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON diag.icd_code = d_icd.icd_code AND diag.icd_version = d_icd.icd_version\n  WHERE d_icd.long_title LIKE '%Heart failure%' AND diag.icd_version = 9  \n),\ncohort AS (\n  SELECT pat.subject_id, adm.hadm_id, adm.admittime, adm.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` pat\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON pat.subject_id = adm.subject_id\n  WHERE pat.gender = 'F' AND pat.anchor_age BETWEEN 50 AND 60\n    AND adm.hadm_id IN (SELECT hadm_id FROM diabetes_patients)\n    AND adm.hadm_id IN (SELECT hadm_id FROM heart_failure_patients)\n),\n\n-- Step 2: Determine medication initiation in the first and last 72 hours\nmedication_initiation AS (\n  SELECT c.hadm_id, \n         CASE \n           WHEN p.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR) THEN 1 \n           ELSE 0 \n         END AS glp1_first_72h,\n         CASE \n           WHEN p.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 72 HOUR) AND c.dischtime THEN 1 \n           ELSE 0 \n         END AS glp1_last_72h\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n  WHERE LOWER(p.drug) LIKE '%glp-1%'  \n),\n\n-- Step 3: Aggregate results\ninitiation_rates AS (\n  SELECT \n    COUNT(DISTINCT CASE WHEN glp1_first_72h = 1 THEN hadm_id END) AS count_glp1_first_72h,\n    COUNT(DISTINCT CASE WHEN glp1_last_72h = 1 THEN hadm_id END) AS count_glp1_last_72h,\n    COUNT(DISTINCT hadm_id) AS total_patients\n  FROM medication_initiation\n)\n\n-- Final calculation\nSELECT \n  CASE \n    WHEN total_patients = 0 THEN NULL \n    ELSE count_glp1_first_72h / total_patients \n  END AS rate_glp1_first_72h,\n  CASE \n    WHEN total_patients = 0 THEN NULL \n    ELSE count_glp1_last_72h / total_patients \n  END AS rate_glp1_last_72h,\n  CASE \n    WHEN total_patients = 0 THEN NULL \n    ELSE (count_glp1_last_72h - count_glp1_first_72h) / total_patients \n  END AS absolute_change,\n  CASE \n    WHEN count_glp1_first_72h = 0 THEN NULL \n    ELSE SAFE_DIVIDE((count_glp1_last_72h - count_glp1_first_72h), count_glp1_first_72h) \n  END AS relative_change\nFROM initiation_rates;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 3c4ba6dc-0d74-48c3-9e47-c47d3aa4aa71\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 58-year-old female patient with DKA, what is the median peak serum glucose during hospitalization among female DKA admissions?",
+  "final_sql": "WITH dka_adms AS (\n  -- female patients age 58 with a diagnosis description containing \"ketoacidosis\"\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dic\n    ON di.icd_code = dic.icd_code AND di.icd_version = dic.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age = 58\n    AND LOWER(dic.long_title) LIKE '%ketoacidosis%'\n),\n\nglucose_itemids AS (\n  -- pick lab itemids related to glucose (serum/blood/plasma)\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%glucose%'\n    AND (\n      LOWER(COALESCE(fluid, '')) LIKE '%blood%'\n      OR LOWER(COALESCE(fluid, '')) LIKE '%ser%'\n      OR LOWER(COALESCE(fluid, '')) LIKE '%plasma%'\n      OR COALESCE(fluid, '') = ''\n    )\n),\n\npeak_per_adm AS (\n  -- peak glucose (numeric) per admission during that hospital stay\n  SELECT\n    d.hadm_id,\n    MAX(le.valuenum) AS peak_glucose,\n    ANY_VALUE(le.valueuom) AS unit\n  FROM dka_adms d\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = d.hadm_id\n  JOIN glucose_itemids gi\n    ON le.itemid = gi.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND le.charttime BETWEEN d.admittime AND d.dischtime\n  GROUP BY d.hadm_id\n)\n\n-- median of the admission-level peaks (approximate with high resolution)\nSELECT\n  COUNT(*) AS num_admissions_with_glucose,\n  (SELECT APPROX_QUANTILES(peak_glucose, 1001)[OFFSET(500)] FROM peak_per_adm) AS median_peak_glucose,\n  (SELECT ANY_VALUE(unit) FROM peak_per_adm) AS example_unit\nFROM peak_per_adm;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

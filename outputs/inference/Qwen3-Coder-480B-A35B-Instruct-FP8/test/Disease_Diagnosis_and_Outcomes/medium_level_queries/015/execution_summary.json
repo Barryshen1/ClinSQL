@@ -1,0 +1,22 @@
+{
+  "query": "For my 53-year-old female: among female stroke admissions aged 48\u201358, report in\u2011hospital mortality (%) with 95% CIs by ICU vs non\u2011ICU, LOS \u22645 vs >5, and comorbidity burden.",
+  "final_sql": "WITH stroke_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    p.anchor_age,\n    p.gender,\n    CASE WHEN i.hadm_id IS NOT NULL THEN 'ICU' ELSE 'Non-ICU' END AS icu_status\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  LEFT JOIN\n    (SELECT DISTINCT hadm_id FROM `physionet-data.mimiciv_3_1_icu.icustays`) i\n    ON a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id AND d.seq_num = 1\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('434', '43401', '43411', '43491', '435', '4350', '4351', '4352', '4353', '4358', '4359'))\n      OR\n      (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^I63'))\n    )\n),\n\ncomorbidity_count AS (\n  SELECT\n    hadm_id,\n    COUNT(*) AS comorbidity_score\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    seq_num > 1\n  GROUP BY\n    hadm_id\n),\n\nadmissions_with_comorbidities AS (\n  SELECT\n    s.*,\n    COALESCE(c.comorbidity_score, 0) AS comorbidity_score,\n    CASE\n      WHEN s.los <= 5 THEN 'LOS \u22645'\n      ELSE 'LOS >5'\n    END AS los_group\n  FROM\n    stroke_admissions s\n  LEFT JOIN\n    comorbidity_count c\n    ON s.hadm_id = c.hadm_id\n),\n\ncomorbidity_stratified AS (\n  SELECT\n    *,\n    CASE\n      WHEN comorbidity_score = 0 THEN 'Low'\n      WHEN comorbidity_score BETWEEN 1 AND 2 THEN 'Medium'\n      ELSE 'High'\n    END AS comorbidity_group\n  FROM\n    admissions_with_comorbidities\n),\n\nmortality_stats AS (\n  SELECT\n    icu_status,\n    los_group,\n    comorbidity_group,\n    COUNT(*) AS n,\n    SUM(hospital_expire_flag) AS deaths,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM\n    comorbidity_stratified\n  GROUP BY\n    icu_status, los_group, comorbidity_group\n)\n\nSELECT\n  icu_status,\n  los_group,\n  comorbidity_group,\n  n,\n  deaths,\n  ROUND(mortality_rate * 100, 2) AS mortality_percent,\n  ROUND(\n    (mortality_rate - 1.96 * SQRT(mortality_rate * (1 - mortality_rate) / n)) * 100,\n    2\n  ) AS ci_95_lower,\n  ROUND(\n    (mortality_rate + 1.96 * SQRT(mortality_rate * (1 - mortality_rate) / n)) * 100,\n    2\n  ) AS ci_95_upper\nFROM\n  mortality_stats\nORDER BY\n  icu_status, los_group, comorbidity_group;",
+  "execution_success": true,
+  "row_count": 7,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [9:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [9:7]\n\nLocation: US\nJob ID: f0d6d801-dd89-4384-9996-49bfada9a0fb\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 7,
+      "error": null
+    }
+  ]
+}

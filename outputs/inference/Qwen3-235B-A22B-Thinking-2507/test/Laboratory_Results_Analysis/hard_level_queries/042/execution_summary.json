@@ -1,0 +1,23 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH patients_cohort AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 73 AND 83\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE d.subject_id = p.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code = '431')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'I61%')\n          OR LOWER(dd.long_title) LIKE '%intracerebral hemorrhage%'\n        )\n    )\n),\n\ninstability_scores AS (\n  SELECT \n    pc.subject_id,\n    pc.hadm_id,\n    pc.admittime,\n    COUNT(DISTINCT le.itemid) AS instability_score\n  FROM patients_cohort pc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON pc.subject_id = le.subject_id\n    AND pc.hadm_id = le.hadm_id\n    AND le.charttime >= pc.admittime\n    AND le.charttime <= DATETIME_ADD(pc.admittime, INTERVAL 48 HOUR)\n    AND le.valuenum IS NOT NULL\n    AND (\n      (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower)\n      OR (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper)\n    )\n  GROUP BY pc.subject_id, pc.hadm_id, pc.admittime\n),\n\ncohort_with_score AS (\n  SELECT \n    pc.subject_id,\n    pc.hadm_id,\n    pc.admittime,\n    pc.dischtime,\n    pc.hospital_expire_flag,\n    COALESCE(iscore.instability_score, 0) AS instability_score\n  FROM patients_cohort pc\n  LEFT JOIN instability_scores iscore\n    ON pc.subject_id = iscore.subject_id \n    AND pc.hadm_id = iscore.hadm_id\n),\n\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM cohort_with_score\n),\n\ncritical_mortality AS (\n  SELECT \n    AVG(hospital_expire_flag) AS critical_mortality_rate\n  FROM quartiles\n  WHERE quartile = 4\n),\n\noverall_mortality AS (\n  SELECT \n    AVG(hospital_expire_flag) AS overall_mortality_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n)\n\nSELECT \n  q.quartile,\n  COUNT(*) AS patient_count,\n  AVG(TIMESTAMP_DIFF(q.dischtime, q.admittime, MICROSECOND) / (1000000 * 60 * 60 * 24)) AS mean_los_days,\n  AVG(q.hospital_expire_flag) AS mortality_rate,\n  cm.critical_mortality_rate,\n  om.overall_mortality_rate\nFROM quartiles q\nCROSS JOIN critical_mortality cm\nCROSS JOIN overall_mortality om\nGROUP BY q.quartile, cm.critical_mortality_rate, om.overall_mortality_rate\nORDER BY q.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \":\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \":\" at [1:9]\n\nLocation: US\nJob ID: ab046e22-71f7-4a2c-9d9a-c2a76ae78ff9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

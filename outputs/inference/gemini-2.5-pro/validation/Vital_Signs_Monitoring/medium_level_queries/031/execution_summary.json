@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 72-year-old man. Among male ICU stays aged 67\u201377, what percentile is a per-stay average temperature of 36.0\u00b0C measured over the first 24 hours?",
+  "final_sql": "WITH cohort AS (\n    -- Step 1: Identify male ICU stays for patients aged 67-77\n    SELECT\n        icu.stay_id,\n        icu.intime\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON icu.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'M'\n        -- Calculate age at ICU admission and filter\n        AND (\n            pat.anchor_age + DATETIME_DIFF(icu.intime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR)\n        ) BETWEEN 67 AND 77\n),\ntemps_in_first_24h AS (\n    -- Step 2 & 3: Get all temperature readings in the first 24h, convert to Celsius, and clean\n    SELECT\n        c.stay_id,\n        CASE\n            -- itemid 223761 is Temperature Fahrenheit\n            WHEN ce.itemid = 223761 THEN (ce.valuenum - 32) * 5 / 9\n            -- itemid 223762 is Temperature Celsius\n            WHEN ce.itemid = 223762 THEN ce.valuenum\n            ELSE NULL\n        END AS temp_c\n    FROM cohort AS c\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n        ON c.stay_id = ce.stay_id\n    WHERE\n        ce.itemid IN (223761, 223762) -- Temperature F and C\n        AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n        AND ce.valuenum IS NOT NULL\n),\nfiltered_temps AS (\n    -- Further cleaning for physiologically plausible temperatures\n    SELECT\n        stay_id,\n        temp_c\n    FROM temps_in_first_24h\n    WHERE\n        temp_c BETWEEN 32 AND 43 -- Plausible range for human body temp in Celsius\n),\nstay_avg_temps AS (\n    -- Step 4: Calculate the average temperature for each stay that has valid measurements\n    SELECT\n        stay_id,\n        AVG(temp_c) AS avg_temp_c\n    FROM filtered_temps\n    GROUP BY\n        stay_id\n)\n-- Step 5: Calculate the percentile of 36.0\u00b0C among the distribution of average temperatures\nSELECT\n    (COUNTIF(avg_temp_c <= 36.0) * 100.0) / COUNT(stay_id) AS percentile_of_36_0_c\nFROM stay_avg_temps;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

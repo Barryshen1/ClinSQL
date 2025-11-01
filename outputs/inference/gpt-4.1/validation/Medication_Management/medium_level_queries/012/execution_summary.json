@@ -1,0 +1,16 @@
+{
+  "query": "For my 55-year-old female inpatient: among women aged 50\u201360 with type 2 diabetes and heart failure admitted \u226572 hours, what were first 12\u2011hour GLP\u20111 initiation, final 72\u2011hour prevalence, and net percentage\u2011point change?",
+  "final_sql": "WITH cohort AS (\n  -- Select admissions for females aged 50-60, admitted >=72h, with both T2DM and HF\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n    AND a.hadm_id IN (\n      -- Must have BOTH T2DM and HF diagnoses\n      SELECT hadm_id\n      FROM (\n        SELECT\n          hadm_id,\n          MAX(CASE WHEN\n            ( (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^250[.]([0-9]{1,2})[02]?$')) OR\n              (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^E11')) )\n            THEN 1 ELSE 0 END) AS has_t2dm,\n          MAX(CASE WHEN\n            ( (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^428')) OR\n              (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^I50')) )\n            THEN 1 ELSE 0 END) AS has_hf\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        GROUP BY hadm_id\n      )\n      WHERE has_t2dm = 1 AND has_hf = 1\n    )\n),\nglp1_drugs AS (\n  -- List of GLP-1 drugs for matching\n  SELECT 'exenatide' AS drug UNION ALL\n  SELECT 'liraglutide' UNION ALL\n  SELECT 'dulaglutide' UNION ALL\n  SELECT 'semaglutide' UNION ALL\n  SELECT 'albiglutide' UNION ALL\n  SELECT 'lixisenatide'\n),\nglp1_presc AS (\n  -- Find GLP-1 prescriptions in first 72h and first 12h\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    MIN(CASE WHEN TIMESTAMP_DIFF(pr.starttime, c.admittime, HOUR) < 12 THEN 1 ELSE 0 END) AS glp1_in_12h,\n    MAX(CASE WHEN TIMESTAMP_DIFF(pr.starttime, c.admittime, HOUR) < 72 THEN 1 ELSE 0 END) AS glp1_in_72h\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.subject_id = pr.subject_id AND c.hadm_id = pr.hadm_id\n  JOIN\n    glp1_drugs g\n    ON LOWER(pr.drug) LIKE CONCAT('%', g.drug, '%')\n  WHERE\n    pr.starttime >= c.admittime\n    AND pr.starttime < c.dischtime\n  GROUP BY\n    c.subject_id, c.hadm_id\n),\nfinal AS (\n  -- Merge cohort and GLP-1 prescription flags\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    IFNULL(g.glp1_in_12h, 0) AS glp1_in_12h,\n    IFNULL(g.glp1_in_72h, 0) AS glp1_in_72h\n  FROM\n    cohort c\n  LEFT JOIN\n    glp1_presc g\n    ON c.subject_id = g.subject_id AND c.hadm_id = g.hadm_id\n)\nSELECT\n  COUNT(*) AS n_admissions,\n  ROUND(SUM(glp1_in_12h) / COUNT(*) * 100, 2) AS first_12h_initiation_pct,\n  ROUND(SUM(glp1_in_72h) / COUNT(*) * 100, 2) AS final_72h_prevalence_pct,\n  ROUND(SUM(glp1_in_72h) / COUNT(*) * 100 - SUM(glp1_in_12h) / COUNT(*) * 100, 2) AS net_pct_point_change\nFROM\n  final\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH base AS (\n  -- 1. Get all male inpatients age 46\u201356 with acute MI\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      USING(subject_id)\n    JOIN (\n      -- pick admissions with an acute MI diagnosis\n      SELECT DISTINCT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE\n        (icd_version = 9   AND icd_code LIKE '410%')\n        OR\n        (icd_version = 10  AND icd_code LIKE 'I21%')\n    ) mi\n      USING(hadm_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 46 AND 56\n),\ncomp AS (\n  -- 2. Count major complications per admission\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT icd_code) AS num_major_comps\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    -- example complication codes\n    (icd_version = 9  AND icd_code IN ('78551')         -- cardiogenic shock\n                      OR icd_code LIKE '428%')          -- heart failure\n    OR\n    (icd_version = 9  AND icd_code = '5184')             -- acute pulmonary edema\n  GROUP BY\n    hadm_id\n),\nscored AS (\n  -- 3. Combine and compute risk score + binary complication flag\n  SELECT\n    b.*,\n    COALESCE(c.num_major_comps, 0) AS num_major_comps,\n    CASE WHEN COALESCE(c.num_major_comps, 0) > 0 THEN 1 ELSE 0 END AS has_complication,\n    b.anchor_age + COALESCE(c.num_major_comps, 0) AS risk_score\n  FROM\n    base b\n    LEFT JOIN comp c USING(hadm_id)\n),\nquintiled AS (\n  -- 4. Assign risk quintile\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM\n    scored\n)\n-- 5. Aggregate outcomes by quintile\nSELECT\n  risk_quintile,\n  COUNT(*) AS n_admissions,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 1) AS pct_in_hospital_mortality,\n  ROUND(100.0 * SUM(has_complication) / COUNT(*), 1)    AS pct_major_complication,\n  -- median LOS among survivors (approximate)\n  APPROX_QUANTILES(\n    CASE\n      WHEN hospital_expire_flag = 0\n      THEN TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0\n      ELSE NULL\n    END,\n    2\n  )[OFFSET(1)] AS median_survivor_los_days\nFROM\n  quintiled\nGROUP BY\n  risk_quintile\nORDER BY\n  risk_quintile;",
+      "success": true,
+      "error": null,
+      "row_count": 5
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 5
+}

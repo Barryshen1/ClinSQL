@@ -1,0 +1,22 @@
+{
+  "query": "For a 64-year-old man, among males 59\u201369 with heart failure, give the 25th, 50th, and 75th percentiles of radiography/CT per admission for 1\u20134 vs 5\u20138 day stays, by ICU use.",
+  "final_sql": "WITH\n-- Step 1: Identify all hospital admissions for heart failure.\nHFCohort AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    -- ICD-9 codes for Heart Failure start with '428'\n    (icd_version = 9 AND SUBSTR(icd_code, 1, 3) = '428')\n    OR\n    -- ICD-10 codes for Heart Failure start with 'I50'\n    (icd_version = 10 AND SUBSTR(icd_code, 1, 3) = 'I50')\n),\n\n-- Step 2: Define the main cohort: male patients 59-69 with HF, and categorize their admissions.\nAdmissionsWithFeatures AS (\n  SELECT\n    adm.hadm_id,\n    CASE\n      WHEN CEIL(DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0) BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN CEIL(DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0) BETWEEN 5 AND 8 THEN '5-8 days'\n    END AS los_category,\n    -- If any ICU stay exists for this admission, flag as 'ICU'.\n    MAX(CASE WHEN icu.stay_id IS NOT NULL THEN 'ICU' ELSE 'No ICU' END) AS icu_use\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN HFCohort AS hf\n    ON adm.hadm_id = hf.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    ON adm.hadm_id = icu.hadm_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 59 AND 69\n    AND CEIL(DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0) BETWEEN 1 AND 8\n  GROUP BY\n    adm.hadm_id,\n    los_category\n),\n\n-- Step 3: Create a reference list of HCPCS codes for Radiography/CT procedures.\nRadiologyCodes AS (\n  SELECT DISTINCT code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_hcpcs`\n  WHERE\n    REGEXP_CONTAINS(LOWER(short_description), r'\\b(ct|x-ray|xray|radiograph|radiologic exam)\\b')\n),\n\n-- Step 4: Count the number of relevant imaging procedures for each admission in our cohort.\nAdmissionProcedureCounts AS (\n  SELECT\n    a.los_category,\n    a.icu_use,\n    -- Count the radiology codes that joined successfully.\n    -- The LEFT JOINs ensure that admissions with zero relevant procedures are kept and result in a count of 0.\n    COUNT(rc.code) AS procedure_count\n  FROM AdmissionsWithFeatures AS a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.hcpcsevents` AS h\n    ON a.hadm_id = h.hadm_id\n  LEFT JOIN RadiologyCodes AS rc\n    ON h.hcpcs_cd = rc.code\n  GROUP BY\n    a.hadm_id,\n    a.los_category,\n    a.icu_use\n)\n\n-- Step 5: Calculate the 25th, 50th, and 75th percentiles of procedure counts for each group.\nSELECT\n  los_category,\n  icu_use,\n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(25)] AS percentile_25,\n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(50)] AS percentile_50,\n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(75)] AS percentile_75\nFROM AdmissionProcedureCounts\nGROUP BY\n  los_category,\n  icu_use\nORDER BY\n  los_category,\n  icu_use;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 IN subquery is not supported inside join predicate.; reason: invalidQuery, location: query, message: IN subquery is not supported inside join predicate.\n\nLocation: US\nJob ID: 8d540d4d-abe3-40ac-8d4a-f59809a49548\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

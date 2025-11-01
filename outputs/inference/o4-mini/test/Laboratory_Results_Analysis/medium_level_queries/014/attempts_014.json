@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH troponin_ids AS (\n  -- Find the itemids corresponding to Troponin T\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\n\nfirst_troponin AS (\n  -- For each admission, get the earliest Troponin T measurement\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum,\n    le.valueuom,\n    le.charttime,\n    ROW_NUMBER() OVER (PARTITION BY le.subject_id, le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_ids t ON le.itemid = t.itemid\n  WHERE le.valuenum IS NOT NULL\n),\ninitial_troponin AS (\n  -- Keep only the first measurement\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum\n  FROM first_troponin\n  WHERE rn = 1\n),\n\nacs_admissions AS (\n  -- Identify ACS admissions for 79-89yo males\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id\n   AND a.hadm_id    = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 79 AND 89\n    AND (\n      d.icd_code LIKE '410%'     -- acute myocardial infarction\n      OR d.icd_code LIKE '4111%'  -- unstable angina\n    )\n)\n\n-- Final aggregation\nSELECT\n  CASE\n    WHEN it.valuenum <= 0.01 THEN 'Normal'\n    WHEN it.valuenum > 0.01\n      AND it.valuenum <= 0.03 THEN 'Borderline'\n    WHEN it.valuenum > 0.03 THEN 'Elevated'\n    ELSE 'Unknown'\n  END AS troponin_category,\n  COUNT(*) AS count,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percent\nFROM acs_admissions a\nJOIN initial_troponin it\n  ON a.subject_id = it.subject_id\n AND a.hadm_id    = it.hadm_id\nGROUP BY troponin_category\nORDER BY troponin_category;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

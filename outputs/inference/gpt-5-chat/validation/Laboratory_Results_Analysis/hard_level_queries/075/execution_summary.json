@@ -1,0 +1,16 @@
+{
+  "query": "As a consultant for a 47\u2011year\u2011old man, among male inpatients aged 42\u201352 with DVT, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u226595th percentile report mortality, mean LOS, and compare critical lab rates to all inpatients.",
+  "final_sql": "WITH dvt_hadm AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, pat.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddd\n    ON diag.icd_code = ddd.icd_code\n    AND diag.icd_version = ddd.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 42 AND 52\n    AND LOWER(ddd.long_title) LIKE '%deep vein thromb%'\n),\nlab_scores AS (\n  SELECT\n    dv.subject_id,\n    dv.hadm_id,\n    COUNTIF(le.flag IS NOT NULL) AS instability_score,\n    COUNT(*) AS total_labs,\n    SUM(CASE WHEN le.flag IS NOT NULL THEN 1 ELSE 0 END) AS abnormal_labs\n  FROM dvt_hadm dv\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON dv.hadm_id = le.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON dv.hadm_id = adm.hadm_id\n  WHERE le.charttime BETWEEN adm.admittime AND TIMESTAMP_ADD(adm.admittime, INTERVAL 72 HOUR)\n  GROUP BY dv.subject_id, dv.hadm_id\n),\nscore_threshold AS (\n  SELECT\n    PERCENTILE_CONT(instability_score, 0.95) OVER() AS p95_score\n  FROM lab_scores\n  LIMIT 1\n),\nhigh_group AS (\n  SELECT ls.*, st.p95_score\n  FROM lab_scores ls\n  CROSS JOIN score_threshold st\n  WHERE ls.instability_score >= st.p95_score\n),\nmort_los AS (\n  SELECT\n    hg.p95_score,\n    COUNT(*) AS n_high,\n    AVG(a.hospital_expire_flag) AS mortality_rate,\n    AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR)/24.0) AS mean_los_days,\n    AVG(hg.abnormal_labs / NULLIF(hg.total_labs,0)) AS critical_lab_rate_high\n  FROM high_group hg\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON hg.hadm_id = a.hadm_id\n  GROUP BY hg.p95_score\n),\noverall_rates AS (\n  SELECT\n    AVG(abnormal_labs / NULLIF(total_labs,0)) AS critical_lab_rate_overall\n  FROM lab_scores\n)\nSELECT\n  m.p95_score,\n  m.n_high,\n  m.mortality_rate,\n  m.mean_los_days,\n  m.critical_lab_rate_high,\n  o.critical_lab_rate_overall\nFROM mort_los m\nCROSS JOIN overall_rates o;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

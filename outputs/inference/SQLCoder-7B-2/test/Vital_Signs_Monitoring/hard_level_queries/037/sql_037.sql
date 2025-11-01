@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.99) within GROUP (ORDER BY male_icu_patients_with_labevents.avg_heart_rate) AS ninety_ninth_percentile FROM male_icu_patients_with_labevents;

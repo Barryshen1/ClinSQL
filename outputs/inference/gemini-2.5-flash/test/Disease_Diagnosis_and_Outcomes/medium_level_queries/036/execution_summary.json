@@ -1,0 +1,28 @@
+{
+  "query": "My 44-year-old female with heart failure: among females 39\u201349 with HF, report in-hospital mortality (%) and N by LOS (\u22645 vs >5) and comorbidity tertiles (Low/Med/High); include CKD and diabetes prevalence.",
+  "final_sql": "WITH CohortHF AS (\n    -- CTE 1: Identify the main cohort: females aged 39-49 with a heart failure diagnosis (ICD-10 I50%)\n    SELECT DISTINCT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di_hf\n        ON adm.hadm_id = di_hf.hadm_id\n    WHERE\n        pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 39 AND 49\n        AND di_hf.icd_version = 10\n        AND di_hf.icd_code LIKE 'I50%' -- ICD-10 for Heart Failure\n),\nCohortWithComorbidities AS (\n    -- CTE 2: Calculate LOS category and identify presence of CKD and Diabetes for each admission in the cohort\n    SELECT\n        coh.subject_id,\n        coh.hadm_id,\n        coh.hospital_expire_flag,\n        DATETIME_DIFF(coh.dischtime, coh.admittime, DAY) AS los_days,\n        CASE\n            WHEN DATETIME_DIFF(coh.dischtime, coh.admittime, DAY) <= 5 THEN 'Low LOS (<=5 days)'\n            ELSE 'High LOS (>5 days)'\n        END AS los_category,\n        -- Check for presence of CKD (ICD-10 N18%)\n        -- We join `diagnoses_icd` again to CohortHF to check for *any* CKD/Diabetes diagnosis for the admission\n        MAX(CASE WHEN di.icd_version = 10 AND di.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS has_ckd,\n        -- Check for presence of Diabetes (ICD-10 E10%, E11%, E13%)\n        MAX(CASE WHEN di.icd_version = 10 AND (di.icd_code LIKE 'E10%' OR di.icd_code LIKE 'E11%' OR di.icd_code LIKE 'E13%') THEN 1 ELSE 0 END) AS has_diabetes\n    FROM\n        CohortHF AS coh\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di -- Corrected dataset reference\n        ON coh.hadm_id = di.hadm_id\n    GROUP BY\n        coh.subject_id,\n        coh.hadm_id,\n        coh.hospital_expire_flag,\n        coh.admittime,\n        coh.dischtime\n),\nCohortWithComorbidityTertiles AS (\n    -- CTE 3: Calculate comorbidity score and assign tertile (Low/Med/High based on 0, 1, or 2 comorbidities)\n    SELECT\n        *,\n        (has_ckd + has_diabetes) AS comorbidity_score,\n        CASE\n            WHEN (has_ckd + has_diabetes) = 0 THEN 'Low'\n            WHEN (has_ckd + has_diabetes) = 1 THEN 'Medium'\n            WHEN (has_ckd + has_diabetes) = 2 THEN 'High'\n            ELSE 'Unknown' -- Should not be reached with current comorbidity definitions\n        END AS comorbidity_tertile\n    FROM\n        CohortWithComorbidities\n)\n-- Final aggregation to report in-hospital mortality, N, and prevalence by LOS and comorbidity tertiles\nSELECT\n    los_category,\n    comorbidity_tertile,\n    COUNT(DISTINCT subject_id || '_' || hadm_id) AS N_admissions, -- Count unique admissions\n    SUM(hospital_expire_flag) AS N_mortality,\n    ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_percent,\n    ROUND(AVG(has_ckd) * 100, 2) AS ckd_prevalence_percent,\n    ROUND(AVG(has_diabetes) * 100, 2) AS diabetes_prevalence_percent\nFROM\n    CohortWithComorbidityTertiles\nGROUP BY\n    los_category,\n    comorbidity_tertile\nORDER BY\n    los_category,\n    CASE comorbidity_tertile\n        WHEN 'Low' THEN 1\n        WHEN 'Medium' THEN 2\n        WHEN 'High' THEN 3\n        ELSE 4 -- For 'Unknown' if it ever occurs\n    END;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got integer literal \"2\" at [1:11]\n\nLocation: US\nJob ID: beab4b4e-314e-42ef-953c-049d7d7eef63\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Dataset mimic-sql-468315:clin_data_analyst_expert_for_mimic_iv was not found in location US; reason: notFound, message: Not found: Dataset mimic-sql-468315:clin_data_analyst_expert_for_mimic_iv was not found in location US\n\nLocation: US\nJob ID: bd3def60-1fe2-4bbe-ba92-75dba7e59715\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

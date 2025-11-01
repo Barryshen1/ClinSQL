@@ -1,0 +1,22 @@
+{
+  "query": "For a 92-year-old woman: among female ICU patients aged 87\u201397 with lower GI bleeding (first ICU stay), stratify by quintiles of distinct procedures in the first 48 hours and report mean procedure count, mean ICU LOS (days), and in-hospital mortality%.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.hospital_expire_flag,\n    DATETIME_ADD(a.admittime, INTERVAL 48 HOUR) AS admittime_plus_48h\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 87 AND 97\n),\n\nicu_stays_with_diagnosis AS (\n  SELECT\n    pa.*,\n    icd.icd_code,\n    icd.icd_version,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY pa.hadm_id ORDER BY i.intime) AS stay_rank\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON pa.hadm_id = i.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` icd\n    ON pa.hadm_id = icd.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON icd.icd_code = d.icd_code AND icd.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%lower gastrointestinal bleed%'\n     OR d.long_title LIKE '%lower GI bleed%'\n     OR (icd.icd_code = 'K922' AND icd.icd_version = 10)\n),\n\nfirst_icu_stay AS (\n  SELECT *\n  FROM icu_stays_with_diagnosis\n  WHERE stay_rank = 1\n),\n\nprocedures_in_48h AS (\n  SELECT\n    f.stay_id,\n    COUNT(DISTINCT p.itemid) AS distinct_procedure_count\n  FROM first_icu_stay f\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON f.stay_id = p.stay_id\n    AND p.starttime >= f.intime\n    AND p.starttime <= DATETIME_ADD(f.intime, INTERVAL 48 HOUR)\n  GROUP BY f.stay_id\n),\n\nquintiles AS (\n  SELECT\n    f.*,\n    COALESCE(p.distinct_procedure_count, 0) AS proc_count,\n    NTILE(5) OVER (ORDER BY COALESCE(p.distinct_procedure_count, 0)) AS quintile\n  FROM first_icu_stay f\n  LEFT JOIN procedures_in_48h p ON f.stay_id = p.stay_id\n)\n\nSELECT\n  quintile,\n  AVG(proc_count) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(CAST(hospital_expire_flag AS INT64)) * 100 AS in_hospital_mortality_percent\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [71:12]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [71:12]\n\nLocation: US\nJob ID: 8d4b6ed7-3d5b-4ff2-a790-a9212b0f28de\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

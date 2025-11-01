@@ -1,0 +1,1 @@
+SELECT male_icu_patients_38_48.subject_id, male_icu_patients_38_48.average_map, percentile_rank() OVER (ORDER BY male_icu_patients_38_48.average_map) AS percentile_rank FROM male_icu_patients_38_48 WHERE male_icu_patients_38_48.average_map <= 60 ORDER BY male_icu_patients_38_48.average_map NULLS LAST;

@@ -1,0 +1,16 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id, \n        p.anchor_age,\n        a.hadm_id, \n        a.admittime, \n        a.dischtime, \n        a.hospital_expire_flag,\n        DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON a.hadm_id = di.hadm_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 73 AND 83\n        AND (\n            (di.icd_version = 10 AND di.icd_code LIKE 'I61%') \n            OR (di.icd_version = 9 AND di.icd_code = '431')\n        )\n),\n\nlabs_48hr AS (\n    SELECT \n        c.subject_id, \n        c.hadm_id,\n        COUNT(DISTINCT l.itemid) AS instability_score\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n        ON c.hadm_id = l.hadm_id\n        AND l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n        AND l.flag = 'abnormal'\n    GROUP BY c.subject_id, c.hadm_id\n),\n\ncohort_with_score AS (\n    SELECT \n        c.*, \n        COALESCE(l.instability_score, 0) AS instability_score,\n        NTILE(4) OVER (ORDER BY COALESCE(l.instability_score, 0)) AS quartile\n    FROM cohort c\n    LEFT JOIN labs_48hr l\n        ON c.hadm_id = l.hadm_id\n),\n\nquartile_summary AS (\n    SELECT \n        quartile,\n        COUNT(*) AS count_patients,\n        AVG(los_days) AS mean_los,\n        AVG(hospital_expire_flag) AS mortality_rate\n    FROM cohort_with_score\n    GROUP BY quartile\n),\n\noverall_mortality AS (\n    SELECT AVG(hospital_expire_flag) AS overall_mortality_rate\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n)\n\nSELECT \n    q.quartile,\n    q.count_patients,\n    q.mean_los,\n    q.mortality_rate,\n    o.overall_mortality_rate,\n    q.mortality_rate - o.overall_mortality_rate AS mortality_rate_diff\nFROM quartile_summary q\nCROSS JOIN overall_mortality o\nORDER BY q.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

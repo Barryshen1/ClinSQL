@@ -1,0 +1,1 @@
+SELECT stddev(p.stoptime - p.starttime) AS standard_deviation FROM patients p JOIN admissions a ON p.subject_id = a.subject_id JOIN prescriptions pr ON a.subject_id = pr.subject_id WHERE p.gender = 'F' AND a.admission_type = 'DAPT' AND p.age >= 49 AND a.stay_id BETWEEN 44 AND 54 AND pr.drug_type = 'Antiplatelet';

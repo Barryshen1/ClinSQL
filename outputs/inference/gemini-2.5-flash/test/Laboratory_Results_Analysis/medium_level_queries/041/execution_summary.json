@@ -1,0 +1,28 @@
+{
+  "query": "I have a 48\u2011year\u2011old man. Among male patients aged 43\u201353 admitted with ACS and initial hs\u2011Troponin T >99th percentile (ULN), what are the median and IQR of initial values in ng/mL?",
+  "final_sql": "WITH admissions_acs_cohort AS (\n    -- Step 1: Select admissions for male patients aged 43-53 with an ACS diagnosis.\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        ad.admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ad.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 43 AND 53\n        -- Check for ACS diagnosis using common ICD codes\n        AND EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n            WHERE\n                di.subject_id = ad.subject_id\n                AND di.hadm_id = ad.hadm_id\n                AND (\n                    -- ICD-10 codes for Acute Coronary Syndrome\n                    (di.icd_version = 10 AND (\n                        di.icd_code LIKE 'I20%' OR -- Angina pectoris\n                        di.icd_code LIKE 'I21%' OR -- Acute myocardial infarction\n                        di.icd_code LIKE 'I22%' OR -- Subsequent myocardial infarction\n                        di.icd_code LIKE 'I24%' OR -- Other acute ischemic heart diseases\n                        di.icd_code LIKE 'I25%'    -- Chronic ischemic heart disease (often included in ACS definition for studies)\n                    ))\n                    OR\n                    -- ICD-9 codes for Acute Coronary Syndrome\n                    (di.icd_version = 9 AND (\n                        di.icd_code LIKE '410%' OR -- Acute myocardial infarction\n                        di.icd_code LIKE '411%' OR -- Other acute and subacute forms of ischemic heart disease\n                        di.icd_code LIKE '413%'    -- Angina pectoris\n                    ))\n                )\n        )\n),\n-- Step 2: Identify initial high-sensitivity Troponin T values for the ACS cohort\ninitial_troponin_values AS (\n    SELECT\n        aac.hadm_id,\n        le.valuenum AS troponin_value_ng_ml,\n        -- Rank lab events by charttime for each admission to find the initial one\n        ROW_NUMBER() OVER (PARTITION BY aac.hadm_id ORDER BY le.charttime, le.labevent_id) AS rn\n    FROM\n        admissions_acs_cohort aac\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON aac.subject_id = le.subject_id AND aac.hadm_id = le.hadm_id\n    WHERE\n        -- Itemid for 'Troponin T, High Sensitivity' (itemid 52520 confirmed from d_labitems)\n        le.itemid = 52520\n        AND le.valuenum IS NOT NULL\n        -- Ensure the value is in ng/mL as specified in the question\n        AND le.valueuom = 'ng/mL'\n),\n-- Step 3: Filter for the initial measurement and the ULN threshold\nfiltered_initial_troponin AS (\n    SELECT\n        itv.troponin_value_ng_ml\n    FROM\n        initial_troponin_values itv\n    WHERE\n        itv.rn = 1 -- Only consider the first measurement for each admission\n        -- Apply the ULN threshold: greater than 99th percentile (0.014 ng/mL for hs-TnT)\n        AND itv.troponin_value_ng_ml > 0.014\n)\n-- Step 4: Calculate the median and IQR of the filtered initial values using APPROX_QUANTILES\nSELECT\n    APPROX_QUANTILES(troponin_value_ng_ml, 100)[OFFSET(50)] AS median_initial_troponin_ng_ml,\n    APPROX_QUANTILES(troponin_value_ng_ml, 100)[OFFSET(25)] AS q1_initial_troponin_ng_ml,\n    APPROX_QUANTILES(troponin_value_ng_ml, 100)[OFFSET(75)] AS q3_initial_troponin_ng_ml\nFROM\n    filtered_initial_troponin;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [59:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [59:1]\n\nLocation: US\nJob ID: b4fd52b1-19fe-496a-a40d-8a668df59b2c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 8e94f904-f1ba-4f9f-8109-6d3a5d07d76d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

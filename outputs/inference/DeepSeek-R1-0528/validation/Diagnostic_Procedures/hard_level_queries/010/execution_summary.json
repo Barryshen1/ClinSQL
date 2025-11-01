@@ -1,0 +1,16 @@
+{
+  "query": "I have a 45-year-old man. Among male ICU patients aged 40\u201350, comparing those with hemorrhagic stroke versus other males 40\u201350, what is the 90th percentile of diagnostic procedures in the first 72 hours, and associated ICU LOS and in-hospital mortality?",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    ie.stay_id,\n    ie.subject_id,\n    ie.hadm_id,\n    ie.intime,\n    ie.outtime,\n    ie.los AS icu_los,\n    p.gender,\n    adm.hospital_expire_flag,\n    -- Calculate exact age at admission: anchor_age + (admission_year - anchor_year)\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 40 AND 50\n),\nstroke_group AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code IN ('430', '431', '432'))\n    OR \n    (icd_version = 10 AND icd_code IN ('I60', 'I61', 'I62'))\n),\nprocedure_counts AS (\n  SELECT \n    b.stay_id,\n    COUNT(p.itemid) AS num_procedures  -- Count all procedures within first 72h of ICU stay\n  FROM base_cohort b\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON b.stay_id = p.stay_id\n    AND p.starttime >= b.intime\n    AND p.starttime < DATETIME_ADD(b.intime, INTERVAL 72 HOUR)\n  GROUP BY b.stay_id\n),\ncohort_with_groups AS (\n  SELECT \n    b.*,\n    COALESCE(pc.num_procedures, 0) AS num_procedures,  -- Include stays with 0 procedures\n    CASE \n      WHEN s.hadm_id IS NOT NULL THEN 'Hemorrhagic Stroke'\n      ELSE 'Other'\n    END AS patient_group\n  FROM base_cohort b\n  LEFT JOIN stroke_group s\n    ON b.hadm_id = s.hadm_id\n  LEFT JOIN procedure_counts pc\n    ON b.stay_id = pc.stay_id\n)\nSELECT \n  patient_group,\n  COUNT(*) AS total_stays,\n  -- 90th percentile of procedure count\n  APPROX_QUANTILES(num_procedures, 100)[OFFSET(90)] AS proc_90th_percentile,\n  -- ICU LOS: median and IQR\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(50)] AS los_median,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(25)] AS los_25th,\n  APPROX_QUANTILES(icu_los, 100)[OFFSET(75)] AS los_75th,\n  -- Mortality rate\n  SUM(hospital_expire_flag) AS deaths,\n  ROUND(100 * AVG(hospital_expire_flag), 2) AS mortality_rate_percent\nFROM cohort_with_groups\nGROUP BY patient_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

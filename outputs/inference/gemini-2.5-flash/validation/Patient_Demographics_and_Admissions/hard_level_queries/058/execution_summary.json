@@ -1,0 +1,28 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH initial_cohort_admissions AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag,\n        -- Calculate Length of Stay in days\n        DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n        ON adm.subject_id = diag.subject_id AND adm.hadm_id = diag.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dicd\n        ON diag.icd_code = dicd.icd_code AND diag.icd_version = dicd.icd_version\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 50 AND 60\n        AND adm.insurance = 'Medicare'\n        AND adm.admission_location = 'EMERGENCY ROOM'\n        AND diag.seq_num = 1 -- Principal diagnosis\n        -- Filter for 'Lower GI bleeding' based on long_title\n        AND (\n            LOWER(dicd.long_title) LIKE '%lower gastrointestinal hemorrhage%'\n            OR LOWER(dicd.long_title) LIKE '%rectal hemorrhage%'\n            OR LOWER(dicd.long_title) LIKE '%hemorrhage of anus and rectum%'\n        )\n),\nreadmission_status_cte AS (\n    SELECT\n        ica.subject_id,\n        ica.hadm_id,\n        ica.los_days,\n        -- Determine if the index admission is followed by a readmission within 30 days\n        (\n            SELECT COUNT(subsequent_adm.hadm_id)\n            FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS subsequent_adm\n            WHERE ica.subject_id = subsequent_adm.subject_id\n              AND subsequent_adm.admittime > ica.dischtime -- Subsequent admission must be after current discharge\n              AND DATETIME_DIFF(subsequent_adm.admittime, ica.dischtime, DAY) <= 30\n              AND ica.hadm_id != subsequent_adm.hadm_id -- Ensure it's a different admission\n              AND subsequent_adm.hospital_expire_flag = 0 -- Subsequent admission must also be discharged alive to be a valid readmission\n        ) > 0 AS is_readmitted_30_day\n    FROM\n        initial_cohort_admissions AS ica\n    WHERE\n        ica.hospital_expire_flag = 0 -- Only consider admissions where the patient was discharged alive as index admissions for readmission tracking\n)\nSELECT\n    -- Overall 30-day readmission rate\n    COALESCE(SAFE_DIVIDE(\n        COUNTIF(rs.is_readmitted_30_day = TRUE) * 100.0,\n        COUNT(rs.hadm_id)\n    ), 0.0) AS readmission_rate_30_day_pct,\n\n    -- Median LOS for readmitted patients\n    PERCENTILE_CONT(CASE WHEN rs.is_readmitted_30_day = TRUE THEN rs.los_days ELSE NULL END, 0.5) AS median_los_readmitted,\n\n    -- Median LOS for not readmitted patients\n    PERCENTILE_CONT(CASE WHEN rs.is_readmitted_30_day = FALSE THEN rs.los_days ELSE NULL END, 0.5) AS median_los_not_readmitted,\n\n    -- Percentage of readmitted patients with LOS > 6 days\n    COALESCE(SAFE_DIVIDE(\n        COUNTIF(rs.is_readmitted_30_day = TRUE AND rs.los_days > 6) * 100.0,\n        COUNTIF(rs.is_readmitted_30_day = TRUE)\n    ), 0.0) AS pct_los_gt_6_readmitted_pct,\n\n    -- Percentage of not readmitted patients with LOS > 6 days\n    COALESCE(SAFE_DIVIDE(\n        COUNTIF(rs.is_readmitted_30_day = FALSE AND rs.los_days > 6) * 100.0,\n        COUNTIF(rs.is_readmitted_30_day = FALSE)\n    ), 0.0) AS pct_los_gt_6_not_readmitted_pct\nFROM\n    readmission_status_cte AS rs;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 1471ac61-7df2-417c-882c-6c00a344f827\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \">\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \">\" at [1:10]\n\nLocation: US\nJob ID: dee77e43-da9a-419b-9d0c-4cd320c5a358\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references rs.is_readmitted_30_day which is neither grouped nor aggregated at [62:31]; reason: invalidQuery, location: query, message: SELECT list expression references rs.is_readmitted_30_day which is neither grouped nor aggregated at [62:31]\n\nLocation: US\nJob ID: 64c2b1b2-8c75-4f76-8a1d-f553672dda68\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 1471ac61-7df2-417c-882c-6c00a344f827\n"
+    }
+  ]
+}

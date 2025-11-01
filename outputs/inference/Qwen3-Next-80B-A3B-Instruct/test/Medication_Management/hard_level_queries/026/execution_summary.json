@@ -1,0 +1,28 @@
+{
+  "query": "I have an 81\u2011year\u2011old woman with pneumonia. Among female inpatients aged 76\u201386 with pneumonia, stratify admissions into tertiles by medication complexity (unique drugs in first 7 hospital days) and report counts, min/avg/max score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH pneumonia_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND (\n      LOWER(did.long_title) LIKE '%pneumonia%'\n      OR d.icd_code BETWEEN '480' AND '486'  -- ICD-9\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'J1%')  -- ICD-10: J12-J18\n    )\n),\n\nmedication_complexity AS (\n  SELECT\n    pa.hadm_id,\n    COUNT(DISTINCT pr.drug) AS unique_drugs_7days\n  FROM pneumonia_admissions pa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON pa.hadm_id = pr.hadm_id\n    AND pr.starttime >= pa.admittime\n    AND pr.starttime < TIMESTAMP_ADD(pa.admittime, INTERVAL 7 DAY)\n  GROUP BY pa.hadm_id\n),\n\ntertiles AS (\n  SELECT\n    mc.hadm_id,\n    mc.unique_drugs_7days,\n    NTILE(3) OVER (ORDER BY mc.unique_drugs_7days) AS medication_tertile\n  FROM medication_complexity mc\n),\n\nreadmission_flag AS (\n  SELECT\n    pa.hadm_id,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = pa.subject_id\n          AND a2.hadm_id != pa.hadm_id\n          AND a2.admittime > pa.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(pa.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmission_30day\n  FROM pneumonia_admissions pa\n)\n\nSELECT\n  t.medication_tertile,\n  COUNT(*) AS admission_count,\n  MIN(t.unique_drugs_7days) AS min_unique_drugs,\n  AVG(t.unique_drugs_7days) AS avg_unique_drugs,\n  MAX(t.unique_drugs_7days) AS max_unique_drugs,\n  AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY)) AS mean_los_days,\n  AVG(a.hospital_expire_flag) * 100 AS in_hospital_mortality_pct,\n  AVG(r.readmission_30day) * 100 AS thirty_day_readmission_pct\nFROM tertiles t\nJOIN pneumonia_admissions a ON t.hadm_id = a.hadm_id\nJOIN readmission_flag r ON t.hadm_id = r.hadm_id\nGROUP BY t.medication_tertile\nORDER BY t.medication_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got identifier \"ILIKE\" at [17:22]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got identifier \"ILIKE\" at [17:22]\n\nLocation: US\nJob ID: 718ee900-2361-4414-8e8c-6bf16f546b1a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [33:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [33:3]\n\nLocation: US\nJob ID: e4acbcca-1cce-4c70-b923-ea372fcdfb6a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

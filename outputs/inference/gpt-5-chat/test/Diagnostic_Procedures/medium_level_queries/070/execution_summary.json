@@ -1,0 +1,22 @@
+{
+  "query": "For a 64-year-old man, among males 59\u201369 with heart failure, give the 25th, 50th, and 75th percentiles of radiography/CT per admission for 1\u20134 vs 5\u20138 day stays, by ICU use.",
+  "final_sql": "WITH hf_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON p.subject_id = di.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND LOWER(dd.long_title) LIKE '%heart failure%'\n),\nadm_with_los AS (\n  SELECT a.subject_id,\n         a.hadm_id,\n         DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN hf_patients hfp\n    ON a.subject_id = hfp.subject_id\n  WHERE a.dischtime IS NOT NULL\n),\nicu_flagged AS (\n  SELECT awl.subject_id,\n         awl.hadm_id,\n         awl.los_days,\n         CASE WHEN COUNT(ic.stay_id) > 0 THEN 1 ELSE 0 END AS icu_flag\n  FROM adm_with_los awl\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` ic\n    ON awl.subject_id = ic.subject_id\n    AND awl.hadm_id = ic.hadm_id\n  GROUP BY awl.subject_id, awl.hadm_id, awl.los_days\n),\nradiology_counts AS (\n  SELECT icuf.subject_id,\n         icuf.hadm_id,\n         icuf.los_days,\n         icuf.icu_flag,\n         COUNT(proc.icd_code) AS rad_ct_count\n  FROM icu_flagged icuf\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n    ON icuf.subject_id = proc.subject_id\n    AND icuf.hadm_id = proc.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n    ON proc.icd_code = dp.icd_code\n    AND proc.icd_version = dp.icd_version\n  WHERE dp.long_title IS NULL\n        OR LOWER(dp.long_title) LIKE '%radiography%'\n        OR LOWER(dp.long_title) LIKE '%computed tomography%'\n        OR LOWER(dp.long_title) LIKE '%x-ray%'\n        OR LOWER(dp.long_title) LIKE '%ct %'\n  GROUP BY icuf.subject_id, icuf.hadm_id, icuf.los_days, icuf.icu_flag\n),\nclassified AS (\n  SELECT *,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 8 THEN '5-8 days'\n    END AS stay_group\n  FROM radiology_counts\n  WHERE los_days BETWEEN 1 AND 8\n)\nSELECT\n  stay_group,\n  icu_flag,\n  q[OFFSET(CAST(ROUND(0.25*(ARRAY_LENGTH(q)-1)) AS INT64))] AS p25_rad_ct,\n  q[OFFSET(CAST(ROUND(0.50*(ARRAY_LENGTH(q)-1)) AS INT64))] AS p50_rad_ct,\n  q[OFFSET(CAST(ROUND(0.75*(ARRAY_LENGTH(q)-1)) AS INT64))] AS p75_rad_ct\nFROM (\n  SELECT\n    stay_group,\n    icu_flag,\n    APPROX_QUANTILES(rad_ct_count, 100) AS q\n  FROM classified\n  GROUP BY stay_group, icu_flag\n)\nORDER BY stay_group, icu_flag;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Array position in [] must be coercible to INT64 type, but has type FLOAT64 at [65:12]; reason: invalidQuery, location: query, message: Array position in [] must be coercible to INT64 type, but has type FLOAT64 at [65:12]\n\nLocation: US\nJob ID: 547cb4f7-8f4c-4546-bef9-5f8b92b559dd\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

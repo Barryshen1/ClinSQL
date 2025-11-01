@@ -1,0 +1,22 @@
+{
+  "query": "I have a 55-year-old female with TIA. Among female patients aged 50\u201360 with TIA, what are the patient counts and mean CT/MRI procedures per admission for LOS 1\u20133 versus 4\u20137 days?",
+  "final_sql": "WITH target_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    -- approximate age at admission\n    (CAST(p.anchor_age AS INT64) + (EXTRACT(YEAR FROM a.admittime) - CAST(p.anchor_year AS INT64))) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (CAST(p.anchor_age AS INT64) + (EXTRACT(YEAR FROM a.admittime) - CAST(p.anchor_year AS INT64))) BETWEEN 50 AND 60\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND (\n              (di.icd_version = 9 AND di.icd_code LIKE '435%')\n              OR\n              (di.icd_version = 10 AND di.icd_code LIKE 'G45%')\n            )\n    )\n),\nctmri_by_hadm AS (\n  SELECT\n    icu.hadm_id,\n    COUNT(*) AS ctmri_cnt\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON icu.stay_id = pe.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON pe.itemid = di.itemid\n  WHERE (LOWER(di.label) LIKE '%ct%' OR LOWER(di.label) LIKE '%mri%')\n    -- ensure the procedure happened during the ICU stay\n    AND pe.starttime BETWEEN icu.intime AND icu.outtime\n  GROUP BY icu.hadm_id\n)\n\nSELECT\n  los_group AS los_group,\n  COUNT(DISTINCT a.subject_id) AS patient_count,\n  COUNT(DISTINCT a.hadm_id) AS admission_count,\n  AVG(COALESCE(c.ctmri_cnt, 0)) AS mean_ct_mri_per_admission\nFROM (\n  SELECT\n    ta.subject_id,\n    ta.hadm_id,\n    CASE\n      WHEN TIMESTAMP_DIFF(ta.dischtime, ta.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3'\n      WHEN TIMESTAMP_DIFF(ta.dischtime, ta.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7'\n    END AS los_group\n  FROM target_admissions AS ta\n  WHERE TIMESTAMP_DIFF(ta.dischtime, ta.admittime, DAY) BETWEEN 1 AND 7\n) AS a\nLEFT JOIN ctmri_by_hadm AS c ON a.hadm_id = c.hadm_id\nWHERE a.los_group IS NOT NULL\nGROUP BY los_group\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:10]\n\nLocation: US\nJob ID: d8cfecd6-6fb3-4847-8268-e82db83fe4bc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

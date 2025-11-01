@@ -1,0 +1,28 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  -- Define cohort: males aged 70-80 with hemorrhagic stroke (ICD-10 I60-I61)\n  SELECT DISTINCT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND d.icd_version = '10'\n    AND (d.icd_code LIKE 'I60%' OR d.icd_code LIKE 'I61%')\n    AND d.seq_num <= 5  -- Top diagnoses for specificity\n),\n\ninstability_scores AS (\n  -- Compute instability score: count of unstable lab events in first 48h per hadm_id\n  SELECT \n    c.hadm_id,\n    COUNT(*) AS instability_score  -- Count events (rows) for instability volume\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.subject_id = le.subject_id \n    AND c.hadm_id = le.hadm_id\n    AND le.charttime >= c.admittime\n    AND le.charttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n  WHERE le.valuenum IS NOT NULL\n    AND le.itemid IN (\n      51222,  -- WBC (Hematology)\n      51265,  -- Hgb\n      51279,  -- Plt\n      50971,  -- Sodium (Chemistry)\n      50983,  -- Potassium\n      51006,  -- Creatinine\n      51237,  -- INR (Coagulation)\n      51516   -- pH (Blood Gases, arterial/venous proxy)\n    )\n    AND (le.flag = 'abnormal' \n         OR (le.valuenum < le.ref_range_lower AND le.ref_range_lower IS NOT NULL)\n         OR (le.valuenum > le.ref_range_upper AND le.ref_range_upper IS NOT NULL))\n  GROUP BY c.hadm_id\n),\n\nall_admissions AS (\n  -- For general inpatient rate: all admissions with lab join\n  SELECT \n    a.hadm_id,\n    COUNT(*) AS general_instability  -- Consistent with cohort: count events\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON a.subject_id = le.subject_id \n    AND a.hadm_id = le.hadm_id\n    AND le.charttime >= a.admittime\n    AND le.charttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n    AND le.itemid IN (51222, 51265, 51279, 50971, 50983, 51006, 51237, 51516)\n    AND le.valuenum IS NOT NULL\n    AND (le.flag = 'abnormal' \n         OR (le.valuenum < le.ref_range_lower AND le.ref_range_lower IS NOT NULL)\n         OR (le.valuenum > le.ref_range_upper AND le.ref_range_upper IS NOT NULL))\n  GROUP BY a.hadm_id\n),\n\ngeneral_rate AS (\n  SELECT AVG(CASE WHEN COALESCE(general_instability, 0) > 0 THEN 1.0 ELSE 0 END) AS general_event_rate\n  FROM all_admissions\n),\n\npercentile_calc AS (\n  SELECT PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY COALESCE(instability_score, 0)) AS p25_instability_score\n  FROM instability_scores\n)\n\n-- Main aggregation: cohort metrics + general comparison\nSELECT \n  pc.p25_instability_score,\n  \n  -- Cohort critical-lab event rate (proportion with >0 unstable labs)\n  AVG(CASE WHEN COALESCE(is.instability_score, 0) > 0 THEN 1.0 ELSE 0 END) AS cohort_event_rate,\n  \n  -- General inpatient critical-lab event rate\n  gr.general_event_rate,\n  \n  -- Mean LOS (days) for cohort\n  AVG(DATE_DIFF(c.dischtime, c.admittime, DAY)) AS mean_los_days,\n  \n  -- In-hospital mortality rate (cohort)\n  AVG(c.hospital_expire_flag) AS mortality_rate\n\nFROM cohort c\nLEFT JOIN instability_scores is \n  ON c.hadm_id = is.hadm_id\nCROSS JOIN general_rate gr\nCROSS JOIN percentile_calc pc;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [74:32]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [74:32]\n\nLocation: US\nJob ID: 1019c182-e4a1-41b0-947c-e3beabd39399\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [71:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [71:25]\n\nLocation: US\nJob ID: 06740b77-c010-41c9-aee4-bd1cb0acdcb8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword IGNORE at [76:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword IGNORE at [76:25]\n\nLocation: US\nJob ID: a49df3de-4cb3-4f2f-b9d8-aa109ae78a46\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [74:32]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [74:32]\n\nLocation: US\nJob ID: 1019c182-e4a1-41b0-947c-e3beabd39399\n"
+    }
+  ]
+}

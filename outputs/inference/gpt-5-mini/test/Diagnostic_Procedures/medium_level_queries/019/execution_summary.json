@@ -1,0 +1,16 @@
+{
+  "query": "I have a 47-year-old male. Among male patients 42\u201352 with acute pancreatitis, for LOS 1\u20134 vs 5\u20137 days, report patient count and mean (min\u2013max) diagnostic procedures per admission.",
+  "final_sql": "WITH cohort_admissions AS (\n  -- Admissions for male patients age 42-52 with an acute pancreatitis diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  USING(subject_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 42 AND 52\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n        ON d.icd_code = dicd.icd_code\n        AND d.icd_version = dicd.icd_version\n      WHERE\n        d.hadm_id = a.hadm_id\n        AND LOWER(dicd.long_title) LIKE '%acute pancreatitis%'\n    )\n),\n\nprocs_per_hadm AS (\n  -- Count procedures (procedures_icd rows) per admission\n  SELECT\n    hadm_id,\n    COUNT(*) AS num_procs\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd`\n  GROUP BY\n    hadm_id\n),\n\ncohort_with_procs AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.los_days,\n    COALESCE(p.num_procs, 0) AS num_procs\n  FROM\n    cohort_admissions c\n  LEFT JOIN\n    procs_per_hadm p\n  USING(hadm_id)\n  -- limit to LOS groups of interest (1-4 or 5-7 days)\n  WHERE\n    (c.los_days BETWEEN 1 AND 4)\n    OR (c.los_days BETWEEN 5 AND 7)\n)\n\nSELECT\n  CASE\n    WHEN los_days BETWEEN 1 AND 4 THEN '1-4'\n    WHEN los_days BETWEEN 5 AND 7 THEN '5-7'\n    ELSE 'other'\n  END AS los_group,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  -- statistics of diagnostic procedures per admission (admissions with no procedures counted as 0)\n  ROUND(AVG(num_procs), 2) AS mean_procedures_per_admission,\n  MIN(num_procs) AS min_procedures_per_admission,\n  MAX(num_procs) AS max_procedures_per_admission\nFROM\n  cohort_with_procs\nGROUP BY\n  los_group\nORDER BY\n  -- keep the natural LOS order\n  CASE los_group WHEN '1-4' THEN 1 WHEN '5-7' THEN 2 ELSE 3 END;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

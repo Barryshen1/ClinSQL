@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH hf_admissions AS (\n  -- Step 1 & 2: filter for male patients age 68-78 with heart failure admission\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND EXISTS (\n      -- heart failure diagnosis\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n       AND d.icd_version = dd.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%heart failure%'\n    )\n),\nadmission_flags AS (\n  -- Step 3: for each HF admission, determine CKD and Diabetes\n  SELECT\n    ha.*,\n    CASE WHEN ha.los < 8 THEN '<8' ELSE '>=8' END AS los_group,\n    -- CKD flag\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n       AND d.icd_version = dd.icd_version\n      WHERE d.hadm_id = ha.hadm_id\n        AND LOWER(dd.long_title) LIKE '%chronic kidney%'\n    ) THEN 1 ELSE 0 END AS ckd_flag,\n    -- Diabetes flag\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n       AND d.icd_version = dd.icd_version\n      WHERE d.hadm_id = ha.hadm_id\n        AND LOWER(dd.long_title) LIKE '%diabet%'\n    ) THEN 1 ELSE 0 END AS dm_flag\n  FROM hf_admissions ha\n)\n-- Step 4: aggregate\nSELECT\n  los_group,\n  COUNT(*) AS admissions_n,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 1) AS mortality_pct,\n  ROUND(100.0 * SUM(ckd_flag) / COUNT(*), 1)      AS ckd_prevalence_pct,\n  ROUND(100.0 * SUM(dm_flag) / COUNT(*), 1)       AS diabetes_prevalence_pct\nFROM admission_flags\nGROUP BY los_group\nORDER BY los_group;",
+      "success": true,
+      "error": null,
+      "row_count": 2
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 2
+}

@@ -1,0 +1,1 @@
+SELECT AVG(p.stoptime - p.starttime) AS average_duration FROM prescriptions p JOIN patients pt ON p.subject_id = pt.subject_id WHERE pt.gender = 'M' AND pt.anchor_age = 71 AND EXTRACT(YEAR FROM p.starttime) BETWEEN 2015 AND 2016 AND p.drug = 'digoxin' AND pt.anchor_year BETWEEN 2015 AND 2016 AND EXTRACT(YEAR FROM pt.anchor_year_group::DATE) BETWEEN 66 AND 76;

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 49-year-old male inpatient; among males 44\u201354 on general wards, report LOS p50/p75/p90/p95 and the percentile rank of a 7\u2011day stay, stratified by discharge home/hospice/death.",
+  "final_sql": "WITH CohortAdmissions AS (\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        DATE_DIFF(ad.dischtime, ad.admittime, DAY) AS los_days,\n        CASE\n            WHEN ad.deathtime IS NOT NULL THEN 'Died in hospital'\n            WHEN ad.discharge_location IN ('HOME', 'HOME HEALTH CARE') THEN 'Discharged Home'\n            WHEN ad.discharge_location LIKE '%HOSPICE%' THEN 'Discharged to Hospice'\n            ELSE 'Other Discharge' -- Include for completeness, though filtered later\n        END AS discharge_status\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ad.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 44 AND 54\n        -- Filter out admissions that include any ICU stay (i.e., \"general wards\")\n        AND NOT EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n            WHERE icu.hadm_id = ad.hadm_id\n        )\n),\n-- Step 2: Select relevant data from the cohort and filter for the specific discharge statuses requested.\nCalculatedMetrics AS (\n    SELECT\n        discharge_status,\n        los_days\n    FROM\n        CohortAdmissions\n    WHERE\n        discharge_status IN ('Discharged Home', 'Discharged to Hospice', 'Died in hospital')\n)\n-- Step 3: Calculate the requested approximate percentiles and the percentile rank of a 7-day stay,\n--         stratified by discharge status, using aggregate functions.\nSELECT\n    discharge_status,\n    -- LOS Percentiles using APPROX_QUANTILES (approximate)\n    -- APPROX_QUANTILES(los_days, 100) returns an array of 101 elements (0-indexed quantiles 0 to 100)\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS los_p50_days,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS los_p75_days,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(90)] AS los_p90_days,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(95)] AS los_p95_days,\n    -- Percentile rank for a 7-day stay (exact calculation)\n    SAFE_DIVIDE(\n        COUNT(CASE WHEN los_days <= 7 THEN 1 END) * 100.0,\n        COUNT(los_days) -- COUNT(los_days) ensures denominator handles NULLs correctly if any\n    ) AS percentile_rank_7_day_stay\nFROM\n    CalculatedMetrics\nGROUP BY\n    discharge_status\nORDER BY\n    discharge_status;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: OVER keyword must follow a function call at [48:68]; reason: invalidQuery, location: query, message: Syntax error: OVER keyword must follow a function call at [48:68]\n\nLocation: US\nJob ID: 039be765-b04e-426b-879c-3cfc3c3a2e69\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 25c369fd-b408-44f3-b5c7-1d14ef75aacb\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

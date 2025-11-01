@@ -1,0 +1,29 @@
+{
+  "query": "I\u2019m evaluating a 64\u2011year\u2011old woman. Among female inpatients aged 59\u201369 with cardiac arrest, stratified into quartiles by composite risk score, report for each quartile: 30\u2011day mortality, cardiovascular and neurologic complication rates, median survivor LOS, and baseline 30\u2011day mortality for all female 59\u201369.",
+  "final_sql": "with cardiac arrest, stratified into quartiles by composite risk score, \n-- report for each quartile: 30-day mortality, cardiovascular and neurologic complication rates, \n-- median survivor LOS, and baseline 30-day mortality for all female 59-69.\n\nWITH eligible_patients AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.dod,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 59 AND 69\n),\ncardiac_arrest_patients AS (\n  SELECT DISTINCT\n    ep.subject_id,\n    ep.hadm_id\n  FROM eligible_patients ep\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON ep.subject_id = d.subject_id\n    AND ep.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE dd.icd_code = 'I46.9'  -- cardiac arrest ICD-10 code\n    AND dd.icd_version = 10\n),\n-- Compute number of diagnoses per admission as a proxy for comorbidity burden (dummy risk score)\ndiagnosis_counts AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    COUNT(*) AS num_diagnoses\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY subject_id, hadm_id\n),\ncardiac_arrest_with_risk AS (\n  SELECT\n    ep.*,\n    dc.num_diagnoses,\n    NTILE(4) OVER (ORDER BY dc.num_diagnoses) AS risk_quartile\n  FROM eligible_patients ep\n  INNER JOIN cardiac_arrest_patients cap\n    ON ep.subject_id = cap.subject_id\n    AND ep.hadm_id = cap.hadm_id\n  LEFT JOIN diagnosis_counts dc\n    ON ep.subject_id = dc.subject_id\n    AND ep.hadm_id = dc.hadm_id\n),\noutcomes AS (\n  SELECT\n    car.*,\n    -- 30-day mortality: died within 30 days of admission\n    CASE \n      WHEN car.dod IS NOT NULL \n        AND DATE_DIFF(CAST(car.dod AS DATE), CAST(car.admittime AS DATE), DAY) BETWEEN 0 AND 30 \n      THEN 1 \n      ELSE 0 \n    END AS died_30day,\n    -- Cardiovascular complications (excluding cardiac arrest ICD code)\n    COALESCE((\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = car.subject_id\n        AND d.hadm_id = car.hadm_id\n        AND d.icd_code BETWEEN 'I20' AND 'I52'\n        AND d.icd_code != 'I46.9'\n      LIMIT 1\n    ), 0) AS has_cv_complication,\n    -- Neurologic complications\n    COALESCE((\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = car.subject_id\n        AND d.hadm_id = car.hadm_id\n        AND d.icd_code BETWEEN 'G00' AND 'G99'\n      LIMIT 1\n    ), 0) AS has_neuro_complication,\n    -- Survivor LOS: for patients surviving beyond 30 days, in days\n    CASE \n      WHEN car.dod IS NULL OR DATE_DIFF(CAST(car.dod AS DATE), CAST(car.admittime AS DATE), DAY) > 30 \n      THEN DATE_DIFF(CAST(car.dischtime AS DATE), CAST(car.admittime AS DATE), DAY)\n      ELSE NULL \n    END AS survivor_los\n  FROM cardiac_arrest_with_risk car\n),\nquartile_agg AS (\n  SELECT\n    risk_quartile,\n    COUNT(*) AS num_patients,\n    SUM(died_30day) / COUNT(*) AS mortality_30day,\n    AVG(has_cv_complication) AS cv_complication_rate,\n    AVG(has_neuro_complication) AS neuro_complication_rate,\n    PERCENTILE_CONT(survivor_los, 0.5) WITHIN GROUP (ORDER BY survivor_los) AS median_survivor_los\n  FROM outcomes\n  GROUP BY risk_quartile\n),\nbaseline_mortality AS (\n  SELECT\n    SUM(CASE \n          WHEN dod IS NOT NULL \n            AND DATE_DIFF(CAST(dod AS DATE), CAST(admittime AS DATE), DAY) BETWEEN 0 AND 30 \n          THEN 1 \n          ELSE 0 \n        END) / COUNT(*) AS baseline_mortality\n  FROM eligible_patients\n)\nSELECT\n  qa.*,\n  bm.baseline_mortality\nFROM quartile_agg qa\nCROSS JOIN baseline_mortality bm\nORDER BY risk_quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected keyword AS but got identifier \"arrest\" at [1:14]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"arrest\" at [1:14]\n\nLocation: US\nJob ID: c5679869-bfd6-440c-9e22-aad0dc819002\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected integer literal \"30\" at [197:24]; reason: invalidQuery, location: query, message: Syntax error: Unexpected integer literal \"30\" at [197:24]\n\nLocation: US\nJob ID: 4ee21524-1a7b-4401-b63c-22c06435ca50\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"Reasoning\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"Reasoning\" at [1:1]\n\nLocation: US\nJob ID: 07a87d2f-81f9-412d-8058-31610aaf6c1b\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"arrest\" at [1:14]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"arrest\" at [1:14]\n\nLocation: US\nJob ID: c5679869-bfd6-440c-9e22-aad0dc819002\n"
+    }
+  ]
+}

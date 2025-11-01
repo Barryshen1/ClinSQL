@@ -1,0 +1,16 @@
+{
+  "query": "For my 54-year-old male, among men aged 49\u201359 whose initial Troponin T exceeded the dataset 99th-percentile ULN, report cohort size, ULN, p25, median (p50), p75 and value range.",
+  "final_sql": "WITH troponin_t_itemid AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) = 'troponin t'\n),\n\nfirst_troponin AS (\n  SELECT\n    l.subject_id,\n    l.valuenum,\n    l.charttime,\n    l.ref_range_upper,\n    ROW_NUMBER() OVER (PARTITION BY l.subject_id ORDER BY l.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN troponin_t_itemid t ON l.itemid = t.itemid\n  WHERE l.valuenum IS NOT NULL\n),\n\ninitial_troponin AS (\n  SELECT *\n  FROM first_troponin\n  WHERE rn = 1\n),\n\neligible_patients AS (\n  SELECT\n    p.subject_id,\n    i.valuenum AS first_trop_t,\n    i.ref_range_upper\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN initial_troponin i ON p.subject_id = i.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n),\n\n-- Estimate ULN as 99th percentile of first normal values\nnormal_troponin AS (\n  SELECT valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN troponin_t_itemid t ON l.itemid = t.itemid\n  WHERE l.valuenum IS NOT NULL\n    AND (l.flag IS NULL OR LOWER(l.flag) != 'abnormal')\n),\n\nuln_estimate AS (\n  SELECT APPROX_QUANTILES(valuenum, 100)[OFFSET(99)] AS uln\n  FROM normal_troponin\n),\n\ncohort AS (\n  SELECT e.*\n  FROM eligible_patients e\n  CROSS JOIN uln_estimate u\n  WHERE e.first_trop_t > u.uln\n)\n\nSELECT\n  COUNT(*) AS cohort_size,\n  MAX(u.uln) AS uln,\n  APPROX_QUANTILES(first_trop_t, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(first_trop_t, 4)[OFFSET(2)] AS median,\n  APPROX_QUANTILES(first_trop_t, 4)[OFFSET(3)] AS p75,\n  MIN(first_trop_t) AS min_value,\n  MAX(first_trop_t) AS max_value\nFROM cohort\nCROSS JOIN uln_estimate u;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY duration) - percentile_cont(0.25) within GROUP (ORDER BY duration)) AS interquartile_range FROM (SELECT (stoptime - starttime) AS duration FROM prescriptions WHERE drug = 'atorvastatin' AND dose_val_rx BETWEEN 40 AND 80 AND gender = 'F' AND age BETWEEN 75 AND 85 AND starttime <= 0 AND stoptime >= 0) AS d;

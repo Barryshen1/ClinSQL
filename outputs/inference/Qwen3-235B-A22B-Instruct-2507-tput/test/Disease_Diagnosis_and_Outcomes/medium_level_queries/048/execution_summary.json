@@ -1,0 +1,16 @@
+{
+  "query": "I have a 73-year-old man with heart failure. Among males 68\u201378, report in-hospital mortality (%) and CKD and diabetes prevalence (%) stratified by LOS <8 vs \u22658 days.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.hadm_id,\n    p.subject_id,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 68 AND 78\n),\nhf_admissions AS (\n  SELECT DISTINCT\n    pa.hadm_id\n  FROM patient_admissions pa\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_version = 10\n    AND d.icd_code LIKE 'I50%'\n),\ncomorbidity_flags AS (\n  SELECT\n    pa.hadm_id,\n    pa.los_days,\n    pa.hospital_expire_flag,\n    MAX(CASE WHEN d.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN d.icd_code IN ('E11', 'E10', 'E13') \n              OR d.icd_code LIKE 'E11.%' OR d.icd_code LIKE 'E10.%' OR d.icd_code LIKE 'E13.%' THEN 1 ELSE 0 END) AS has_diabetes\n  FROM patient_admissions pa\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_version = 10\n  GROUP BY pa.hadm_id, pa.los_days, pa.hospital_expire_flag\n),\nhf_with_comorbidities AS (\n  SELECT\n    cf.hadm_id,\n    cf.los_days,\n    cf.hospital_expire_flag,\n    cf.has_ckd,\n    cf.has_diabetes,\n    CASE WHEN cf.los_days < 8 THEN '<8 days' ELSE '>=8 days' END AS los_group\n  FROM comorbidity_flags cf\n  INNER JOIN hf_admissions hf\n    ON cf.hadm_id = hf.hadm_id\n)\nSELECT\n  los_group,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_rate_pct,\n  ROUND(AVG(has_ckd) * 100, 2) AS ckd_prevalence_pct,\n  ROUND(AVG(has_diabetes) * 100, 2) AS diabetes_prevalence_pct\nFROM hf_with_comorbidities\nGROUP BY los_group\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

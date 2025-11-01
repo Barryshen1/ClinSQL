@@ -1,0 +1,22 @@
+{
+  "query": "For a 42-year-old man with heart failure, among male inpatients aged 37\u201347 within the first 72 hours what is the maximum laboratory instability score (unique critically abnormal lab types)? Compare critical-event rate to general inpatients, and report LOS and mortality.",
+  "final_sql": "WITH heart_failure_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '428%') OR\n    (icd_version = 10 AND icd_code LIKE 'I50%')\n),\n\nhf_cohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND EXISTS (\n      SELECT 1\n      FROM heart_failure_codes hfc\n      WHERE diag.icd_code = hfc.icd_code\n        AND diag.icd_version = hfc.icd_version\n    )\n),\n\ncontrol_cohort AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND adm.hadm_id NOT IN (SELECT hadm_id FROM hf_cohort)\n),\n\nlabs_in_first_72h AS (\n  SELECT \n    lab.hadm_id,\n    lab.itemid,\n    lab.charttime,\n    lab.flag,\n    dlab.category\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` lab\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dlab\n    ON lab.itemid = dlab.itemid\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON lab.hadm_id = adm.hadm_id\n  WHERE \n    lab.charttime <= DATETIME_ADD(adm.admittime, INTERVAL 72 HOUR)\n    AND lab.flag IS NOT NULL\n    AND lab.flag != 'Normal'\n),\n\ninstability_score AS (\n  SELECT \n    hadm_id,\n    COUNT(DISTINCT category) AS num_critical_lab_types\n  FROM labs_in_first_72h\n  GROUP BY hadm_id\n),\n\nhf_with_stats AS (\n  SELECT \n    hf.hadm_id,\n    COALESCE(iscore.num_critical_lab_types, 0) AS instability_score,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    adm.hospital_expire_flag\n  FROM hf_cohort hf\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON hf.hadm_id = adm.hadm_id\n  LEFT JOIN instability_score iscore\n    ON hf.hadm_id = iscore.hadm_id\n),\n\ncontrol_with_stats AS (\n  SELECT \n    ctrl.hadm_id,\n    COALESCE(iscore.num_critical_lab_types, 0) AS instability_score,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    adm.hospital_expire_flag\n  FROM control_cohort ctrl\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ctrl.hadm_id = adm.hadm_id\n  LEFT JOIN instability_score iscore\n    ON ctrl.hadm_id = iscore.hadm_id\n)\n\nSELECT \n  'Heart Failure' AS cohort,\n  COUNT(hadm_id) AS num_admissions,\n  AVG(instability_score) AS avg_instability_score,\n  AVG(los_days) AS avg_los_days,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM hf_with_stats\n\nUNION ALL\n\nSELECT \n  'Control' AS cohort,\n  COUNT(hadm_id) AS num_admissions,\n  AVG(instability_score) AS avg_instability_score,\n  AVG(los_days) AS avg_los_days,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM control_with_stats;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Subquery of type IN must have only one output column at [19:47]; reason: invalidQuery, location: query, message: Subquery of type IN must have only one output column at [19:47]\n\nLocation: US\nJob ID: 5ec71e5d-72aa-4e61-8129-5b22350abdaf\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

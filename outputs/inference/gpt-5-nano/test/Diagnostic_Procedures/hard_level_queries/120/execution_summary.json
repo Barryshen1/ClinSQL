@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 79\u2011year\u2011old man. Among male ICU patients aged 74\u201384 admitted with upper GI bleeding, using first ICU stay, stratify first\u201172\u2011hour diagnostic intensity into quartiles and report mean procedure count, mean hospital LOS (days), and in\u2011hospital mortality per quartile.",
+  "final_sql": "WITH first_icustay AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS s\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY s.subject_id ORDER BY s.intime) = 1\n),\n\n-- 2) Eligible patients: male, age 74-84, with UGIB diagnosis during this admission\neligible AS (\n  SELECT\n    fi.subject_id,\n    fi.hadm_id,\n    fi.stay_id,\n    fi.intime\n  FROM first_icustay AS fi\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.hadm_id = fi.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = fi.subject_id\n  WHERE (LOWER(p.gender) IN ('m', 'male'))\n    AND p.anchor_age BETWEEN 74 AND 84\n    -- UGIB inclusion: diagnoses long_title indicates upper GI bleeding\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS Did\n        ON di.icd_code = Did.icd_code AND di.icd_version = Did.icd_version\n      WHERE di.subject_id = fi.subject_id\n        AND di.hadm_id = fi.hadm_id\n        AND LOWER(Did.long_title) LIKE '%upper gastrointestinal bleeding%'\n    )\n),\n\n-- 3) Diagnostic intensity: count of lab tests within first 72 hours of ICU intime\ndiag_intensity AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    e.stay_id,\n    COUNT(l.labevent_id) AS diag_intensity\n  FROM eligible AS e\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n    ON l.subject_id = e.subject_id\n   AND l.hadm_id = e.hadm_id\n   AND l.charttime >= e.intime\n   AND l.charttime < TIMESTAMP_ADD(e.intime, INTERVAL 72 HOUR)\n  GROUP BY e.subject_id, e.hadm_id, e.stay_id\n),\n\n-- 4) Procedure count within first 72 hours (ICU module)\nproc_intensity AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    e.stay_id,\n    COUNT(pe.starttime) AS proc_count\n  FROM eligible AS e\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON pe.subject_id = e.subject_id\n   AND pe.hadm_id = e.hadm_id\n   AND pe.stay_id = e.stay_id\n   AND pe.starttime >= e.intime\n   AND pe.starttime < TIMESTAMP_ADD(e.intime, INTERVAL 72 HOUR)\n  GROUP BY e.subject_id, e.hadm_id, e.stay_id\n),\n\n-- 5) Hospital LOS for the admission associated with the first ICU stay\nlos AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    e.stay_id,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS hosp_los_days\n  FROM eligible AS e\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.hadm_id = e.hadm_id\n),\n\n-- 6) In-hospital mortality flag for the admission\ndeath AS (\n  SELECT\n    e.subject_id,\n    e.hadm_id,\n    CAST(a.hospital_expire_flag AS INT64) AS hospital_expire_flag\n  FROM eligible AS e\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.hadm_id = e.hadm_id\n)\n\n-- 7) Compute quartiles by diagnostic intensity and report the requested metrics per quartile\nSELECT\n  quartile AS quartile,\n  AVG(proc_count) AS mean_proc_count,\n  AVG(hosp_los_days) AS mean_hospital_los_days,\n  AVG(CAST(hospital_expire_flag AS INT64)) AS in_hospital_mortality\nFROM (\n  SELECT\n    di.diag_intensity,\n    NTILE(4) OVER (ORDER BY COALESCE(di.diag_intensity, 0)) AS quartile,\n    COALESCE(pi.proc_count, 0) AS proc_count,\n    lo.hosp_los_days,\n    da.hospital_expire_flag\n  FROM eligible AS e\n  LEFT JOIN diag_intensity AS di\n    ON di.subject_id = e.subject_id\n   AND di.hadm_id = e.hadm_id\n   AND di.stay_id = e.stay_id\n  LEFT JOIN proc_intensity AS pi\n    ON pi.subject_id = e.subject_id\n   AND pi.hadm_id = e.hadm_id\n   AND pi.stay_id = e.stay_id\n  LEFT JOIN los AS lo\n    ON lo.subject_id = e.subject_id\n   AND lo.hadm_id = e.hadm_id\n   AND lo.stay_id = e.stay_id\n  LEFT JOIN death AS da\n    ON da.subject_id = e.subject_id\n   AND da.hadm_id = e.hadm_id\n) t\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: Did at [30:26]; reason: invalidQuery, location: query, message: Unrecognized name: Did at [30:26]\n\nLocation: US\nJob ID: 6e78017b-9239-46cb-9c1b-7b3b6dc3e228\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name procedureevents_id not found inside pe at [59:14]; reason: invalidQuery, location: query, message: Name procedureevents_id not found inside pe at [59:14]\n\nLocation: US\nJob ID: 79ced2b0-1aac-4f2a-997e-f9254472bd68\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

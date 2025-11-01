@@ -1,0 +1,28 @@
+{
+  "query": "For a 93\u2011year\u2011old male ICU patient on RRT: among male ICU patients aged 88\u201398, what percentile is an instability score of 85 in the first 72 hours, and what are ICU LOS and hospital mortality for the most unstable quartile?",
+  "final_sql": "WITH\n-- Get male ICU patients aged 88-98\npatient_icu AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los AS icu_los,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i ON p.subject_id = i.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year)) BETWEEN 88 AND 98\n),\n\n-- Calculate instability score (simplified example - would need clinical validation)\ninstability_scores AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.stay_id,\n    -- Example instability score calculation (would need proper clinical definition)\n    -- This is a placeholder - actual calculation would use multiple parameters\n    AVG(CASE\n        WHEN ce.itemid IN (220045, 220050) THEN ce.valuenum -- Heart rate\n        ELSE NULL\n      END) AS heart_rate,\n    AVG(CASE\n        WHEN ce.itemid IN (220050, 220179) THEN ce.valuenum -- Systolic BP\n        ELSE NULL\n      END) AS systolic_bp,\n    AVG(CASE\n        WHEN ce.itemid IN (220210, 220277) THEN ce.valuenum -- Oxygen saturation\n        ELSE NULL\n      END) AS spo2,\n    -- Simplified instability score (example only)\n    -- In reality, this would be a more complex clinical calculation\n    (AVG(CASE\n        WHEN ce.itemid IN (220045, 220050) THEN ce.valuenum\n        ELSE NULL\n      END) / NULLIF(AVG(CASE\n        WHEN ce.itemid IN (220050, 220179) THEN ce.valuenum\n        ELSE NULL\n      END), 0) * 100) AS instability_score\n  FROM\n    patient_icu p\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce ON p.stay_id = ce.stay_id\n  WHERE\n    ce.charttime BETWEEN p.intime AND DATETIME_ADD(p.intime, INTERVAL 72 HOUR)\n    AND ce.itemid IN (220045, 220050, 220179, 220210, 220277) -- Example itemids\n  GROUP BY\n    p.subject_id, p.hadm_id, p.stay_id\n),\n\n-- Calculate percentiles\npercentile_ranks AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    instability_score,\n    PERCENT_RANK() OVER (ORDER BY instability_score) AS percentile\n  FROM\n    instability_scores\n),\n\n-- Get the percentile for score of 85\nscore_percentile AS (\n  SELECT\n    percentile\n  FROM\n    percentile_ranks\n  WHERE\n    instability_score = 85\n),\n\n-- Identify most unstable quartile (top 25%)\nmost_unstable AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.stay_id,\n    s.instability_score,\n    p.icu_los,\n    p.hospital_expire_flag\n  FROM\n    percentile_ranks s\n  JOIN\n    patient_icu p ON s.subject_id = p.subject_id AND s.hadm_id = p.hadm_id AND s.stay_id = p.stay_id\n  WHERE\n    s.percentile >= 0.75\n)\n\n-- Final results\nSELECT\n  (SELECT percentile FROM score_percentile) AS percentile_for_score_85,\n  AVG(icu_los) AS avg_icu_los_most_unstable,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) /\n    COUNT(*) AS hospital_mortality_rate_most_unstable\nFROM\n  most_unstable;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in WHERE clause at [103:9]; reason: invalidQuery, location: query, message: Analytic function not allowed in WHERE clause at [103:9]\n\nLocation: US\nJob ID: c913b322-f16b-4313-936b-cf9381795a5d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name icu_los not found inside p at [95:7]; reason: invalidQuery, location: query, message: Name icu_los not found inside p at [95:7]\n\nLocation: US\nJob ID: b5ef380d-2adb-411e-8f45-a084157ee4f1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

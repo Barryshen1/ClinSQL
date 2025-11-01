@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 66\u2011year\u2011old woman. Among female Medicare patients 61\u201371 admitted from SNF with a principal diagnosis of acute kidney injury, what's the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >6 days?",
+  "final_sql": "WITH index_cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender,\n    p.dod,\n    a.admission_location,\n    a.insurance,\n    di.long_title\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd di_c\n    ON a.hadm_id = di_c.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses di\n    ON di_c.icd_code = di.icd_code AND di_c.icd_version = di.icd_version\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 61 AND 71\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'SNF'\n    AND di_c.seq_num = 1\n    AND LOWER(di.long_title) LIKE '%acute kidney injury%'\n    AND a.dischtime IS NOT NULL\n    AND a.admittime IS NOT NULL\n),\n\nwith_next_admission AS (\n  SELECT *,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n  FROM index_cohort\n),\n\nreadmission_flag AS (\n  SELECT *,\n    CASE \n      WHEN next_admittime IS NOT NULL \n        AND next_admittime <= DATE_ADD(dischtime, INTERVAL 30 DAY)\n        AND hospital_expire_flag = 0  -- Only alive patients can be readmitted\n      THEN 1 \n      ELSE 0 \n    END AS readmitted,\n    DATE_DIFF(dischtime, admittime, DAY) AS index_los\n  FROM with_next_admission\n)\n\nSELECT\n  SUM(readmitted) * 100.0 / COUNT(*) AS readmission_rate_percent,\n  APPROX_QUANTILES(CASE WHEN readmitted = 1 THEN index_los END, 2)[OFFSET(1)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN readmitted = 0 THEN index_los END, 2)[OFFSET(1)] AS median_los_non_readmitted,\n  SUM(CASE WHEN index_los > 6 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS percent_index_stays_gt_6_days\nFROM readmission_flag;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [53:42]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [53:42]\n\nLocation: US\nJob ID: d949d956-a1ab-4ca9-8efb-189cd93209e4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 52e18e15-c9d0-4594-84d2-08770a2856be\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

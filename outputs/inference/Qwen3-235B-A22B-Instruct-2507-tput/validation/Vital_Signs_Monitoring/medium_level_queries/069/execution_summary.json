@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46-year-old female ICU patient. Among female ICU patients 41\u201351, how many had per\u2011stay average RR <12, 12\u201320, 21\u201329, \u226530 in first 48h, and what were stroke rates?",
+  "final_sql": "WITH rr_measurements AS (\n  -- Get respiratory rate itemid\n  SELECT itemid \n  FROM `physionet-data.mimiciv_3_1_icu`.d_items \n  WHERE LOWER(label) = 'respiratory rate'\n),\nstay_rr_avg AS (\n  -- Get average RR in first 48h for each ICU stay\n  SELECT \n    ce.stay_id,\n    AVG(ce.valuenum) AS avg_rr_48h\n  FROM `physionet-data.mimiciv_3_1_icu`.chartevents ce\n  CROSS JOIN rr_measurements rm\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays icu\n    ON ce.stay_id = icu.stay_id\n  WHERE ce.itemid = rm.itemid\n    AND ce.charttime >= icu.intime\n    AND ce.charttime <= DATETIME_ADD(icu.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY ce.stay_id\n),\npatients_filtered AS (\n  -- Get female patients aged 41-51\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 41 AND 51\n),\nstay_with_rr_and_demographics AS (\n  -- Link stays with patient filter and get hadm_id for stroke check\n  SELECT \n    sra.stay_id,\n    sra.avg_rr_48h,\n    icu.hadm_id\n  FROM stay_rr_avg sra\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays icu\n    ON sra.stay_id = icu.stay_id\n  INNER JOIN patients_filtered pf\n    ON icu.subject_id = pf.subject_id\n),\nstroke_status AS (\n  -- Check if admission had ischemic stroke (ICD-10 I63)\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  WHERE di.icd_version = 10\n    AND di.icd_code LIKE 'I63%'\n),\nstay_with_stroke AS (\n  SELECT \n    s.stay_id,\n    s.avg_rr_48h,\n    CASE WHEN ss.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS had_stroke\n  FROM stay_with_rr_and_demographics s\n  LEFT JOIN stroke_status ss\n    ON s.hadm_id = ss.hadm_id\n),\nrr_binned AS (\n  SELECT \n    stay_id,\n    had_stroke,\n    CASE\n      WHEN avg_rr_48h < 12 THEN '<12'\n      WHEN avg_rr_48h BETWEEN 12 AND 20 THEN '12-20'\n      WHEN avg_rr_48h BETWEEN 21 AND 29 THEN '21-29'\n      WHEN avg_rr_48h >= 30 THEN '>=30'\n      ELSE NULL\n    END AS rr_bin\n  FROM stay_with_stroke\n  WHERE avg_rr_48h IS NOT NULL\n)\n-- Final aggregation: count stays and stroke rate per RR bin\nSELECT \n  rr_bin,\n  COUNT(*) AS stay_count,\n  SUM(had_stroke) AS stroke_count,\n  ROUND(SUM(had_stroke) * 100.0 / COUNT(*), 2) AS stroke_rate_percent\nFROM rr_binned\nWHERE rr_bin IS NOT NULL\nGROUP BY rr_bin\nORDER BY \n  CASE rr_bin\n    WHEN '<12' THEN 1\n    WHEN '12-20' THEN 2\n    WHEN '21-29' THEN 3\n    WHEN '>=30' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 79\u2011year\u2011old man. Among male ICU patients aged 74\u201384 admitted with upper GI bleeding, using first ICU stay, stratify first\u201172\u2011hour diagnostic intensity into quartiles and report mean procedure count, mean hospital LOS (days), and in\u2011hospital mortality per quartile.",
+  "final_sql": "WITH ugib_hadm AS (\n  -- admissions with diagnoses whose description suggests upper GI bleeding\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%gastrointestinal hemorrhage%'\n     OR LOWER(dd.long_title) LIKE '%upper gastrointestinal%'\n     OR LOWER(dd.long_title) LIKE '%hematemesis%'\n     OR LOWER(dd.long_title) LIKE '%melena%'\n     OR LOWER(dd.long_title) LIKE '%gastrointestinal bleeding%'\n     OR LOWER(dd.long_title) LIKE '%gi hemorrhage%'\n),\n\ncohort_admissions AS (\n  -- admissions for male patients age 74-84 that have a UGIB diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN ugib_hadm u\n    ON a.hadm_id = u.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 74 AND 84\n),\n\nfirst_icustay AS (\n  -- for each admission in the cohort, take the first ICU stay (earliest intime) for that hadm_id\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN cohort_admissions ca\n    ON s.hadm_id = ca.hadm_id\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY s.subject_id, s.hadm_id ORDER BY s.intime) = 1\n),\n\nproc_counts AS (\n  -- count procedureevents in the first 72 hours of the ICU stay; include stays with zero events\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    ca.admittime,\n    ca.dischtime,\n    ca.hospital_expire_flag,\n    ca.anchor_age,\n    ca.gender,\n    COALESCE(COUNT(pe.starttime), 0) AS procedure_count,\n    -- hospital LOS in days (fractional)\n    TIMESTAMP_DIFF(ca.dischtime, ca.admittime, HOUR) / 24.0 AS hosp_los_days\n  FROM first_icustay f\n  JOIN cohort_admissions ca\n    ON f.hadm_id = ca.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON pe.stay_id = f.stay_id\n   AND pe.starttime BETWEEN f.intime AND TIMESTAMP_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY\n    f.subject_id, f.hadm_id, f.stay_id, f.intime,\n    ca.admittime, ca.dischtime, ca.hospital_expire_flag, ca.anchor_age, ca.gender\n),\n\nwith_quartile AS (\n  -- assign quartiles of diagnostic intensity (procedure_count) across the cohort\n  SELECT\n    pc.*,\n    NTILE(4) OVER (ORDER BY procedure_count) AS intensity_quartile\n  FROM proc_counts pc\n)\n\n-- Final aggregation per quartile: mean procedure count, mean hospital LOS (days), and in-hospital mortality\nSELECT\n  intensity_quartile AS quartile,\n  COUNT(*) AS n_patients,\n  ROUND(AVG(procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(hosp_los_days), 2) AS mean_hospital_los_days,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)), 3) AS in_hospital_mortality_proportion\nFROM with_quartile\nGROUP BY intensity_quartile\nORDER BY intensity_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]\n\nLocation: US\nJob ID: 66c07c82-160b-4120-91fa-2d6ad5220e76\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

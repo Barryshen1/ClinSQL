@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 54-year-old man. For male inpatients on medicine service aged 49\u201359, report proportions with LOS \u22657 and \u226514 days and 7-day LOS percentile by discharge (home, hospice, in-hospital death).",
+  "final_sql": "WITH patient_admissions AS (\n  -- Get most recent admission for each patient meeting criteria\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    s.curr_service,\n    TIMESTAMP_DIFF(TIMESTAMP(a.dischtime), TIMESTAMP(a.admittime), DAY) + 1 AS los_days,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN (\n    -- Get most recent service for each admission\n    SELECT\n      subject_id,\n      hadm_id,\n      curr_service,\n      ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY transfertime DESC) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.services`\n  ) s ON a.subject_id = s.subject_id AND a.hadm_id = s.hadm_id AND s.rn = 1\n  WHERE\n    p.gender = 'M'\n    AND s.curr_service = 'MED'\n    AND a.dischtime IS NOT NULL\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 49 AND 59\n),\n\n-- Categorize discharge locations\ndischarge_categories AS (\n  SELECT\n    *,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN discharge_location = 'HOSPICE' THEN 'Hospice'\n      WHEN discharge_location = 'HOME' THEN 'Home'\n      ELSE 'Other'\n    END AS discharge_category\n  FROM\n    patient_admissions\n),\n\n-- Calculate proportions for LOS thresholds\nlos_proportions AS (\n  SELECT\n    discharge_category,\n    COUNT(*) AS total_patients,\n    SUM(CASE WHEN los_days >= 7 THEN 1 ELSE 0 END) AS los_ge7,\n    SUM(CASE WHEN los_days >= 14 THEN 1 ELSE 0 END) AS los_ge14,\n    ROUND(SUM(CASE WHEN los_days >= 7 THEN 1 ELSE 0 END) / COUNT(*), 4) AS prop_ge7,\n    ROUND(SUM(CASE WHEN los_days >= 14 THEN 1 ELSE 0 END) / COUNT(*), 4) AS prop_ge14\n  FROM\n    discharge_categories\n  GROUP BY\n    discharge_category\n),\n\n-- Calculate 7-day LOS percentiles\nlos_percentiles AS (\n  SELECT\n    discharge_category,\n    PERCENT_RANK() OVER (PARTITION BY discharge_category ORDER BY los_days) AS percentile_rank,\n    los_days\n  FROM\n    discharge_categories\n)\n\n-- Final output\nSELECT\n  lp.discharge_category,\n  lp.total_patients,\n  lp.prop_ge7 AS proportion_los_ge7,\n  lp.prop_ge14 AS proportion_los_ge14,\n  ROUND(AVG(CASE WHEN lpr.los_days = 7 THEN lpr.percentile_rank ELSE NULL END), 4) AS percentile_rank_for_7day_los\nFROM\n  los_proportions lp\nLEFT JOIN\n  los_percentiles lpr ON lp.discharge_category = lpr.discharge_category\nGROUP BY\n  lp.discharge_category, lp.total_patients, lp.prop_ge7, lp.prop_ge14\nORDER BY\n  lp.discharge_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [13:5]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [13:5]\n\nLocation: US\nJob ID: ff60a184-c41e-4a61-ba37-446268d00012\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name age_at_admission not found inside p at [43:7]; reason: invalidQuery, location: query, message: Name age_at_admission not found inside p at [43:7]\n\nLocation: US\nJob ID: 93f05855-a3b8-43b2-a293-7e187b8d6ab1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

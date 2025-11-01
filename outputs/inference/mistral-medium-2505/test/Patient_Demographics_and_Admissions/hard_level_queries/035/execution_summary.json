@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old man admitted from a SNF with principal UTI. Among male Medicare patients 68\u201378 admitted from SNF with principal UTI, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of stays >6 days?",
+  "final_sql": "WITH\n-- Get UTI diagnosis codes\nuti_codes AS (\n  SELECT DISTINCT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%urinary tract infection%'\n     OR icd_code LIKE 'N39.0%'\n),\n\n-- Get index admissions meeting criteria\nindex_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_location,\n    a.insurance,\n    p.gender,\n    p.anchor_age,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id AND d.seq_num = 1\n  JOIN uti_codes u ON d.icd_code = u.icd_code\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'SNF'\n    AND a.hospital_expire_flag = 0\n),\n\n-- Get subsequent admissions within 30 days\nreadmissions AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id AS index_hadm_id,\n    r.hadm_id AS readmit_hadm_id,\n    r.admittime AS readmit_time,\n    TIMESTAMP_DIFF(r.admittime, i.dischtime, DAY) AS days_to_readmit\n  FROM index_admissions i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` r ON i.subject_id = r.subject_id\n  WHERE\n    r.admittime > i.dischtime\n    AND TIMESTAMP_DIFF(r.admittime, i.dischtime, DAY) <= 30\n    AND r.hadm_id != i.hadm_id\n),\n\n-- Flag patients with readmissions\npatient_readmission_status AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.los_days,\n    CASE WHEN r.readmit_hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_readmission\n  FROM index_admissions i\n  LEFT JOIN readmissions r ON i.hadm_id = r.index_hadm_id\n),\n\n-- Calculate statistics\nreadmission_stats AS (\n  SELECT\n    has_readmission,\n    COUNT(DISTINCT subject_id) AS patient_count,\n    COUNT(DISTINCT hadm_id) AS stay_count,\n    COUNT(DISTINCT CASE WHEN los_days > 6 THEN hadm_id END) AS long_stays,\n    PERCENTILE_CONT(los_days, 0.5) AS median_los\n  FROM patient_readmission_status\n  GROUP BY has_readmission\n)\n\n-- Final results\nSELECT\n  SUM(CASE WHEN has_readmission = 1 THEN patient_count ELSE 0 END) AS readmitted_count,\n  SUM(patient_count) AS total_patients,\n  ROUND(SUM(CASE WHEN has_readmission = 1 THEN patient_count ELSE 0 END) * 100.0 / SUM(patient_count), 2) AS readmission_rate_pct,\n  MAX(CASE WHEN has_readmission = 1 THEN median_los END) AS median_los_readmitted,\n  MAX(CASE WHEN has_readmission = 0 THEN median_los END) AS median_los_not_readmitted,\n  ROUND(SUM(long_stays) * 100.0 / SUM(stay_count), 2) AS pct_stays_over_6_days\nFROM readmission_stats;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6ae468af-c5c4-4908-96bd-5c468bc1e376\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \"(\" at [70:43]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \"(\" at [70:43]\n\nLocation: US\nJob ID: 2848dc27-a5a0-4e52-b86e-363f4d2a3853\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [70:21]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [70:21]\n\nLocation: US\nJob ID: 465be024-4738-470a-842b-59acd892d8a1\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6ae468af-c5c4-4908-96bd-5c468bc1e376\n"
+    }
+  ]
+}

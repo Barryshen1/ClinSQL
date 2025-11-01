@@ -1,0 +1,16 @@
+{
+  "query": "For a 45\u2011year\u2011old man with AMI (no shock or respiratory failure), among males 40\u201350 report in\u2011hospital mortality (%) and median LOS by LOS \u22645 vs >5 and day\u20111 ICU status.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    -- Calculate age at admission\n    pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age_adm\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON adm.subject_id = pat.subject_id\n  WHERE \n    pat.gender = 'M'\n    AND adm.dischtime IS NOT NULL  -- Ensure completed admissions\n    -- Age 40-50 at admission\n    AND (pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year)) BETWEEN 40 AND 50\n    -- AMI diagnosis (ICD-9 or ICD-10)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE \n        diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code LIKE '410%')\n          OR (diag.icd_version = 10 AND (diag.icd_code LIKE 'I21%' OR diag.icd_code LIKE 'I22%'))\n        )\n    )\n    -- Exclude shock/respiratory failure\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` exc\n      WHERE \n        exc.hadm_id = adm.hadm_id\n        AND (\n          -- Shock codes\n          (exc.icd_version = 9 AND exc.icd_code LIKE '785.5%')\n          OR (exc.icd_version = 10 AND exc.icd_code LIKE 'R57%')\n          -- Respiratory failure codes\n          OR (exc.icd_version = 9 AND exc.icd_code IN ('518.81','518.82','518.84','786.09'))\n          OR (exc.icd_version = 10 AND exc.icd_code LIKE 'J96%')\n        )\n    )\n),\ncohort_icu AS (\n  SELECT \n    c.*,\n    -- Flag ICU admission within 24h of hospital admission\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n      WHERE \n        icu.hadm_id = c.hadm_id\n        AND icu.intime <= DATETIME_ADD(c.admittime, INTERVAL 1 DAY)\n    ) THEN 'ICU day1' ELSE 'No ICU day1' END AS icu_status\n  FROM cohort c\n)\nSELECT \n  CASE \n    WHEN los_days <= 5 THEN 'LOS \u22645' \n    ELSE 'LOS >5' \n  END AS los_group,\n  icu_status,\n  COUNT(*) AS admissions,\n  ROUND(100 * AVG(hospital_expire_flag), 2) AS mortality_percent,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los\nFROM cohort_icu\nGROUP BY los_group, icu_status\nORDER BY los_group, icu_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

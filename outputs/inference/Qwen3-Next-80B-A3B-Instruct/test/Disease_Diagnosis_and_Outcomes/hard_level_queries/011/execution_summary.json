@@ -1,0 +1,28 @@
+{
+  "query": "For my 93-year-old female with AMI who had an ICU stay, among female inpatients 88\u201398 with AMI post-ICU, what is the average composite risk percentile? Report cohort 30\u2011day mortality, AKI and ARDS rates, and median survival of decedents.",
+  "final_sql": "WITH amipatients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.dod,\n    i.stay_id\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_icu.icustays i\n    ON a.hadm_id = i.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 88 AND 98\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'))\n    )\n),\n\nbaseline_creatinine AS (\n  SELECT\n    ap.subject_id,\n    ap.hadm_id,\n    MIN(le.valuenum) AS baseline_creatinine\n  FROM amipatients ap\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.labevents le\n    ON ap.subject_id = le.subject_id AND ap.hadm_id = le.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_labitems dl\n    ON le.itemid = dl.itemid\n  WHERE dl.label = 'Creatinine'\n    AND le.valuenum IS NOT NULL\n    AND le.valuenum > 0\n    AND le.charttime >= ap.admittime\n    AND le.charttime <= TIMESTAMP_ADD(ap.admittime, INTERVAL 24 HOUR)\n  GROUP BY ap.subject_id, ap.hadm_id\n),\n\naki_flag AS (\n  SELECT\n    ap.subject_id,\n    ap.hadm_id,\n    MAX(\n      CASE\n        WHEN le.valuenum >= (bc.baseline_creatinine * 1.5)\n          OR (le.valuenum - bc.baseline_creatinine) >= 0.3\n        THEN 1\n        ELSE 0\n      END\n    ) AS has_aki\n  FROM amipatients ap\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.labevents le\n    ON ap.subject_id = le.subject_id AND ap.hadm_id = le.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_labitems dl\n    ON le.itemid = dl.itemid\n  INNER JOIN baseline_creatinine bc\n    ON ap.subject_id = bc.subject_id AND ap.hadm_id = bc.hadm_id\n  WHERE dl.label = 'Creatinine'\n    AND le.valuenum IS NOT NULL\n    AND le.valuenum > 0\n    AND le.charttime >= ap.admittime\n    AND le.charttime <= TIMESTAMP_ADD(ap.admittime, INTERVAL 7 DAY)\n  GROUP BY ap.subject_id, ap.hadm_id\n),\n\nards_flag AS (\n  SELECT DISTINCT\n    ap.subject_id,\n    ap.hadm_id,\n    1 AS has_ards\n  FROM amipatients ap\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON ap.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE (d.icd_version = 9 AND d.icd_code = '518.82')\n     OR (d.icd_version = 10 AND d.icd_code = 'J80')\n)\n\nSELECT\n  COUNTIF(ap.dod IS NOT NULL AND CAST(ap.dod AS TIMESTAMP) <= TIMESTAMP_ADD(ap.dischtime, INTERVAL 30 DAY)) * 1.0 / COUNT(*) AS thirty_day_mortality_rate,\n  COUNTIF(aki.has_aki = 1) * 1.0 / COUNT(*) AS aki_rate,\n  COUNTIF(ards.has_ards = 1) * 1.0 / COUNT(*) AS ards_rate,\n  PERCENTILE_CONT(CASE \n    WHEN ap.dod IS NOT NULL AND CAST(ap.dod AS TIMESTAMP) <= TIMESTAMP_ADD(ap.dischtime, INTERVAL 30 DAY) \n    THEN TIMESTAMP_DIFF(CAST(ap.dod AS TIMESTAMP), ap.dischtime, DAY) \n  END, 0.5) AS median_survival_days_decedents\nFROM amipatients ap\nLEFT JOIN aki_flag aki ON ap.subject_id = aki.subject_id AND ap.hadm_id = aki.hadm_id\nLEFT JOIN ards_flag ards ON ap.subject_id = ards.subject_id AND ap.hadm_id = ards.hadm_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name dod not found inside a at [8:7]; reason: invalidQuery, location: query, message: Name dod not found inside a at [8:7]\n\nLocation: US\nJob ID: 49c0d5df-fa24-4aa5-b9e0-5c891e86f47a\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 5a908232-d09a-457d-9a2b-443b8055d348\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name dod not found inside a at [8:7]; reason: invalidQuery, location: query, message: Name dod not found inside a at [8:7]\n\nLocation: US\nJob ID: 0ad5400d-0fe4-4b53-8855-7d97be56c123\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name dod not found inside a at [8:7]; reason: invalidQuery, location: query, message: Name dod not found inside a at [8:7]\n\nLocation: US\nJob ID: 49c0d5df-fa24-4aa5-b9e0-5c891e86f47a\n"
+    }
+  ]
+}

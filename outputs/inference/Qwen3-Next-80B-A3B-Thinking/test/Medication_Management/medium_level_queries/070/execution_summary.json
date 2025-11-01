@@ -1,0 +1,29 @@
+{
+  "query": "For my 73\u2011year\u2011old woman with T2DM and HF: among female inpatients 68\u201378, report prevalence (%) of metformin, sulfonylureas, DPP\u20114 and SGLT2 inhibitors in first 48h versus last 12h and net percentage\u2011point change.",
+  "final_sql": "WITH patients_cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 68 AND 78\n),\n\nprescriptions_with_classes AS (\n  SELECT \n    p.subject_id,\n    p.hadm_id,\n    p.starttime,\n    c.admittime,\n    c.dischtime,\n    CASE \n      WHEN LOWER(p.drug) LIKE '%metformin%' THEN 1 ELSE 0 \n    END AS is_metformin,\n    CASE \n      WHEN LOWER(p.drug) LIKE '%glipizide%' OR \n           LOWER(p.drug) LIKE '%glyburide%' OR \n           LOWER(p.drug) LIKE '%glimepiride%' OR \n           LOWER(p.drug) LIKE '%tolbutamide%' OR \n           LOWER(p.drug) LIKE '%chlorpropamide%' OR \n           LOWER(p.drug) LIKE '%acetohexamide%' OR \n           LOWER(p.drug) LIKE '%tolazamide%' OR \n           LOWER(p.drug) LIKE '%gliclazide%' OR \n           LOWER(p.drug) LIKE '%glibenclamide%' \n      THEN 1 ELSE 0 \n    END AS is_sulfonylurea,\n    CASE \n      WHEN LOWER(p.drug) LIKE '%sitagliptin%' OR \n           LOWER(p.drug) LIKE '%saxagliptin%' OR \n           LOWER(p.drug) LIKE '%linagliptin%' OR \n           LOWER(p.drug) LIKE '%alogliptin%' OR \n           LOWER(p.drug) LIKE '%vildagliptin%' \n      THEN 1 ELSE 0 \n    END AS is_dpp4,\n    CASE \n      WHEN LOWER(p.drug) LIKE '%canagliflozin%' OR \n           LOWER(p.drug) LIKE '%dapagliflozin%' OR \n           LOWER(p.drug) LIKE '%empagliflozin%' OR \n           LOWER(p.drug) LIKE '%ertugliflozin%' \n      THEN 1 ELSE 0 \n    END AS is_sglt2\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN patients_cohort c ON p.hadm_id = c.hadm_id\n),\n\nfirst_48h AS (\n  SELECT \n    subject_id,\n    MAX(is_metformin) AS metformin_first48,\n    MAX(is_sulfonylurea) AS sulfonylurea_first48,\n    MAX(is_dpp4) AS dpp4_first48,\n    MAX(is_sglt2) AS sglt2_first48\n  FROM prescriptions_with_classes\n  WHERE starttime BETWEEN admittime AND admittime + INTERVAL '48' HOUR\n  GROUP BY subject_id\n),\n\nlast_12h AS (\n  SELECT \n    subject_id,\n    MAX(is_metformin) AS metformin_last12,\n    MAX(is_sulfonylurea) AS sulfonylurea_last12,\n    MAX(is_dpp4) AS dpp4_last12,\n    MAX(is_sglt2) AS sglt2_last12\n  FROM prescriptions_with_classes\n  WHERE starttime BETWEEN dischtime - INTERVAL '12' HOUR AND dischtime\n  GROUP BY subject_id\n),\n\nall_subjects AS (\n  SELECT subject_id FROM patients_cohort\n)\n\nSELECT \n  'metformin' AS drug_class,\n  ROUND(100.0 * AVG(COALESCE(f.metformin_first48, 0)), 2) AS first_48h_prevalence,\n  ROUND(100.0 * AVG(COALESCE(l.metformin_last12, 0)), 2) AS last_12h_prevalence,\n  ROUND(100.0 * (AVG(COALESCE(l.metformin_last12, 0)) - AVG(COALESCE(f.metformin_first48, 0))), 2) AS net_change\nFROM all_subjects a\nLEFT JOIN first_48h f ON a.subject_id = f.subject_id\nLEFT JOIN last_12h l ON a.subject_id = l.subject_id\n\nUNION ALL\n\nSELECT \n  'sulfonylureas' AS drug_class,\n  ROUND(100.0 * AVG(COALESCE(f.sulfonylurea_first48, 0)), 2),\n  ROUND(100.0 * AVG(COALESCE(l.sulfonylurea_last12, 0)), 2),\n  ROUND(100.0 * (AVG(COALESCE(l.sulfonylurea_last12, 0)) - AVG(COALESCE(f.sulfonylurea_first48, 0))), 2)\nFROM all_subjects a\nLEFT JOIN first_48h f ON a.subject_id = f.subject_id\nLEFT JOIN last_12h l ON a.subject_id = l.subject_id\n\nUNION ALL\n\nSELECT \n  'DPP-4' AS drug_class,\n  ROUND(100.0 * AVG(COALESCE(f.dpp4_first48, 0)), 2),\n  ROUND(100.0 * AVG(COALESCE(l.dpp4_last12, 0)), 2),\n  ROUND(100.0 * (AVG(COALESCE(l.dpp4_last12, 0)) - AVG(COALESCE(f.dpp4_first48, 0))), 2)\nFROM all_subjects a\nLEFT JOIN first_48h f ON a.subject_id = f.subject_id\nLEFT JOIN last_12h l ON a.subject_id = l.subject_id\n\nUNION ALL\n\nSELECT \n  'SGLT2' AS drug_class,\n  ROUND(100.0 * AVG(COALESCE(f.sglt2_first48, 0)), 2),\n  ROUND(100.0 * AVG(COALESCE(l.sglt2_last12, 0)), 2),\n  ROUND(100.0 * (AVG(COALESCE(l.sglt2_last12, 0)) - AVG(COALESCE(f.sglt2_first48, 0))), 2)\nFROM all_subjects a\nLEFT JOIN first_48h f ON a.subject_id = f.subject_id\nLEFT JOIN last_12h l ON a.subject_id = l.subject_id;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [64:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [64:3]\n\nLocation: US\nJob ID: 62253e2f-e63a-4ac9-ae0e-8cbdf0bf5d15\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [64:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [64:3]\n\nLocation: US\nJob ID: 976c50ff-e7af-452b-ad9b-16213bd5febd\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

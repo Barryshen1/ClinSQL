@@ -1,0 +1,1 @@
+TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days;

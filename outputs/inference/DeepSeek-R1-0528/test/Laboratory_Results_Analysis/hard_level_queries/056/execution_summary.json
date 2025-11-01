@@ -1,0 +1,28 @@
+{
+  "query": "I have a 60\u2011year\u2011old female with asthma exacerbation. Among female inpatients aged 55\u201365, what is the 95th percentile of the lab instability score in the first 48 hours? For that top tier, report LOS, mortality, and critical lab rate versus general inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 55 AND 65\n),\n\nlab_events AS (\n  SELECT \n    c.hadm_id,\n    l.charttime,\n    l.flag,\n    -- Mark abnormal labs (non-null and not 'normal')\n    CASE WHEN l.flag IS NOT NULL AND l.flag != 'normal' THEN 1 ELSE 0 END AS is_abnormal\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n),\n\npatient_scores AS (\n  SELECT \n    hadm_id,\n    COUNT(flag) AS total_labs,  -- Fixed: Remove invalid alias 'l'\n    COALESCE(SUM(is_abnormal), 0) AS lab_instability_score  -- Handle NULLs for no-lab patients\n  FROM lab_events\n  GROUP BY hadm_id\n),\n\npercentile AS (\n  SELECT \n    APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(95)] AS p95  -- BigQuery-compatible 95th percentile\n  FROM patient_scores\n),\n\ncohort_with_tier AS (\n  SELECT \n    c.*,\n    ps.total_labs,\n    ps.lab_instability_score,\n    -- Handle division by zero for critical lab rate\n    COALESCE(ps.lab_instability_score / NULLIF(ps.total_labs, 0), 0) AS critical_lab_rate,\n    CASE \n      WHEN ps.lab_instability_score >= (SELECT p95 FROM percentile) THEN 1 \n      ELSE 0 \n    END AS is_top_tier\n  FROM cohort c\n  LEFT JOIN patient_scores ps\n    ON c.hadm_id = ps.hadm_id\n),\n\ngroup_metrics AS (\n  SELECT \n    'Top Tier' AS group_label,\n    COUNT(*) AS count_admissions,\n    AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS avg_los,\n    AVG(hospital_expire_flag) * 100 AS mortality_rate,\n    AVG(critical_lab_rate) AS avg_critical_lab_rate\n  FROM cohort_with_tier\n  WHERE is_top_tier = 1\n  UNION ALL\n  SELECT \n    'Entire Cohort' AS group_label,\n    COUNT(*) AS count_admissions,\n    AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS avg_los,\n    AVG(hospital_expire_flag) * 100 AS mortality_rate,\n    AVG(critical_lab_rate) AS avg_critical_lab_rate\n  FROM cohort_with_tier\n)\n\n-- Final output with 95th percentile and group metrics\nSELECT \n  '95th Percentile' AS group_label,\n  NULL AS count_admissions,\n  NULL AS avg_los,\n  NULL AS mortality_rate,\n  NULL AS avg_critical_lab_rate,\n  (SELECT p95 FROM percentile) AS percentile_95_value\nUNION ALL\nSELECT \n  group_label,\n  count_admissions,\n  avg_los,\n  mortality_rate,\n  avg_critical_lab_rate,\n  NULL AS percentile_95_value\nFROM group_metrics;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [42:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [42:5]\n\nLocation: US\nJob ID: f247b638-2deb-43ec-9249-32682eb4db66\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: l at [34:11]; reason: invalidQuery, location: query, message: Unrecognized name: l at [34:11]\n\nLocation: US\nJob ID: 3e764843-6105-416e-900f-c03dd4ab785b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

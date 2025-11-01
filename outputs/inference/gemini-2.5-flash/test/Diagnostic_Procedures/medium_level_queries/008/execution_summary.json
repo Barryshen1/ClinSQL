@@ -1,0 +1,16 @@
+{
+  "query": "For my 63\u2011year\u2011old male with HHS: among male patients aged 58\u201368, what were patient and admission counts and mean radiography/CT procedures per admission for LOS 1\u20134 versus 5\u20137 days?",
+  "final_sql": "WITH PatientDemographics AS (\n    -- Select patients within the specified age and gender range, calculate LOS\n    SELECT\n        p.subject_id,\n        adm.hadm_id,\n        DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON p.subject_id = adm.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 58 AND 68\n        -- Filter admissions with LOS between 1 and 7 days as requested by the question segments\n        AND DATE_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 7\n),\nHHS_Admissions AS (\n    -- Filter admissions for Hyperosmolar Hyperglycemic State (HHS) diagnostic codes\n    SELECT DISTINCT\n        pd.subject_id,\n        pd.hadm_id,\n        pd.los_days\n    FROM\n        PatientDemographics pd\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON pd.hadm_id = di.hadm_id\n    WHERE\n        (di.icd_version = 9 AND di.icd_code LIKE '250.2%') -- ICD-9 codes for diabetes with hyperosmolarity\n        OR (di.icd_version = 10 AND (di.icd_code LIKE 'E11.0%' OR di.icd_code LIKE 'E13.0%')) -- ICD-10 codes for DM with hyperosmolarity\n),\nRadiographyCT_Procedures AS (\n    -- Count radiography/CT procedures per admission\n    SELECT\n        pr.hadm_id,\n        COUNT(pr.icd_code) AS num_radiography_ct_procedures\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dip\n        ON pr.icd_code = dip.icd_code AND pr.icd_version = dip.icd_version\n    WHERE\n        LOWER(dip.long_title) LIKE '%radiograph%'              -- Covers various radiography types\n        OR LOWER(dip.long_title) LIKE '%computed tomography%' -- Covers full term for CT\n        OR LOWER(dip.long_title) LIKE '%ct scan%'             -- Covers common abbreviation for CT\n    GROUP BY\n        pr.hadm_id\n)\n-- Final aggregation\nSELECT\n    CASE\n        WHEN hhs.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n        WHEN hhs.los_days BETWEEN 5 AND 7 THEN '5-7 days'\n        ELSE 'Other' -- Should not be reached due to initial LOS filter\n    END AS los_group,\n    COUNT(DISTINCT hhs.subject_id) AS patient_count,\n    COUNT(DISTINCT hhs.hadm_id) AS admission_count,\n    -- Calculate mean procedures per admission, handling cases with 0 procedures\n    AVG(COALESCE(rcp.num_radiography_ct_procedures, 0)) AS mean_radiography_ct_procedures_per_admission\nFROM\n    HHS_Admissions hhs\nLEFT JOIN -- Use LEFT JOIN to include admissions that had 0 radiography/CT procedures\n    RadiographyCT_Procedures rcp\n    ON hhs.hadm_id = rcp.hadm_id\nGROUP BY\n    los_group\nORDER BY\n    los_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

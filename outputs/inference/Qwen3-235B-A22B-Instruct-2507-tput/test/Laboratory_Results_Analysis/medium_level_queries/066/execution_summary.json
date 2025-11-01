@@ -1,0 +1,28 @@
+{
+  "query": "For my 44\u2011year\u2011old male with chest pain: among men aged 39\u201349 admitted for chest pain, report counts, percentages, and mean, median, IQR of initial hs\u2011TnT by category (normal/borderline/myocardial injury).",
+  "final_sql": "WITH chest_pain_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%chest pain%'\n    AND icd_version = 10\n),\npatients_of_interest AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 39 AND 49\n    AND di.icd_code IN (SELECT icd_code FROM chest_pain_codes)\n  GROUP BY p.subject_id\n),\nhs_tnt_item AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin%t%high%'\n     OR LOWER(label) LIKE '%troponin%high%'\n),\nfirst_hs_tnt AS (\n  SELECT \n    le.hadm_id,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN hs_tnt_item h ON le.itemid = h.itemid\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON le.hadm_id = a.hadm_id\n  INNER JOIN patients_of_interest p ON a.subject_id = p.subject_id\n  WHERE le.valuenum IS NOT NULL\n),\ninitial_troponin AS (\n  SELECT valuenum\n  FROM first_hs_tnt\n  WHERE rn = 1\n),\ncategorized AS (\n  SELECT \n    valuenum,\n    CASE \n      WHEN valuenum <= 14 THEN 'Normal'\n      WHEN valuenum BETWEEN 15 AND 29 THEN 'Borderline'\n      WHEN valuenum >= 30 THEN 'Myocardial injury'\n      ELSE 'Unknown'\n    END AS category\n  FROM initial_troponin\n),\nsummary_stats AS (\n  SELECT\n    category,\n    COUNT(*) AS count_val,\n    APPROX_QUANTILES(valuenum, 100)[OFFSET(25)] AS q1,\n    APPROX_QUANTILES(valuenum, 100)[OFFSET(50)] AS median,\n    APPROX_QUANTILES(valuenum, 100)[OFFSET(75)] AS q3,\n    AVG(valuenum) AS mean_val\n  FROM categorized\n  WHERE category != 'Unknown'\n  GROUP BY category\n)\nSELECT\n  category,\n  count_val AS count,\n  ROUND(count_val * 100.0 / SUM(count_val) OVER (), 2) AS percentage,\n  ROUND(mean_val, 2) AS mean_hs_tnt,\n  ROUND(median, 2) AS median_hs_tnt,\n  CONCAT('[', ROUND(q1, 2), '-', ROUND(q3, 2), ']') AS iqr_hs_tnt\nFROM summary_stats\nORDER BY \n  CASE category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Myocardial injury' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column category which is neither grouped nor aggregated at [54:5]; reason: invalidQuery, location: query, message: SELECT list expression references column category which is neither grouped nor aggregated at [54:5]\n\nLocation: US\nJob ID: 9ce1e112-fbd3-452e-ac0a-c1b773e95379\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f8e556fc-9be9-45f2-9425-80f7f6e14083\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

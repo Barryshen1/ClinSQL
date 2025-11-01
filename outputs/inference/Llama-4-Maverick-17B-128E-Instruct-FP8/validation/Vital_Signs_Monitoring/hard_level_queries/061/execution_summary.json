@@ -1,0 +1,28 @@
+{
+  "query": "I have a 54-year-old female with ACS. Among female ICU patients aged 49\u201359, what percentile is a first-24h composite vital instability score of 70? Also report ICU length of stay (mean days) and hospital mortality (%) for the top decile.",
+  "final_sql": "WITH \n-- Filter female patients aged 49-59 and calculate composite vital instability score\neligible_patients_score AS (\n  WITH \n  vital_signs AS (\n    SELECT p.subject_id, icu.stay_id, icu.intime,\n           MAX(CASE WHEN di.label = 'Heart Rate' THEN ce.valuenum END) AS max_hr,\n           MIN(CASE WHEN di.label = 'Heart Rate' THEN ce.valuenum END) AS min_hr,\n           MAX(CASE WHEN di.label = 'Systolic Blood Pressure' THEN ce.valuenum END) AS max_sbp,\n           MIN(CASE WHEN di.label = 'Systolic Blood Pressure' THEN ce.valuenum END) AS min_sbp,\n           MAX(CASE WHEN di.label = 'Respiratory Rate' THEN ce.valuenum END) AS max_rr,\n           MIN(CASE WHEN di.label = 'Respiratory Rate' THEN ce.valuenum END) AS min_rr\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON p.subject_id = icu.subject_id\n    JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON icu.stay_id = ce.stay_id\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n    WHERE p.gender = 'F' AND p.anchor_age BETWEEN 49 AND 59\n    AND ce.charttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n    AND di.label IN ('Heart Rate', 'Systolic Blood Pressure', 'Respiratory Rate')\n    GROUP BY p.subject_id, icu.stay_id, icu.intime\n  )\n  SELECT subject_id, stay_id, intime,\n         (max_hr - min_hr) + (max_sbp - min_sbp) + (max_rr - min_rr) AS score\n  FROM vital_signs\n),\n\n-- Calculate ICU length of stay and hospital mortality\nicu_los_mortality AS (\n  SELECT icu.stay_id, \n         DATETIME_DIFF(icu.outtime, icu.intime, DAY) AS icu_los_days,\n         CASE WHEN adm.deathtime IS NOT NULL THEN 1 ELSE 0 END AS hospital_mortality\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm ON icu.hadm_id = adm.hadm_id\n),\n\n-- Calculate percentile and top decile threshold\npercentiles AS (\n  SELECT \n    PERCENTILE_CONT(score, 0.5) OVER () AS median_score,\n    PERCENTILE_CONT(score, 0.9) AS top_decile_threshold\n  FROM eligible_patients_score\n),\n\nscore_stats AS (\n  SELECT \n    COUNTIF(score <= 70) / COUNT(*) AS percentile_70,\n    ANY_VALUE(top_decile_threshold) AS top_decile_threshold\n  FROM eligible_patients_score\n  CROSS JOIN (SELECT top_decile_threshold FROM percentiles LIMIT 1) p\n)\n\n-- Main query\nSELECT \n  s.percentile_70,\n  AVG(CASE WHEN eps.score >= s.top_decile_threshold THEN ilm.icu_los_days END) AS mean_icu_los_days_top_decile,\n  AVG(CASE WHEN eps.score >= s.top_decile_threshold THEN ilm.hospital_mortality END) * 100 AS hospital_mortality_percent_top_decile\nFROM icu_los_mortality ilm\nJOIN eligible_patients_score eps ON ilm.stay_id = eps.stay_id\nCROSS JOIN score_stats s;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column score which is neither grouped nor aggregated at [39:21]; reason: invalidQuery, location: query, message: SELECT list expression references column score which is neither grouped nor aggregated at [39:21]\n\nLocation: US\nJob ID: 8228468f-3bbe-402c-b118-a26084052b47\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Scalar subquery produced more than one element; reason: invalidQuery, location: query, message: Scalar subquery produced more than one element\n\nLocation: US\nJob ID: dd846cde-3e68-4e8a-b418-9b078dbdf0f0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column score which is neither grouped nor aggregated at [40:21]; reason: invalidQuery, location: query, message: SELECT list expression references column score which is neither grouped nor aggregated at [40:21]\n\nLocation: US\nJob ID: e4f63d27-b73c-4441-9c82-53c37f894519\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column score which is neither grouped nor aggregated at [39:21]; reason: invalidQuery, location: query, message: SELECT list expression references column score which is neither grouped nor aggregated at [39:21]\n\nLocation: US\nJob ID: 8228468f-3bbe-402c-b118-a26084052b47\n"
+    }
+  ]
+}

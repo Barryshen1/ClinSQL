@@ -1,0 +1,28 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH\n-- Step 1: Identify first ICU stays for female patients in the specified age range\nfirst_stays AS (\n  SELECT\n    p.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    (p.anchor_age + EXTRACT(YEAR FROM i.intime) - p.anchor_year) AS age_at_icustay,\n    ROW_NUMBER() OVER(PARTITION BY p.subject_id ORDER BY i.intime) AS stay_rank\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` AS i\n    ON p.subject_id = i.subject_id\n  WHERE\n    p.gender = 'F'\n),\n\n-- Step 2: Identify hospital admissions with a sepsis diagnosis\nsepsis_hadms AS (\n  SELECT DISTINCT\n    hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    (icd_version = 9 AND icd_code IN ('99591', '99592', '78552'))\n    OR (icd_version = 10 AND (icd_code LIKE 'A40%' OR icd_code LIKE 'A41%' OR icd_code LIKE 'R65.2%'))\n),\n\n-- Step 3: Define the Sepsis and Control cohorts from the filtered first stays\ncohorts AS (\n  SELECT\n    fs.subject_id,\n    fs.hadm_id,\n    fs.stay_id,\n    fs.intime,\n    CASE\n      WHEN sh.hadm_id IS NOT NULL THEN 'Sepsis'\n      ELSE 'Control'\n    END AS cohort_group\n  FROM\n    first_stays AS fs\n  LEFT JOIN\n    sepsis_hadms AS sh\n    ON fs.hadm_id = sh.hadm_id\n  WHERE\n    fs.stay_rank = 1\n    AND fs.age_at_icustay BETWEEN 66 AND 76\n),\n\n-- Step 4: For the sepsis cohort, count distinct procedures in the first 48 hours\nsepsis_proc_counts AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT p.icd_code) AS distinct_procedure_count\n  FROM\n    cohorts AS c\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS p\n    ON c.hadm_id = p.hadm_id\n  WHERE\n    c.cohort_group = 'Sepsis'\n    -- Captures procedures on the day of ICU admission and the following calendar day\n    -- as a proxy for the first 48 hours, given procedures_icd has a DATE type column.\n    AND p.chartdate >= DATE(c.intime)\n    AND p.chartdate <= DATE_ADD(DATE(c.intime), INTERVAL 1 DAY)\n  GROUP BY\n    c.subject_id,\n    c.hadm_id\n),\n\n-- Step 5: Calculate the 90th percentile of the procedure counts for the sepsis cohort\npercentile_90_procs AS (\n  SELECT\n    APPROX_QUANTILES(distinct_procedure_count, 100)[OFFSET(90)] AS percentile_90_procedure_count\n  FROM\n    sepsis_proc_counts\n),\n\n-- Step 6: Calculate LOS and mortality outcomes for both cohorts\ncohort_outcomes AS (\n  SELECT\n    c.cohort_group,\n    AVG(DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0) AS avg_hospital_los_days,\n    AVG(a.hospital_expire_flag) AS in_hospital_mortality_rate\n  FROM\n    cohorts AS c\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON c.hadm_id = a.hadm_id\n  GROUP BY\n    c.cohort_group\n)\n\n-- Final Step: Combine all metrics into a single summary row\nSELECT\n  MAX(p90.percentile_90_procedure_count) AS percentile_90_procedure_count,\n  MAX(CASE WHEN co.cohort_group = 'Sepsis' THEN co.avg_hospital_los_days END) AS avg_los_sepsis,\n  MAX(CASE WHEN co.cohort_group = 'Sepsis' THEN co.in_hospital_mortality_rate END) AS mortality_rate_sepsis,\n  MAX(CASE WHEN co.cohort_group = 'Control' THEN co.avg_hospital_los_days END) AS avg_los_control,\n  MAX(CASE WHEN co.cohort_group = 'Control' THEN co.in_hospital_mortality_rate END) AS mortality_rate_control\nFROM\n  cohort_outcomes AS co,\n  percentile_90_procs AS p90;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references p90.percentile_90_procedure_count which is neither grouped nor aggregated at [98:3]; reason: invalidQuery, location: query, message: SELECT list expression references p90.percentile_90_procedure_count which is neither grouped nor aggregated at [98:3]\n\nLocation: US\nJob ID: f013153f-0602-457b-82f5-ca85db7959b0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid project ID 'physionet-data.mimiciv_hosp'. Project IDs must contain 6-63 lowercase letters, digits, or dashes. Some project IDs also include domain name separated by a colon. IDs must start with a letter and may not end with a dash.; reason: invalid, location: physionet-data.mimiciv_hosp.v2_2.admissions, message: Invalid project ID 'physionet-data.mimiciv_hosp'. Project IDs must contain 6-63 lowercase letters, digits, or dashes. Some project IDs also include domain name separated by a colon. IDs must start with a letter and may not end with a dash.\n\nLocation: US\nJob ID: 373eabc4-6c22-4d52-a806-b67092be83b4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For a 49-year-old woman with TIA: among female patients 44\u201354, what are p25, p50, p75 of diagnostic imaging per admission by LOS (1\u20134 vs 5\u20137 days) and ICU use?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id\n    AND a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '435%') -- ICD-9 TIA\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'G45%') -- ICD-10 TIA\n    )\n),\ncohort_los AS (\n  SELECT\n    c.*,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7'\n    END AS los_group\n  FROM cohort c\n  WHERE los_days BETWEEN 1 AND 7\n),\nimaging_counts AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    COUNT(*) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  WHERE\n    (p.icd_version = 9 AND (p.icd_code LIKE '87%' OR p.icd_code LIKE '88%'))\n    OR (p.icd_version = 10 AND p.icd_code LIKE 'B0%')\n  GROUP BY p.subject_id, p.hadm_id\n),\nicu_flags AS (\n  SELECT\n    hadm_id,\n    1 AS icu_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\njoined AS (\n  SELECT\n    cl.subject_id,\n    cl.hadm_id,\n    cl.los_group,\n    IF(IFNULL(i.icu_flag,0) = 1, 'ICU', 'No ICU') AS icu_use,\n    IFNULL(ic.imaging_count, 0) AS imaging_count\n  FROM cohort_los cl\n  LEFT JOIN imaging_counts ic\n    ON cl.subject_id = ic.subject_id\n    AND cl.hadm_id = ic.hadm_id\n  LEFT JOIN icu_flags i\n    ON cl.hadm_id = i.hadm_id\n)\nSELECT\n  los_group,\n  icu_use,\n  q[OFFSET(1)] AS p25,\n  q[OFFSET(2)] AS p50,\n  q[OFFSET(3)] AS p75\nFROM (\n  SELECT\n    los_group,\n    icu_use,\n    APPROX_QUANTILES(imaging_count, 4) AS q\n  FROM joined\n  GROUP BY los_group, icu_use\n)\nORDER BY los_group, icu_use;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

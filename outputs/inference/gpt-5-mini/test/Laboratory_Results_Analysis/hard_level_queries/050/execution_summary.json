@@ -1,0 +1,22 @@
+{
+  "query": "For a 45-year-old woman: among female inpatients aged 40\u201350 with ARDS, what is the 75th-percentile laboratory-instability score (first 72 h)? For patients at/above this threshold, report mortality, mean LOS, and compare average critical lab events per patient to age-matched non-ARDS inpatients.",
+  "final_sql": "WITH\n-- 1) Female patients aged 40-50\npatients_f AS (\n  SELECT subject_id, gender, anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 40 AND 50\n),\n\n-- 2) Admissions for that subset\nadmissions_cohort AS (\n  SELECT a.*\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN patients_f p USING(subject_id)\n),\n\n-- 3) Identify ARDS diagnoses (match by d_icd_diagnoses.long_title or common ICD codes)\ndiagnoses_ards AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (\n      LOWER(COALESCE(d.long_title, '')) LIKE '%acute respiratory distress%'\n      OR di.icd_code IN ('J80', '518.82', '51882')\n      OR REPLACE(di.icd_code, '.', '') IN ('J80', '51882')\n    )\n),\n\n-- 4) Lab critical counts in first 72 hours for admissions in the cohort\nlab_crit_counts AS (\n  SELECT\n    a.hadm_id,\n    COUNT(*) AS critical_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN admissions_cohort a\n    ON l.hadm_id = a.hadm_id\n   AND l.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n  WHERE\n    (\n      (l.valuenum IS NOT NULL\n       AND (\n         (l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower)\n         OR\n         (l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper)\n       )\n      )\n      OR (l.flag IS NOT NULL AND TRIM(l.flag) <> '')\n    )\n  GROUP BY a.hadm_id\n),\n\n-- 5) Per-admission scores (include admissions with zero critical events)\nadmission_scores AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.hospital_expire_flag,\n    SAFE_DIVIDE(CAST(TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) AS FLOAT64), 86400.0) AS los_days,\n    COALESCE(l.critical_count, 0) AS score\n  FROM admissions_cohort a\n  LEFT JOIN lab_crit_counts l\n    ON a.hadm_id = l.hadm_id\n),\n\n-- 6) ARDS admission scores and non-ARDS admission scores\nards_scores AS (\n  SELECT s.*\n  FROM admission_scores s\n  WHERE s.hadm_id IN (SELECT hadm_id FROM diagnoses_ards)\n),\nnonards_scores AS (\n  SELECT s.*\n  FROM admission_scores s\n  WHERE s.hadm_id NOT IN (SELECT hadm_id FROM diagnoses_ards)\n),\n\n-- 7) 75th percentile threshold among ARDS admission scores\nards_threshold AS (\n  SELECT\n    COALESCE(\n      (SELECT APPROX_QUANTILES(score, 100)[OFFSET(75)] FROM ards_scores),\n      0\n    ) AS threshold_75\n),\n\n-- 8) Aggregates for ARDS admissions at/above threshold\nards_agg AS (\n  SELECT\n    COUNT(*) AS ards_high_n,\n    SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)) AS ards_high_mortality_rate,\n    AVG(los_days) AS ards_high_mean_los_days,\n    AVG(score) AS ards_high_avg_critical_events_per_patient\n  FROM ards_scores s\n  JOIN ards_threshold t ON TRUE\n  WHERE s.score >= t.threshold_75\n),\n\n-- 9) Aggregates for non-ARDS admissions (age-matched cohort)\nnonards_agg AS (\n  SELECT\n    COUNT(*) AS nonards_n,\n    AVG(score) AS nonards_avg_critical_events_per_patient\n  FROM nonards_scores\n)\n\n-- Final aggregated results:\nSELECT\n  t.threshold_75 AS ards_75th_score_threshold,\n  a.ards_high_n,\n  a.ards_high_mortality_rate,\n  a.ards_high_mean_los_days,\n  a.ards_high_avg_critical_events_per_patient,\n  n.nonards_avg_critical_events_per_patient,\n  n.nonards_n\nFROM ards_threshold t\nLEFT JOIN ards_agg a ON TRUE\nLEFT JOIN nonards_agg n ON TRUE;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:10]\n\nLocation: US\nJob ID: 274a190b-06a0-4bd1-809d-85b5bf6c8209\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

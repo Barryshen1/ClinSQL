@@ -1,0 +1,22 @@
+{
+  "query": "For benchmarking my 70-year-old female ICU patient: among female ICU stays age 65\u201375, summarize per-measurement systolic BP in first 24h by categories (<140; 140\u2013159; \u2265160) giving mean, median, IQR.",
+  "final_sql": "WITH systolic_items AS (\n  -- identify itemids that represent systolic BP measurements\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%systolic%'\n),\n\ncohort_icustays AS (\n  -- female patients age 65-75 (inclusive) and their ICU stays\n  SELECT icu.subject_id, icu.hadm_id, icu.stay_id, icu.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n),\n\nmeasurements AS (\n  -- systolic BP measurements in the first 24 hours of the ICU stay\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.itemid,\n    ce.charttime,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN systolic_items si\n    ON ce.itemid = si.itemid\n  JOIN cohort_icustays icu\n    ON ce.stay_id = icu.stay_id\n  WHERE ce.valuenum IS NOT NULL\n    -- restrict to the first 24 hours of the ICU stay\n    AND ce.charttime >= icu.intime\n    AND ce.charttime < TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n    -- plausible physiologic filter to reduce obvious data entry errors\n    AND ce.valuenum > 20\n    AND ce.valuenum < 300\n),\n\ncategorized AS (\n  SELECT\n    CASE\n      WHEN valuenum < 140 THEN '<140'\n      WHEN valuenum BETWEEN 140 AND 159 THEN '140-159'\n      ELSE '>=160'\n    END AS sbp_category,\n    valuenum\n  FROM measurements\n)\n\n-- Final summary per category: count, mean, median, IQR (Q3 - Q1)\nSELECT\n  sbp_category AS category,\n  cnt AS n_measurements,\n  ROUND(mean_sbp, 2) AS mean_sbp,\n  quantiles[OFFSET(2)] AS median_sbp,\n  quantiles[OFFSET(3)] - quantiles[OFFSET(1)] AS iqr_sbp,\n  quantiles[OFFSET(1)] AS q1_sbp,\n  quantiles[OFFSET(3)] AS q3_sbp\nFROM (\n  SELECT\n    sbp_category,\n    COUNT(*) AS cnt,\n    AVG(valuenum) AS mean_sbp,\n    APPROX_QUANTILES(valuenum, 4) AS quantiles\n  FROM categorized\n  GROUP BY sbp_category\n)\nORDER BY\n  CASE sbp_category WHEN '<140' THEN 1 WHEN '140-159' THEN 2 ELSE 3 END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function APPROX_QUANTILES is not supported.; reason: invalidQuery, location: query, message: Analytic function APPROX_QUANTILES is not supported.\n\nLocation: US\nJob ID: 7aa0fa14-7d10-4763-af34-e4fdb4f61232\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "89-year-old male ICU patient with ischemic stroke: among male ICU patients aged 84\u201394 with ischemic stroke, what percentile is a first 72 hours vital-sign instability score of 80? Also report ICU LOS and mortality for the top instability quartile.",
+  "final_sql": "WITH vitals_items AS (\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) IN (\n    'heart rate', 'sbp', 'dbp', 'respiratory rate', 'temperature fahrenheit',\n    'o2 saturation', 'spo2'\n  )\n),\nstroke_admissions AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%ischemic stroke%'\n),\neligible_patients AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 84 AND 94\n),\nicu_stays_filtered AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN stroke_admissions sa ON icu.hadm_id = sa.hadm_id\n  JOIN eligible_patients ep ON icu.subject_id = ep.subject_id\n),\nvital_sign_scores AS (\n  SELECT\n    icu.stay_id,\n    SUM(\n      CASE\n        WHEN LOWER(d.label) = 'heart rate' AND (ce.valuenum > 130 OR ce.valuenum < 50) THEN 1\n        WHEN LOWER(d.label) IN ('sbp', 'dbp') AND (ce.valuenum > 180 OR ce.valuenum < 90) THEN 1\n        WHEN LOWER(d.label) = 'respiratory rate' AND (ce.valuenum > 30 OR ce.valuenum < 10) THEN 1\n        WHEN LOWER(d.label) = 'temperature fahrenheit' AND (ce.valuenum > 101.3 OR ce.valuenum < 95.9) THEN 1\n        WHEN LOWER(d.label) IN ('o2 saturation', 'spo2') AND ce.valuenum < 90 THEN 1\n        ELSE 0\n      END\n    ) AS instability_score\n  FROM icu_stays_filtered icu\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON icu.stay_id = ce.stay_id\n  JOIN vitals_items d ON ce.itemid = d.itemid\n  WHERE ce.charttime BETWEEN icu.intime AND DATETIME_ADD(icu.intime, INTERVAL 72 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY icu.stay_id\n),\nscore_percentiles AS (\n  SELECT\n    *,\n    PERCENT_RANK() OVER (ORDER BY instability_score) AS percentile_rank\n  FROM vital_sign_scores\n),\nscore_80_percentile AS (\n  SELECT MAX(percentile_rank) AS percentile_of_80\n  FROM score_percentiles\n  WHERE instability_score = 80\n),\ntop_quartile AS (\n  SELECT *\n  FROM score_percentiles\n  WHERE percentile_rank >= 0.75\n)\nSELECT\n  (SELECT percentile_of_80 FROM score_80_percentile) AS percentile_of_score_80,\n  APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_icu_los_top_quartile,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate_top_quartile\nFROM top_quartile t\nJOIN icu_stays_filtered icu ON t.stay_id = icu.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

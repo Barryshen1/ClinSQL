@@ -1,0 +1,16 @@
+{
+  "query": "For my 44\u2011year\u2011old male with chest pain: among men aged 39\u201349 admitted for chest pain, report counts, percentages, and mean, median, IQR of initial hs\u2011TnT by category (normal/borderline/myocardial injury).",
+  "final_sql": "WITH chest_pain_cohort AS (\n  SELECT DISTINCT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON dd.icd_code = di.icd_code AND dd.icd_version = di.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND LOWER(dd.long_title) LIKE '%chest pain%'\n),\n\n-- Part 2: extract the initial hs-TnT value for each such admission\ninitial_hstnt AS (\n  SELECT\n    cpc.hadm_id,\n    le.charttime,\n    le.valuenum AS initial_tn\n  FROM chest_pain_cohort AS cpc\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.hadm_id = cpc.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n    ON le.itemid = dli.itemid\n  WHERE (\n        LOWER(dli.label) LIKE '%troponin%'\n        OR LOWER(dli.label) LIKE '%hs-troponin%'\n        OR LOWER(dli.label) LIKE '%hs troponin%'\n      )\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY cpc.hadm_id ORDER BY le.charttime) = 1\n)\n\n-- Part 3: compute category stats from the initial hs-TnT values\nSELECT\n  CASE\n    WHEN initial_tn < 14 THEN 'Normal'\n    WHEN initial_tn < 52 THEN 'Borderline'\n    ELSE 'Myocardial injury'\n  END AS category,\n  COUNT(*) AS cnt,\n  100.0 * COUNT(*) / (SELECT COUNT(*) FROM initial_hstnt) AS pct,\n  AVG(initial_tn) AS mean,\n  -- Median and IQR using approximate quantiles (100 bins)\n  APPROX_QUANTILES(initial_tn, 100)[OFFSET(50)] AS median,\n  (APPROX_QUANTILES(initial_tn, 100)[OFFSET(75)]\n     - APPROX_QUANTILES(initial_tn, 100)[OFFSET(25)]\n  ) AS iqr\nFROM initial_hstnt\nGROUP BY category\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

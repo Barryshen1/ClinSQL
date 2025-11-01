@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH neutropenia_fever_adms AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.subject_id = d.subject_id\n      AND a.hadm_id = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 41 AND 51\n  GROUP BY\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  HAVING\n    COUNTIF(LOWER(dd.long_title) LIKE '%neutropenia%') >= 1\n    AND COUNTIF(LOWER(dd.long_title) LIKE '%fever%') >= 1\n),\n\nmed_counts AS (\n  SELECT\n    n.subject_id,\n    n.hadm_id,\n    n.admittime,\n    n.dischtime,\n    n.hospital_expire_flag,\n    COUNT(DISTINCT pr.drug) AS med_count\n  FROM\n    neutropenia_fever_adms n\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n      ON n.subject_id = pr.subject_id\n      AND n.hadm_id = pr.hadm_id\n      AND pr.starttime BETWEEN n.admittime\n                          AND TIMESTAMP_ADD(n.admittime, INTERVAL 48 HOUR)\n  GROUP BY\n    n.subject_id,\n    n.hadm_id,\n    n.admittime,\n    n.dischtime,\n    n.hospital_expire_flag\n),\n\ntertiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag,\n    med_count,\n    NTILE(3) OVER (ORDER BY med_count) AS tertile\n  FROM\n    med_counts\n),\n\nreadmission_flags AS (\n  SELECT\n    t.*,\n    -- Flag 1 if there exists a readmission within 30 days after discharge\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = t.subject_id\n          AND a2.hadm_id <> t.hadm_id\n          AND a2.admittime BETWEEN t.dischtime\n                              AND TIMESTAMP_ADD(t.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmit_30d_flag,\n    -- Compute LOS in days\n    TIMESTAMP_DIFF(t.dischtime, t.admittime, DAY) AS los_days\n  FROM\n    tertiles t\n)\n\nSELECT\n  tertile,\n  ROUND(AVG(los_days), 2) AS avg_los_days,\n  ROUND(100.0 * AVG(hospital_expire_flag), 2) AS pct_in_hosp_mortality,\n  ROUND(100.0 * AVG(readmit_30d_flag), 2) AS pct_30d_readmission\nFROM\n  readmission_flags\nGROUP BY\n  tertile\nORDER BY\n  tertile;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

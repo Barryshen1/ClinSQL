@@ -1,0 +1,22 @@
+{
+  "query": "For my 69-year-old female with AKI: among female patients 64\u201374 with AKI, median (IQR) diagnostic imaging studies per admission for 1\u20133 vs 4\u20137 days, stratified by primary vs secondary diagnosis?",
+  "final_sql": "WITH aki_admissions AS (\n  -- Find admissions for female patients aged 64-74 with AKI diagnosis\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.anchor_age,\n    pat.gender,\n    adm.admittime,\n    adm.dischtime,\n    diag.seq_num,\n    diag.icd_code,\n    diag.icd_version,\n    CASE\n      WHEN diag.seq_num = 1 THEN 'primary'\n      ELSE 'secondary'\n    END AS aki_dx_type\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 64 AND 74\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code LIKE '584%') -- AKI ICD-9\n      OR\n      (diag.icd_version = 10 AND diag.icd_code LIKE 'N17%') -- AKI ICD-10\n    )\n),\n\nimaging_procedures AS (\n  -- Identify imaging procedures per admission\n  SELECT\n    proc.subject_id,\n    proc.hadm_id,\n    COUNT(DISTINCT proc.icd_code) AS imaging_study_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dproc\n    ON proc.icd_code = dproc.icd_code AND proc.icd_version = dproc.icd_version\n  WHERE\n    LOWER(dproc.long_title) LIKE '%imaging%'\n    OR LOWER(dproc.long_title) LIKE '%radiology%'\n    OR LOWER(dproc.long_title) LIKE '%ct%'\n    OR LOWER(dproc.long_title) LIKE '%mri%'\n    OR LOWER(dproc.long_title) LIKE '%ultrasound%'\n    OR LOWER(dproc.long_title) LIKE '%x-ray%'\n  GROUP BY\n    proc.subject_id, proc.hadm_id\n),\n\naki_imaging AS (\n  -- Merge AKI admissions with imaging counts and LOS\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.anchor_age,\n    a.gender,\n    a.aki_dx_type,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    IFNULL(ip.imaging_study_count, 0) AS imaging_study_count\n  FROM\n    aki_admissions a\n  LEFT JOIN\n    imaging_procedures ip\n    ON a.subject_id = ip.subject_id AND a.hadm_id = ip.hadm_id\n  WHERE\n    a.dischtime IS NOT NULL\n    AND a.admittime IS NOT NULL\n),\n\naki_imaging_stratified AS (\n  -- Stratify by LOS group\n  SELECT\n    *,\n    CASE\n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n      ELSE NULL\n    END AS los_group\n  FROM\n    aki_imaging\n  WHERE\n    los_days BETWEEN 1 AND 7\n)\n\nSELECT\n  los_group,\n  aki_dx_type,\n  APPROX_QUANTILES(imaging_study_count, 4)[OFFSET(2)] AS median_imaging_studies,\n  APPROX_QUANTILES(imaging_study_count, 4)[OFFSET(1)] AS iqr_low,\n  APPROX_QUANTILES(imaging_study_count, 4)[OFFSET(3)] AS iqr_high\nFROM\n  aki_imaging_stratified\nGROUP BY\n  los_group, aki_dx_type\nORDER BY\n  los_group, aki_dx_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_group at [90:9]; reason: invalidQuery, location: query, message: Unrecognized name: los_group at [90:9]\n\nLocation: US\nJob ID: ecec0922-85bf-4338-8a13-edf9fcdeb378\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

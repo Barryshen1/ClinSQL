@@ -1,0 +1,16 @@
+{
+  "query": "For my 57-year-old male, among men aged 52\u201362 undergoing their first PCI, what is the average 30-day readmission rate?",
+  "final_sql": "WITH cohort AS (\n  -- Step 1: Identify male patients aged 52\u201362\n  SELECT \n    p.subject_id,\n    p.anchor_age\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE \n    p.gender = 'M' AND\n    p.anchor_age BETWEEN 52 AND 62\n),\n\n-- Step 2: Identify first PCI procedure per patient\nfirst_pci AS (\n  SELECT \n    pc.subject_id,\n    pc.hadm_id AS index_hadm_id,\n    pc.chartdate AS index_chartdate\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` pc\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d\n    ON pc.icd_code = d.icd_code AND pc.icd_version = d.icd_version\n  WHERE \n    -- ICD-10 PCS codes for PCI (example range)\n    d.icd_code LIKE '0270%' OR\n    d.icd_code LIKE '0271%' OR\n    d.icd_code LIKE '0272%' OR\n    d.icd_code LIKE '0273%'\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY pc.subject_id ORDER BY pc.chartdate) = 1\n),\n\n-- Step 3: Get index admission details\nindex_admission AS (\n  SELECT \n    f.subject_id,\n    f.index_hadm_id,\n    a.dischtime AS index_dischtime\n  FROM \n    first_pci f\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.index_hadm_id = a.hadm_id\n  WHERE \n    a.hospital_expire_flag = 0  -- Exclude deaths during index admission\n),\n\n-- Step 4: Identify 30-day readmissions\nreadmissions AS (\n  SELECT \n    ia.subject_id,\n    ia.index_hadm_id,\n    CASE \n      WHEN readmit.hadm_id IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS readmitted_30d\n  FROM \n    index_admission ia\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` readmit\n    ON ia.subject_id = readmit.subject_id\n    AND readmit.hadm_id != ia.index_hadm_id\n    AND readmit.admittime > ia.index_dischtime\n    AND readmit.admittime <= DATETIME_ADD(ia.index_dischtime, INTERVAL 30 DAY)\n)\n\n-- Final step: Calculate average 30-day readmission rate\nSELECT \n  AVG(readmitted_30d) AS avg_30day_readmission_rate\nFROM \n  readmissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

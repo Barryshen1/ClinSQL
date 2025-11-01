@@ -1,0 +1,28 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH ranked_icu_stays AS (\n    -- Pre-calculate row number for ICU stays to identify the first one\n    SELECT\n        icu.subject_id,\n        icu.hadm_id,\n        icu.stay_id,\n        icu.intime,\n        icu.outtime,\n        ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY icu.intime) as rn\n    FROM\n        `physionet-data.mimiciv_3_1_icu`.icustays icu\n),\ncohort_first_icu_stays AS (\n    -- Step 1: Identify eligible patients and their first ICU stay,\n    -- filtering by age, gender, and hepatic failure diagnosis.\n    SELECT\n        p.subject_id,\n        ad.hadm_id,\n        ris.stay_id, -- Use stay_id from ranked_icu_stays\n        ris.intime,\n        ris.outtime,\n        ad.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp`.patients p\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp`.admissions ad\n        ON p.subject_id = ad.subject_id\n    JOIN\n        ranked_icu_stays ris -- Join with the CTE containing ranked ICU stays\n        ON ad.hadm_id = ris.hadm_id\n    WHERE\n        ris.rn = 1 -- Filter for the first ICU stay here, after ROW_NUMBER is calculated\n        AND p.gender = 'M'\n        AND p.anchor_age = 90 -- Patients >= 90 years old are grouped as 90 in MIMIC-IV\n        -- Check for hepatic failure diagnosis during the admission\n        AND EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd dicd\n            WHERE\n                dicd.subject_id = ad.subject_id\n                AND dicd.hadm_id = ad.hadm_id\n                AND (\n                    (dicd.icd_version = 9 AND (dicd.icd_code LIKE '570%' OR dicd.icd_code LIKE '5722%')) -- ICD-9 codes for hepatic failure (e.g., 570, 572.2)\n                    OR (dicd.icd_version = 10 AND dicd.icd_code LIKE 'K72%') -- ICD-10 codes for hepatic failure (e.g., K72)\n                )\n        )\n),\npatient_procedure_counts AS (\n    -- Step 2: Count distinct diagnostic procedures within the initial 72 hours of ICU stay,\n    -- and calculate LOS.\n    SELECT\n        cfis.subject_id,\n        cfis.hadm_id,\n        cfis.stay_id,\n        cfis.intime,\n        cfis.outtime,\n        cfis.hospital_expire_flag,\n        -- Calculate number of distinct procedures (0 if none found in window)\n        COUNT(DISTINCT proc.icd_code) AS num_procedures,\n        -- Calculate Length of Stay in days\n        DATETIME_DIFF(cfis.outtime, cfis.intime, HOUR) / 24.0 AS los_days\n    FROM\n        cohort_first_icu_stays cfis\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp`.procedures_icd proc\n        ON cfis.subject_id = proc.subject_id\n        AND cfis.hadm_id = proc.hadm_id\n        -- Procedures must occur within the first 72 hours (3 days) of ICU admission time\n        AND proc.chartdate BETWEEN cfis.intime AND DATETIME_ADD(cfis.intime, INTERVAL 72 HOUR)\n        AND proc.chartdate IS NOT NULL -- Ensure chartdate is not null for valid comparison\n    GROUP BY\n        cfis.subject_id,\n        cfis.hadm_id,\n        cfis.stay_id,\n        cfis.intime,\n        cfis.outtime,\n        cfis.hospital_expire_flag\n),\nquartile_assigned_patients AS (\n    -- Step 3: Assign quartiles based on the number of distinct procedures.\n    SELECT\n        ppc.subject_id,\n        ppc.hadm_id,\n        ppc.stay_id,\n        ppc.intime,\n        ppc.outtime,\n        ppc.hospital_expire_flag,\n        ppc.num_procedures,\n        ppc.los_days,\n        NTILE(4) OVER (ORDER BY ppc.num_procedures) AS quartile\n    FROM\n        patient_procedure_counts ppc\n)\n-- Step 4: Final aggregation by quartile to report requested metrics.\nSELECT\n    qap.quartile,\n    COUNT(DISTINCT qap.subject_id) AS num_patients,\n    MIN(qap.num_procedures) AS min_procedures_per_patient,\n    MAX(qap.num_procedures) AS max_procedures_per_patient,\n    AVG(qap.num_procedures) AS mean_procedures_per_patient,\n    AVG(qap.los_days) AS mean_los_days,\n    AVG(CASE WHEN qap.hospital_expire_flag = 1 THEN 100.0 ELSE 0.0 END) AS mortality_percentage\nFROM\n    quartile_assigned_patients qap\nGROUP BY\n    qap.quartile\nORDER BY\n    qap.quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [76:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [76:1]\n\nLocation: US\nJob ID: 74be0da6-74dd-434c-87cd-a63ca4054caf\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in WHERE clause at [23:14]; reason: invalidQuery, location: query, message: Analytic function not allowed in WHERE clause at [23:14]\n\nLocation: US\nJob ID: 50ea3229-d7d7-418a-9117-a0c2162dec35\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

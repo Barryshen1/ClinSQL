@@ -1,0 +1,1 @@
+Note: The query may return NULL if there are no qualifying admissions. In practice, additional filtering (e.g., excluding duplicate admissions or handling edge cases) might be needed, but this meets the specified constraints and clinical question.;

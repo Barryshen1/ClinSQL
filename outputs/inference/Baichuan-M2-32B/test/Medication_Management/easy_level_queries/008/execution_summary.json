@@ -1,0 +1,29 @@
+{
+  "query": "For my hospitalized 69-year-old man: among men 64\u201374 given aspirin plus a P2Y12 inhibitor, median inpatient antiplatelet prescription duration (days)?",
+  "final_sql": "WITH antiplatelet_drugs AS (\n  SELECT 'aspirin' AS drug_type, 'aspirin' AS drug_name_pattern\n  UNION ALL\n  SELECT 'p2y12_inhibitor', 'clopidogrel'\n  UNION ALL\n  SELECT 'p2y12_inhibitor', 'ticagrelor'\n  UNION ALL\n  SELECT 'p2y12_inhibitor', 'prasugrel'\n),\nlatest_poe AS (\n  SELECT\n    poe_id,\n    poe_seq,\n    FIRST_VALUE(order_status) OVER (PARTITION BY poe_id, poe_seq ORDER BY ordertime DESC) AS latest_status\n  FROM `physionet-data.mimiciv_3_1_hosp.poe`\n  GROUP BY poe_id, poe_seq\n),\nprescriptions_with_drug_type AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.starttime,\n    p.stoptime,\n    ad.drug_type\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN antiplatelet_drugs ad\n    ON LOWER(p.drug) LIKE CONCAT('%', LOWER(ad.drug_name_pattern), '%')\n  WHERE p.stoptime IS NOT NULL\n),\nadmissions_with_patients AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    TIMESTAMP_DIFF(a.admittime, DATE_SUB(FROM_YEARS(p.anchor_year), INTERVAL p.anchor_age YEAR), YEAR) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND TIMESTAMP_DIFF(a.admittime, DATE_SUB(FROM_YEARS(p.anchor_year), INTERVAL p.anchor_age YEAR), YEAR) BETWEEN 64 AND 74\n),\nprescriptions_with_status AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.starttime,\n    p.stoptime,\n    p.drug_type\n  FROM prescriptions_with_drug_type p\n  JOIN latest_poe lp\n    ON p.poe_id = lp.poe_id AND p.poe_seq = lp.poe_seq\n  WHERE lp.latest_status NOT IN ('cancelled', 'discontinued')\n),\nclipped_prescriptions AS (\n  SELECT\n    p.hadm_id,\n    p.drug_type,\n    GREATEST(p.starttime, a.admittime) AS clipped_start,\n    LEAST(p.stoptime, a.dischtime) AS clipped_end\n  FROM prescriptions_with_status p\n  JOIN admissions_with_patients a\n    ON p.hadm_id = a.hadm_id\n  WHERE p.starttime < a.dischtime\n    AND p.stoptime > a.admittime\n),\nadmissions_with_both_drugs AS (\n  SELECT\n    hadm_id\n  FROM clipped_prescriptions\n  GROUP BY hadm_id\n  HAVING COUNT(DISTINCT drug_type) = 2\n),\nfiltered_clipped_prescriptions AS (\n  SELECT\n    cp.hadm_id,\n    cp.clipped_start,\n    cp.clipped_end\n  FROM clipped_prescriptions cp\n  JOIN admissions_with_both_drugs abd\n    ON cp.hadm_id = abd.hadm_id\n),\nintervals_for_merging AS (\n  SELECT\n    hadm_id,\n    clipped_start AS start_time,\n    clipped_end AS end_time,\n    LAG(clipped_end) OVER (PARTITION BY hadm_id ORDER BY clipped_start) AS prev_end\n  FROM filtered_clipped_prescriptions\n),\ngroups AS (\n  SELECT\n    hadm_id,\n    start_time,\n    end_time,\n    CASE\n      WHEN prev_end IS NULL THEN 1\n      WHEN start_time <= prev_end THEN 0\n      ELSE 1\n    END AS is_new_group\n  FROM intervals_for_merging\n),\ngrouped_intervals AS (\n  SELECT\n    hadm_id,\n    start_time,\n    end_time,\n    SUM(is_new_group) OVER (PARTITION BY hadm_id ORDER BY start_time) AS group_id\n  FROM groups\n),\nmerged_intervals AS (\n  SELECT\n    hadm_id,\n    MIN(start_time) AS merged_start,\n    MAX(end_time) AS merged_end\n  FROM grouped_intervals\n  GROUP BY hadm_id, group_id\n),\nadmission_durations AS (\n  SELECT\n    hadm_id,\n    SUM(TIMESTAMP_DIFF(merged_end, merged_start, MILLISECOND) / 86400000.0) AS total_duration_days\n  FROM merged_intervals\n  GROUP BY hadm_id\n)\nSELECT\n  APPROX_QUANTILES(total_duration_days, 100)[OFFSET(50)] AS median_duration_days\nFROM admission_durations;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected keyword SELECT but got keyword GROUPS at [92:1]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword SELECT but got keyword GROUPS at [92:1]\n\nLocation: US\nJob ID: 9f3b7c05-c41c-4f9f-ab0d-6a223f45cf3c\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"admission\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"admission\" at [1:10]\n\nLocation: US\nJob ID: f1d107cd-7a37-47d6-845d-75471275f0b1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected string literal \"with the admission.\" at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected string literal \"with the admission.\" at [1:6]\n\nLocation: US\nJob ID: cbb3c990-237f-4868-b80a-29b70fae779e\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword SELECT but got keyword GROUPS at [92:1]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword SELECT but got keyword GROUPS at [92:1]\n\nLocation: US\nJob ID: 9f3b7c05-c41c-4f9f-ab0d-6a223f45cf3c\n"
+    }
+  ]
+}

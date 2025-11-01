@@ -1,0 +1,22 @@
+{
+  "query": "44-year-old male. In male patients 39\u201349 with ACS and LOS 1\u20137 days, report p25, p50, p75 of ultrasounds (incl. echo) per admission, stratified 1\u20134 vs 5\u20137 stays and primary vs secondary ACS.",
+  "final_sql": "WITH \n-- Step 1: Filter patients\nfiltered_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M' AND anchor_age BETWEEN 39 AND 49\n),\n\n-- Step 2: Identify admissions with ACS\nacs_admissions AS (\n  SELECT a.hadm_id, \n         CASE \n           WHEN MIN(d.seq_num) = 1 THEN 'Primary'\n           ELSE 'Secondary'\n         END AS acs_priority\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE a.subject_id IN (SELECT subject_id FROM filtered_patients)\n    AND dicd.long_title LIKE '%Acute Coronary Syndrome%'  -- Simplified ACS identification\n  GROUP BY a.hadm_id\n),\n\n-- Step 3: Calculate LOS and count ICU stays\nadmission_characteristics AS (\n  SELECT aa.hadm_id, \n         aa.acs_priority,\n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n         COUNT(ic.stay_id) AS num_icu_stays\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN acs_admissions aa ON a.hadm_id = aa.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` ic ON a.hadm_id = ic.hadm_id\n  GROUP BY aa.hadm_id, aa.acs_priority, a.dischtime, a.admittime\n),\n\n-- Step 4: Count ultrasounds\nultrasound_counts AS (\n  SELECT a.hadm_id, \n         COUNT(pe.itemid) AS num_ultrasounds\n  FROM admission_characteristics a\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe ON a.hadm_id = pe.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON pe.itemid = di.itemid\n  WHERE di.label LIKE '%ultrasound%' OR di.label LIKE '%echo%'\n  GROUP BY a.hadm_id\n)\n\n-- Step 5: Stratify and calculate statistics\nSELECT \n  CASE \n    WHEN ac.num_icu_stays BETWEEN 1 AND 4 THEN '1-4 stays'\n    WHEN ac.num_icu_stays BETWEEN 5 AND 7 THEN '5-7 stays'\n    ELSE 'Outside range'\n  END AS icu_stay_strata,\n  ac.acs_priority,\n  APPROX_QUANTILES(uc.num_ultrasounds, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(uc.num_ultrasounds, 100)[OFFSET(50)] AS p50,\n  APPROX_QUANTILES(uc.num_ultrasounds, 100)[OFFSET(75)] AS p75\nFROM admission_characteristics ac\nJOIN ultrasound_counts uc ON ac.hadm_id = uc.hadm_id\nWHERE ac.los BETWEEN 1 AND 7\nGROUP BY icu_stay_strata, ac.acs_priority\nORDER BY icu_stay_strata, ac.acs_priority;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name acs_priority not found inside a at [26:12]; reason: invalidQuery, location: query, message: Name acs_priority not found inside a at [26:12]\n\nLocation: US\nJob ID: c029883f-63f6-4c4a-8cc1-bacded2ce97a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

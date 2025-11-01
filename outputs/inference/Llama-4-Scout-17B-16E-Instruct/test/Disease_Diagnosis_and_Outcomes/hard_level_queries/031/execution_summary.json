@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 90\u2011year\u2011old woman. Among female inpatients aged 85\u201395 hospitalized with asthma exacerbation, stratify by the composite comorbidity risk score into quartiles and report in\u2011hospital mortality, cardiovascular and neurologic complication rates for each quartile.",
+  "final_sql": "WITH \n  -- Identify patients with asthma exacerbation\n  asthma_patients AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      p.anchor_age,\n      p.gender,\n      a.hospital_expire_flag\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON \n      a.subject_id = p.subject_id\n    WHERE \n      p.gender = 'F'\n      AND p.anchor_age BETWEEN 85 AND 95\n      AND a.hadm_id IN (\n        SELECT \n          hadm_id\n        FROM \n          `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n        WHERE \n          icd_code LIKE '493%'\n      )\n  ),\n\n  -- Calculate composite comorbidity risk score\n  comorbidity_scores AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      drg_code,\n      drg_severity,\n      drg_mortality\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.drgcodes`\n  ),\n\n  -- Merge patients with comorbidity scores\n  patient_scores AS (\n    SELECT \n      ap.subject_id,\n      ap.hadm_id,\n      ap.anchor_age,\n      ap.gender,\n      ap.hospital_expire_flag,\n      cs.drg_severity AS comorbidity_score\n    FROM \n      asthma_patients ap\n    LEFT JOIN \n      comorbidity_scores cs\n    ON \n      ap.hadm_id = cs.hadm_id\n  ),\n\n  -- Calculate quartiles of comorbidity scores\n  score_quartiles AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      anchor_age,\n      gender,\n      hospital_expire_flag,\n      comorbidity_score,\n      NTILE(4) OVER (ORDER BY comorbidity_score) AS quartile\n    FROM \n      patient_scores\n  ),\n\n  -- Identify cardiovascular and neurologic complications\n  complications AS (\n    SELECT \n      hadm_id,\n      CASE\n        WHEN icd_code LIKE '390%' OR icd_code LIKE '391%' OR icd_code LIKE '392%' THEN 'cardiovascular'\n        WHEN icd_code LIKE '800%' OR icd_code LIKE '801%' OR icd_code LIKE '802%' THEN 'neurologic'\n        ELSE NULL\n      END AS complication_type\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  )\n\n-- Final calculation of outcomes by quartile\nSELECT \n  sq.quartile,\n  AVG(CASE WHEN sq.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS in_hospital_mortality_rate,\n  AVG(CASE WHEN c.complication_type = 'cardiovascular' THEN 1 ELSE 0 END) AS cardiovascular_complication_rate,\n  AVG(CASE WHEN c.complication_type = 'neurologic' THEN 1 ELSE 0 END) AS neurologic_complication_rate\nFROM \n  score_quartiles sq\nLEFT JOIN \n  complications c\nON \n  sq.hadm_id = c.hadm_id\nGROUP BY \n  sq.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 58\u2011year\u2011old woman. Among female inpatients aged 53\u201363 with pulmonary embolism, what is the 75th percentile of the 72\u2011hour lab instability score? For patients \u2265that threshold, report mortality (%), mean LOS (days), and compare critical\u2011lab rates to inpatients.",
+  "final_sql": "WITH patients_with_pe AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 53 AND 63\n    AND LOWER(d.long_title) LIKE '%pulmonary embolism%'\n),\nabnormal_labs_72h AS (\n  SELECT \n    pwp.subject_id,\n    pwp.hadm_id,\n    COUNT(*) AS abnormal_lab_count\n  FROM patients_with_pe pwp\n  JOIN `physionet-data.mimiciv_3_1_hosp`.labevents l ON pwp.hadm_id = l.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_labitems d ON l.itemid = d.itemid\n  WHERE l.charttime >= pwp.admittime \n    AND l.charttime <= DATETIME_ADD(pwp.admittime, INTERVAL 72 HOUR)\n    AND l.valuenum IS NOT NULL\n    AND (\n      LOWER(l.flag) = 'abnormal'\n      OR (l.valuenum < l.ref_range_lower AND l.ref_range_lower IS NOT NULL)\n      OR (l.valuenum > l.ref_range_upper AND l.ref_range_upper IS NOT NULL)\n    )\n  GROUP BY pwp.subject_id, pwp.hadm_id\n),\npercentiles AS (\n  SELECT \n    APPROX_QUANTILES(abnormal_lab_count, 100)[OFFSET(75)] AS p75_score\n  FROM abnormal_labs_72h\n),\nhigh_instability AS (\n  SELECT pwp.subject_id, pwp.hadm_id, pwp.admittime, pwp.dischtime, pwp.hospital_expire_flag, al.abnormal_lab_count\n  FROM patients_with_pe pwp\n  JOIN abnormal_labs_72h al ON pwp.hadm_id = al.hadm_id\n  CROSS JOIN percentiles\n  WHERE al.abnormal_lab_count >= p75_score\n)\nSELECT\n  SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)) * 100 AS mortality_rate_percent,\n  AVG(DATETIME_DIFF(dischtime, admittime, SECOND) / 86400.0) AS mean_los_days,\n  AVG(abnormal_lab_count) AS mean_critical_lab_rate\nFROM high_instability;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

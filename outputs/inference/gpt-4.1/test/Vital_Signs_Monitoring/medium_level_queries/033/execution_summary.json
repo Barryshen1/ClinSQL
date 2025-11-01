@@ -1,0 +1,16 @@
+{
+  "query": "Patient is a 67-year-old man. Among male ICU patients aged 62\u201372, report counts per ICU-stay mean heart\u2011rate category (<60; 60\u201399; 100\u2013119; \u2265120 bpm) and percent with acute MI.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON icu.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 62 AND 72\n),\n\nmean_hr AS (\n  SELECT\n    c.stay_id,\n    AVG(ce.valuenum) AS mean_hr\n  FROM\n    cohort c\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      ON c.stay_id = ce.stay_id\n  WHERE\n    ce.itemid = 220045 -- Heart Rate\n    AND ce.valuenum IS NOT NULL\n  GROUP BY\n    c.stay_id\n),\n\nhr_category AS (\n  SELECT\n    m.stay_id,\n    m.mean_hr,\n    CASE\n      WHEN m.mean_hr < 60 THEN '<60'\n      WHEN m.mean_hr >= 60 AND m.mean_hr < 100 THEN '60-99'\n      WHEN m.mean_hr >= 100 AND m.mean_hr < 120 THEN '100-119'\n      WHEN m.mean_hr >= 120 THEN '>=120'\n      ELSE NULL\n    END AS hr_cat\n  FROM\n    mean_hr m\n  WHERE\n    m.mean_hr IS NOT NULL\n),\n\nacute_mi AS (\n  SELECT\n    c.stay_id,\n    MAX(\n      CASE\n        WHEN (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^410')) OR\n             (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^I21'))\n        THEN 1 ELSE 0 END\n    ) AS has_acute_mi\n  FROM\n    cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON c.hadm_id = d.hadm_id\n  GROUP BY\n    c.stay_id\n)\n\nSELECT\n  h.hr_cat AS heart_rate_category,\n  COUNT(h.stay_id) AS icu_stay_count,\n  ROUND(100 * SUM(a.has_acute_mi) / COUNT(h.stay_id), 1) AS percent_with_acute_mi\nFROM\n  hr_category h\n  LEFT JOIN acute_mi a\n    ON h.stay_id = a.stay_id\nWHERE\n  h.hr_cat IS NOT NULL\nGROUP BY\n  h.hr_cat\nORDER BY\n  CASE h.hr_cat\n    WHEN '<60' THEN 1\n    WHEN '60-99' THEN 2\n    WHEN '100-119' THEN 3\n    WHEN '>=120' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

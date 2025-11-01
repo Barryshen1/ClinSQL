@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH pci_events AS (\n  -- Identify all PCI procedures\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.chartdate\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d\n      ON p.icd_code = d.icd_code\n     AND p.icd_version = d.icd_version\n  WHERE\n    LOWER(d.long_title) LIKE '%percutaneous coronary intervention%'\n),\nfirst_pci AS (\n  -- Get each patient's first PCI\n  SELECT\n    subject_id,\n    ARRAY_AGG(STRUCT(hadm_id, chartdate) ORDER BY chartdate LIMIT 1)[OFFSET(0)] AS first_event\n  FROM\n    pci_events\n  GROUP BY\n    subject_id\n),\nindex_admissions AS (\n  -- Restrict to men aged 52\u201362 at the time of their first PCI admission\n  SELECT\n    fp.subject_id,\n    fp.first_event.hadm_id       AS index_hadm_id,\n    fp.first_event.chartdate     AS pci_date,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age\n  FROM\n    first_pci fp\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON fp.subject_id = a.subject_id\n     AND fp.first_event.hadm_id = a.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON fp.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n),\nreadmission_flags AS (\n  -- For each index admission, check for a 30-day readmission\n  SELECT\n    ia.subject_id,\n    ia.index_hadm_id,\n    ia.dischtime,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE\n          a2.subject_id = ia.subject_id\n          AND a2.admittime > ia.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(ia.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmitted_within_30d\n  FROM\n    index_admissions ia\n)\n-- Compute the overall 30-day readmission rate\nSELECT\n  ROUND(\n    100.0 * SUM(readmitted_within_30d) / COUNT(1),\n    2\n  ) AS pct_readmission_30d\nFROM\n  readmission_flags;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

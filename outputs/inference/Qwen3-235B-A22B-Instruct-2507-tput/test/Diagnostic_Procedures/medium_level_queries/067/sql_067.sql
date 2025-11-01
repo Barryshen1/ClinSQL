@@ -1,0 +1,1 @@
+OR (LOWER(d.category) = 'diagnostic ultrasound' AND LOWER(d.short_description) LIKE '%cardiac%');

@@ -1,0 +1,1 @@
+SELECT (SELECT COUNT(*) FROM instability WHERE instability_score > 1.5)::FLOAT / NULLIF((SELECT COUNT(*) FROM most_unstable), 0) AS percentile_rank, (SELECT avg_los FROM icu_los) AS avg_length_of_stay, (SELECT avg_mortality FROM mortality) AS avg_mortality_rate FROM instability;

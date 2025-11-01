@@ -1,0 +1,1 @@
+SELECT stddev(o.value) AS standard_deviation FROM omr o JOIN patients p ON o.subject_id = p.subject_id JOIN admissions a ON o.hadm_id = a.hadm_id WHERE p.gender = 'F' AND p.age >= 78 AND p.age <= 83 AND a.admittime = o.charttime AND o.result_name = 'Respiratory rate';

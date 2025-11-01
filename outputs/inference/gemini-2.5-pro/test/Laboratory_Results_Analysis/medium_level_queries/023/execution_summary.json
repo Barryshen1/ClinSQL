@@ -1,0 +1,16 @@
+{
+  "query": "I have a 72-year-old woman. Among female patients 67\u201377 admitted with ACS, report counts, percent of admissions, and in-hospital mortality rates for initial Troponin T: \u22640.04 normal; >0.04\u20130.1 borderline; >0.1 elevated.",
+  "final_sql": "WITH acs_hadm_ids AS (\n  -- Step 1: Identify all hospital admissions with an ACS-related diagnosis\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    -- ICD-9 codes for Acute Myocardial Infarction and Unstable Angina\n    (icd_version = 9 AND SUBSTR(icd_code, 1, 3) = '410')\n    OR (icd_version = 9 AND icd_code = '4111')\n    -- ICD-10 codes for Acute Myocardial Infarction and Unstable Angina\n    OR (icd_version = 10 AND SUBSTR(icd_code, 1, 3) IN ('I21', 'I22'))\n    OR (icd_version = 10 AND icd_code = 'I200')\n),\npatient_cohort AS (\n  -- Step 2: Define the patient cohort: females aged 67-77 at admission\n  SELECT\n    adm.hadm_id,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'F'\n    AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) + pat.anchor_age BETWEEN 67 AND 77\n),\nfirst_troponin AS (\n  -- Step 3: Find the first Troponin T measurement for each hospital admission\n  SELECT\n    hadm_id,\n    valuenum,\n    ROW_NUMBER() OVER(PARTITION BY hadm_id ORDER BY charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n  WHERE\n    itemid = 51003 -- Troponin T\n    AND valuenum IS NOT NULL\n)\n-- Step 4: Combine the data, categorize, and calculate final metrics\nSELECT\n  troponin_category,\n  COUNT(hadm_id) AS counts,\n  ROUND(COUNT(hadm_id) * 100.0 / SUM(COUNT(hadm_id)) OVER(), 2) AS percent_of_admissions,\n  ROUND(AVG(hospital_expire_flag) * 100.0, 2) AS in_hospital_mortality_rate\nFROM (\n  SELECT\n    pc.hadm_id,\n    pc.hospital_expire_flag,\n    CASE\n      WHEN ft.valuenum <= 0.04 THEN 'Normal (<=0.04)'\n      WHEN ft.valuenum > 0.04 AND ft.valuenum <= 0.1 THEN 'Borderline (>0.04-0.1)'\n      WHEN ft.valuenum > 0.1 THEN 'Elevated (>0.1)'\n      ELSE NULL\n    END AS troponin_category\n  FROM patient_cohort AS pc\n  INNER JOIN acs_hadm_ids AS acs\n    ON pc.hadm_id = acs.hadm_id\n  INNER JOIN first_troponin AS ft\n    ON pc.hadm_id = ft.hadm_id\n  WHERE\n    ft.rn = 1 -- Ensure we only use the first troponin measurement\n) AS final_cohort\nWHERE\n  troponin_category IS NOT NULL\nGROUP BY\n  troponin_category\nORDER BY\n  CASE\n    WHEN troponin_category = 'Normal (<=0.04)' THEN 1\n    WHEN troponin_category = 'Borderline (>0.04-0.1)' THEN 2\n    WHEN troponin_category = 'Elevated (>0.1)' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For a 40-year-old male inpatient with acute pancreatitis, among male inpatients aged 35\u201345, stratify into risk-score quartiles (diagnosis count plus 5\u00d7major complication flags) and report in-hospital mortality, major complication rate, and median survivor LOS for each quartile and overall.",
+  "final_sql": "WITH ap_hadm AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE ((icd_version = 9 AND icd_code LIKE '577.0%')\n         OR (icd_version = 10 AND icd_code LIKE 'K85%'))\n),\ncohort AS (\n  SELECT \n    a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag,\n    p.gender, p.anchor_age,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN ap_hadm aph ON a.subject_id = aph.subject_id AND a.hadm_id = aph.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 35 AND 45\n    AND a.dischtime IS NOT NULL\n),\ndiagnoses_count AS (\n  SELECT \n    c.*,\n    COUNT(di.icd_code) AS num_diagnoses\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n    ON c.subject_id = di.subject_id AND c.hadm_id = di.hadm_id\n  GROUP BY \n    c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag,\n    c.gender, c.anchor_age, c.los_days\n),\nmajor_comps AS (\n  SELECT \n    subject_id, hadm_id,\n    MAX(CASE WHEN (\n      (icd_version = 9 AND (icd_code LIKE '038%' OR icd_code LIKE '995.91' OR icd_code LIKE '785.5%')) OR\n      (icd_version = 10 AND (icd_code LIKE 'A40%' OR icd_code LIKE 'A41%' OR icd_code LIKE 'R65.2%'))\n    ) THEN 1 ELSE 0 END) AS flag_sepsis,\n    MAX(CASE WHEN (\n      (icd_version = 9 AND icd_code LIKE '584%') OR\n      (icd_version = 10 AND icd_code LIKE 'N17%')\n    ) THEN 1 ELSE 0 END) AS flag_aki,\n    MAX(CASE WHEN (\n      (icd_version = 9 AND (icd_code LIKE '518.8%' OR icd_code = '799.1')) OR\n      (icd_version = 10 AND (icd_code LIKE 'J96.0%' OR icd_code LIKE 'J96.2%'))\n    ) THEN 1 ELSE 0 END) AS flag_resp,\n    MAX(CASE WHEN (\n      (icd_version = 9 AND icd_code LIKE '785.5%') OR\n      (icd_version = 10 AND icd_code LIKE 'R57%')\n    ) THEN 1 ELSE 0 END) AS flag_shock\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY subject_id, hadm_id\n),\nrisk_scores AS (\n  SELECT \n    dc.*,\n    COALESCE(mc.flag_sepsis, 0) AS flag_sepsis,\n    COALESCE(mc.flag_aki, 0) AS flag_aki,\n    COALESCE(mc.flag_resp, 0) AS flag_resp,\n    COALESCE(mc.flag_shock, 0) AS flag_shock,\n    dc.num_diagnoses + 5 * (COALESCE(mc.flag_sepsis, 0) + COALESCE(mc.flag_aki, 0) + \n                            COALESCE(mc.flag_resp, 0) + COALESCE(mc.flag_shock, 0)) AS risk_score\n  FROM diagnoses_count dc\n  LEFT JOIN major_comps mc \n    ON dc.subject_id = mc.subject_id AND dc.hadm_id = mc.hadm_id\n),\nwith_quartile AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY risk_score) AS quartile\n  FROM risk_scores\n),\nmetrics AS (\n  SELECT \n    *,\n    (COALESCE(flag_sepsis, 0) + COALESCE(flag_aki, 0) + COALESCE(flag_resp, 0) + COALESCE(flag_shock, 0)) AS total_flags,\n    CASE WHEN hospital_expire_flag = 0 THEN los_days ELSE NULL END AS survivor_los\n  FROM with_quartile\n)\nSELECT \n  'Overall' AS group_label,\n  COUNT(*) AS num_patients,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_rate_pct,\n  ROUND(100.0 * SUM(CASE WHEN total_flags > 0 THEN 1 ELSE 0 END) / COUNT(*), 2) AS major_complication_rate_pct,\n  APPROX_QUANTILES(survivor_los, 2)[SAFE_OFFSET(1)] AS median_survivor_los_days\nFROM metrics\n\nUNION ALL\n\nSELECT \n  CAST(quartile AS STRING) AS group_label,\n  COUNT(*) AS num_patients,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_rate_pct,\n  ROUND(100.0 * SUM(CASE WHEN total_flags > 0 THEN 1 ELSE 0 END) / COUNT(*), 2) AS major_complication_rate_pct,\n  APPROX_QUANTILES(survivor_los, 2)[SAFE_OFFSET(1)] AS median_survivor_los_days\nFROM metrics\nGROUP BY quartile\nORDER BY CASE WHEN group_label = 'Overall' THEN 0 ELSE CAST(group_label AS INT64) END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [4:11]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [4:11]\n\nLocation: US\nJob ID: c3c6b3f4-08bc-445d-aaa9-2b606fda10c8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f2e083c7-9f20-4ce9-a22d-7fc735df8466\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

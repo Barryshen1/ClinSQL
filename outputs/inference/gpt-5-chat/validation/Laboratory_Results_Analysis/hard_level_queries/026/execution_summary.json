@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 80\u2011year\u2011old man. For male inpatients aged 75\u201385 with hepatic failure, during the first 48 hours what was the cohort\u2019s maximum instability score, mortality, average LOS, and how did critical lab frequencies compare to general inpatients?",
+  "final_sql": "WITH hepatic_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    icu.stay_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    icu.intime,\n    icu.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n    ON di.icd_code = ddi.icd_code AND di.icd_version = ddi.icd_version\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON a.subject_id = icu.subject_id AND a.hadm_id = icu.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 75 AND 85\n    AND LOWER(ddi.long_title) LIKE '%hepatic failure%'\n),\ninstability_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%instability%'\n),\ninstability_scores AS (\n  SELECT\n    hc.subject_id,\n    MAX(ce.valuenum) AS max_instability_48h\n  FROM hepatic_cohort hc\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON hc.subject_id = ce.subject_id\n    AND hc.stay_id = ce.stay_id\n  WHERE ce.itemid IN (SELECT itemid FROM instability_items)\n    AND TIMESTAMP_DIFF(ce.charttime, hc.intime, MINUTE) BETWEEN 0 AND 48*60\n    AND ce.valuenum IS NOT NULL\n  GROUP BY hc.subject_id\n),\ncritical_labs_cohort AS (\n  SELECT\n    COUNTIF(LOWER(le.flag) IN ('abnormal','critical')) AS critical_lab_count,\n    COUNT(*) AS total_lab_count\n  FROM hepatic_cohort hc\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON hc.subject_id = le.subject_id AND hc.hadm_id = le.hadm_id\n  WHERE TIMESTAMP_DIFF(le.charttime, hc.intime, MINUTE) BETWEEN 0 AND 48*60\n),\ncritical_labs_all AS (\n  SELECT\n    COUNTIF(LOWER(le.flag) IN ('abnormal','critical')) AS critical_lab_count,\n    COUNT(*) AS total_lab_count\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON a.subject_id = icu.subject_id AND a.hadm_id = icu.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON a.subject_id = le.subject_id AND a.hadm_id = le.hadm_id\n  WHERE TIMESTAMP_DIFF(le.charttime, icu.intime, MINUTE) BETWEEN 0 AND 48*60\n)\nSELECT\n  MAX(iscore.max_instability_48h) AS cohort_max_instability_score_48h,\n  AVG(TIMESTAMP_DIFF(hc.dischtime, hc.admittime, DAY)) AS avg_hosp_los_days,\n  AVG(hc.hospital_expire_flag) AS mortality_rate, -- proportion since flag is 1 for death\n  MAX(clc.critical_lab_count) AS cohort_critical_lab_count,\n  MAX(clc.total_lab_count) AS cohort_total_labs,\n  MAX(SAFE_DIVIDE(clc.critical_lab_count, clc.total_lab_count)) AS cohort_critical_lab_proportion,\n  MAX(cla.critical_lab_count) AS all_critical_lab_count,\n  MAX(cla.total_lab_count) AS all_total_labs,\n  MAX(SAFE_DIVIDE(cla.critical_lab_count, cla.total_lab_count)) AS all_critical_lab_proportion\nFROM hepatic_cohort hc\nLEFT JOIN instability_scores iscore\n  ON hc.subject_id = iscore.subject_id\nCROSS JOIN critical_labs_cohort clc\nCROSS JOIN critical_labs_all cla;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references clc.critical_lab_count which is neither grouped nor aggregated at [68:3]; reason: invalidQuery, location: query, message: SELECT list expression references clc.critical_lab_count which is neither grouped nor aggregated at [68:3]\n\nLocation: US\nJob ID: 0b6deaf4-6e7d-465d-af05-8cd2a70b67d5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

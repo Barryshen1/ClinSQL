@@ -1,0 +1,23 @@
+{
+  "query": "67-year-old female with AMI: among females 62\u201372 without shock or respiratory failure, compare in\u2011hospital mortality LOS \u22645 vs >5 days; report mortality rates, CKD and diabetes prevalence, and absolute/relative mortality differences.",
+  "final_sql": "WITH ami_patients AS (\n  SELECT \n    a.hadm_id,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE d.hadm_id = a.hadm_id\n      AND (\n        (d.icd_version = 9 AND d.icd_code LIKE '410%')\n        OR (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n      )\n  )\n  AND p.gender = 'F'\n  AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 62 AND 72\n  AND a.dischtime IS NOT NULL\n),\nexclusion_criteria AS (\n  SELECT \n    hadm_id,\n    MAX(CASE WHEN \n      (icd_version = 9 AND icd_code LIKE '7855%') \n      OR (icd_version = 10 AND icd_code LIKE 'R57%') \n      THEN 1 ELSE 0 END) AS has_shock,\n    MAX(CASE WHEN \n      (icd_version = 9 AND icd_code LIKE '5188%') \n      OR (icd_version = 10 AND icd_code LIKE 'J96%') \n      THEN 1 ELSE 0 END) AS has_resp_failure\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\ncomorbidities AS (\n  SELECT \n    hadm_id,\n    MAX(CASE WHEN \n      (icd_version = 9 AND icd_code LIKE '585%') \n      OR (icd_version = 10 AND icd_code LIKE 'N18%') \n      THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN \n      (icd_version = 9 AND icd_code LIKE '250%') \n      OR (icd_version = 10 AND (icd_code LIKE 'E08%' OR icd_code LIKE 'E09%' OR icd_code LIKE 'E10%' OR icd_code LIKE 'E11%' OR icd_code LIKE 'E13%'))\n      THEN 1 ELSE 0 END) AS has_diabetes\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nfiltered_patients AS (\n  SELECT \n    ap.*,\n    c.has_ckd,\n    c.has_diabetes\n  FROM ami_patients ap\n  LEFT JOIN comorbidities c ON ap.hadm_id = c.hadm_id\n  LEFT JOIN exclusion_criteria ec ON ap.hadm_id = ec.hadm_id\n  WHERE COALESCE(ec.has_shock, 0) = 0\n    AND COALESCE(ec.has_resp_failure, 0) = 0\n),\ngrouped_data AS (\n  SELECT \n    CASE WHEN hospital_los <= 5 THEN 'LOS<=5' ELSE 'LOS>5' END AS los_group,\n    COUNT(*) AS n,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(has_ckd) AS ckd_prev,\n    AVG(has_diabetes) AS diabetes_prev\n  FROM filtered_patients\n  GROUP BY los_group\n)\nSELECT \n  los_group,\n  n,\n  mortality_rate,\n  ckd_prev,\n  diabetes_prev\nFROM grouped_data\n\nUNION ALL\n\nSELECT \n  'Absolute Difference' AS los_group,\n  NULL AS n,\n  (SELECT mortality_rate FROM grouped_data WHERE los_group = 'LOS>5') - \n  (SELECT mortality_rate FROM grouped_data WHERE los_group = 'LOS<=5') AS mortality_rate,\n  NULL AS ckd_prev,\n  NULL AS diabetes_prev\n\nUNION ALL\n\nSELECT \n  'Relative Difference' AS los_group,\n  NULL AS n,\n  ( (SELECT mortality_rate FROM grouped_data WHERE los_group = 'LOS>5') - \n    (SELECT mortality_rate FROM grouped_data WHERE los_group = 'LOS<=5') \n  ) / \n  NULLIF((SELECT mortality_rate FROM grouped_data WHERE los_group = 'LOS<=5'), 0) AS mortality_rate,\n  NULL AS ckd_prev,\n  NULL AS diabetes_prev;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \":\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \":\" at [1:9]\n\nLocation: US\nJob ID: 71f7e14f-bbe6-42d6-a0dd-9b56a3d3e466\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

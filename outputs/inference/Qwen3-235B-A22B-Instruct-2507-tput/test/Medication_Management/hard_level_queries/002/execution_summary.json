@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 72-year-old man with AMI. Among male inpatients aged 67-77 with AMI, stratified into tertiles by first-24-hour medication complexity score, report per tertile: admission count, score range and mean, mean LOS (days), in-hospital mortality%, and 30-day readmission%.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 67 AND 77\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag\n        ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n      WHERE diag.hadm_id = a.hadm_id\n        AND d_diag.icd_version = 10\n        AND (d_diag.icd_code LIKE 'I21%' OR d_diag.icd_code LIKE 'I22%')\n    )\n),\nmedication_complexity AS (\n  SELECT\n    ea.hadm_id,\n    ea.subject_id,\n    ea.admittime,\n    ea.dischtime,\n    ea.hospital_expire_flag,\n    ea.age_at_admit,\n    -- Count distinct drugs in first 24h of admission\n    COUNT(DISTINCT pr.drug) AS med_count\n  FROM eligible_admissions ea\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON ea.hadm_id = pr.hadm_id\n    AND pr.starttime >= ea.admittime\n    AND pr.starttime < DATETIME_ADD(ea.admittime, INTERVAL 1 DAY)\n    AND pr.drug IS NOT NULL\n  GROUP BY ea.hadm_id, ea.subject_id, ea.admittime, ea.dischtime, ea.hospital_expire_flag, ea.age_at_admit\n),\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY med_count) AS tertile\n  FROM medication_complexity\n),\nreadmission_flag AS (\n  SELECT\n    t.*,\n    -- Check if next admission is within 30 days\n    LEAD(t.admittime) OVER (PARTITION BY t.subject_id ORDER BY t.admittime) AS next_admittime\n  FROM tertiles t\n),\nreadmission_stats AS (\n  SELECT\n    *,\n    CASE \n      WHEN next_admittime IS NOT NULL \n        AND next_admittime <= DATETIME_ADD(dischtime, INTERVAL 30 DAY) \n      THEN 1 ELSE 0 \n    END AS thirty_day_readmit\n  FROM readmission_flag\n),\nsummary AS (\n  SELECT\n    tertile,\n    COUNT(*) AS admission_count,\n    MIN(med_count) AS score_min,\n    MAX(med_count) AS score_max,\n    AVG(med_count) AS score_mean,\n    AVG(DATETIME_DIFF(dischtime, admittime, SECOND) / 86400.0) AS mean_los_days,\n    AVG(hospital_expire_flag) * 100 AS mortality_pct,\n    AVG(thirty_day_readmit) * 100 AS readmission_30day_pct\n  FROM readmission_stats\n  GROUP BY tertile\n)\nSELECT\n  tertile,\n  admission_count,\n  CONCAT(CAST(score_min AS STRING), ' - ', CAST(score_max AS STRING)) AS score_range,\n  ROUND(score_mean, 2) AS score_mean,\n  ROUND(mean_los_days, 2) AS mean_los_days,\n  ROUND(mortality_pct, 2) AS mortality_pct,\n  ROUND(readmission_30day_pct, 2) AS readmission_30day_pct\nFROM summary\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [75:9]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [75:9]\n\nLocation: US\nJob ID: 831b9413-ec49-453e-ba6b-40d0fd825b07\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

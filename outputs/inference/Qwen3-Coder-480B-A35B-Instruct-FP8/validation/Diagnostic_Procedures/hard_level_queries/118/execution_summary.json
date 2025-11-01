@@ -1,0 +1,22 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    icu.stay_id,\n    icu.intime AS icu_intime,\n    icu.outtime,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los_days,\n    ROW_NUMBER() OVER (PARTITION BY a.hadm_id ORDER BY icu.intime) AS rn_first_icu\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  ON\n    a.hadm_id = icu.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n  ON\n    a.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddx\n  ON\n    dx.icd_code = ddx.icd_code AND dx.icd_version = ddx.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND dx.seq_num = 1\n    AND dx.icd_version = 10\n    AND dx.icd_code LIKE 'I21%'\n),\n\nfirst_icu AS (\n  SELECT *\n  FROM cohort\n  WHERE rn_first_icu = 1\n),\n\nprocedures_72h AS (\n  SELECT\n    f.hadm_id,\n    f.stay_id,\n    COUNT(pe.itemid) AS procedure_count\n  FROM\n    first_icu f\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  ON\n    f.stay_id = pe.stay_id\n    AND pe.starttime >= f.icu_intime\n    AND pe.starttime <= DATETIME_ADD(f.icu_intime, INTERVAL 72 HOUR)\n  GROUP BY\n    f.hadm_id, f.stay_id\n),\n\nquartiles AS (\n  SELECT\n    f.*,\n    COALESCE(p.procedure_count, 0) AS procedure_count,\n    NTILE(4) OVER (ORDER BY COALESCE(p.procedure_count, 0)) AS procedure_quartile\n  FROM\n    first_icu f\n  LEFT JOIN\n    procedures_72h p\n  ON\n    f.hadm_id = p.hadm_id\n)\n\nSELECT\n  procedure_quartile,\n  COUNT(*) AS n_patients,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(hospital_los_days) AS mean_hospital_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_percent\nFROM\n  quartiles\nGROUP BY\n  procedure_quartile\nORDER BY\n  procedure_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [80:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [80:36]\n\nLocation: US\nJob ID: e37aa236-4458-4355-a907-29e54e66a7f4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

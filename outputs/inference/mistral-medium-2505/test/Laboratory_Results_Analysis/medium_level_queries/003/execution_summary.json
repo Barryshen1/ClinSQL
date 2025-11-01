@@ -1,0 +1,28 @@
+{
+  "query": "I have a 41-year-old woman; among female patients aged 36\u201346 admitted with ischemic heart disease whose initial high-sensitivity Troponin T was >ULN, what are p25, p50, p75 and min\u2013max?",
+  "final_sql": "WITH\n-- Get female patients aged 36-46\nfemale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 36 AND 46\n),\n\n-- Get admissions with ischemic heart disease (IHD) diagnoses\nihd_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM female_patients)\n    AND (\n      d.icd_code LIKE 'I20.%'\n      OR d.icd_code LIKE 'I21.%'\n      OR d.icd_code LIKE 'I22.%'\n      OR d.icd_code LIKE 'I23.%'\n      OR d.icd_code LIKE 'I24.%'\n      OR d.icd_code LIKE 'I25.%'\n    )\n),\n\n-- Get initial high-sensitivity Troponin T > ULN (0.014)\ninitial_troponin AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum AS troponin_value\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      valuenum,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.labevents`\n    WHERE\n      itemid = 50930  -- High-sensitivity Troponin T\n      AND hadm_id IN (SELECT hadm_id FROM ihd_admissions)\n  ) le\n  WHERE\n    le.rn = 1  -- First measurement per admission\n    AND le.valuenum > 0.014  -- ULN threshold\n)\n\n-- Calculate percentiles and min/max\nSELECT\n  APPROX_QUANTILES(initial_troponin.troponin_value, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(initial_troponin.troponin_value, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(initial_troponin.troponin_value, 4)[OFFSET(3)] AS p75,\n  MIN(initial_troponin.troponin_value) AS min_value,\n  MAX(initial_troponin.troponin_value) AS max_value\nFROM\n  initial_troponin\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references initial_troponin.troponin_value which is neither grouped nor aggregated at [61:19]; reason: invalidQuery, location: query, message: SELECT list expression references initial_troponin.troponin_value which is neither grouped nor aggregated at [61:19]\n\nLocation: US\nJob ID: 5fd6ac23-cca3-4a08-bfa9-7ce25984a6fe\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 45f3a979-f9e9-4619-8ca9-8b1d38938dbc\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

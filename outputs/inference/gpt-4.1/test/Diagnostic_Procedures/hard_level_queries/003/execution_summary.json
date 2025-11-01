@@ -1,0 +1,22 @@
+{
+  "query": "I have an 89\u2011year\u2011old female. Among female ICU patients 84\u201394 with ARDS, give the 25th, 75th, and 95th percentiles of diagnostic intensity (distinct procedures in first 24\u2009h), plus average hospital LOS and hospital mortality; compare to general ICU population.",
+  "final_sql": "WITH ards_icd_codes AS (\n  -- ARDS ICD-9 and ICD-10 codes\n  SELECT '51882' AS icd_code, 9 AS icd_version UNION ALL\n  SELECT 'J80' AS icd_code, 10 AS icd_version\n),\nards_patients AS (\n  -- ICU stays for female, age 84-94, with ARDS diagnosis\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON icu.subject_id = pat.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n      ON icu.hadm_id = adm.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      ON icu.hadm_id = diag.hadm_id\n    JOIN ards_icd_codes ards\n      ON diag.icd_code = ards.icd_code AND diag.icd_version = ards.icd_version\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 84 AND 94\n),\ngeneral_icu AS (\n  -- All ICU stays\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n      ON icu.hadm_id = adm.hadm_id\n),\nprocedures_24h AS (\n  -- Diagnostic intensity: count distinct procedures in first 24h of ICU stay\n  SELECT\n    cohort,\n    stay_id,\n    COUNT(DISTINCT proc.icd_code) AS n_distinct_procedures\n  FROM (\n    SELECT 'ARDS_F84_94' AS cohort, stay_id, hadm_id, intime FROM ards_patients\n    UNION ALL\n    SELECT 'GENERAL_ICU' AS cohort, stay_id, hadm_id, intime FROM general_icu\n  ) icu\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n    ON icu.hadm_id = proc.hadm_id\n    AND proc.chartdate >= icu.intime\n    AND proc.chartdate < TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n  GROUP BY cohort, stay_id\n),\ncohort_info AS (\n  -- Add hospital LOS and mortality\n  SELECT\n    icu.cohort,\n    icu.stay_id,\n    icu.subject_id,\n    icu.hadm_id,\n    proc.n_distinct_procedures,\n    TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS hosp_los,\n    adm.hospital_expire_flag\n  FROM (\n    SELECT 'ARDS_F84_94' AS cohort, stay_id, subject_id, hadm_id FROM ards_patients\n    UNION ALL\n    SELECT 'GENERAL_ICU' AS cohort, stay_id, subject_id, hadm_id FROM general_icu\n  ) icu\n  LEFT JOIN procedures_24h proc\n    ON icu.cohort = proc.cohort AND icu.stay_id = proc.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n)\nSELECT\n  cohort,\n  COUNT(*) AS n_patients,\n  APPROX_QUANTILES(IFNULL(n_distinct_procedures, 0), 100)[25] AS diagnostic_intensity_p25,\n  APPROX_QUANTILES(IFNULL(n_distinct_procedures, 0), 100)[75] AS diagnostic_intensity_p75,\n  APPROX_QUANTILES(IFNULL(n_distinct_procedures, 0), 100)[95] AS diagnostic_intensity_p95,\n  ROUND(AVG(hosp_los), 2) AS avg_hosp_los,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)), 4) AS hosp_mortality_rate\nFROM\n  cohort_info\nGROUP BY cohort\nORDER BY cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name cohort is ambiguous at [61:5]; reason: invalidQuery, location: query, message: Column name cohort is ambiguous at [61:5]\n\nLocation: US\nJob ID: b2ad84d0-67ad-4295-8960-e3c1adbee1f3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

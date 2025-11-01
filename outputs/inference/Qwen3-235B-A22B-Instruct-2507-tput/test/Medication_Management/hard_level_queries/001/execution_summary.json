@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating an 81-year-old woman with cardiac arrest. Among female inpatients 76\u201386 with cardiac arrest, stratified by medication complexity quintiles (first 7 hospital days), report per quintile: patient count, avg/min/max score, LOS, in-hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 76 AND 86\n),\n\ncardiac_arrest AS (\n  SELECT DISTINCT pa.*\n  FROM patient_admissions pa\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON pa.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%cardiac arrest%'\n),\n\nmedication_complexity AS (\n  SELECT\n    ca.hadm_id,\n    COUNT(DISTINCT pr.drug) AS med_count\n  FROM cardiac_arrest ca\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON ca.hadm_id = pr.hadm_id\n    AND pr.starttime >= ca.admittime\n    AND pr.starttime < DATETIME_ADD(ca.admittime, INTERVAL 7 DAY)\n  GROUP BY ca.hadm_id\n),\n\nquintiles AS (\n  SELECT\n    ca.*,\n    mc.med_count,\n    NTILE(5) OVER (ORDER BY mc.med_count) AS quintile\n  FROM cardiac_arrest ca\n  JOIN medication_complexity mc ON ca.hadm_id = mc.hadm_id\n),\n\nreadmissions AS (\n  SELECT\n    q.*,\n    LEAD(q.admittime) OVER (PARTITION BY q.subject_id ORDER BY q.admittime) AS next_admittime\n  FROM quintiles q\n),\n\nsummary_stats AS (\n  SELECT\n    quintile,\n    COUNT(*) AS patient_count,\n    AVG(med_count) AS avg_score,\n    MIN(med_count) AS min_score,\n    MAX(med_count) AS max_score,\n    AVG(DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0) AS avg_los_days,\n    AVG(IF(hospital_expire_flag = 1, 1, 0)) AS in_hospital_mortality_rate,\n    AVG(IF(\n      next_admittime IS NOT NULL AND DATETIME_DIFF(next_admittime, dischtime, DAY) <= 30,\n      1, 0\n    )) AS thirty_day_readmission_rate\n  FROM readmissions\n  GROUP BY quintile\n)\n\nSELECT\n  quintile,\n  patient_count,\n  ROUND(avg_score, 2) AS avg_score,\n  min_score,\n  max_score,\n  ROUND(avg_los_days, 2) AS avg_los_days,\n  ROUND(in_hospital_mortality_rate * 100, 2) AS in_hospital_mortality_percent,\n  ROUND(thirty_day_readmission_rate * 100, 2) AS thirty_day_readmission_percent\nFROM summary_stats\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [63:14]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [63:14]\n\nLocation: US\nJob ID: 97df217e-90a5-4045-a9ad-0ef59f6fa1b9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

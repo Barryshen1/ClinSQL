@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 83-year-old man with sepsis. Among male ICU patients aged 78\u201388 with sepsis, what percentile rank does an instability score of 85 in the first 24 hours have? Also report mean ICU LOS and hospital mortality for quartile 4.",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT DISTINCT icu.subject_id,\n                  icu.hadm_id,\n                  icu.stay_id,\n                  pat.gender,\n                  pat.anchor_age,\n                  adm.hospital_expire_flag,\n                  icu.intime,\n                  icu.outtime,\n                  icu.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON icu.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddx\n    ON dx.icd_code = ddx.icd_code\n   AND dx.icd_version = ddx.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 78 AND 88\n    AND (LOWER(ddx.long_title) LIKE '%sepsis%' OR LOWER(ddx.long_title) LIKE '%septicemia%')\n),\nscore_24h AS (\n  SELECT sc.subject_id,\n         sc.hadm_id,\n         sc.stay_id,\n         sc.gender,\n         sc.anchor_age,\n         sc.hospital_expire_flag,\n         sc.los,\n         AVG(ce.valuenum) AS instability_score\n  FROM sepsis_cohort sc\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON sc.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON ce.itemid = di.itemid\n  WHERE LOWER(di.label) = 'instability score'\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN sc.intime AND DATETIME_ADD(sc.intime, INTERVAL 24 HOUR)\n  GROUP BY sc.subject_id, sc.hadm_id, sc.stay_id, sc.gender, sc.anchor_age, sc.hospital_expire_flag, sc.los\n),\npercentile_calc AS (\n  SELECT\n    100 * COUNTIF(instability_score <= 85) / NULLIF(COUNT(*), 0) AS percentile_for_85\n  FROM score_24h\n),\nquartiles AS (\n  SELECT *,\n         NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM score_24h\n),\nquartile4_stats AS (\n  SELECT\n    AVG(los) AS mean_icu_los,\n    AVG(hospital_expire_flag) AS hospital_mortality_rate\n  FROM quartiles\n  WHERE quartile = 4\n)\nSELECT\n  p.percentile_for_85,\n  q.mean_icu_los,\n  q.hospital_mortality_rate\nFROM percentile_calc p\nCROSS JOIN quartile4_stats q;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/37fced3b-80b6-4573-a981-75ecc5e1e3dc?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: 37fced3b-80b6-4573-a981-75ecc5e1e3dc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

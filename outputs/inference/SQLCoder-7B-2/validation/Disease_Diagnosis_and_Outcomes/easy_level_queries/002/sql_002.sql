@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY icustays.los) AS percentile_75 FROM admissions JOIN patients ON admissions.subject_id = patients.subject_id JOIN icustays ON admissions.stay_id = icustays.stay_id WHERE patients.gender = 'M' AND patients.anchor_age = 57 AND admissions.admission_type = 'AL' AND (patients.anchor_year BETWEEN 52 AND 62);

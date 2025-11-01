@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 64\u2011year\u2011old woman. Among female inpatients aged 59\u201369 with cardiac arrest, stratified into quartiles by composite risk score, report for each quartile: 30\u2011day mortality, cardiovascular and neurologic complication rates, median survivor LOS, and baseline 30\u2011day mortality for all female 59\u201369.",
+  "final_sql": "WITH patients_cohort AS (\n  SELECT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 59 AND 69\n),\ncardiac_arrest_patients AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON di.icd_code = dicd.icd_code AND di.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Cardiac arrest%' AND di.hadm_id IN (SELECT hadm_id FROM patients_cohort)\n),\ncomorbidities AS (\n  SELECT hadm_id, COUNT(DISTINCT icd_code) as num_comorbidities\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nrisk_score AS (\n  SELECT pc.subject_id, pc.hadm_id, pc.anchor_age, pc.admittime, pc.dischtime, pc.deathtime,\n         COALESCE(c.num_comorbidities, 0) as num_comorbidities,\n         pc.anchor_age + COALESCE(c.num_comorbidities, 0) as composite_risk_score\n  FROM patients_cohort pc\n  LEFT JOIN comorbidities c ON pc.hadm_id = c.hadm_id\n  WHERE pc.hadm_id IN (SELECT hadm_id FROM cardiac_arrest_patients)\n),\nmortality_30day AS (\n  SELECT rs.hadm_id,\n         CASE WHEN rs.deathtime <= DATETIME_ADD(rs.admittime, INTERVAL 30 DAY) THEN 1 ELSE 0 END as died_30day\n  FROM risk_score rs\n),\ncomplications AS (\n  SELECT rs.hadm_id,\n         MAX(CASE WHEN dicd.long_title LIKE '%Cardiovascular%' THEN 1 ELSE 0 END) as cardiovascular_complication,\n         MAX(CASE WHEN dicd.long_title LIKE '%Neurologic%' THEN 1 ELSE 0 END) as neurologic_complication\n  FROM risk_score rs\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON rs.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON di.icd_code = dicd.icd_code AND di.icd_version = dicd.icd_version\n  GROUP BY rs.hadm_id\n),\nlos AS (\n  SELECT rs.hadm_id, DATETIME_DIFF(rs.dischtime, rs.admittime, DAY) as los,\n         NTILE(4) OVER (ORDER BY rs.composite_risk_score) as risk_quartile\n  FROM risk_score rs\n  WHERE rs.dischtime IS NOT NULL\n),\nquartile_results AS (\n  SELECT \n    l.risk_quartile,\n    AVG(m.died_30day) as mortality_30day,\n    AVG(c.cardiovascular_complication) as cardiovascular_complication_rate,\n    AVG(c.neurologic_complication) as neurologic_complication_rate,\n    APPROX_QUANTILES(l.los, 2)[OFFSET(1)] AS median_los\n  FROM los l\n  LEFT JOIN mortality_30day m ON l.hadm_id = m.hadm_id\n  LEFT JOIN complications c ON l.hadm_id = c.hadm_id\n  GROUP BY l.risk_quartile\n),\nbaseline_mortality AS (\n  SELECT AVG(m.died_30day) as baseline_mortality_30day\n  FROM patients_cohort pc\n  LEFT JOIN mortality_30day m ON pc.hadm_id = m.hadm_id\n)\nSELECT \n  risk_quartile,\n  mortality_30day,\n  cardiovascular_complication_rate,\n  neurologic_complication_rate,\n  median_los,\n  (SELECT baseline_mortality_30day FROM baseline_mortality) as baseline_mortality_30day\nFROM quartile_results\nORDER BY risk_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references l.los which is neither grouped nor aggregated at [51:19]; reason: invalidQuery, location: query, message: SELECT list expression references l.los which is neither grouped nor aggregated at [51:19]\n\nLocation: US\nJob ID: 174ff645-007c-41fd-87ca-519701bb9e2c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 4f749d71-4ecc-466c-a33b-a0a2bf4aa70d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

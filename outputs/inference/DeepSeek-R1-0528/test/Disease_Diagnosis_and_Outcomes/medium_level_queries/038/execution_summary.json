@@ -1,0 +1,22 @@
+{
+  "query": "I have an 85\u2011year\u2011old woman. Among females 80\u201390 with heart failure, stratified ICU vs non\u2011ICU and LOS <8 vs \u22658 days, report in\u2011hospital mortality (%) and CKD and diabetes prevalence.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year BETWEEN 80 AND 90\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      WHERE d.hadm_id = a.hadm_id \n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '428%') \n          OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n        )\n    )\n),\n\nicu_status AS (\n  SELECT \n    c.hadm_id,\n    CASE WHEN i.hadm_id IS NOT NULL THEN 'ICU' ELSE 'non-ICU' END AS icu_status\n  FROM cohort c\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id \n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) i ON c.hadm_id = i.hadm_id\n),\n\nckd_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND (\n        icd_code LIKE '585%' OR \n        icd_code LIKE '586%' OR \n        icd_code LIKE 'V56%' OR \n        icd_code LIKE '403%' OR \n        icd_code LIKE '404%'\n    )) OR \n    (icd_version = 10 AND (\n        icd_code LIKE 'N18%' OR \n        icd_code LIKE 'N19%' OR \n        icd_code LIKE 'I12%' OR \n        icd_code LIKE 'I13%' OR \n        icd_code LIKE 'Z49%' OR \n        icd_code = 'Z99.2'\n    ))\n),\n\ndiabetes_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '250%') OR \n    (icd_version = 10 AND (\n        icd_code LIKE 'E10%' OR \n        icd_code LIKE 'E11%' OR \n        icd_code LIKE 'E12%' OR \n        icd_code LIKE 'E13%' OR \n        icd_code LIKE 'E14%'\n    ))\n),\n\ncohort_with_flags AS (\n  SELECT \n    c.*,\n    icu.icu_status,\n    CASE WHEN ckd.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS ckd_flag,\n    CASE WHEN dm.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS diabetes_flag,\n    CASE WHEN c.los_days < 8 THEN '<8' ELSE '>=8' END AS los_group\n  FROM cohort c\n  INNER JOIN icu_status icu ON c.hadm_id = icu.hadm_id\n  LEFT JOIN ckd_patients ckd ON c.hadm_id = ckd.hadm_id\n  LEFT JOIN diabetes_patients dm ON c.hadm_id = dm.hadm_id\n)\n\nSELECT \n  icu_status,\n  los_group,\n  COUNT(hadm_id) AS total_admissions,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(hadm_id), 2) AS mortality_percent,\n  ROUND(100 * SUM(ckd_flag) / COUNT(hadm_id), 2) AS ckd_percent,\n  ROUND(100 * SUM(diabetes_flag) / COUNT(hadm_id), 2) AS diabetes_percent\nFROM cohort_with_flags\nGROUP BY icu_status, los_group\nORDER BY icu_status, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [26:2]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [26:2]\n\nLocation: US\nJob ID: 306bc61a-e3f5-4f02-8d25-52ba119fa55b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

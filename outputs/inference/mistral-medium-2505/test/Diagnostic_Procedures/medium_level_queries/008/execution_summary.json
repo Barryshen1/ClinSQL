@@ -1,0 +1,16 @@
+{
+  "query": "For my 63\u2011year\u2011old male with HHS: among male patients aged 58\u201368, what were patient and admission counts and mean radiography/CT procedures per admission for LOS 1\u20134 versus 5\u20137 days?",
+  "final_sql": "WITH\n-- Get male patients aged 58-68\neligible_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 58 AND 68\n),\n\n-- Get their admissions with LOS calculation\nadmissions_with_los AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    eligible_patients p ON a.subject_id = p.subject_id\n  WHERE\n    a.dischtime IS NOT NULL  -- Only completed admissions\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7  -- LOS 1-7 days\n),\n\n-- Categorize admissions by LOS groups\nlos_groups AS (\n  SELECT\n    hadm_id,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7 days'\n    END AS los_group\n  FROM\n    admissions_with_los\n),\n\n-- Get radiography/CT procedures (using HCPCS codes)\nradiology_procedures AS (\n  SELECT\n    h.hadm_id,\n    COUNT(DISTINCT h.hcpcs_cd) AS procedure_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d ON h.hcpcs_cd = d.code\n  WHERE\n    (d.long_description LIKE '%RADIOLOGY%'\n     OR d.long_description LIKE '%CT%'\n     OR d.short_description LIKE '%RADIOLOGY%'\n     OR d.short_description LIKE '%CT%')\n  GROUP BY\n    h.hadm_id\n),\n\n-- Combine all data\nfinal_data AS (\n  SELECT\n    l.los_group,\n    COUNT(DISTINCT a.subject_id) AS patient_count,\n    COUNT(DISTINCT l.hadm_id) AS admission_count,\n    AVG(COALESCE(r.procedure_count, 0)) AS mean_procedures_per_admission\n  FROM\n    los_groups l\n  JOIN\n    admissions_with_los a ON l.hadm_id = a.hadm_id\n  LEFT JOIN\n    radiology_procedures r ON l.hadm_id = r.hadm_id\n  GROUP BY\n    l.los_group\n)\n\n-- Final output\nSELECT\n  los_group,\n  patient_count,\n  admission_count,\n  ROUND(mean_procedures_per_admission, 2) AS mean_procedures_per_admission\nFROM\n  final_data\nORDER BY\n  los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

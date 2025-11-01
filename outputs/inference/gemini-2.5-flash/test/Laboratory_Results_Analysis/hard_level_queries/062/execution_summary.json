@@ -1,0 +1,28 @@
+{
+  "query": "I have a 48\u2011year\u2011old female inpatient. In female admissions aged 43\u201353 with sepsis, what is the 25th\u2011percentile instability score (critical lab event count) in the first 72 hours? Report cohort and general mean critical events per admission, LOS, and mortality.",
+  "final_sql": "WITH sepsis_admissions AS (\n    -- Step 1: Identify the cohort of female patients aged 43-53 with a sepsis diagnosis\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime,\n        ad.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON ad.subject_id = p.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n        ON ad.subject_id = di.subject_id AND ad.hadm_id = di.hadm_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 43 AND 53\n        AND (\n            -- ICD-10 codes for Sepsis, Severe Sepsis, Septic Shock\n            (di.icd_version = 10 AND (di.icd_code LIKE 'A40%' OR di.icd_code LIKE 'A41%' OR di.icd_code LIKE 'R652%'))\n            OR\n            -- ICD-9 codes for Septicemia, Sepsis, Severe Sepsis, Septic Shock\n            (di.icd_version = 9 AND (di.icd_code LIKE '038%' OR di.icd_code IN ('78552', '99591', '99592')))\n        )\n    GROUP BY\n        ad.subject_id, ad.hadm_id, ad.admittime, ad.dischtime, ad.hospital_expire_flag\n),\ncritical_lab_events AS (\n    -- Step 2: Count critical lab events within the first 72 hours for each admission in the cohort\n    SELECT\n        sa.subject_id,\n        sa.hadm_id,\n        sa.admittime,\n        sa.dischtime,\n        sa.hospital_expire_flag,\n        -- Count lab events flagged as critically low ('LL') or critically high ('HH')\n        -- occurring within the first 72 hours of admission.\n        -- Use COUNT(CASE ...) with LEFT JOIN to include admissions with 0 critical events.\n        COUNT(CASE\n            WHEN le.charttime BETWEEN sa.admittime AND DATETIME_ADD(sa.admittime, INTERVAL 72 HOUR)\n            AND (le.flag = 'LL' OR le.flag = 'HH')\n            THEN le.labevent_id\n        END) AS critical_events_72hr\n    FROM\n        sepsis_admissions AS sa\n    LEFT JOIN -- Use LEFT JOIN to ensure all sepsis admissions are included, even if they have no relevant lab events\n        `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n        ON sa.subject_id = le.subject_id AND sa.hadm_id = le.hadm_id\n    GROUP BY\n        sa.subject_id, sa.hadm_id, sa.admittime, sa.dischtime, sa.hospital_expire_flag\n)\n-- Step 3: Calculate the requested cohort statistics\nSELECT\n    COUNT(DISTINCT cle.hadm_id) AS cohort_admissions,\n    -- FIX: Use APPROX_QUANTILES to calculate the 25th percentile, as PERCENTILE_CONT is not supported directly as an aggregate in this BigQuery environment.\n    ROUND(APPROX_QUANTILES(cle.critical_events_72hr, 100)[OFFSET(25)], 2) AS percentile_25_critical_events,\n    ROUND(AVG(cle.critical_events_72hr), 2) AS mean_critical_events_per_admission,\n    ROUND(AVG(DATETIME_DIFF(cle.dischtime, cle.admittime, HOUR) / 24.0), 2) AS mean_los_days,\n    ROUND(AVG(cle.hospital_expire_flag) * 100, 2) AS mortality_percentage\nFROM\n    critical_lab_events AS cle;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [57:16]; reason: invalidQuery, location: query, message: No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [57:16]\n\nLocation: US\nJob ID: 097c3e77-dd56-419d-806b-e0e152959762\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e51282d7-b638-4255-ab90-c98adf2c4685\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For a 55\u2011year\u2011old female: among female ICU patients aged 50\u201360 with intracranial hemorrhage, report 25th, 50th (median), and 90th percentiles of procedure burden during the first 72 ICU hours, and compare ICU LOS and in\u2011hospital mortality to the general ICU.",
+  "final_sql": "WITH intracranial_hadm AS (\n  -- admissions (hadm_id) that have at least one diagnosis suggesting intracranial hemorrhage\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%hemorrhag%' -- contains \"hemorrhage\"/\"hemorrhagic\" etc.\n    AND (\n      LOWER(dd.long_title) LIKE '%intracran%'   -- intracranial\n      OR LOWER(dd.long_title) LIKE '%cerebr%'   -- cerebral / cerebr...\n      OR LOWER(dd.long_title) LIKE '%subarach%' -- subarachnoid\n      OR LOWER(dd.long_title) LIKE '%subdural%' -- subdural\n      OR LOWER(dd.long_title) LIKE '%epidural%'  -- epidural\n    )\n),\n\nicu_proc_counts AS (\n  -- Count procedureevents within first 72 hours of each ICU stay\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.los,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag,\n    COALESCE(COUNT(pe.starttime), 0) AS proc_count\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON s.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON pe.stay_id = s.stay_id\n   AND pe.starttime IS NOT NULL\n   AND pe.starttime >= s.intime\n   AND pe.starttime <= TIMESTAMP_ADD(s.intime, INTERVAL 72 HOUR)\n  GROUP BY s.subject_id, s.hadm_id, s.stay_id, s.intime, s.outtime, s.los, p.gender, p.anchor_age, a.hospital_expire_flag\n),\n\n-- Cohort stays: female, age 50-60, and admission has intracranial hemorrhage\ncohort_stays AS (\n  SELECT ipc.*\n  FROM icu_proc_counts ipc\n  WHERE ipc.gender = 'F'\n    AND ipc.anchor_age BETWEEN 50 AND 60\n    AND ipc.hadm_id IN (SELECT hadm_id FROM intracranial_hadm)\n),\n\n-- General ICU stays (all ICU stays)\ngeneral_stays AS (\n  SELECT ipc.*\n  FROM icu_proc_counts ipc\n)\n\n-- Final aggregation: percentiles for procedure burden (cohort) and comparison of ICU LOS and mortality\nSELECT\n  'Female 50-60 with intracranial hemorrhage' AS group_label,\n  COUNT(*) AS n_stays,\n  -- Procedure burden percentiles (approximate) computed from the cohort_stays CTE via scalar subqueries\n  (SELECT APPROX_QUANTILES(proc_count, 100)[OFFSET(25)] FROM cohort_stays) AS proc_p25,\n  (SELECT APPROX_QUANTILES(proc_count, 100)[OFFSET(50)] FROM cohort_stays) AS proc_median,\n  (SELECT APPROX_QUANTILES(proc_count, 100)[OFFSET(90)] FROM cohort_stays) AS proc_p90,\n  -- ICU LOS median (approximate)\n  (SELECT APPROX_QUANTILES(los, 100)[OFFSET(50)] FROM cohort_stays) AS los_median_days,\n  -- In-hospital mortality proportion\n  SAFE_DIVIDE(SUM(CAST(hospital_expire_flag AS INT64)), COUNT(*)) AS hospital_mortality\nFROM cohort_stays\n\nUNION ALL\n\nSELECT\n  'General ICU (all stays)' AS group_label,\n  COUNT(*) AS n_stays,\n  CAST(NULL AS FLOAT64) AS proc_p25,\n  CAST(NULL AS FLOAT64) AS proc_median,\n  CAST(NULL AS FLOAT64) AS proc_p90,\n  (SELECT APPROX_QUANTILES(los, 100)[OFFSET(50)] FROM general_stays) AS los_median_days,\n  SAFE_DIVIDE(SUM(CAST(hospital_expire_flag AS INT64)), COUNT(*)) AS hospital_mortality\nFROM general_stays\n;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]\n\nLocation: US\nJob ID: 491bc69f-811a-44b5-aa33-cb865849eade\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [64:37]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [64:37]\n\nLocation: US\nJob ID: 017f450f-4791-4905-a1da-912d7fcd06e2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "For an 83-year-old female with DVT: among females 78\u201388, give counts and mean noninvasive diagnostics per admission by LOS (1\u20134 vs 5\u20138 days), stratified by ICU versus no ICU?",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 78 AND 88\n    AND a.dischtime IS NOT NULL  -- Ensure valid LOS calculation\n),\ndvt_admissions AS (\n  SELECT DISTINCT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.admittime,\n    pa.dischtime,\n    pa.age_at_admission\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON pa.hadm_id = d.hadm_id\n  WHERE \n    -- ICD-9 codes for DVT\n    (d.icd_version = 9 AND d.icd_code IN ('45111','45119','4512','45181','45183','45184','45189','4519','4530','4531','4532','4533','4534','4535','4536','4537','4538','4539'))\n    OR \n    -- ICD-10 codes for DVT\n    (d.icd_version = 10 AND (d.icd_code LIKE 'I80.%' OR d.icd_code LIKE 'I82.%'))\n),\nadmission_details AS (\n  SELECT \n    dvt.*,\n    -- Calculate LOS in days (adding 1 because same-day admission/discharge = 1 day)\n    DATE_DIFF(CAST(dvt.dischtime AS DATE), CAST(dvt.admittime AS DATE), DAY) + 1 AS los_days,\n    -- Determine if admission included ICU stay\n    CASE WHEN i.stay_id IS NOT NULL THEN 'ICU' ELSE 'non-ICU' END AS icu_status\n  FROM dvt_admissions dvt\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON dvt.hadm_id = i.hadm_id\n),\nlab_counts AS (\n  SELECT \n    hadm_id,\n    COUNT(*) AS lab_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n  GROUP BY hadm_id\n)\nSELECT\n  CASE \n    WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n    WHEN los_days BETWEEN 5 AND 8 THEN '5-8 days'\n  END AS los_group,\n  icu_status,\n  COUNT(*) AS admission_count,\n  AVG(COALESCE(lc.lab_count, 0)) AS mean_lab_count\nFROM admission_details ad\nLEFT JOIN lab_counts lc\n  ON ad.hadm_id = lc.hadm_id\nWHERE los_days BETWEEN 1 AND 8\nGROUP BY los_group, icu_status\nORDER BY los_group, icu_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \":\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \":\" at [1:9]\n\nLocation: US\nJob ID: e7e94e51-80da-4a4b-b40a-a2227b08d645\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

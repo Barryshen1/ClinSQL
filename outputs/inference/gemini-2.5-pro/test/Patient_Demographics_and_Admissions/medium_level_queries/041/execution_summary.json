@@ -1,0 +1,16 @@
+{
+  "query": "For my 93-year-old male patient: among patients aged 88\u201398 with elective admissions (postoperative proxy), report mean, median (p50), p75, p90 LOS by discharge outcome (home; SNF/rehab/LTACH; in-hospital death) and percent with LOS \u22647 days.",
+  "final_sql": "WITH cohort AS (\n  -- First, define the patient cohort based on age and admission type, and calculate LOS.\n  SELECT\n    adm.hadm_id,\n    adm.discharge_location,\n    adm.hospital_expire_flag,\n    -- Calculate LOS in fractional days for higher precision in stats\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON p.subject_id = adm.subject_id\n  WHERE\n    -- Filter for elective admissions as a proxy for postoperative patients\n    adm.admission_type = 'ELECTIVE'\n    -- Calculate age at admission and filter for the 88-98 range\n    AND ((EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) + p.anchor_age) BETWEEN 88 AND 98\n    -- Ensure a discharge time exists to calculate a valid LOS\n    AND adm.dischtime IS NOT NULL\n),\ndischarge_categorized AS (\n  -- Second, categorize each admission by its discharge outcome.\n  SELECT\n    c.los_days,\n    CASE\n      WHEN c.hospital_expire_flag = 1 THEN 'In-hospital Death'\n      WHEN c.discharge_location IN ('HOME', 'HOME HEALTH CARE') THEN 'Home'\n      WHEN c.discharge_location IN (\n        'SKILLED NURSING FACILITY',\n        'REHAB/DISTINCT PART HOSP',\n        'LONG TERM CARE HOSPITAL',\n        'CHRONIC/LONG TERM CARE'\n      ) THEN 'SNF/Rehab/LTACH'\n      ELSE 'Other' -- Group all other outcomes here\n    END AS discharge_outcome\n  FROM\n    cohort AS c\n)\n-- Finally, aggregate the data to compute the requested statistics for each outcome category.\nSELECT\n  discharge_outcome,\n  COUNT(*) AS number_of_admissions,\n  AVG(los_days) AS mean_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS p75_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(90)] AS p90_los_days,\n  SAFE_DIVIDE(COUNTIF(los_days <= 7) * 100.0, COUNT(*)) AS percent_los_leq_7_days\nFROM\n  discharge_categorized\nWHERE\n  -- Exclude 'Other' outcomes to focus on the requested categories\n  discharge_outcome IN ('Home', 'SNF/Rehab/LTACH', 'In-hospital Death')\nGROUP BY\n  discharge_outcome\nORDER BY\n  -- Order results for logical presentation\n  CASE discharge_outcome\n    WHEN 'Home' THEN 1\n    WHEN 'SNF/Rehab/LTACH' THEN 2\n    WHEN 'In-hospital Death' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

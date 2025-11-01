@@ -1,0 +1,23 @@
+{
+  "query": "I'm evaluating a 79\u2011year\u2011old man. Among male ICU patients aged 74\u201384 admitted with upper GI bleeding, using first ICU stay, stratify first\u201172\u2011hour diagnostic intensity into quartiles and report mean procedure count, mean hospital LOS (days), and in\u2011hospital mortality per quartile.",
+  "final_sql": "WITH \n-- Identify patients meeting demographic criteria and with upper GI bleeding diagnosis\nadmissions_cohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Calculate age at admission\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 74 AND 84\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND d.icd_code IN (\n          'K250', 'K252', 'K253', 'K255', 'K256',  -- Gastric ulcer hemorrhage\n          'K260', 'K262', 'K263', 'K265', 'K266',  -- Duodenal ulcer hemorrhage\n          'K270', 'K272', 'K273', 'K275', 'K276',  -- Peptic ulcer hemorrhage\n          'K280', 'K282', 'K283', 'K285', 'K286',  -- Gastrojejunal ulcer hemorrhage\n          'K920', 'K921', 'K922'                   -- Hematemesis/melena\n        )\n    )\n),\n\n-- Get first ICU stay for each qualifying admission\nfirst_icu_stay AS (\n  SELECT \n    i.hadm_id,\n    i.subject_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN admissions_cohort a\n    ON i.hadm_id = a.hadm_id\n),\nfirst_stay AS (\n  SELECT *\n  FROM first_icu_stay\n  WHERE rn = 1\n),\n\n-- Calculate diagnostic intensity (labs + micro in first 72h)\ndiagnostic_intensity AS (\n  SELECT \n    s.stay_id,\n    s.hadm_id,\n    s.subject_id,\n    s.intime,\n    -- Count lab events in first 72h\n    COALESCE((\n      SELECT COUNT(*)\n      FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n      WHERE l.subject_id = s.subject_id\n        AND l.hadm_id = s.hadm_id\n        AND l.charttime >= s.intime\n        AND l.charttime < TIMESTAMP_ADD(s.intime, INTERVAL 72 HOUR)\n    ), 0) AS lab_count,\n    -- Count microbiology events in first 72h\n    COALESCE((\n      SELECT COUNT(*)\n      FROM `physionet-data.mimiciv_3_1_hosp.microbiologyevents` m\n      WHERE m.subject_id = s.subject_id\n        AND m.hadm_id = s.hadm_id\n        AND m.charttime >= s.intime\n        AND m.charttime < TIMESTAMP_ADD(s.intime, INTERVAL 72 HOUR)\n    ), 0) AS micro_count\n  FROM first_stay s\n),\n\n-- Add procedure count, hospital LOS, and mortality\npatient_metrics AS (\n  SELECT \n    di.stay_id,\n    di.hadm_id,\n    di.subject_id,\n    di.lab_count + di.micro_count AS diagnostic_intensity,\n    -- Procedure count for the admission\n    COALESCE((\n      SELECT COUNT(*)\n      FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n      WHERE p.hadm_id = di.hadm_id\n    ), 0) AS procedure_count,\n    -- Hospital LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS hospital_los,\n    a.hospital_expire_flag\n  FROM diagnostic_intensity di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON di.hadm_id = a.hadm_id\n),\n\n-- Assign quartiles based on diagnostic intensity\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY diagnostic_intensity) AS intensity_quartile\n  FROM patient_metrics\n)\n\n-- Aggregate results by quartile\nSELECT \n  intensity_quartile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(hospital_los) AS mean_hospital_los_days,\n  AVG(hospital_expire_flag) AS in_hospital_mortality_rate\nFROM quartiles\nGROUP BY intensity_quartile\nORDER BY intensity_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]\n\nLocation: US\nJob ID: cb87242e-bae4-4240-8d01-6ee3e61bd815\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

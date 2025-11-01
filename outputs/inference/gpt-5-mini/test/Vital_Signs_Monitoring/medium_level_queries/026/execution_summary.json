@@ -1,0 +1,16 @@
+{
+  "query": "I have a 73-year-old male. Among male ICU stays aged 68\u201378, what percentile is a per-stay average respiratory rate of 12 breaths/min during the first 48 hours?",
+  "final_sql": "WITH rr_items AS (\n  -- Identify likely respiratory rate itemids\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    -- look for common respiratory-rate terms or RR abbreviation\n    LOWER(label) LIKE '%respir%' \n    OR LOWER(label) LIKE '%resp rate%'\n    OR LOWER(label) LIKE '%respiration%'\n    OR LOWER(COALESCE(abbreviation, '')) LIKE '%rr%'\n),\n\nper_stay_rr AS (\n  -- Compute per-stay average RR within the first 48 hours of the ICU stay\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    AVG(c.valuenum) AS avg_rr,\n    COUNT(1) AS n_measurements\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON s.subject_id = c.subject_id\n    AND s.hadm_id = c.hadm_id\n    AND s.stay_id = c.stay_id\n  WHERE\n    c.itemid IN (SELECT itemid FROM rr_items)\n    AND c.valuenum IS NOT NULL\n    AND c.valuenum > 0\n    AND c.charttime >= s.intime\n    AND c.charttime <= TIMESTAMP_ADD(s.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    s.subject_id, s.hadm_id, s.stay_id\n),\n\neligible_stays AS (\n  -- Filter to male patients aged 68-78 (inclusive)\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    r.stay_id,\n    r.avg_rr,\n    r.n_measurements\n  FROM per_stay_rr r\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON r.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n)\n\n-- Compute percentile position of the value 12 breaths/min\nSELECT\n  COUNT(*) AS total_stays,\n  SUM(CASE WHEN avg_rr <= 12 THEN 1 ELSE 0 END) AS stays_with_avg_le_12,\n  ROUND(100.0 * SAFE_DIVIDE(SUM(CASE WHEN avg_rr <= 12 THEN 1 ELSE 0 END), COUNT(*)), 2) AS percentile_of_12_percent\nFROM eligible_stays;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

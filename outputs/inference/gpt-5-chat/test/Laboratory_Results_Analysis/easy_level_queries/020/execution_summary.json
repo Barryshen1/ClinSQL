@@ -1,0 +1,16 @@
+{
+  "query": "I have a 49-year-old man; among male heart-failure hospitalizations, what's the 75th percentile of nadir hemoglobin during the stay?",
+  "final_sql": "WITH hf_admissions AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE \n    (\n      -- ICD-9 heart failure: 428.*, 402.01, 402.11, 402.91, 404.*\n      (di.icd_version = 9 AND (\n          di.icd_code LIKE '428%' \n          OR di.icd_code IN ('40201','40211','40291')\n          OR di.icd_code LIKE '404%'))\n      -- ICD-10 heart failure: I50.*, I11.0, I13.0, I13.2\n      OR (di.icd_version = 10 AND (\n          di.icd_code LIKE 'I50%' \n          OR di.icd_code IN ('I110','I130','I132')))\n      -- As a safety net: match textual description if it contains 'HEART FAILURE'\n      OR UPPER(dd.long_title) LIKE '%HEART FAILURE%'\n    )\n),\nmale_49_hf AS (\n  SELECT ha.subject_id, ha.hadm_id\n  FROM hf_admissions ha\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ha.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age = 49\n),\nhemoglobin_itemids AS (\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE 'hemoglobin%'\n    AND LOWER(fluid) = 'blood'\n),\nnadir_hb AS (\n  SELECT\n    mh.subject_id,\n    mh.hadm_id,\n    MIN(le.valuenum) AS nadir_hemoglobin\n  FROM male_49_hf mh\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON mh.subject_id = le.subject_id\n    AND mh.hadm_id = le.hadm_id\n  JOIN hemoglobin_itemids hi\n    ON le.itemid = hi.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND LOWER(le.valueuom) = 'g/dl'\n  GROUP BY mh.subject_id, mh.hadm_id\n)\nSELECT\n  APPROX_QUANTILES(nadir_hemoglobin, 100)[OFFSET(75)] AS p75_nadir_hemoglobin_g_dl\nFROM nadir_hb;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

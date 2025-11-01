@@ -1,0 +1,28 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH base_cohort AS (\n    SELECT\n        p.subject_id,\n        adm.hadm_id,\n        icustay.stay_id,\n        icustay.intime,\n        icustay.los AS icu_los,\n        adm.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n        ON p.subject_id = adm.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` AS icustay\n        ON adm.hadm_id = icustay.hadm_id AND p.subject_id = icustay.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 53 AND 63\n),\n-- Step 2: Identify sepsis diagnoses within the base cohort\n-- Using common ICD-10 codes for sepsis.\nsepsis_cohort_stays AS (\n    SELECT DISTINCT\n        bc.stay_id\n    FROM\n        base_cohort AS bc\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n        ON bc.hadm_id = di.hadm_id AND bc.subject_id = di.subject_id\n    WHERE\n        di.icd_version = 10 AND (\n            di.icd_code LIKE 'A40%' OR  -- Streptococcal sepsis, etc.\n            di.icd_code LIKE 'A41%' OR  -- Other sepsis, including gram-negative, unspecified, etc.\n            di.icd_code LIKE 'R65.2%'   -- Severe sepsis (R65.20 without shock, R65.21 with shock)\n        )\n),\n-- Step 3: Count procedures in the first 24 hours of ICU stay for the base cohort\nprocedures_24h_counts AS (\n    SELECT\n        bc.stay_id,\n        COUNT(pe.itemid) AS procedure_count_24h -- Count each recorded procedure event\n    FROM\n        base_cohort AS bc\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n        ON bc.stay_id = pe.stay_id\n    WHERE\n        pe.starttime >= bc.intime\n        AND pe.starttime < TIMESTAMP_ADD(bc.intime, INTERVAL 24 HOUR)\n    GROUP BY\n        bc.stay_id\n),\n-- Step 4: Combine all data and add cohort flags\nfinal_cohort_data AS (\n    SELECT\n        bc.subject_id,\n        bc.hadm_id,\n        bc.stay_id,\n        bc.intime,\n        bc.icu_los,\n        bc.hospital_expire_flag,\n        CASE\n            WHEN scs.stay_id IS NOT NULL THEN TRUE\n            ELSE FALSE\n        END AS is_sepsis_cohort_flag,\n        COALESCE(p24.procedure_count_24h, 0) AS procedure_count_24h -- Default to 0 if no procedures\n    FROM\n        base_cohort AS bc\n    LEFT JOIN\n        sepsis_cohort_stays AS scs\n        ON bc.stay_id = scs.stay_id\n    LEFT JOIN\n        procedures_24h_counts AS p24\n        ON bc.stay_id = p24.stay_id\n)\n-- Step 5: Calculate and compare metrics for both cohorts\n-- Cohort 1: Sepsis Cohort (Female, 53-63)\nSELECT\n    'Sepsis Cohort (Female, 53-63)' AS cohort_name,\n    APPROX_QUANTILES(procedure_count_24h, 100)[OFFSET(75)] AS procedures_24h_75th_percentile,\n    APPROX_QUANTILES(procedure_count_24h, 100)[OFFSET(90)] AS procedures_24h_90th_percentile,\n    AVG(icu_los) AS average_icu_los,\n    AVG(hospital_expire_flag) * 100 AS hospital_mortality_rate_percent -- Hospital mortality as percentage\nFROM\n    final_cohort_data\nWHERE\n    is_sepsis_cohort_flag = TRUE\n\nUNION ALL\n\n-- Cohort 2: Age-Matched Control Cohort (Female, 53-63, All ICU patients)\n-- This includes all female ICU patients aged 53-63, regardless of sepsis status, for comparison.\nSELECT\n    'Age-Matched Control Cohort (Female, 53-63, All ICU patients)' AS cohort_name,\n    APPROX_QUANTILES(procedure_count_24h, 100)[OFFSET(75)] AS procedures_24h_75th_percentile,\n    APPROX_QUANTILES(procedure_count_24h, 100)[OFFSET(90)] AS procedures_24h_90th_percentile,\n    AVG(icu_los) AS average_icu_los,\n    AVG(hospital_expire_flag) * 100 AS hospital_mortality_rate_percent -- Hospital mortality as percentage\nFROM\n    final_cohort_data\nWHERE hospital_expire_flag IS NOT NULL -- Ensure only patients with known mortality status are included\n;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column procedure_count_24h which is neither grouped nor aggregated at [81:21]; reason: invalidQuery, location: query, message: SELECT list expression references column procedure_count_24h which is neither grouped nor aggregated at [81:21]\n\nLocation: US\nJob ID: 7c191c8b-6f30-4fe6-a1b2-0d9d499ce967\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 1fb8a099-7bb5-473f-99a6-7f16b5565437\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

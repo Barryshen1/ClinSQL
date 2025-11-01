@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 72-year-old man. Among male ICU stays aged 67\u201377, what percentile is a per-stay average temperature of 36.0\u00b0C measured over the first 24 hours?",
+  "final_sql": "WITH temp_measurements AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    ce.charttime,\n    ce.valuenum,\n    LOWER(COALESCE(ce.valueuom, di.unitname, '')) AS unit_normalized,\n    di.label AS item_label,\n    -- convert Fahrenheit to Celsius when unit indicates F, otherwise treat as Celsius\n    CASE\n      WHEN LOWER(COALESCE(ce.valueuom, di.unitname, '')) LIKE '%f%' THEN (ce.valuenum - 32) * 5.0/9.0\n      ELSE ce.valuenum\n    END AS temp_c\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = i.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE\n    -- patient filters\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 67 AND 77\n    -- time window: first 24 hours of ICU stay (inclusive)\n    AND ce.charttime IS NOT NULL\n    AND ce.charttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 24 HOUR)\n    -- numeric measurement required\n    AND ce.valuenum IS NOT NULL\n    -- identify likely temperature items by label/abbrev or unit\n    AND (\n         LOWER(COALESCE(di.label, '')) LIKE '%temp%'\n      OR LOWER(COALESCE(di.abbreviation, '')) LIKE '%temp%'\n      OR LOWER(COALESCE(di.label, '')) LIKE '%temperature%'\n      OR LOWER(COALESCE(ce.valueuom, '')) LIKE '%f%'\n      OR LOWER(COALESCE(ce.valueuom, '')) LIKE '%c%'\n      OR LOWER(COALESCE(di.unitname, '')) LIKE '%cel%'\n      OR LOWER(COALESCE(di.unitname, '')) LIKE '%f%'\n    )\n    -- keep plausible human temps after conversion\n    AND (\n      CASE\n        WHEN LOWER(COALESCE(ce.valueuom, di.unitname, '')) LIKE '%f%' THEN (ce.valuenum - 32) * 5.0/9.0\n        ELSE ce.valuenum\n      END BETWEEN 25 AND 45\n    )\n),\n\nper_stay_avg AS (\n  -- compute per-stay average temperature (C) over the first 24 hours\n  SELECT\n    stay_id,\n    subject_id,\n    hadm_id,\n    AVG(temp_c) AS avg_temp_c,\n    COUNT(*) AS n_measurements\n  FROM temp_measurements\n  GROUP BY stay_id, subject_id, hadm_id\n)\n\n-- final percentile calculation: proportion of stays with per-stay avg <= 36.0\u00b0C\nSELECT\n  COUNTIF(avg_temp_c <= 36.0) AS stays_le_36,\n  COUNT(*) AS total_stays,\n  100.0 * COUNTIF(avg_temp_c <= 36.0) / COUNT(*) AS percentile_le_36\nFROM per_stay_avg;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

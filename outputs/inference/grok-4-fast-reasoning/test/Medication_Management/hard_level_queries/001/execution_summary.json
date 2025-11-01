@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating an 81-year-old woman with cardiac arrest. Among female inpatients 76\u201386 with cardiac arrest, stratified by medication complexity quintiles (first 7 hospital days), report per quintile: patient count, avg/min/max score, LOS, in-hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cohort_hadm AS (\n  SELECT DISTINCT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON d.subject_id = a.subject_id AND d.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND (\n      (d.icd_version = 9 AND d.icd_code = '4275') \n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I46%')\n    )\n),\nmed_scores AS (\n  SELECT \n    c.subject_id, \n    c.hadm_id, \n    c.admittime, \n    c.dischtime, \n    c.hospital_expire_flag,\n    COUNT(DISTINCT pr.drug) AS med_score\n  FROM cohort_hadm c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr \n    ON pr.subject_id = c.subject_id \n    AND pr.hadm_id = c.hadm_id\n    AND pr.starttime >= c.admittime \n    AND pr.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n    AND pr.drug IS NOT NULL \n    AND TRIM(pr.drug) != ''\n  GROUP BY c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag\n),\nbase AS (\n  SELECT \n    ms.*,\n    DATE_DIFF(ms.dischtime, ms.admittime, DAY) AS los,\n    CAST((ms.hospital_expire_flag = 1) AS INT64) AS died,\n    CASE \n      WHEN ms.hospital_expire_flag = 1 OR ms.dischtime IS NULL THEN 0\n      ELSE CAST((\n        EXISTS (\n          SELECT 1 \n          FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n          WHERE a2.subject_id = ms.subject_id\n            AND a2.hadm_id != ms.hadm_id\n            AND a2.admittime > ms.dischtime\n            AND a2.admittime <= TIMESTAMP_ADD(ms.dischtime, INTERVAL 30 DAY)\n        )\n      ) AS INT64)\n    END AS has_readmit,\n    NTILE(5) OVER (ORDER BY ms.med_score ASC) AS quintile\n  FROM med_scores ms\n)\nSELECT \n  quintile,\n  COUNT(*) AS patient_count,\n  ROUND(AVG(med_score), 2) AS avg_score,\n  MIN(med_score) AS min_score,\n  MAX(med_score) AS max_score,\n  ROUND(AVG(los), 2) AS avg_los,\n  ROUND((SUM(died) * 100.0 / COUNT(*)), 2) AS mortality_pct,\n  ROUND((SUM(has_readmit) * 100.0 / NULLIF(COUNT(*) - SUM(died), 0)), 2) AS readmit_30d_pct\nFROM base\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [14:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [14:8]\n\nLocation: US\nJob ID: a8c8adc5-0385-4d7f-abfc-45a598885c34\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

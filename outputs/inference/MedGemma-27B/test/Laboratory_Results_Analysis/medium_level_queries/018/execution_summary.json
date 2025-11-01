@@ -1,0 +1,17 @@
+{
+  "query": "I have a 95\u2011year\u2011old man. Among male patients aged 90\u2013100 admitted with ACS, what are counts, percentages, and mean length of stay for index Troponin T categorized as normal/borderline/elevated?",
+  "final_sql": "WITH PatientInfo AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  WHERE\n    p.gender = 'M' AND p.anchor_age BETWEEN 90 AND 100\n),\nACSAdmissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  WHERE\n    a.subject_id IN (\n      SELECT\n        subject_id\n      FROM\n        PatientInfo\n    )\n    AND a.admission_type = 'EMERGENCY'\n    AND EXISTS (\n      SELECT\n        1\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      WHERE\n        d.subject_id = a.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND d.icd_code IN ('410', '411', '413', '414') -- ACS ICD-10 codes\n    )\n),\nTroponinEvents AS (\n  SELECT\n    te.subject_id,\n    te.hadm_id,\n    te.charttime,\n    te.valuenum AS troponin_value,\n    te.valueuom AS troponin_uom\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` AS te\n  WHERE\n    te.subject_id IN (\n      SELECT\n        subject_id\n      FROM\n        ACSAdmissions\n    )\n    AND te.itemid = 50178 -- Troponin T itemid\n),\nTroponinCategories AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    CASE\n      WHEN troponin_value < 0.01 THEN 'normal'\n      WHEN troponin_value BETWEEN 0.01 AND 0.1 THEN 'borderline'\n      ELSE 'elevated'\n    END AS troponin_category\n  FROM\n    TroponinEvents\n  WHERE\n    troponin_uom = 'ng/mL'\n    AND troponin_value IS NOT NULL\n),\nHospitalLOS AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.dischtime,\n    a.admittime,\n    (\n      TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24\n    ) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  WHERE\n    a.subject_id IN (\n      SELECT\n        subject_id\n      FROM\n        ACSAdmissions\n    )\n)\nSELECT\n  tc.troponin_category,\n  COUNT(DISTINCT tc.subject_id) AS patient_count,\n  COUNT(DISTINCT tc.hadm_id) AS admission_count,\n  AVG(h.los) AS mean_los\nFROM\n  TroponinCategories AS tc\nLEFT JOIN\n  HospitalLOS AS h\n  ON tc.subject_id = h.subject_id AND tc.hadm_id = h.hadm_id\nGROUP BY\n  tc.troponin_category\nORDER BY\n  tc.troponin_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

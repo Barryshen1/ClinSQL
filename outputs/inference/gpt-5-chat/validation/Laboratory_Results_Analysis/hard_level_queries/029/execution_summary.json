@@ -1,0 +1,28 @@
+{
+  "query": "Patient: female, 55. Among female inpatients aged 50\u201360 with hyperosmolar hyperglycemic state, what is the 75th percentile of the first\u201148\u2011hour laboratory instability score? For admissions \u2265 this threshold, give mortality, mean LOS (days), and compare critical\u2011lab rates versus general inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n),\nhhs_dx AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE (\n      -- ICD-9 codes for HHS\n      (d.icd_version = 9 AND d.icd_code LIKE '250.2%')\n      OR\n      -- ICD-10 codes for diabetes with hyperosmolarity\n      (d.icd_version = 10 AND (\n          d.icd_code LIKE 'E10.0%' OR\n          d.icd_code LIKE 'E11.0%' OR\n          d.icd_code LIKE 'E13.0%'\n      ))\n    )\n),\nlabs_48h AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNTIF(le.flag = 'abnormal') AS abnormal_count,\n    COUNT(*) AS total_labs\n  FROM cohort c\n  JOIN hhs_dx h\n    ON c.hadm_id = h.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.hadm_id = le.hadm_id\n  WHERE le.charttime BETWEEN c.admittime \n                         AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.subject_id, c.hadm_id\n),\nscored AS (\n  SELECT\n    c.*,\n    l.abnormal_count,\n    l.total_labs,\n    -- lab instability score = abnormal_count\n    l.abnormal_count AS instab_score\n  FROM cohort c\n  JOIN labs_48h l\n    ON c.subject_id = l.subject_id AND c.hadm_id = l.hadm_id\n),\nthreshold AS (\n  SELECT PERCENTILE_CONT(instab_score, 0.75) OVER() AS p75\n  FROM scored\n),\nhigh_group AS (\n  SELECT s.*, t.p75\n  FROM scored s\n  CROSS JOIN (SELECT DISTINCT p75 FROM threshold) t\n  WHERE s.instab_score >= t.p75\n),\n-- General inpatient baseline abnormal rate in first 48h\ngeneral_abnormal_rate AS (\n  SELECT \n    COUNTIF(le.flag = 'abnormal') / COUNT(*) AS abnormal_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON a.hadm_id = le.hadm_id\n  WHERE le.charttime BETWEEN a.admittime \n                         AND DATETIME_ADD(a.admittime, INTERVAL 48 HOUR)\n)\nSELECT\n  MAX(hg.p75) AS instability_score_p75,\n  AVG(hg.hospital_expire_flag) AS mortality_rate,\n  AVG(TIMESTAMP_DIFF(hg.dischtime, hg.admittime, HOUR) / 24.0) AS mean_los_days,\n  AVG(hg.abnormal_count / NULLIF(hg.total_labs,0)) AS high_group_abnormal_rate,\n  MAX(gar.abnormal_rate) AS general_inpatient_abnormal_rate\nFROM high_group hg\nCROSS JOIN general_abnormal_rate gar;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references hg.p75 which is neither grouped nor aggregated at [80:3]; reason: invalidQuery, location: query, message: SELECT list expression references hg.p75 which is neither grouped nor aggregated at [80:3]\n\nLocation: US\nJob ID: 956d3de3-62e2-44cb-a995-aff75a9d128d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references gar.abnormal_rate which is neither grouped nor aggregated at [84:3]; reason: invalidQuery, location: query, message: SELECT list expression references gar.abnormal_rate which is neither grouped nor aggregated at [84:3]\n\nLocation: US\nJob ID: ac3c9404-8c47-4ea0-bb36-7c1b10a54991\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

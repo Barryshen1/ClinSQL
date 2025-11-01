@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH heart_failure_adm AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 AS los_days,\n    CASE\n      WHEN DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 BETWEEN 1 AND 4 THEN '1-4'\n      WHEN DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 BETWEEN 5 AND 8 THEN '5-8'\n    END AS stay_group,\n    CASE WHEN icu.stay_id IS NOT NULL THEN TRUE ELSE FALSE END AS icu_use\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.hadm_id = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n      ON d.icd_code = ddi.icd_code\n      AND d.icd_version = ddi.icd_version\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n      ON a.hadm_id = icu.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND LOWER(ddi.long_title) LIKE '%heart failure%'\n    AND DATE_DIFF(a.dischtime, a.admittime, DAY) + 1 BETWEEN 1 AND 8\n),\nimaging_counts AS (\n  -- HOSP radiography/CT via HCPCS events\n  SELECT\n    hadm_id,\n    COUNT(*) AS img_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n  WHERE\n    LOWER(short_description) LIKE '%xray%'\n    OR LOWER(short_description) LIKE '%ct%'\n  GROUP BY hadm_id\n\n  UNION ALL\n\n  -- ICU radiography/CT via procedureevents + d_items\n  SELECT\n    pe.hadm_id,\n    COUNT(*) AS img_count\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n      ON pe.itemid = di.itemid\n  WHERE\n    LOWER(di.label) LIKE '%xray%'\n    OR LOWER(di.label) LIKE '%ct%'\n  GROUP BY pe.hadm_id\n),\nadm_counts AS (\n  -- Sum imaging counts per admission; if none, default to zero\n  SELECT\n    h.hadm_id,\n    COALESCE(SUM(ic.img_count), 0) AS radiology_count\n  FROM\n    heart_failure_adm h\n    LEFT JOIN imaging_counts ic\n      ON h.hadm_id = ic.hadm_id\n  GROUP BY h.hadm_id\n),\nstats AS (\n  SELECT\n    h.stay_group,\n    h.icu_use,\n    ac.radiology_count\n  FROM\n    heart_failure_adm h\n    JOIN adm_counts ac\n      ON h.hadm_id = ac.hadm_id\n)\nSELECT\n  stay_group,\n  icu_use,\n  quartiles[OFFSET(1)] AS p25,\n  quartiles[OFFSET(2)] AS p50,\n  quartiles[OFFSET(3)] AS p75\nFROM (\n  SELECT\n    stay_group,\n    icu_use,\n    APPROX_QUANTILES(radiology_count, 4) AS quartiles\n  FROM stats\n  GROUP BY stay_group, icu_use\n)\nORDER BY stay_group, icu_use;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

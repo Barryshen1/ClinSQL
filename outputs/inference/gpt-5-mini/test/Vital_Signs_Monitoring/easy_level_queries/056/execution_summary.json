@@ -1,0 +1,16 @@
+{
+  "query": "51-year-old male in ICU. Among male patients 46\u201356, what's median temperature (\u00b0F) in first 24 hours?",
+  "final_sql": "WITH temp_candidates AS (\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum,\n    ce.valueuom,\n    di.label AS item_label,\n    di.abbreviation AS item_abbrev,\n    di.unitname AS item_unit,\n    icu.intime,\n    -- Convert to Fahrenheit when unit indicates Celsius; otherwise assume Fahrenheit\n    CASE\n      WHEN ce.valuenum IS NULL THEN NULL\n      WHEN LOWER(COALESCE(ce.valueuom, '')) LIKE '%c%' THEN ce.valuenum * 9.0/5.0 + 32.0\n      WHEN LOWER(COALESCE(ce.valueuom, '')) LIKE '%f%' THEN ce.valuenum\n      WHEN LOWER(COALESCE(di.unitname, '')) LIKE '%c%' THEN ce.valuenum * 9.0/5.0 + 32.0\n      WHEN LOWER(COALESCE(di.unitname, '')) LIKE '%f%' THEN ce.valuenum\n      ELSE ce.valuenum\n    END AS temp_f\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON ce.stay_id = icu.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ce.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 46 AND 56\n    AND ce.charttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n    -- Identify temperature-related items conservatively by label/abbreviation/category\n    AND (\n      LOWER(COALESCE(di.label, '')) LIKE '%temp%'\n      OR LOWER(COALESCE(di.label, '')) LIKE '%temperature%'\n      OR LOWER(COALESCE(di.abbreviation, '')) LIKE '%temp%'\n      OR LOWER(COALESCE(di.category, '')) LIKE '%vital%'\n    )\n),\n\n-- Keep only plausible Fahrenheit values\ntemp_filtered AS (\n  SELECT *\n  FROM temp_candidates\n  WHERE temp_f IS NOT NULL\n    AND temp_f BETWEEN 85.0 AND 110.0\n),\n\n-- Compute per-stay median temperature (first 24h) using APPROX_QUANTILES\nper_stay_medians AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    APPROX_QUANTILES(temp_f, 100)[OFFSET(50)] AS median_temp_f\n  FROM temp_filtered\n  GROUP BY subject_id, hadm_id, stay_id\n)\n\n-- Final: median of the per-stay medians\nSELECT\n  COUNT(*) AS n_stays_included,\n  APPROX_QUANTILES(median_temp_f, 100)[OFFSET(50)] AS median_temperature_f_across_stays\nFROM per_stay_medians;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

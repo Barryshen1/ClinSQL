@@ -1,0 +1,22 @@
+{
+  "query": "Report percent initiating GLP\u20111 receptor agonists in first 12 hours after admission versus final 24 hours pre\u2011discharge among male inpatients 79\u201389 with type 2 diabetes and heart failure, and net percentage\u2011point change.",
+  "final_sql": "WITH patient_diagnoses AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.gender,\n    -- Check for type 2 diabetes (ICD-10: E11)\n    MAX(CASE WHEN di.icd_version = 10 AND di.icd_code LIKE 'E11%' THEN 1 ELSE 0 END) AS has_t2dm,\n    -- Check for heart failure (ICD-10: I50%)\n    MAX(CASE WHEN di.icd_version = 10 AND di.icd_code LIKE 'I50%' THEN 1 ELSE 0 END) AS has_hf\n  FROM\n    `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON a.hadm_id = di.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age >= 79 AND p.anchor_age <= 89\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime, p.anchor_age, p.gender\n),\nqualifying_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n  FROM\n    patient_diagnoses\n  WHERE\n    has_t2dm = 1 AND has_hf = 1\n),\nfirst_admission AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime\n  FROM\n    qualifying_admissions\n  WHERE\n    rn = 1\n),\nglp1_prescriptions AS (\n  SELECT DISTINCT\n    fa.subject_id,\n    fa.hadm_id,\n    fa.admittime,\n    fa.dischtime,\n    -- Flag if GLP-1 agonist was prescribed in first 12 hours\n    MAX(CASE WHEN p.starttime >= fa.admittime AND p.starttime <= DATETIME_ADD(fa.admittime, INTERVAL 12 HOUR) THEN 1 ELSE 0 END) AS glp1_early,\n    -- Flag if GLP-1 agonist was prescribed in last 24 hours\n    MAX(CASE WHEN p.starttime >= DATETIME_SUB(fa.dischtime, INTERVAL 24 HOUR) AND p.starttime <= fa.dischtime THEN 1 ELSE 0 END) AS glp1_late\n  FROM\n    first_admission fa\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp`.prescriptions p\n    ON fa.hadm_id = p.hadm_id\n    AND LOWER(p.drug) IN (\n      'liraglutide', 'semaglutide', 'dulaglutide', 'exenatide', \n      'lixisenatide', 'tirzepatide', 'dulaglutide pen', 'semaglutide pen',\n      'liraglutide injection', 'exenatide extended release'\n    )\n  GROUP BY\n    fa.subject_id, fa.hadm_id, fa.admittime, fa.dischtime\n),\nsummary AS (\n  SELECT\n    COUNT(*) AS total_patients,\n    SUM(glp1_early) AS early_count,\n    SUM(glp1_late) AS late_count\n  FROM\n    glp1_prescriptions\n)\nSELECT\n  total_patients,\n  early_count,\n  late_count,\n  ROUND((early_count / total_patients) * 100, 2) AS percent_early,\n  ROUND((late_count / total_patients) * 100, 2) AS percent_late,\n  ROUND((late_count / total_patients) * 100 - (early_count / total_patients) * 100, 2) AS net_percentage_point_change\nFROM\n  summary;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \";\" at [77:18]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \";\" at [77:18]\n\nLocation: US\nJob ID: d7b7f801-3532-493a-9407-5a84bce0cf24\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

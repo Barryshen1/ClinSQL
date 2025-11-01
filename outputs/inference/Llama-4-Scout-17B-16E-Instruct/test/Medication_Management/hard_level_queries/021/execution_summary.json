@@ -1,0 +1,28 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH \n-- Identify population of interest\npopulation AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    p.anchor_age, \n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 41 AND 51\n),\n\n-- Identify patients with neutropenia and fever\nneutropenia_fever AS (\n  SELECT \n    subject_id, \n    hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.labevents`\n  WHERE \n    itemid IN (\n      220050, 220179\n    ) \n    AND valuenum < 1000 \n    AND charttime BETWEEN (SELECT MIN(admittime) FROM population) AND (SELECT MAX(dischtime) FROM population)\n),\n\n-- Medications prescribed in first 48 hours\nmedications AS (\n  SELECT \n    p.subject_id, \n    p.hadm_id, \n    COUNT(DISTINCT p.drug) AS unique_medications\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN \n    population po \n      ON p.subject_id = po.subject_id AND p.hadm_id = po.hadm_id\n  WHERE \n    p.starttime BETWEEN po.admittime AND po.admittime + INTERVAL 2 DAY\n  GROUP BY \n    p.subject_id, \n    p.hadm_id\n),\n\n-- Combine population, neutropenia/fever, and medications\ncombined AS (\n  SELECT \n    p.subject_id, \n    p.hadm_id, \n    m.unique_medications\n  FROM \n    population p\n  JOIN \n    neutropenia_fever n \n      ON p.subject_id = n.subject_id AND p.hadm_id = n.hadm_id\n  JOIN \n    medications m \n      ON p.subject_id = m.subject_id AND p.hadm_id = m.hadm_id\n),\n\n-- Calculate tertiles of unique medications\ntertiles AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    unique_medications,\n    NTILE(3) OVER (ORDER BY unique_medications) AS tertile\n  FROM \n    combined\n),\n\n-- Calculate LOS, in-hospital mortality, and 30-day readmission\noutcomes AS (\n  SELECT \n    t.subject_id, \n    t.hadm_id,\n    TIMESTAMP_DIFF(po.dischtime, po.admittime, DAY) AS los,\n    IF(po.hospital_expire_flag = 1, 1, 0) AS in_hospital_death,\n    CASE \n      WHEN EXISTS (\n        SELECT \n          1 \n        FROM \n          `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE \n          a2.subject_id = t.subject_id \n          AND a2.admittime BETWEEN po.dischtime AND TIMESTAMP_ADD(po.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 \n      ELSE 0 \n    END AS readmitted\n  FROM \n    tertiles t\n  JOIN \n    population po \n      ON t.subject_id = po.subject_id AND t.hadm_id = po.hadm_id\n)\n\n-- Final aggregation\nSELECT \n  tertile,\n  AVG(los) AS avg_los,\n  AVG(in_hospital_death) AS in_hospital_mortality_rate,\n  AVG(readmitted) AS thirty_day_readmission_rate\nFROM \n  outcomes\nGROUP BY \n  tertile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: tertile at [110:3]; reason: invalidQuery, location: query, message: Unrecognized name: tertile at [110:3]\n\nLocation: US\nJob ID: 29a327e6-9ea4-4471-b9d6-8df550bb59b7\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: admittime at [44:23]; reason: invalidQuery, location: query, message: Unrecognized name: admittime at [44:23]\n\nLocation: US\nJob ID: ae1c8eae-335c-4203-9f08-af7878c3c2d6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [87:5]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [87:5]\n\nLocation: US\nJob ID: bfa6df9b-76ba-45d8-936e-39b761637a2e\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: tertile at [110:3]; reason: invalidQuery, location: query, message: Unrecognized name: tertile at [110:3]\n\nLocation: US\nJob ID: 29a327e6-9ea4-4471-b9d6-8df550bb59b7\n"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "query": "I have a 68\u2011year\u2011old male patient. Among male inpatients 63\u201373 with septic shock and >15 diagnoses, what are mean risk score and 90\u2011day mortality? Compare major complication rate and survivor LOS to general inpatients; give percentile for that profile (68M, 16 diagnoses).",
+  "final_sql": "WITH patients_with_age AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_year,\n    anchor_age,\n    dod,\n    DATE_SUB(CAST(CONCAT(CAST(anchor_year AS STRING), '-01-01') AS DATE), INTERVAL anchor_age YEAR) AS birth_date\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n),\nadmissions_with_age AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    TIMESTAMP_DIFF(a.admittime, p.birth_date, YEAR) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN patients_with_age p ON a.subject_id = p.subject_id\n),\nseptic_shock_diagnoses AS (\n  SELECT\n    subject_id,\n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 10 AND icd_code IN ('R65.20', 'R65.21', 'R65.22', 'R65.28', 'R65.29'))\n    OR (icd_version = 9 AND icd_code = '785.52')\n),\ncohort_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.age_at_admission,\n    COUNT(DISTINCT d.icd_code) AS num_diagnoses,\n    MAX(CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS has_septic_shock\n  FROM admissions_with_age a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  LEFT JOIN septic_shock_diagnoses s ON a.hadm_id = s.hadm_id\n  WHERE\n    a.gender = 'M'\n    AND a.age_at_admission BETWEEN 63 AND 73\n  GROUP BY\n    a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.hospital_expire_flag, a.age_at_admission\n  HAVING\n    num_diagnoses > 15\n    AND has_septic_shock = 1\n),\ncohort_metrics AS (\n  SELECT\n    hadm_id,\n    died_within_90_days,\n    los_survivor,\n    num_diagnoses,\n    age_at_admission\n  FROM (\n    SELECT\n      c.hadm_id,\n      c.subject_id,\n      c.num_diagnoses,\n      c.age_at_admission,\n      -- 90-day mortality: 1 if died within 90 days, else 0\n      IF(p.dod <= DATE(c.admittime) + 90, 1, 0) AS died_within_90_days,\n      -- Survivor LOS: only for patients who survived admission\n      CASE WHEN c.hospital_expire_flag = 0 THEN c.los END AS los_survivor\n    FROM cohort_admissions c\n    JOIN patients_with_age p ON c.subject_id = p.subject_id\n  )\n),\ncohort_summary AS (\n  SELECT\n    AVG(num_diagnoses) AS mean_risk_score,  -- Using diagnoses count as risk proxy\n    AVG(died_within_90_days) AS mean_90day_mortality,\n    NULL AS major_complication_rate,  -- Ambiguous definition; left as NULL\n    AVG(los_survivor) AS mean_survivor_los\n  FROM cohort_metrics\n),\ngeneral_population_metrics AS (\n  SELECT\n    AVG(died_within_90_days) AS general_mean_90day_mortality,\n    AVG(los_survivor) AS general_mean_survivor_los\n  FROM (\n    SELECT\n      a.hadm_id,\n      a.subject_id,\n      a.age_at_admission,\n      -- 90-day mortality\n      IF(p.dod <= DATE(a.admittime) + 90, 1, 0) AS died_within_90_days,\n      -- Survivor LOS\n      CASE WHEN a.hospital_expire_flag = 0 THEN a.los END AS los_survivor\n    FROM admissions_with_age a\n    JOIN patients_with_age p ON a.subject_id = p.subject_id\n    WHERE\n      a.gender = 'M'\n      AND a.age_at_admission BETWEEN 63 AND 73\n      AND (a.hadm_id NOT IN (SELECT hadm_id FROM cohort_admissions) OR num_diagnoses <= 15)\n  )\n),\ncohort_with_percentile AS (\n  SELECT\n    hadm_id,\n    died_within_90_days,\n    los_survivor,\n    num_diagnoses,\n    age_at_admission,\n    PERCENT_RANK() OVER (ORDER BY num_diagnoses) AS percentile\n  FROM cohort_metrics\n),\nprofile_percentile AS (\n  SELECT\n    percentile\n  FROM cohort_with_percentile\n  WHERE\n    age_at_admission = 68\n    AND num_diagnoses = 16\n  LIMIT 1\n)\nSELECT\n  cs.mean_risk_score,\n  cs.mean_90day_mortality,\n  cs.major_complication_rate,\n  cs.mean_survivor_los,\n  gp.general_mean_90day_mortality,\n  gp.general_mean_survivor_los,\n  pp.percentile AS profile_percentile\nFROM cohort_summary cs\nCROSS JOIN general_population_metrics gp\nLEFT JOIN profile_percentile pp ON TRUE;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name gender not found inside a at [46:7]; reason: invalidQuery, location: query, message: Name gender not found inside a at [46:7]\n\nLocation: US\nJob ID: cbbed61e-4ff5-44a4-b95a-efb5fcd84534\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \".\" at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \".\" at [1:6]\n\nLocation: US\nJob ID: a5693b53-31c9-4900-96ac-f7f3ee9892f1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \".\" at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \".\" at [1:6]\n\nLocation: US\nJob ID: 79506be8-d1e7-4bd6-9c2b-ca207d1e33bc\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name gender not found inside a at [46:7]; reason: invalidQuery, location: query, message: Name gender not found inside a at [46:7]\n\nLocation: US\nJob ID: cbbed61e-4ff5-44a4-b95a-efb5fcd84534\n"
+    }
+  ]
+}

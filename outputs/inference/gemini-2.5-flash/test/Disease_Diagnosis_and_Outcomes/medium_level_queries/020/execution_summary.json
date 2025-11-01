@@ -1,0 +1,28 @@
+{
+  "query": "I have a 91-year-old man. Among male patients aged 86\u201396 with sepsis (excluding septic shock), report in-hospital mortality (%) by LOS (\u22643/4\u20136/7\u201310/>10 days) and day\u20111 ICU status, plus median days-to-death.",
+  "final_sql": "WITH sepsis_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_version = 10\n    AND (icd_code LIKE 'A40%' OR icd_code LIKE 'A41%')\n),\nseptic_shock_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_version = 10\n    AND icd_code = 'R6521' -- ICD-10 code for Septic Shock\n),\n-- Combine to get eligible sepsis admissions (excluding septic shock)\neligible_admissions AS (\n  SELECT hadm_id\n  FROM sepsis_admissions\n  WHERE hadm_id NOT IN (SELECT hadm_id FROM septic_shock_admissions)\n),\n-- Identify admissions with an ICU stay starting within Day 1 of hospital admission\nday1_icu_stays AS (\n    SELECT DISTINCT\n        s.subject_id,\n        s.hadm_id,\n        TRUE AS had_day1_icu\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a_inner\n    JOIN `physionet-data.mimiciv_3_1_icu.icustays` s\n        ON a_inner.hadm_id = s.hadm_id AND a_inner.subject_id = s.subject_id\n    WHERE s.intime >= a_inner.admittime AND s.intime < DATETIME_ADD(a_inner.admittime, INTERVAL 1 DAY)\n),\n-- Main patient cohort with all derived attributes\npatient_cohort AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        p.gender,\n        p.anchor_age,\n        adm.admittime,\n        adm.dischtime,\n        DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n        adm.hospital_expire_flag,\n        -- Calculate days from admission to death; NULL if not expired in hospital or deathtime missing\n        DATE_DIFF(adm.deathtime, adm.admittime, DAY) AS days_to_death_if_died,\n        -- Determine Day-1 ICU status\n        CASE\n            WHEN day1_icu.had_day1_icu IS NOT NULL THEN 'Yes'\n            ELSE 'No'\n        END AS day1_icu_status,\n        -- Categorize LOS\n        CASE\n            WHEN DATE_DIFF(adm.dischtime, adm.admittime, DAY) <= 3 THEN '=<3 days'\n            WHEN DATE_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 4 AND 6 THEN '4-6 days'\n            WHEN DATE_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 7 AND 10 THEN '7-10 days'\n            ELSE '>10 days'\n        END AS los_category\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON adm.subject_id = p.subject_id\n    JOIN eligible_admissions ea -- Filter for sepsis (excluding septic shock)\n        ON adm.hadm_id = ea.hadm_id\n    LEFT JOIN day1_icu_stays day1_icu -- Add Day-1 ICU status without filtering out non-ICU patients\n        ON adm.subject_id = day1_icu.subject_id AND adm.hadm_id = day1_icu.hadm_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 86 AND 96\n)\n-- Final aggregation to calculate required metrics\nSELECT\n    cohort.los_category,\n    cohort.day1_icu_status,\n    -- In-hospital mortality (%)\n    ROUND(COUNT(CASE WHEN cohort.hospital_expire_flag = 1 THEN 1 END) * 100.0 / COUNT(*), 2) AS in_hospital_mortality_percent,\n    -- Median days to death for those who died in hospital\n    -- PERCENTILE_CONT handles NULLs by ignoring them, which is appropriate for days_to_death_if_died\n    COALESCE(CAST(PERCENTILE_CONT(cohort.days_to_death_if_died, 0.5) AS NUMERIC), 0) AS median_days_to_death,\n    COUNT(cohort.hadm_id) AS total_patients_in_group -- Added for context\nFROM patient_cohort cohort\nGROUP BY\n    cohort.los_category,\n    cohort.day1_icu_status\nORDER BY\n    CASE cohort.los_category -- Ensure logical ordering of LOS categories\n        WHEN '=<3 days' THEN 1\n        WHEN '4-6 days' THEN 2\n        WHEN '7-10 days' THEN 3\n        ELSE 4\n    END,\n    cohort.day1_icu_status;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6ed68042-e6d0-4d5e-972f-615efeaf3c95\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"ICU\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"ICU\" at [1:9]\n\nLocation: US\nJob ID: c50d38a4-4761-46df-88a4-1a249b00f142\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword WITHIN at [74:40]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword WITHIN at [74:40]\n\nLocation: US\nJob ID: 1c7dcebc-ebdb-4dab-a295-2b9d6621c179\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6ed68042-e6d0-4d5e-972f-615efeaf3c95\n"
+    }
+  ]
+}

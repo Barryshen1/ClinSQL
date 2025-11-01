@@ -1,0 +1,1 @@
+SELECT CAST(percentile_cont(0.75) within GROUP (ORDER BY l.valuenum) AS FLOAT) AS seventy_fifth_percentile FROM labevents l JOIN admissions_with_high_lab_instability a ON l.subject_id = a.hadm_id AND l.stay_id = a.stay_id;

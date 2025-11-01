@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY length_of_stay) - percentile_cont(0.25) within GROUP (ORDER BY length_of_stay)) AS interquartile_range FROM icu_stays;

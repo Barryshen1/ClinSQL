@@ -1,0 +1,22 @@
+{
+  "query": "My 42\u2011year\u2011old female: among female ICU patients aged 37\u201347 with ARDS (first ICU stay), what is the minimum diagnostic utilization (distinct procedures during first 72 hours)? Compare to all ICU patients and report P75/P90, mean hospital LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS hospital_los,\n    a.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays i\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    ON i.hadm_id = a.hadm_id\n  WHERE\n    i.intime = (\n      SELECT MIN(intime)\n      FROM physionet-data.mimiciv_3_1_icu.icustays i2\n      WHERE i2.subject_id = i.subject_id\n    )\n),\n\ntarget_patients AS (\n  SELECT DISTINCT\n    p.subject_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON p.subject_id = d.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND dd.icd_code = 'J80'\n    AND dd.icd_version = 10\n),\n\ntarget_first_stays AS (\n  SELECT\n    f.*\n  FROM\n    first_icu_stays f\n  JOIN\n    target_patients t\n    ON f.subject_id = t.subject_id\n),\n\nprocedures_first_72hr AS (\n  SELECT\n    pe.stay_id,\n    COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM\n    physionet-data.mimiciv_3_1_icu.procedureevents pe\n  JOIN\n    first_icu_stays f\n    ON pe.stay_id = f.stay_id\n  WHERE\n    pe.starttime >= f.intime\n    AND pe.starttime <= DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY\n    pe.stay_id\n),\n\ntarget_procedures AS (\n  SELECT\n    t.stay_id,\n    COALESCE(p.proc_count, 0) AS proc_count\n  FROM\n    target_first_stays t\n  LEFT JOIN\n    procedures_first_72hr p\n    ON t.stay_id = p.stay_id\n),\n\nall_procedures AS (\n  SELECT\n    f.stay_id,\n    COALESCE(p.proc_count, 0) AS proc_count,\n    f.hospital_los,\n    f.hospital_expire_flag\n  FROM\n    first_icu_stays f\n  LEFT JOIN\n    procedures_first_72hr p\n    ON f.stay_id = p.stay_id\n)\n\nSELECT\n  -- Target cohort stats\n  (SELECT MIN(proc_count) FROM target_procedures) AS min_procedures_target,\n\n  -- All ICU patients percentiles\n  APPROX_QUANTILES(proc_count, 100)[OFFSET(75)] AS p75_all,\n  APPROX_QUANTILES(proc_count, 100)[OFFSET(90)] AS p90_all,\n\n  -- Mean hospital LOS\n  AVG(hospital_los) AS mean_hospital_los,\n\n  -- In-hospital mortality\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM\n  all_procedures;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [8:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [8:7]\n\nLocation: US\nJob ID: 0f54d594-23e0-4405-8878-6cee1dd5fc4b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

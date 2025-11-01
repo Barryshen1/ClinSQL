@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 62-year-old man. Among male non\u2011elective medicine inpatients aged 57\u201367, report mean, median (p50), p75, p90 LOS by discharged alive versus in\u2011hospital death, and percentile rank of 5\u2011day stay.",
+  "final_sql": "WITH InitialServices AS (\n    -- Find the initial service type for each admission\n    SELECT\n        s.hadm_id,\n        s.curr_service,\n        ROW_NUMBER() OVER (PARTITION BY s.hadm_id ORDER BY s.transfertime ASC) as rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.services` AS s\n),\nCohortData AS (\n    -- Select the relevant cohort and calculate LOS and outcome\n    SELECT\n        adm.hadm_id,\n        -- Calculate length of stay in days, ensuring float division\n        TIMESTAMP_DIFF(adm.dischtime, adm.admittime, MINUTE) / (60 * 24.0) AS los_days,\n        -- Determine patient outcome\n        CASE\n            WHEN adm.hospital_expire_flag = 1 THEN 'In-hospital Death'\n            ELSE 'Discharged Alive'\n        END AS outcome\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n        ON p.subject_id = adm.subject_id\n    JOIN\n        InitialServices AS iserv\n        ON adm.hadm_id = iserv.hadm_id\n    WHERE\n        p.gender = 'M' -- Male patients\n        AND p.anchor_age BETWEEN 57 AND 67 -- Aged 57-67\n        AND adm.admission_type IN ('URGENT', 'EMERGENCY') -- Non-elective admissions\n        AND iserv.rn = 1 -- Select the initial service for the admission\n        AND iserv.curr_service = 'MED' -- Medicine inpatients\n        AND adm.dischtime IS NOT NULL -- Ensure discharge time exists for LOS calculation\n        AND adm.admittime IS NOT NULL -- Ensure admission time exists for LOS calculation\n        AND adm.dischtime > adm.admittime -- Ensure valid LOS (discharge after admission)\n),\nOutcomeAggregates AS (\n    -- Calculate mean, median (p50), p75, p90 LOS by outcome\n    SELECT\n        outcome,\n        AVG(los_days) AS mean_los,\n        -- Use APPROX_QUANTILES for BigQuery's approximate percentiles, accessing via OFFSET\n        APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_p50,\n        APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS p75_los,\n        APPROX_QUANTILES(los_days, 100)[OFFSET(90)] AS p90_los\n    FROM\n        CohortData\n    GROUP BY\n        outcome\n),\nFiveDayStayPercentile AS (\n    -- Calculate the percentile rank of a 5-day stay for the entire cohort\n    SELECT\n        100.0 * COUNTIF(los_days <= 5.0) / COUNT(los_days) AS percentile_rank_5day_stay\n    FROM\n        CohortData\n)\n-- Final selection combining the aggregated results and the overall percentile rank\nSELECT\n    oa.outcome,\n    oa.mean_los,\n    oa.median_los_p50,\n    oa.p75_los,\n    oa.p90_los,\n    -- Include the single calculated percentile rank for a 5-day stay\n    -- It will be the same for both outcome rows as it's computed over the entire cohort\n    (SELECT percentile_rank_5day_stay FROM FiveDayStayPercentile) AS percentile_rank_5day_stay_overall_cohort\nFROM\n    OutcomeAggregates AS oa\nORDER BY\n    oa.outcome;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [36:5]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [36:5]\n\nLocation: US\nJob ID: 7f7d5ada-2ec1-4819-b35c-a74e59471f23\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e32ddd3b-2f59-43ab-bc80-830493877eb8\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

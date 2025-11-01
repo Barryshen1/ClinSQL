@@ -1,0 +1,22 @@
+{
+  "query": "I have a 67-year-old female ICU patient. Among female ICU patients aged 62\u201372, show first-24h per-measurement temperature categories (<36.0 / 36.0\u201337.9 / \u226538.0\u00b0C) with mean, median, IQR and AKI rate.",
+  "final_sql": "WITH temp_itemids AS (\n  -- pick itemids that look like temperature measurements\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%temp%'\n     OR LOWER(label) LIKE '%temperature%'\n     OR LOWER(abbreviation) LIKE '%temp%'\n),\n\nfirst_temps AS (\n  -- for each icu stay, get the first temperature measurement within first 24 hours of ICU admission\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    ce.charttime,\n    -- convert F -> C if unit indicates Fahrenheit; otherwise assume Celsius\n    CASE\n      WHEN ce.valuenum IS NULL THEN NULL\n      WHEN LOWER(COALESCE(ce.valueuom, '')) LIKE '%f%' THEN (ce.valuenum - 32) * 5.0/9.0\n      ELSE ce.valuenum\n    END AS temp_c\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = i.stay_id\n  JOIN temp_itemids di\n    ON ce.itemid = di.itemid\n  WHERE i.hadm_id IS NOT NULL\n    AND ce.charttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\n\nfirst_temps_per_stay AS (\n  -- select the earliest valid temperature per stay, filter for plausible temps\n  SELECT\n    ft.subject_id,\n    ft.hadm_id,\n    ft.stay_id,\n    ft.charttime,\n    ft.temp_c\n  FROM (\n    SELECT\n      ft.*,\n      ROW_NUMBER() OVER (PARTITION BY ft.stay_id ORDER BY ft.charttime ASC) AS rn\n    FROM first_temps ft\n  ) ft\n  WHERE rn = 1\n    AND ft.temp_c BETWEEN 30.0 AND 45.0   -- plausible clinical range in Celsius\n),\n\ncohort AS (\n  -- restrict to female patients age 62-72 inclusive\n  SELECT\n    fts.*,\n    p.gender,\n    p.anchor_age\n  FROM first_temps_per_stay fts\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = fts.subject_id\n  WHERE LOWER(p.gender) = 'f'\n    AND p.anchor_age BETWEEN 62 AND 72\n),\n\naki_flags AS (\n  -- admissions with an AKI diagnosis (based on diagnosis description)\n  SELECT DISTINCT\n    d.hadm_id,\n    TRUE AS has_aki\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE LOWER(COALESCE(dd.long_title, '')) LIKE '%acute kidney%'\n     OR LOWER(COALESCE(dd.long_title, '')) LIKE '%acute renal%'\n),\n\n-- aggregate per temperature category, compute quantiles array and AKI counts\nquantiles_per_cat AS (\n  SELECT\n    temp_cat,\n    COUNT(1) AS n_stays,\n    ROUND(AVG(temp_c), 2) AS mean_temp_c,\n    APPROX_QUANTILES(temp_c, 100) AS quantiles,  -- array of percentiles 0..100\n    SUM(CASE WHEN COALESCE(ak.has_aki, FALSE) THEN 1 ELSE 0 END) AS aki_count\n  FROM (\n    SELECT\n      c.*,\n      CASE\n        WHEN temp_c < 36.0 THEN '<36.0'\n        WHEN temp_c >= 38.0 THEN '>=38.0'\n        ELSE '36.0-37.9'\n      END AS temp_cat\n    FROM cohort c\n  ) c\n  LEFT JOIN aki_flags ak\n    ON ak.hadm_id = c.hadm_id\n  GROUP BY temp_cat\n)\n\nSELECT\n  qpc.temp_cat,\n  qpc.n_stays,\n  qpc.mean_temp_c,\n  ROUND(qpc.quantiles[OFFSET(50)], 2) AS median_temp_c,\n  ROUND(qpc.quantiles[OFFSET(25)], 2) AS q1_temp_c,\n  ROUND(qpc.quantiles[OFFSET(75)], 2) AS q3_temp_c,\n  ROUND(qpc.quantiles[OFFSET(75)] - qpc.quantiles[OFFSET(25)], 2) AS iqr_temp_c,\n  ROUND(SAFE_DIVIDE(qpc.aki_count, qpc.n_stays) * 100, 1) AS aki_rate_percent\nFROM quantiles_per_cat qpc\nORDER BY\n  CASE qpc.temp_cat\n    WHEN '<36.0' THEN 1\n    WHEN '36.0-37.9' THEN 2\n    WHEN '>=38.0' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [94:43]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [94:43]\n\nLocation: US\nJob ID: b2275583-0849-4df0-b8ed-f3802ea85d19\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

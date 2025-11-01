@@ -1,0 +1,22 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH ami_hadm AS (\n  -- admissions for female patients age 44-54 that have an AMI diagnosis\n  SELECT DISTINCT a.hadm_id, a.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND (\n      LOWER(COALESCE(d.long_title, '')) LIKE '%acute myocardial%'\n      OR LOWER(COALESCE(d.long_title, '')) LIKE '%acute mi%'\n      OR di.icd_code LIKE '410%'   -- ICD-9 AMI\n      OR di.icd_code LIKE 'I21%'   -- ICD-10 AMI\n    )\n),\n\nfirst_icustay AS (\n  -- pick the first ICU stay for each hadm_id (within the admissions with AMI)\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime\n  FROM (\n    SELECT s.*,\n           ROW_NUMBER() OVER (PARTITION BY s.hadm_id ORDER BY s.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n    WHERE s.hadm_id IS NOT NULL\n  ) s\n  WHERE s.rn = 1\n    AND s.hadm_id IN (SELECT hadm_id FROM ami_hadm)\n),\n\nproc_counts_72h AS (\n  -- correlated count per first ICU stay constrained to 72 hours\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    COALESCE((\n      SELECT COUNT(1)\n      FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n      WHERE pe.stay_id = f.stay_id\n        AND pe.starttime IS NOT NULL\n        AND pe.starttime >= f.intime\n        AND pe.starttime <= TIMESTAMP_ADD(f.intime, INTERVAL 72 HOUR)\n    ), 0) AS proc_count\n  FROM first_icustay f\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.hadm_id = a.hadm_id\n),\n\nquartiled AS (\n  -- assign quartiles based on proc_count distribution\n  SELECT\n    pc.*,\n    NTILE(4) OVER (ORDER BY pc.proc_count) AS quartile\n  FROM proc_counts_72h pc\n)\n\n-- final aggregation per quartile\nSELECT\n  quartile,\n  COUNT(1) AS n_patients,\n  ROUND(AVG(proc_count), 2) AS mean_procedure_count,\n  -- mean hospital LOS in days\n  ROUND(AVG(\n    CASE\n      WHEN admittime IS NOT NULL AND dischtime IS NOT NULL\n        THEN TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0\n      ELSE NULL\n    END\n  ), 2) AS mean_hospital_los_days,\n  -- in-hospital mortality percent\n  ROUND(100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(1), 2) AS in_hospital_mortality_pct\nFROM quartiled\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: pe at [51:14]; reason: invalidQuery, location: query, message: Unrecognized name: pe at [51:14]\n\nLocation: US\nJob ID: b58a3bff-2e45-4144-a4f6-99b07ee5372a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

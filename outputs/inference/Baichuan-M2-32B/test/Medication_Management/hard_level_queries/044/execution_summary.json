@@ -1,0 +1,23 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Calculate birthdate from anchor_year and anchor_age\n    DATE_SUB(\n      DATE(p.anchor_year, 1, 1), \n      INTERVAL p.anchor_age YEAR\n    ) AS birthdate,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd \n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE \n    p.gender = 'F'\n    AND dd.icd_code LIKE 'I26.%'  -- PE codes\n    AND dd.icd_version = 10  -- ICD-10\n),\nage_calculated AS (\n  SELECT \n    *,\n    TIMESTAMP_DIFF(admittime, birthdate, YEAR) AS age\n  FROM eligible_admissions\n),\nfiltered_age AS (\n  SELECT *\n  FROM age_calculated\n  WHERE age BETWEEN 64 AND 74\n),\nmed_complexity AS (\n  SELECT \n    f.hadm_id,\n    COUNT(DISTINCT pr.drug) AS med_count\n  FROM filtered_age f\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr \n    ON f.hadm_id = pr.hadm_id\n    AND pr.starttime BETWEEN f.admittime AND TIMESTAMP_ADD(f.admittime, INTERVAL 24 HOUR)\n  GROUP BY f.hadm_id\n),\nreadmissions_v2 AS (\n  SELECT \n    a1.hadm_id,\n    MAX(CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS readmitted_30d\n  FROM filtered_age a1\n  LEFT JOIN filtered_age a2 \n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.admittime\n    AND a2.admittime <= TIMESTAMP_ADD(a1.dischtime, INTERVAL 30 DAY)\n  GROUP BY a1.hadm_id\n),\ncombined AS (\n  SELECT \n    f.hadm_id,\n    f.admittime,\n    f.dischtime,\n    f.hospital_expire_flag,\n    f.age,\n    f.gender,\n    m.med_count,\n    r.readmitted_30d,\n    TIMESTAMP_DIFF(f.dischtime, f.admittime, DAY) AS los_days,\n    NTILE(3) OVER (ORDER BY m.med_count) AS tertile\n  FROM filtered_age f\n  LEFT JOIN med_complexity m ON f.hadm_id = m.hadm_id\n  LEFT JOIN readmissions_v2 r ON f.hadm_id = r.hadm_id\n)\nSELECT \n  tertile,\n  COUNT(*) AS admissions,\n  MIN(med_count) AS min_med_score,\n  MAX(med_count) AS max_med_score,\n  AVG(los_days) AS avg_los_days,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS mortality_pct,\n  SUM(readmitted_30d) * 100.0 / COUNT(*) AS readmission_pct\nFROM combined\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: FROM_UNIX_DATE at [11:9]; reason: invalidQuery, location: query, message: Function not found: FROM_UNIX_DATE at [11:9]\n\nLocation: US\nJob ID: 0add2c64-4edd-4850-83ea-caf781b6af53\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

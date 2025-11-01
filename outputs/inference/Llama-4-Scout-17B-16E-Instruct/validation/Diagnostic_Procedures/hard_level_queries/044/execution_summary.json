@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 87\u2011year\u2011old man. Among male ICU patients aged 82\u201392 with cardiogenic shock, stratify first\u201124\u2011hour procedure burden into quintiles and report for each quintile mean procedure count, mean hospital LOS in days, and in\u2011hospital mortality percentage.",
+  "final_sql": "WITH \n  -- Identify patients of interest\n  patients_of_interest AS (\n    SELECT \n      a.subject_id, \n      a.hadm_id, \n      i.stay_id,\n      p.anchor_age,\n      a.admittime,\n      a.deathtime,\n      a.hospital_expire_flag,\n      a.dischtime\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.icustays` i \n      ON a.hadm_id = i.hadm_id\n    WHERE \n      p.anchor_age BETWEEN 82 AND 92\n      AND p.gender = 'M'\n      AND EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = a.hadm_id\n        AND d.icd_code IN ('785.52', 'I05.1', 'I06.1', 'I07.1', 'I09.1', 'I11.1', 'I13.1', 'I24.1', 'I25.1', 'I27.1', 'I33.1', 'I40.1', 'I41.1', 'I42.1', 'I43.1', 'I44.1', 'I45.1', 'I46.1', 'I47.1', 'I48.1', 'I49.1', 'I50.1', 'I51.1', 'I52.1')\n      )\n  ),\n  \n  -- Calculate procedure burden in the first 24 hours\n  procedure_burden AS (\n    SELECT \n      pe.subject_id, \n      pe.hadm_id, \n      pe.stay_id,\n      COUNT(*) as procedure_count\n    FROM \n      `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    JOIN \n      patients_of_interest poi \n      ON pe.hadm_id = poi.hadm_id AND pe.stay_id = poi.stay_id\n    WHERE \n      pe.starttime < DATETIME_ADD(poi.admittime, INTERVAL 1 DAY)\n    GROUP BY \n      pe.subject_id, \n      pe.hadm_id, \n      pe.stay_id\n  ),\n  \n  -- Merge with hospital outcomes\n  outcomes AS (\n    SELECT \n      p.subject_id, \n      p.hadm_id, \n      p.stay_id,\n      p.procedure_count,\n      poi.hospital_expire_flag,\n      poi.dischtime,\n      poi.admittime\n    FROM \n      procedure_burden p\n    JOIN \n      patients_of_interest poi \n      ON p.hadm_id = poi.hadm_id\n  ),\n  \n  -- Calculate quintiles\n  quintiles AS (\n    SELECT \n      procedure_count,\n      hospital_expire_flag,\n      dischtime,\n      admittime,\n      NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n    FROM \n      outcomes\n  )\n\n-- Stratify into quintiles and calculate statistics\nSELECT \n  quintile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS mean_hospital_LOS,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) * 100 AS in_hospital_mortality_percentage\nFROM \n  quintiles\nGROUP BY \n  quintile\nORDER BY \n  quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: admittime at [42:36]; reason: invalidQuery, location: query, message: Unrecognized name: admittime at [42:36]\n\nLocation: US\nJob ID: 4c9f69c2-5573-48a4-8901-1527e307cc5e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in GROUP BY at [78:3]; reason: invalidQuery, location: query, message: Analytic function not allowed in GROUP BY at [78:3]\n\nLocation: US\nJob ID: b0e5d81f-16b6-46a9-bad6-f9d97bd950c8\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

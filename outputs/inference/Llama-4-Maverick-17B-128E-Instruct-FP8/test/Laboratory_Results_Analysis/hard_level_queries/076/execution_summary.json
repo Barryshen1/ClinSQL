@@ -1,0 +1,28 @@
+{
+  "query": "For a 92\u2011year\u2011old man with ACS: among male inpatients aged 87\u201397, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u2265P95 report mean LOS, in\u2011hospital mortality, and compare avg critical lab events per patient to general inpatients.",
+  "final_sql": "WITH \n-- Step 1: Filter male patients aged 87-97\neligible_patients AS (\n  SELECT p.subject_id, p.anchor_age, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 87 AND 97\n),\n\n-- Step 2: Identify ACS patients\nacs_patients AS (\n  SELECT DISTINCT e.hadm_id\n  FROM eligible_patients e\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON e.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Acute coronary syndrome%' OR dicd.long_title LIKE '%Myocardial infarction%'\n),\n\n-- Step 3: Calculate 72-hour lab instability score for ACS patients\nlab_instability AS (\n  WITH \n  icu_admissions AS (\n    SELECT i.hadm_id, i.stay_id, i.intime\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN acs_patients a ON i.hadm_id = a.hadm_id\n  ),\n  lab_events AS (\n    SELECT i.stay_id, l.charttime, l.itemid, l.valuenum\n    FROM icu_admissions i\n    JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l ON i.hadm_id = l.hadm_id\n    WHERE l.charttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 72 HOUR)\n  )\n  SELECT stay_id, \n         STDDEV(valuenum) AS lab_instability_score\n  FROM lab_events\n  GROUP BY stay_id\n),\n\n-- Step 4: Calculate 95th percentile of lab instability score\npercentile_95 AS (\n  SELECT PERCENTILE_CONT(lab_instability_score, 0.95) AS p95\n  FROM lab_instability\n),\n\n-- Step 5: Analyze patients >= P95\nhigh_risk_patients AS (\n  SELECT li.stay_id, i.hadm_id, i.intime, i.outtime, i.los, ad.hospital_expire_flag\n  FROM lab_instability li\n  JOIN percentile_95 p ON li.lab_instability_score >= p.p95\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON li.stay_id = i.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` ad ON i.hadm_id = ad.hadm_id\n),\n\n-- Step 6: Report mean LOS, in-hospital mortality, and compare avg critical lab events\nanalysis AS (\n  SELECT \n    AVG(hrp.los) AS mean_los,\n    AVG(CAST(hrp.hospital_expire_flag AS INT64)) AS in_hospital_mortality,\n    (SELECT COUNT(*) FROM `physionet-data.mimiciv_3_1_hosp.labevents` l JOIN high_risk_patients hrp2 ON l.hadm_id = hrp2.hadm_id) / COUNT(DISTINCT hrp.stay_id) AS avg_critical_lab_events\n  FROM high_risk_patients hrp\n)\n\n-- Compare to general inpatients\nSELECT \n  mean_los,\n  in_hospital_mortality,\n  avg_critical_lab_events,\n  (SELECT AVG(los) FROM `physionet-data.mimiciv_3_1_icu.icustays`) AS general_mean_los,\n  (SELECT AVG(CAST(hospital_expire_flag AS INT64)) FROM `physionet-data.mimiciv_3_1_hosp.admissions`) AS general_in_hospital_mortality,\n  (SELECT COUNT(*) FROM `physionet-data.mimiciv_3_1_hosp.labevents` l JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON l.hadm_id = i.hadm_id) / (SELECT COUNT(DISTINCT stay_id) FROM `physionet-data.mimiciv_3_1_icu.icustays`) AS general_avg_critical_lab_events\nFROM analysis;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e8a52302-1bff-4d12-9738-007299360dd1\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: a at [47:42]; reason: invalidQuery, location: query, message: Unrecognized name: a at [47:42]\n\nLocation: US\nJob ID: e348a5fe-a359-4f9d-b15a-c1bfcfde2d95\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside hrp at [59:120]; reason: invalidQuery, location: query, message: Name hadm_id not found inside hrp at [59:120]\n\nLocation: US\nJob ID: 8062978d-6f36-4c66-b48f-178b4ae5a6af\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e8a52302-1bff-4d12-9738-007299360dd1\n"
+    }
+  ]
+}

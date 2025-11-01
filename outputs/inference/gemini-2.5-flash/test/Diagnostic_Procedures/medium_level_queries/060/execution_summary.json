@@ -1,0 +1,22 @@
+{
+  "query": "Among male patients aged 49\u201359 with primary heart failure (patient is 54), for LOS 1\u20134 vs 5\u20137 days stratified by ICU use, what are admission counts and mean CT/MRI per admission?",
+  "final_sql": "WITH PatientAdmissionCohort AS (\n    -- CTE 1: Filter admissions based on demographics and primary diagnosis\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        DATETIME_DIFF(ad.dischtime, ad.admittime, DAY) AS los_days,\n        CASE\n            -- Check if *any* ICU stay exists for this hadm_id using an EXISTS subquery\n            WHEN EXISTS (SELECT 1 FROM `physionet-data.mimiciv_3_1_icu.icustays` icu WHERE icu.hadm_id = ad.hadm_id) THEN 'With ICU Stay'\n            ELSE 'Without ICU Stay'\n        END AS icu_use_status\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pa\n        ON ad.subject_id = pa.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n        ON ad.hadm_id = di.hadm_id AND ad.subject_id = di.subject_id\n    WHERE\n        pa.gender = 'M'\n        AND pa.anchor_age BETWEEN 49 AND 59 -- Filter for age 49-59\n        AND di.seq_num = 1 -- Primary diagnosis\n        AND (di.icd_code LIKE 'I50%' OR di.icd_code LIKE '428%') -- Heart Failure ICD-10 (I50) or ICD-9 (428)\n),\nCTMRICodes AS (\n    -- CTE 2: Identify CT/MRI procedure codes\n    SELECT DISTINCT\n        p.icd_code,\n        p.icd_version\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` AS p\n    WHERE\n        (LOWER(p.long_title) LIKE '%ct scan%' OR LOWER(p.long_title) LIKE '%computed tomography%')\n        OR (LOWER(p.long_title) LIKE '%mri%' OR LOWER(p.long_title) LIKE '%magnetic resonance imaging%')\n),\nAdmissionCTMRICounts AS (\n    -- CTE 3: Count CT/MRI procedures for each admission\n    SELECT\n        pr.hadm_id,\n        COUNT(pr.icd_code) AS ct_mri_count -- Count instances of CT/MRI procedures for this admission\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS pr\n    INNER JOIN\n        CTMRICodes AS ctc\n        ON pr.icd_code = ctc.icd_code AND pr.icd_version = ctc.icd_version\n    GROUP BY\n        pr.hadm_id\n)\nSELECT\n    CASE\n        WHEN pac.los_days BETWEEN 1 AND 4 THEN 'LOS 1-4 Days'\n        WHEN pac.los_days BETWEEN 5 AND 7 THEN 'LOS 5-7 Days'\n        -- Ensure all relevant LOS are covered by the CASE statement, though WHERE clause also filters.\n        ELSE 'Undefined LOS Group' -- Should not be reached with the WHERE clause below.\n    END AS los_group,\n    pac.icu_use_status,\n    COUNT(DISTINCT pac.hadm_id) AS admission_count,\n    AVG(COALESCE(actmri.ct_mri_count, 0)) AS mean_ct_mri_per_admission\nFROM\n    PatientAdmissionCohort AS pac\nLEFT JOIN\n    AdmissionCTMRICounts AS actmri\n    ON pac.hadm_id = actmri.hadm_id\nWHERE\n    pac.los_days BETWEEN 1 AND 7 -- Filter for the specified LOS ranges (1-4 days and 5-7 days)\nGROUP BY\n    los_group,\n    pac.icu_use_status\nORDER BY\n    los_group,\n    pac.icu_use_status;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword NO at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword NO at [1:6]\n\nLocation: US\nJob ID: 78d404d7-0853-419a-bf61-7975ea1c7242\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

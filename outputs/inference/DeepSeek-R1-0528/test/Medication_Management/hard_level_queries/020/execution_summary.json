@@ -1,0 +1,28 @@
+{
+  "query": "I have an 83\u2011year\u2011old female inpatient post\u2011cardiac arrest. For females 78\u201388 years, stratified by tertiles of a 7\u2011day medication complexity score (unique drugs + 2\u00d7 high\u2011risk drugs + routes), report counts, score ranges, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    adm.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n      WHERE \n        diag.subject_id = adm.subject_id\n        AND diag.hadm_id = adm.hadm_id\n        AND REGEXP_CONTAINS(d.long_title, r'(?i)cardiac arrest')\n    )\n),\nfiltered_cohort AS (\n  SELECT \n    *,\n    anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) AS age_at_admission\n  FROM cohort\n  WHERE anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) BETWEEN 78 AND 88\n),\nmedication_complexity AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS unique_drugs,\n    COUNT(DISTINCT \n      CASE \n        WHEN REGEXP_CONTAINS(pr.drug, r'(?i)insulin|warfarin|heparin|morphine|fentanyl|diltiazem|digoxin|epinephrine')\n        THEN pr.drug \n      END\n    ) AS high_risk_drugs,\n    COUNT(DISTINCT pr.route) AS distinct_routes\n  FROM filtered_cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.hadm_id = pr.hadm_id\n    AND pr.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.hadm_id\n),\nreadmission_flags AS (\n  SELECT \n    c.hadm_id,\n    CASE \n      WHEN c.hospital_expire_flag = 1 THEN NULL\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE \n          a2.subject_id = c.subject_id\n          AND a2.hadm_id <> c.hadm_id\n          AND a2.admittime > c.dischtime\n          AND a2.admittime <= DATETIME_ADD(c.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0 \n    END AS readmit_30d\n  FROM filtered_cohort c\n),\ncombined_data AS (\n  SELECT \n    c.*,\n    COALESCE(m.unique_drugs, 0) AS unique_drugs,\n    COALESCE(m.high_risk_drugs, 0) AS high_risk_drugs,\n    COALESCE(m.distinct_routes, 0) AS distinct_routes,\n    COALESCE(m.unique_drugs, 0) + 2 * COALESCE(m.high_risk_drugs, 0) + COALESCE(m.distinct_routes, 0) AS complexity_score,\n    DATETIME_DIFF(c.dischtime, c.admittime, HOUR) / 24.0 AS los_days,\n    r.readmit_30d\n  FROM filtered_cohort c\n  LEFT JOIN medication_complexity m ON c.hadm_id = m.hadm_id\n  LEFT JOIN readmission_flags r ON c.hadm_id = r.hadm_id\n),\ntertiles AS (\n  SELECT \n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM combined_data\n)\nSELECT \n  tertile,\n  COUNT(*) AS count_admissions,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_percent,\n  AVG(readmit_30d) * 100 AS readmission_30d_percent\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"a2\" at [68:11]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"a2\" at [68:11]\n\nLocation: US\nJob ID: 17544d53-2f33-4e35-888b-dab83f73e6f2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword UNNEST at [41:13]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword UNNEST at [41:13]\n\nLocation: US\nJob ID: 4bea7590-db39-4139-9708-3d416b43da2f\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

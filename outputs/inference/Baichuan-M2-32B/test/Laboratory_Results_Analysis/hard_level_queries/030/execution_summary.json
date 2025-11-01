@@ -1,0 +1,17 @@
+{
+  "query": "I have a 44-year-old female inpatient. Among female inpatients 39\u201349 with asthma exacerbation, what is the 75th\u2011percentile lab instability score in the first 48 hours? Compare critical\u2011lab events per admission to all inpatients and report cohort LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH critical_labs AS (\n  SELECT\n    le.hadm_id,\n    COUNT(*) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON le.subject_id = a.subject_id AND le.hadm_id = a.hadm_id\n  WHERE\n    le.flag = 'critical'\n    AND le.charttime BETWEEN a.admittime AND a.admittime + INTERVAL 48 HOUR\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n  GROUP BY le.hadm_id\n),\nbase_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - CAST(p.anchor_year AS INT64)) AS age_at_admission,\n    p.gender,\n    COALESCE(cl.lab_instability_score, 0) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  LEFT JOIN critical_labs cl\n    ON a.hadm_id = cl.hadm_id\n  WHERE\n    a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\nasthma_cohort AS (\n  SELECT\n    ba.hadm_id,\n    ba.age_at_admission,\n    ba.gender,\n    ba.admittime,\n    ba.dischtime,\n    ba.hospital_expire_flag,\n    TIMESTAMP_DIFF(ba.dischtime, ba.admittime, DAY) AS los_days,\n    ba.lab_instability_score\n  FROM base_admissions ba\n  WHERE\n    ba.gender = 'F'\n    AND ba.age_at_admission BETWEEN 39 AND 49\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = ba.subject_id\n        AND d.hadm_id = ba.hadm_id\n        AND d.icd_code = 'J45.901'\n        AND d.icd_version = 10\n    )\n),\nall_inpatients_cohort AS (\n  SELECT\n    ba.hadm_id,\n    ba.admittime,\n    ba.dischtime,\n    ba.hospital_expire_flag,\n    TIMESTAMP_DIFF(ba.dischtime, ba.admittime, DAY) AS los_days,\n    ba.lab_instability_score\n  FROM base_admissions ba\n),\nasthma_agg AS (\n  SELECT\n    'asthma' AS cohort,\n    COUNT(*) AS n_admissions,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los,\n    SUM(hospital_expire_flag) / COUNT(*) AS inhosp_mortality,\n    APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(75)] AS lab_instability_75th,\n    AVG(lab_instability_score) AS critical_labs_per_admission\n  FROM asthma_cohort\n),\nall_inpatients_agg AS (\n  SELECT\n    'all_inpatients' AS cohort,\n    COUNT(*) AS n_admissions,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los,\n    SUM(hospital_expire_flag) / COUNT(*) AS inhosp_mortality,\n    APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(75)] AS lab_instability_75th,\n    AVG(lab_instability_score) AS critical_labs_per_admission\n  FROM all_inpatients_cohort\n)\nSELECT * FROM asthma_agg\nUNION ALL\nSELECT * FROM all_inpatients_agg;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

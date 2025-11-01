@@ -1,0 +1,28 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH cohort AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        p.gender,\n        p.anchor_age,\n        a.insurance,\n        a.admission_location,\n        d.long_title AS principal_dx,\n        TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n        ON a.subject_id = dx.subject_id\n        AND a.hadm_id = dx.hadm_id\n        AND dx.seq_num = 1\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON dx.icd_code = d.icd_code\n        AND dx.icd_version = d.icd_version\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 50 AND 60\n      AND a.insurance = 'Medicare'\n      AND LOWER(a.admission_location) LIKE 'emergency%'\n      AND (\n            LOWER(d.long_title) LIKE '%lower gastrointestinal%'\n         OR LOWER(d.long_title) LIKE '%lower gi%'\n         OR LOWER(d.long_title) LIKE '%rectal bleed%'\n         OR LOWER(d.long_title) LIKE '%rectal bleeding%'\n         OR LOWER(d.long_title) LIKE '%colon bleed%'\n         OR LOWER(d.long_title) LIKE '%colon bleeding%'\n      )\n),\nreadmission_flag AS (\n    SELECT\n        c.*,\n        CASE WHEN EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n            WHERE a2.subject_id = c.subject_id\n              AND a2.admittime > c.dischtime\n              AND a2.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n        ) THEN 1 ELSE 0 END AS readmitted_30d\n    FROM cohort c\n),\nstats AS (\n    SELECT\n        readmitted_30d,\n        COUNT(*) AS n_admissions,\n        -- BigQuery: median via APPROX_QUANTILES\n        APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los,\n        100 * SUM(CASE WHEN los_days > 6 THEN 1 ELSE 0 END) / COUNT(*) AS pct_los_gt6\n    FROM readmission_flag\n    GROUP BY readmitted_30d\n),\noverall_rate AS (\n    SELECT \n        ROUND(100.0 * SUM(CASE WHEN readmitted_30d = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) \n        AS overall_readmission_rate_pct\n    FROM readmission_flag\n)\nSELECT\n    s.readmitted_30d,\n    ROUND(s.median_los, 2) AS median_los_days,\n    ROUND(s.pct_los_gt6, 2) AS pct_los_over_6_days,\n    o.overall_readmission_rate_pct\nFROM stats s\nCROSS JOIN overall_rate o\nORDER BY s.readmitted_30d;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column readmitted_30d which is neither grouped nor aggregated at [51:9]; reason: invalidQuery, location: query, message: SELECT list expression references column readmitted_30d which is neither grouped nor aggregated at [51:9]\n\nLocation: US\nJob ID: ce099e19-5e8e-4ed8-be22-93c1f29b6c40\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references rf.readmitted_30d which is neither grouped nor aggregated at [61:33]; reason: invalidQuery, location: query, message: SELECT list expression references rf.readmitted_30d which is neither grouped nor aggregated at [61:33]\n\nLocation: US\nJob ID: 107191dc-00e2-4b2e-a904-6441f975048b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

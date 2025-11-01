@@ -1,0 +1,16 @@
+{
+  "query": "I have a 90-year-old male with COPD. What's the standard deviation of serum creatinine averaged over the first 24 hours?",
+  "final_sql": "WITH copd_admissions AS (\n  -- admissions that have a COPD diagnosis (ICD-10 J44* or ICD-9 491*,492*,496*), or whose diagnosis description\n  -- mentions COPD / obstructive pulmonary disease\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE (\n    -- ICD-10 COPD codes\n    (d.icd_version = 10 AND LOWER(d.icd_code) LIKE 'j44%')\n    OR\n    -- ICD-9 COPD-related codes\n    (d.icd_version = 9 AND (\n       LOWER(d.icd_code) LIKE '491%' OR LOWER(d.icd_code) LIKE '492%' OR LOWER(d.icd_code) LIKE '496%'\n     ))\n    OR\n    -- fallback: description contains COPD / obstructive pulmonary\n    LOWER(COALESCE(dd.long_title, '')) LIKE '%copd%'\n    OR LOWER(COALESCE(dd.long_title, '')) LIKE '%obstructive pulmonary%'\n  )\n),\n\ncreatinine_items AS (\n  -- lab itemids that look like serum creatinine\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%creatinine%'\n),\n\ncohort_admissions AS (\n  -- admissions for 90-year-old male patients that have COPD diagnoses\n  SELECT a.subject_id, a.hadm_id, a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN copd_admissions c\n    ON a.hadm_id = c.hadm_id\n  WHERE p.anchor_age = 90\n    AND p.gender = 'M'\n),\n\nper_admission_avg_creat AS (\n  -- compute per-admission average serum creatinine within first 24 hours\n  SELECT\n    ca.subject_id,\n    ca.hadm_id,\n    AVG(le.valuenum) AS avg_creatinine\n  FROM cohort_admissions ca\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = ca.hadm_id\n  JOIN creatinine_items di\n    ON le.itemid = di.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND le.charttime >= ca.admittime\n    AND le.charttime <= TIMESTAMP_ADD(ca.admittime, INTERVAL 24 HOUR)\n  GROUP BY ca.subject_id, ca.hadm_id\n  HAVING COUNT(*) >= 1\n)\n\n-- final: standard deviation across per-admission average creatinines\nSELECT\n  COUNT(*) AS n_admissions,\n  ROUND(STDDEV_SAMP(avg_creatinine), 4) AS sd_of_avg_creatinine_mg_per_dL\nFROM per_admission_avg_creat;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

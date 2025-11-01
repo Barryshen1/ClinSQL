@@ -1,0 +1,28 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: females 45-55\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 45 AND 55\n),\n\ntrauma_cohort AS (\n  -- Filter for multi-trauma: >=2 distinct trauma ICD-10 codes (T07 or injury S/T)\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    c.anchor_age,\n    COUNT(DISTINCT CASE \n      WHEN icd.icd_code LIKE 'T07%' \n        OR (icd.icd_code LIKE 'S%' AND LENGTH(icd.icd_code) >= 3)\n        OR (icd.icd_code LIKE 'T3%' OR icd.icd_code LIKE 'T4%' OR icd.icd_code LIKE 'T5%' OR icd.icd_code LIKE 'T6%')\n      THEN icd.icd_code \n    END) AS trauma_count\n  FROM \n    cohort c\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` icd\n  ON c.hadm_id = icd.hadm_id\n  WHERE \n    icd.icd_version = 10\n  GROUP BY \n    c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.hospital_expire_flag, c.anchor_age\n  HAVING \n    trauma_count >= 2  -- Multi-trauma definition\n),\n\nmed_complexity AS (\n  -- Compute distinct meds in first 7 days using pharmacy (more complete than prescriptions)\n  SELECT \n    tc.*,\n    COUNT(DISTINCT LOWER(TRIM(pharm.medication))) AS complexity_score\n  FROM \n    trauma_cohort tc\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.pharmacy` pharm\n  ON tc.subject_id = pharm.subject_id\n    AND tc.hadm_id = pharm.hadm_id\n    AND pharm.medication IS NOT NULL\n    AND pharm.starttime >= tc.admittime\n    AND pharm.starttime < TIMESTAMP_ADD(tc.admittime, INTERVAL 7 DAY)\n  GROUP BY \n    tc.subject_id, tc.hadm_id, tc.admittime, tc.dischtime, tc.hospital_expire_flag, tc.anchor_age\n),\n\ntertiles AS (\n  -- Assign tertiles\n  SELECT \n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM \n    med_complexity\n),\n\nreadmission_flags AS (\n  -- Flag 30-day readmissions\n  SELECT \n    t.*,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` next_a\n        WHERE next_a.subject_id = t.subject_id\n          AND next_a.hadm_id != t.hadm_id\n          AND next_a.admittime > t.dischtime\n          AND next_a.admittime <= TIMESTAMP_ADD(t.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 \n      ELSE 0 \n    END AS has_readmission\n  FROM \n    tertiles t\n)\n\n-- Aggregate metrics by tertile\nSELECT \n  tertile,\n  COUNT(*) AS num_admissions,\n  ROUND(AVG(complexity_score), 2) AS mean_score,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  ROUND(AVG(EXTRACT(DAY FROM (dischtime - admittime))), 2) AS mean_los_days,\n  ROUND((SUM(CAST(hospital_expire_flag AS INT64)) * 100.0 / COUNT(*)), 2) AS mortality_pct,\n  ROUND((SUM(has_readmission) * 100.0 / COUNT(*)), 2) AS readmission_30d_pct\nFROM \n  readmission_flags\nGROUP BY \n  tertile\nORDER BY \n  tertile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Star expansion expression references column trauma_count which is neither grouped nor aggregated at [51:5]; reason: invalidQuery, location: query, message: Star expansion expression references column trauma_count which is neither grouped nor aggregated at [51:5]\n\nLocation: US\nJob ID: a78ee0b1-e689-410c-ba4e-857dc0b701b7\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [31:5]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [31:5]\n\nLocation: US\nJob ID: 5cb1b958-d79f-4324-8add-99aa1ef08005\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Star expansion expression references column trauma_count which is neither grouped nor aggregated at [46:5]; reason: invalidQuery, location: query, message: Star expansion expression references column trauma_count which is neither grouped nor aggregated at [46:5]\n\nLocation: US\nJob ID: 553c2da4-69a5-4cb5-ba76-408539d53804\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Star expansion expression references column trauma_count which is neither grouped nor aggregated at [51:5]; reason: invalidQuery, location: query, message: Star expansion expression references column trauma_count which is neither grouped nor aggregated at [51:5]\n\nLocation: US\nJob ID: a78ee0b1-e689-410c-ba4e-857dc0b701b7\n"
+    }
+  ]
+}

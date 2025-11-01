@@ -1,0 +1,28 @@
+{
+  "query": "I have an 87-year-old male. Among male ICU patients aged 82\u201392, what percentile is a per\u2011stay average temperature of 37.5\u00b0C during the first 24 hours of ICU stay?",
+  "final_sql": "WITH\n-- Get male patients aged 82-92\nmale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 82 AND 92\n),\n\n-- Get ICU stays for these patients\nicu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    male_patients p ON s.subject_id = p.subject_id\n),\n\n-- Get temperature measurements in Celsius during first 24 hours of ICU stay\ntemp_celsius AS (\n  SELECT\n    c.stay_id,\n    c.charttime,\n    CASE\n      WHEN c.itemid = 223762 THEN c.valuenum  -- Already in Celsius\n      WHEN c.itemid = 223761 THEN (c.valuenum - 32) * 5/9  -- Convert F to C\n    END AS temperature_celsius\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN\n    icu_stays s ON c.stay_id = s.stay_id\n  WHERE\n    c.itemid IN (223762, 223761)\n    AND c.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR)\n    AND c.valuenum IS NOT NULL\n    AND (\n      (c.itemid = 223762 AND c.valuenum BETWEEN 30 AND 45) OR\n      (c.itemid = 223761 AND c.valuenum BETWEEN 86 AND 113)\n    )\n),\n\n-- Compute average temperature per stay\navg_temp_per_stay AS (\n  SELECT\n    stay_id,\n    AVG(temperature_celsius) AS avg_temp_celsius\n  FROM\n    temp_celsius\n  GROUP BY\n    stay_id\n  HAVING\n    COUNT(temperature_celsius) >= 1  -- Ensure at least one measurement\n),\n\n-- Calculate percentile rank for each average temperature\ntemp_with_percentile AS (\n  SELECT\n    avg_temp_celsius,\n    PERCENT_RANK() OVER (ORDER BY avg_temp_celsius) AS percentile_rank\n  FROM\n    avg_temp_per_stay\n)\n\n-- Find the percentile rank for 37.5\u00b0C (or closest value)\nSELECT\n  percentile_rank\nFROM\n  temp_with_percentile\nWHERE\n  avg_temp_celsius = (\n    SELECT\n      MAX(avg_temp_celsius)\n    FROM\n      temp_with_percentile\n    WHERE\n      avg_temp_celsius <= 37.5\n  )\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [53:5]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [53:5]\n\nLocation: US\nJob ID: ff7fa437-7812-4f2a-a9a8-48dca24aeb07\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 2 to PERCENTILE_CONT must be between 0 and 1 at [65:37]; reason: invalidQuery, location: query, message: Argument 2 to PERCENTILE_CONT must be between 0 and 1 at [65:37]\n\nLocation: US\nJob ID: 151f8aa5-bbb3-47a8-9f6b-e7862415eb66\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

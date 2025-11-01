@@ -1,0 +1,22 @@
+{
+  "query": "Female patient, 57: among female patients aged 52\u201362 with ischemic versus hemorrhagic stroke, report in\u2011hospital mortality (%), median LOS (<8 vs \u22658 days) and CKD/diabetes prevalence by comorbidity tertile",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM physionet-data.mimiciv_3_1_hosp.patients\n  WHERE gender = 'F' \n    AND anchor_age BETWEEN 52 AND 62\n),\n\nstroke_diagnoses AS (\n  SELECT \n    di.subject_id,\n    di.hadm_id,\n    CASE \n      WHEN di.icd_version = 9 AND SUBSTR(di.icd_code, 1, 3) IN ('430', '431') THEN 'hemorrhagic'\n      WHEN di.icd_version = 10 AND SUBSTR(di.icd_code, 1, 3) IN ('I60', 'I61') THEN 'hemorrhagic'\n      WHEN di.icd_version = 9 AND SUBSTR(di.icd_code, 1, 3) IN ('433', '434', '436') THEN 'ischemic'\n      WHEN di.icd_version = 10 AND SUBSTR(di.icd_code, 1, 3) IN ('I63') THEN 'ischemic'\n      ELSE NULL\n    END AS stroke_type\n  FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n  INNER JOIN patients_filtered p ON di.subject_id = p.subject_id\n  WHERE di.seq_num = 1\n    AND (\n      (di.icd_version = 9 AND SUBSTR(di.icd_code, 1, 3) IN ('430', '431', '433', '434', '436'))\n      OR\n      (di.icd_version = 10 AND SUBSTR(di.icd_code, 1, 3) IN ('I60', 'I61', 'I63'))\n    )\n),\n\ncomorbidity_counts AS (\n  SELECT \n    di.subject_id,\n    SUM(CASE \n      WHEN di.icd_version = 9 AND SUBSTR(di.icd_code, 1, 3) IN ('585', '586') THEN 1\n      WHEN di.icd_version = 10 AND SUBSTR(di.icd_code, 1, 3) IN ('N18') THEN 1\n      ELSE 0\n    END) AS ckd_count,\n    SUM(CASE \n      WHEN di.icd_version = 9 AND SUBSTR(di.icd_code, 1, 3) = '250' THEN 1\n      WHEN di.icd_version = 10 AND SUBSTR(di.icd_code, 1, 3) IN ('E10', 'E11', 'E13') THEN 1\n      ELSE 0\n    END) AS diabetes_count\n  FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n  INNER JOIN patients_filtered p ON di.subject_id = p.subject_id\n  GROUP BY di.subject_id\n),\n\ncomorbidity_tertiles AS (\n  SELECT \n    subject_id,\n    ckd_count,\n    diabetes_count,\n    ckd_count + diabetes_count AS comorbidity_score,\n    NTILE(3) OVER (ORDER BY ckd_count + diabetes_count) AS comorbidity_tertile\n  FROM comorbidity_counts\n),\n\nadmissions_with_los AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE \n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) < 8 THEN '<8'\n      ELSE '>=8'\n    END AS los_category\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  INNER JOIN patients_filtered p ON a.subject_id = p.subject_id\n  WHERE a.dischtime IS NOT NULL\n),\n\nfinal_data AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    a.los_days,\n    a.los_category,\n    ct.comorbidity_tertile,\n    ct.ckd_count,\n    ct.diabetes_count,\n    sd.stroke_type\n  FROM admissions_with_los a\n  INNER JOIN comorbidity_tertiles ct ON a.subject_id = ct.subject_id\n  LEFT JOIN stroke_diagnoses sd ON a.subject_id = sd.subject_id AND a.hadm_id = sd.hadm_id\n)\n\nSELECT\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_pct,\n  AVG(CASE WHEN los_category = '<8' THEN 1.0 ELSE 0.0 END) * 100 AS los_less_than_8_pct,\n  AVG(CASE WHEN los_category = '>=8' THEN 1.0 ELSE 0.0 END) * 100 AS los_greater_equal_8_pct,\n  comorbidity_tertile,\n  AVG(CASE WHEN ckd_count > 0 THEN 1.0 ELSE 0.0 END) * 100 AS ckD_prevalence_pct,\n  AVG(CASE WHEN diabetes_count > 0 THEN 1.0 ELSE 0.0 END) * 100 AS diabetes_prevalence_pct\nFROM final_data\nGROUP BY comorbidity_tertile\nORDER BY comorbidity_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"vs\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"vs\" at [1:15]\n\nLocation: US\nJob ID: 98b5ee97-3fa3-46c0-87cc-7f5a06581ff6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

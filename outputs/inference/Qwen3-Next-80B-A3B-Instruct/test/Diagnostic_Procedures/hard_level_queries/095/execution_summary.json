@@ -1,0 +1,28 @@
+{
+  "query": "For an 84-year-old man: among male ICU patients aged 79\u201389 with pulmonary embolism, what is the 75th percentile of diagnostic utilization score in first 24h, and how do their ICU LOS and in\u2011hospital mortality compare to the general ICU population?",
+  "final_sql": "WITH pe_cohort AS (\n  SELECT DISTINCT\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.los,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON i.hadm_id = a.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON i.subject_id = p.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON i.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 79 AND 89\n    AND (\n      dd.icd_code LIKE '415.1%'  -- ICD-9: pulmonary embolism\n      OR dd.icd_code LIKE 'I26%' -- ICD-10: pulmonary embolism\n      OR LOWER(dd.long_title) LIKE '%pulmonary embolism%'\n    )\n),\n\n-- Select first ICU stay per admission to avoid duplicates\nfirst_icu_stay AS (\n  SELECT *,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n  FROM pe_cohort\n),\n\npe_cohort_first AS (\n  SELECT *\n  FROM first_icu_stay\n  WHERE rn = 1\n),\n\ndiagnostic_scores AS (\n  SELECT\n    p.stay_id,\n    COUNT(DISTINCT ce.itemid) + COUNT(DISTINCT le.itemid) AS diagnostic_count\n  FROM pe_cohort_first p\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.chartevents ce\n    ON p.stay_id = ce.stay_id\n    AND ce.charttime >= p.intime\n    AND ce.charttime < TIMESTAMP_ADD(p.intime, INTERVAL 24 HOUR)\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.labevents le\n    ON p.hadm_id = le.hadm_id\n    AND le.charttime >= p.intime\n    AND le.charttime < TIMESTAMP_ADD(p.intime, INTERVAL 24 HOUR)\n  GROUP BY p.stay_id\n),\n\ncohort_metrics AS (\n  SELECT\n    PERCENTILE_CONT(diagnostic_count, 0.75) AS pct75_diagnostic_score,\n    MEDIAN(los) AS cohort_los,\n    AVG(hospital_expire_flag) AS cohort_mortality_rate\n  FROM pe_cohort_first p\n  LEFT JOIN diagnostic_scores ds ON p.stay_id = ds.stay_id\n),\n\ngeneral_metrics AS (\n  SELECT\n    MEDIAN(los) AS general_los,\n    AVG(a.hospital_expire_flag) AS general_mortality_rate\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON i.hadm_id = a.hadm_id\n)\n\nSELECT\n  cm.pct75_diagnostic_score,\n  cm.cohort_los,\n  cm.cohort_mortality_rate,\n  gm.general_los,\n  gm.general_mortality_rate\nFROM cohort_metrics cm\nCROSS JOIN general_metrics gm;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: MEDIAN at [58:5]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [58:5]\n\nLocation: US\nJob ID: 3f981c6a-0348-4eb2-a53c-f377d5994edf\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]\n\nLocation: US\nJob ID: 9176d4e6-634d-4ea2-9fe0-e04c388bff37\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got identifier \"ILIKE\" at [22:24]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got identifier \"ILIKE\" at [22:24]\n\nLocation: US\nJob ID: fc3ba54f-daa7-4b92-aee4-1798381159e1\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [58:5]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [58:5]\n\nLocation: US\nJob ID: 3f981c6a-0348-4eb2-a53c-f377d5994edf\n"
+    }
+  ]
+}

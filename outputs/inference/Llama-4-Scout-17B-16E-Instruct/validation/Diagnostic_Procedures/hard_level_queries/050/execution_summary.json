@@ -1,0 +1,28 @@
+{
+  "query": "I have an 81-year-old man. Among male ICU patients aged 76\u201386 with acute myocardial infarction, stratified by quartiles of distinct procedures in the first 24 hours, report mean procedure count, mean ICU LOS, and hospital mortality (%) for each quartile.",
+  "final_sql": "WITH \n-- Identify patients of interest\npatients_of_interest AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    i.stay_id,\n    i.intime,\n    p.anchor_age,\n    p.gender,\n    a.hospital_expire_flag,\n    i.los\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` i \n      ON a.hadm_id = i.hadm_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 76 AND 86\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id \n      AND d.icd_code LIKE '410%'\n    )\n),\n\n-- Procedures within the first 24 hours of ICU stay and calculate quartiles\nquartile_cuts AS (\n  SELECT \n    poi.subject_id, \n    poi.hadm_id, \n    poi.stay_id,\n    COUNT(DISTINCT p.icd_code) AS procedure_count,\n    NTILE(4) OVER (ORDER BY COUNT(DISTINCT p.icd_code)) AS quartile\n  FROM \n    patients_of_interest poi\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p \n      ON poi.hadm_id = p.hadm_id\n  WHERE \n    p.chartdate BETWEEN poi.intime AND TIMESTAMP_ADD(poi.intime, INTERVAL 1 DAY)\n  GROUP BY \n    poi.subject_id, \n    poi.hadm_id, \n    poi.stay_id,\n    poi.intime\n),\n\n-- Aggregate statistics for each quartile\nquartile_stats AS (\n  SELECT \n    qc.quartile,\n    AVG(qc.procedure_count) AS mean_procedure_count,\n    AVG(poi.los) AS mean_icu_los,\n    SUM(CASE WHEN poi.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(DISTINCT poi.hadm_id) * 100 AS hospital_mortality\n  FROM \n    quartile_cuts qc\n  JOIN \n    patients_of_interest poi ON qc.hadm_id = poi.hadm_id\n  GROUP BY \n    qc.quartile\n)\n\nSELECT \n  quartile,\n  mean_procedure_count,\n  mean_icu_los,\n  hospital_mortality\nFROM \n  quartile_stats\nORDER BY \n  quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name i not found inside poi at [43:23]; reason: invalidQuery, location: query, message: Name i not found inside poi at [43:23]\n\nLocation: US\nJob ID: 0e2ccf6a-7413-4ce5-9543-89d3de6810cb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside poi at [44:23]; reason: invalidQuery, location: query, message: Name intime not found inside poi at [44:23]\n\nLocation: US\nJob ID: 248b6f43-2f00-4864-ab28-7dba9df1c80e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

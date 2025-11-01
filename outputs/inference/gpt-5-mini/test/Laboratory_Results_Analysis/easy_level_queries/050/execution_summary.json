@@ -1,0 +1,22 @@
+{
+  "query": "I have a 44-year-old male with sepsis; among male sepsis admissions, what is the admission platelet count standard deviation?",
+  "final_sql": "WITH sepsis_adms AS (\n  -- admissions with any diagnosis whose long_title mentions \"sepsis\"\n  -- only hadm_id is needed to avoid duplicate subject_id columns in later joins\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n    ON d.icd_code = diag.icd_code\n   AND d.icd_version = diag.icd_version\n  WHERE LOWER(diag.long_title) LIKE '%sepsis%'\n),\n\nmale_sepsis_adms AS (\n  -- restrict to male patients and keep admittime for time-windowing labs\n  SELECT a.subject_id, a.hadm_id, a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN sepsis_adms s USING (hadm_id)\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p USING (subject_id)\n  WHERE p.gender = 'M'\n),\n\nplatelet_labs_first_24h AS (\n  -- get platelet labs within 24 hours of admission; pick the earliest per admission\n  SELECT\n    ms.subject_id,\n    ms.hadm_id,\n    le.valuenum,\n    le.charttime,\n    ROW_NUMBER() OVER (PARTITION BY ms.hadm_id ORDER BY le.charttime ASC) AS rn\n  FROM male_sepsis_adms ms\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = ms.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` li\n    ON le.itemid = li.itemid\n  WHERE LOWER(li.label) LIKE '%platelet%'\n    AND le.valuenum IS NOT NULL\n    AND le.charttime >= ms.admittime\n    AND le.charttime <= TIMESTAMP_ADD(ms.admittime, INTERVAL 24 HOUR)\n)\n\nSELECT\n  COUNT(1) AS n_admissions_with_platelet,\n  STDDEV_SAMP(valuenum) AS platelet_count_sd\nFROM platelet_labs_first_24h\nWHERE rn = 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column subject_id in USING clause is ambiguous on left side of join at [16:60]; reason: invalidQuery, location: query, message: Column subject_id in USING clause is ambiguous on left side of join at [16:60]\n\nLocation: US\nJob ID: 14d34e63-34da-434c-b8ca-ce6fe81c5a85\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

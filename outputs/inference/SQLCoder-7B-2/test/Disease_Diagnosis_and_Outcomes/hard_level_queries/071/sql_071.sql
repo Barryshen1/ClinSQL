@@ -1,0 +1,1 @@
+SELECT percentile_rank() OVER (ORDER BY f.anchor_age) AS percentile_rank FROM f;

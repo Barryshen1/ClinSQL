@@ -1,0 +1,22 @@
+{
+  "query": "I have an 88-year-old male ICU patient. Among male ICU patients aged 83\u201393, what percentile is a per-stay average MAP of 60 mmHg during the first 48 hours (\u22653 measurements)?",
+  "final_sql": "WITH icustay_cohort AS (\n    -- Step 1: Identify the target patient cohort (male ICU patients aged 83-93)\n    SELECT\n        p.subject_id,\n        ad.hadm_id,\n        ic.stay_id,\n        ic.intime\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` ic\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON ic.hadm_id = ad.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ic.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M'\n        -- Filter by age range at admission\n        AND p.anchor_age BETWEEN 83 AND 93\n),\nmap_measurements_first_48hr AS (\n    -- Step 2 & 3: Extract MAP measurements within the first 48 hours\n    SELECT\n        coh.stay_id,\n        ce.valuenum\n    FROM\n        icustay_cohort coh\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON coh.subject_id = ce.subject_id\n        AND coh.hadm_id = ce.hadm_id\n        AND coh.stay_id = ce.stay_id\n    WHERE\n        ce.itemid = 220052 -- itemid for 'Arterial Blood Pressure mean'\n        AND ce.valuenum IS NOT NULL -- Ensure numeric value exists\n        AND ce.valuenum > 10 AND ce.valuenum < 200 -- Filter for physiologically plausible values\n        -- Filter for measurements within the first 48 hours of ICU stay\n        AND ce.charttime >= coh.intime\n        AND ce.charttime <= DATETIME_ADD(coh.intime, INTERVAL 48 HOUR)\n),\nper_stay_avg_map AS (\n    -- Step 4: Calculate the per-stay average MAP and apply measurement count constraint\n    SELECT\n        stay_id,\n        AVG(valuenum) AS avg_map_48hr,\n        COUNT(valuenum) AS num_measurements\n    FROM\n        map_measurements_first_48hr\n    GROUP BY\n        stay_id\n    HAVING\n        num_measurements >= 3 -- At least 3 measurements required\n)\n-- Step 5: Determine the percentile for the declared map_value_of_interest\nSELECT\n    -- Calculate the percentile: (Count of stays with avg_map <= target_value) / (Total count of stays) * 100\n    CAST(SUM(CASE WHEN avg_map_48hr <= 60 THEN 1 ELSE 0 END) * 100.0 / COUNT(stay_id) AS BIGNUMERIC)\n    AS percentile_for_60_mmhg\nFROM\n    per_stay_avg_map;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: map_value_of_interest at [57:40]; reason: invalidQuery, location: query, message: Unrecognized name: map_value_of_interest at [57:40]\n\nLocation: US\nJob ID: 0d6de1d1-86db-4858-a75c-b05bdfae666c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

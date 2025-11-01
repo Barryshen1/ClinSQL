@@ -1,0 +1,1 @@
+with Hyperosmolar Hyperglycemic State (HHS) versus age-matched ICU controls, focusing on four outcomes during the first 48 hours of ICU stay:;

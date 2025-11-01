@@ -1,0 +1,16 @@
+{
+  "query": "I have a 72-year-old woman admitted with ACS. For females aged 67\u201377 with ACS and initial Troponin T above the 99th percentile, report patient/admission counts and initial troponin mean, median, IQR.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    -- Calculate age at admission\n    (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 67 AND 77\n),\n\nacs_admissions AS (\n  SELECT DISTINCT pa.subject_id, pa.hadm_id, pa.admittime, pa.dischtime\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%myocardial infarction%'\n     OR LOWER(d.long_title) LIKE '%acute coronary syndrome%'\n     OR LOWER(d.long_title) LIKE '%unstable angina%'\n     OR (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%' OR d.icd_code = 'I20.0')\n),\n\ntroponin_t_values AS (\n  SELECT \n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum AS troponin_t_value,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_labitems dl\n    ON le.itemid = dl.itemid\n  WHERE LOWER(dl.label) = 'troponin t'\n    AND le.valuenum IS NOT NULL\n    AND le.charttime IS NOT NULL\n),\n\ninitial_troponin AS (\n  SELECT \n    acs.subject_id,\n    acs.hadm_id,\n    tv.troponin_t_value\n  FROM acs_admissions acs\n  INNER JOIN troponin_t_values tv\n    ON acs.hadm_id = tv.hadm_id\n   AND tv.charttime >= acs.admittime\n   AND tv.rn = 1  -- First (earliest) value in admission\n  WHERE tv.troponin_t_value > 0.014  -- Above 99th percentile\n)\n\nSELECT\n  COUNT(*) AS admission_count,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  AVG(troponin_t_value) AS mean_initial_troponin_t,\n  APPROX_QUANTILES(troponin_t_value, 100)[OFFSET(50)] AS median_initial_troponin_t,\n  APPROX_QUANTILES(troponin_t_value, 100)[OFFSET(25)] AS q1_initial_troponin_t,\n  APPROX_QUANTILES(troponin_t_value, 100)[OFFSET(75)] AS q3_initial_troponin_t\nFROM initial_troponin;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

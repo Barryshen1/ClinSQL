@@ -1,0 +1,16 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH first_icu AS (\n  -- each subject's first ICU stay\n  SELECT *\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) = 1\n),\n\nhepatic_admissions AS (\n  -- admissions with a hepatic failure diagnosis (ICD K72* or text match)\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE\n    -- ICD code family for liver/hepatic failure\n    LOWER(di.icd_code) LIKE 'k72%' \n    OR\n    (\n      LOWER(COALESCE(dd.long_title, '')) LIKE '%hepatic%' \n      AND LOWER(COALESCE(dd.long_title, '')) LIKE '%failure%'\n    )\n    OR LOWER(COALESCE(dd.long_title, '')) LIKE '%liver failure%'\n),\n\nproc_counts AS (\n  -- count distinct procedure codes within first 72 hours of the ICU stay\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    COUNT(DISTINCT p.icd_code) AS proc_count\n  FROM first_icu f\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    ON p.hadm_id = f.hadm_id\n   AND DATE(p.chartdate) BETWEEN DATE(f.intime)\n                            AND DATE(TIMESTAMP_ADD(f.intime, INTERVAL 72 HOUR))\n  GROUP BY f.subject_id, f.hadm_id\n),\n\ncohort AS (\n  -- assemble cohort: male, age 90-100, hepatic failure on the admission, with first ICU stay\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.outtime,\n    f.los,\n    a.hospital_expire_flag\n  FROM first_icu f\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.hadm_id = f.hadm_id\n   AND a.subject_id = f.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = f.subject_id\n  -- filter demographics\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 90 AND 100\n    -- require hepatic failure diagnosis on that admission\n    AND EXISTS (\n      SELECT 1\n      FROM hepatic_admissions h\n      WHERE h.hadm_id = f.hadm_id\n    )\n)\n\n-- final step: attach procedure counts, compute quartiles, aggregate per quartile\nSELECT\n  quartile,\n  COUNT(*) AS n_patients,\n  MIN(proc_count) AS min_procedures,\n  MAX(proc_count) AS max_procedures,\n  ROUND(AVG(proc_count), 2) AS mean_procedures,\n  ROUND(AVG(los), 2) AS mean_icu_los_days,\n  ROUND(100.0 * SUM(CAST(hospital_expire_flag AS INT64)) / COUNT(*), 2) AS inhospital_mortality_pct\nFROM (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COALESCE(pc.proc_count, 0) AS proc_count,\n    c.los,\n    c.hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY COALESCE(pc.proc_count, 0)) AS quartile\n  FROM cohort c\n  LEFT JOIN proc_counts pc\n    ON pc.hadm_id = c.hadm_id\n   AND pc.subject_id = c.subject_id\n)\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

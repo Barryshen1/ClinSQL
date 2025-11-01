@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH hf_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n    -- require at least one HF diagnosis in this admission\n    AND EXISTS (\n      SELECT 1\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n        AND d.icd_version = dd.icd_version\n      WHERE\n        d.subject_id = a.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND LOWER(dd.long_title) LIKE '%heart failure%'\n    )\n),\nhf_los_groups AS (\n  SELECT\n    CASE\n      WHEN los_days < 8 THEN '<8 days'\n      ELSE '>=8 days'\n    END AS los_group,\n    hospital_expire_flag,\n    -- time_to_death in days for non-survivors\n    SAFE_DIVIDE(\n      TIMESTAMP_DIFF(deathtime, admittime, SECOND),\n      86400\n    ) AS time_to_death_days\n  FROM hf_admissions\n)\nSELECT\n  los_group AS los_category,\n  COUNT(*) AS admission_count,\n  100.0 * SUM(CAST(hospital_expire_flag AS INT64)) / COUNT(*) AS mortality_rate_pct,\n  -- median time-to-death among non-survivors\n  APPROX_QUANTILES(\n    CASE WHEN hospital_expire_flag = 1 THEN time_to_death_days END,\n    2\n  )[OFFSET(1)] AS median_time_to_death_days\nFROM hf_los_groups\nGROUP BY los_group\nORDER BY los_group;",
+      "success": true,
+      "error": null,
+      "row_count": 2
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 2
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For a 55\u2011year\u2011old woman, among female patients 50\u201360 with ACS, report p25, p50, p75 diagnostic procedures per admission, stratified by LOS (1\u20134 vs 5\u20138 days) and primary vs secondary diagnosis.",
+  "final_sql": "WITH acs_roles AS (\n  SELECT hadm_id,\n         MAX(CASE WHEN seq_num = 1\n                  AND (icd_code LIKE '410%' OR icd_code LIKE '411%' OR icd_code LIKE '412%' OR icd_code LIKE '413%' OR icd_code LIKE '414%')\n                 THEN 1 ELSE 0 END) AS has_primary,\n         MAX(CASE WHEN seq_num > 1\n                  AND (icd_code LIKE '410%' OR icd_code LIKE '411%' OR icd_code LIKE '412%' OR icd_code LIKE '413%' OR icd_code LIKE '414%')\n                 THEN 1 ELSE 0 END) AS has_secondary\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_version = 9\n  GROUP BY hadm_id\n),\n\nadmissions_age AS (\n  SELECT a.hadm_id,\n         a.subject_id,\n         a.admittime,\n         a.dischtime,\n         (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n),\n\ncohort AS (\n  SELECT aa.hadm_id,\n         aa.subject_id,\n         aa.admittime,\n         aa.dischtime,\n         aa.age_at_admit,\n         TIMESTAMP_DIFF(aa.dischtime, aa.admittime, DAY) AS LOS_days,\n         CASE\n           WHEN TIMESTAMP_DIFF(aa.dischtime, aa.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4'\n           WHEN TIMESTAMP_DIFF(aa.dischtime, aa.admittime, DAY) BETWEEN 5 AND 8 THEN '5-8'\n           ELSE NULL\n         END AS los_group,\n         CASE\n           WHEN ar.has_primary = 1 THEN 'primary'\n           WHEN ar.has_primary = 0 AND ar.has_secondary = 1 THEN 'secondary'\n           ELSE NULL\n         END AS acs_role\n  FROM admissions_age aa\n  LEFT JOIN acs_roles ar\n    ON aa.hadm_id = ar.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON aa.subject_id = p.subject_id\n  WHERE (ar.has_primary = 1 OR ar.has_secondary = 1)\n    AND aa.age_at_admit BETWEEN 50 AND 60\n    AND p.gender IN ('F', 'Female', 'FEMALE')\n),\n\ndiag_counts AS (\n  SELECT c.hadm_id,\n         c.subject_id,\n         c.los_group,\n         c.acs_role,\n         SUM(CASE\n               WHEN UPPER(IFNULL(dip.long_title, '')) LIKE '%DIAGNOSTIC%'\n               THEN 1 ELSE 0\n             END) AS diagnostic_proc_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pc\n    ON c.hadm_id = pc.hadm_id\n   AND c.subject_id = pc.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dip\n    ON pc.icd_code = dip.icd_code\n   AND dip.icd_version = 9\n  GROUP BY c.hadm_id, c.subject_id, c.los_group, c.acs_role\n)\n\nSELECT los_group,\n       acs_role,\n       quantiles[OFFSET(1)] AS p25,\n       quantiles[OFFSET(2)] AS p50,\n       quantiles[OFFSET(3)] AS p75\nFROM (\n  SELECT los_group, acs_role, APPROX_QUANTILES(diagnostic_proc_count, 4) AS quantiles\n  FROM diag_counts\n  WHERE los_group IS NOT NULL AND acs_role IS NOT NULL\n  GROUP BY los_group, acs_role\n) AS t\nORDER BY los_group, acs_role;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [77:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [77:3]\n\nLocation: US\nJob ID: 1498454d-dc4d-48dd-acd2-84fbdadb9319\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

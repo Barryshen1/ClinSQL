@@ -1,0 +1,16 @@
+{
+  "query": "For my 50-year-old female patient: among ICU female patients 45\u201355, what's the IQR of heart rate on ICU day 2+?",
+  "final_sql": "WITH patient_cohort AS (\n    -- Identify female patients aged 45-55 at the time of hospital admission\n    SELECT\n        p.subject_id,\n        adm.hadm_id,\n        p.gender,\n        (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) AS age_at_admission\n    FROM\n        `physionet-data.mimiciv_3_1_hosp`.patients p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp`.admissions adm\n        ON p.subject_id = adm.subject_id\n    WHERE\n        p.gender = 'F'\n        AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 45 AND 55\n),\nicu_heart_rates AS (\n    -- Retrieve heart rate measurements for the identified cohort on ICU day 2+\n    SELECT\n        ce.valuenum AS heart_rate\n    FROM\n        patient_cohort pc\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu`.icustays icu\n        ON pc.subject_id = icu.subject_id AND pc.hadm_id = icu.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu`.chartevents ce\n        ON icu.subject_id = ce.subject_id\n        AND icu.hadm_id = ce.hadm_id\n        AND icu.stay_id = ce.stay_id\n    WHERE\n        ce.itemid = 220045 -- ItemID for 'Heart Rate'\n        AND ce.valuenum IS NOT NULL -- Ensure numeric value exists\n        AND ce.valuenum > 0          -- Filter out biologically impossible low values\n        AND ce.valuenum < 300        -- Filter out biologically impossible high values\n        -- Filter for measurements on ICU day 2 onwards\n        -- DATE_DIFF = 0 means day 1, DATE_DIFF = 1 means day 2, etc.\n        AND DATE_DIFF(DATE(ce.charttime), DATE(icu.intime), DAY) >= 1\n)\n-- Calculate the Interquartile Range (IQR) of heart rate\nSELECT\n    PERCENTILE_CONT(heart_rate, 0.75) OVER() - PERCENTILE_CONT(heart_rate, 0.25) OVER() AS iqr_heart_rate\nFROM\n    icu_heart_rates\nLIMIT 1; -- We only need one row as the IQR is for the entire set;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 63-year-old female ICU patient: among female ICU stays aged 58\u201368, what percentile does a 48\u2011hour per\u2011stay mean MAP of 85 mmHg represent in this cohort?",
+  "final_sql": "WITH\n-- Get female patients aged 58-68\nfemale_patients AS (\n  SELECT\n    subject_id,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 58 AND 68\n),\n\n-- Get their ICU stays\nfemale_icu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    female_patients p ON s.subject_id = p.subject_id\n),\n\n-- Get MAP measurements (assuming itemid 220050 is MAP)\nmap_measurements AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.charttime,\n    c.valuenum AS map_value\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` d ON c.itemid = d.itemid\n  WHERE\n    d.label = 'Mean Arterial Pressure'\n    AND c.valuenum IS NOT NULL\n),\n\n-- Calculate 48-hour mean MAP for each stay\nstay_mean_map AS (\n  SELECT\n    s.stay_id,\n    s.subject_id,\n    s.hadm_id,\n    s.anchor_age,\n    AVG(m.map_value) AS mean_map_48h,\n    COUNT(m.map_value) AS map_count\n  FROM\n    female_icu_stays s\n  LEFT JOIN\n    map_measurements m ON s.stay_id = m.stay_id\n    AND m.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    s.stay_id, s.subject_id, s.hadm_id, s.anchor_age\n  HAVING\n    map_count > 0  -- Only include stays with at least one MAP measurement\n),\n\n-- Calculate percentiles\npercentiles AS (\n  SELECT\n    mean_map_48h,\n    PERCENT_RANK() OVER (ORDER BY mean_map_48h) AS percentile\n  FROM\n    stay_mean_map\n)\n\n-- Final result showing the percentile for 85 mmHg\nSELECT\n  ROUND(MAX(percentile) * 100, 2) AS percentile_for_85_mmHg\nFROM\n  percentiles\nWHERE\n  mean_map_48h <= 85;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name anchor_age not found inside p at [21:7]; reason: invalidQuery, location: query, message: Name anchor_age not found inside p at [21:7]\n\nLocation: US\nJob ID: 56cde9b7-d48f-4cab-a5ac-5cc57e5e41f8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

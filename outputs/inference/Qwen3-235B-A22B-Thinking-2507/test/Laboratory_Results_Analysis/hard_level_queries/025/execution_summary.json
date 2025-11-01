@@ -1,0 +1,23 @@
+{
+  "query": "53\u2011year\u2011old female inpatient. Among female inpatients 48\u201358 with hemorrhagic stroke, what is the 90th\u2011percentile lab\u2011instability score (lab systems with critical values in first 72 h)? For patients \u2265P90 report mortality%, mean LOS, and avg critical labs/patient vs age\u2011matched cohort.",
+  "final_sql": "WITH hemorrhagic_stroke_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code IN ('430','431','432'))\n    OR (icd_version = 10 AND (icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%'))\n),\n\nall_admissions_48_58F AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 48 AND 58\n),\n\nhemorrhagic_admissions_48_58F AS (\n  SELECT a.*\n  FROM all_admissions_48_58F a\n  INNER JOIN hemorrhagic_stroke_admissions h\n    ON a.hadm_id = h.hadm_id\n),\n\nhemorrhagic_lab_metrics AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    COUNT(DISTINCT le.itemid) AS instability_score,\n    COUNT(le.labevent_id) AS total_critical_labs\n  FROM hemorrhagic_admissions_48_58F a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON a.hadm_id = le.hadm_id\n    AND le.charttime >= a.admittime\n    AND le.charttime <= DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND le.flag = 'abnormal'\n  GROUP BY a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n),\n\np90_value AS (\n  SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS p90\n  FROM hemorrhagic_lab_metrics\n),\n\nhigh_instability_group AS (\n  SELECT *\n  FROM hemorrhagic_lab_metrics, p90_value\n  WHERE instability_score >= p90\n),\n\nnon_hemorrhagic_admissions_48_58F AS (\n  SELECT a.*\n  FROM all_admissions_48_58F a\n  LEFT JOIN hemorrhagic_stroke_admissions h\n    ON a.hadm_id = h.hadm_id\n  WHERE h.hadm_id IS NULL\n),\n\ncohort_lab_metrics AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    COUNT(le.labevent_id) AS total_critical_labs\n  FROM non_hemorrhagic_admissions_48_58F a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON a.hadm_id = le.hadm_id\n    AND le.charttime >= a.admittime\n    AND le.charttime <= DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND le.flag = 'abnormal'\n  GROUP BY a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n),\n\nhigh_instability_metrics AS (\n  SELECT \n    'high_instability_group' AS group_name,\n    AVG(hospital_expire_flag) * 100 AS mortality_pct,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(total_critical_labs) AS avg_critical_labs\n  FROM high_instability_group\n),\n\ncohort_metrics AS (\n  SELECT \n    'age_matched_cohort' AS group_name,\n    AVG(hospital_expire_flag) * 100 AS mortality_pct,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(total_critical_labs) AS avg_critical_labs\n  FROM cohort_lab_metrics\n)\n\nSELECT * FROM high_instability_metrics\nUNION ALL\nSELECT * FROM cohort_metrics;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"stroke\" at [1:18]\n\nLocation: US\nJob ID: da4c5a9b-ce9c-4ec4-947e-329e99ee05d1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

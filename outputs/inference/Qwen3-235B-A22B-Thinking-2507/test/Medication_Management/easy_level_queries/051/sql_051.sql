@@ -1,0 +1,25 @@
+WITH filtered_patients AS (
+  SELECT
+    a.subject_id,
+    a.hadm_id
+  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p
+    ON a.subject_id = p.subject_id
+  WHERE p.gender = 'M'
+    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 86 AND 96
+),
+digoxin_durations AS (
+  SELECT
+    TIMESTAMP_DIFF(pr.stoptime, pr.starttime, SECOND) / 86400.0 AS duration_days
+  FROM filtered_patients fp
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr
+    ON fp.subject_id = pr.subject_id AND fp.hadm_id = pr.hadm_id
+  WHERE LOWER(pr.drug) LIKE '%digoxin%'
+    AND pr.stoptime IS NOT NULL
+    AND pr.starttime IS NOT NULL
+    AND pr.stoptime >= pr.starttime
+)
+SELECT
+  APPROX_QUANTILES(duration_days, 1000)[SAFE_OFFSET(750)] 
+  - APPROX_QUANTILES(duration_days, 1000)[SAFE_OFFSET(250)] AS iqr
+FROM digoxin_durations;

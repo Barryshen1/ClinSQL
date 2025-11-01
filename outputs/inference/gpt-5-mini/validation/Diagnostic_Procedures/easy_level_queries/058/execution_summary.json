@@ -1,0 +1,22 @@
+{
+  "query": "For my 91-year-old female patient, among women aged 86\u201396, IQR of distinct mechanical circulatory support procedures per hospitalization?",
+  "final_sql": "WITH mcs_procedure_codes AS (\n  -- Identify ICD procedure codes whose description suggests mechanical circulatory support (ECMO, VAD, IABP, etc.)\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE (\n    LOWER(long_title) LIKE '%ecmo%' OR\n    LOWER(long_title) LIKE '%extracorporeal%' OR\n    LOWER(long_title) LIKE '%ventricular assist%' OR\n    LOWER(long_title) LIKE '%ventricular-assist%' OR\n    LOWER(long_title) LIKE '%ventricular assist device%' OR\n    LOWER(long_title) LIKE '%intra-aortic%' OR\n    LOWER(long_title) LIKE '%balloon pump%' OR\n    LOWER(long_title) LIKE '%iabp%' OR\n    LOWER(long_title) LIKE '%cardiac assist%'\n  )\n),\n\nmcs_counts_by_hadm AS (\n  -- Count distinct MCS procedure ICD codes per hospital admission\n  SELECT\n    p.hadm_id,\n    COUNT(DISTINCT p.icd_code) AS distinct_mcs_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  JOIN mcs_procedure_codes m\n    ON p.icd_code = m.icd_code\n   AND p.icd_version = m.icd_version\n  GROUP BY p.hadm_id\n),\n\nfemale_admissions_86_96 AS (\n  -- All hospital admissions for female patients aged 86-96 (inclusive)\n  SELECT\n    a.hadm_id,\n    a.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n    ON a.subject_id = pt.subject_id\n  WHERE pt.gender = 'F'\n    AND pt.anchor_age BETWEEN 86 AND 96\n)\n\n-- Final aggregation: compute single-row count and quantiles, then select\nSELECT\n  q.quantiles[OFFSET(25)] AS q1_25,\n  q.quantiles[OFFSET(75)] AS q3_75,\n  SAFE_CAST(q.quantiles[OFFSET(75)] AS INT64) - SAFE_CAST(q.quantiles[OFFSET(25)] AS INT64) AS iqr_q3_minus_q1,\n  cnt.n_hospitalizations_included\nFROM (\n  -- single-row: count of included admissions\n  SELECT COUNT(1) AS n_hospitalizations_included\n  FROM female_admissions_86_96\n) AS cnt\nCROSS JOIN (\n  -- single-row: approx percentiles (0..100) of distinct_mcs_count including zeros\n  SELECT APPROX_QUANTILES(distinct_mcs_count, 100) AS quantiles\n  FROM (\n    SELECT COALESCE(m.distinct_mcs_count, 0) AS distinct_mcs_count\n    FROM female_admissions_86_96 fa\n    LEFT JOIN mcs_counts_by_hadm m\n      ON fa.hadm_id = m.hadm_id\n  )\n) AS q;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column quantiles which is neither grouped nor aggregated at [45:3]; reason: invalidQuery, location: query, message: SELECT list expression references column quantiles which is neither grouped nor aggregated at [45:3]\n\nLocation: US\nJob ID: b21a30ff-ad81-4b9b-a06d-ecb982ea3014\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 73-year-old man admitted from a SNF with principal UTI. Among male Medicare patients 68\u201378 admitted from SNF with principal UTI, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of stays >6 days?",
+  "final_sql": "WITH uti_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    REGEXP_CONTAINS(LOWER(long_title), r'urinary tract infection') OR\n    REGEXP_CONTAINS(LOWER(long_title), r'uti')\n),\nbase_cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  INNER JOIN uti_codes\n    ON diag.icd_code = uti_codes.icd_code\n    AND diag.icd_version = uti_codes.icd_version\n  WHERE\n    adm.admission_location = 'TRANSFER FROM SKILLED NURSING FACILITY'\n    AND adm.insurance = 'Medicare'\n    AND pat.gender = 'M'\n    AND diag.seq_num = 1\n    AND (pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year)) BETWEEN 68 AND 78\n),\ncohort_with_readmission AS (\n  SELECT\n    base.*,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` readm\n      WHERE\n        readm.subject_id = base.subject_id\n        AND readm.hadm_id <> base.hadm_id\n        AND readm.admittime > base.dischtime\n        AND readm.admittime <= DATETIME_ADD(base.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmitted_30d\n  FROM base_cohort base\n)\nSELECT\n  '30_day_readmission_rate' AS metric,\n  ROUND(AVG(readmitted_30d) * 100, 2) AS value\nFROM cohort_with_readmission\nUNION ALL\nSELECT\n  'median_los_readmitted' AS metric,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS value\nFROM cohort_with_readmission\nWHERE readmitted_30d = 1\nUNION ALL\nSELECT\n  'median_los_non_readmitted' AS metric,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS value\nFROM cohort_with_readmission\nWHERE readmitted_30d = 0\nUNION ALL\nSELECT\n  'pct_stays_gt_6_days' AS metric,\n  ROUND((COUNTIF(los_days > 6) / COUNT(*)) * 100, 2) AS value\nFROM cohort_with_readmission;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 53-year-old female inpatient. Among female inpatients 48\u201358, compare hemorrhagic stroke vs age\u2011matched controls: first 48\u2011hour medication complexity distribution, outcomes (LOS, mortality) for patients with \u22652 serotonergic drugs versus <2, and LOS/mortality for top complexity quartile.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  WHERE p.gender = 'F'\n),\nadmissions_with_age AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.deathtime,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN patients_filtered p\n    ON a.subject_id = p.subject_id\n  WHERE p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 48 AND 58\n),\nstroke_icd AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE icd_version = 10 \n    AND (icd_code LIKE 'I61%' OR icd_code LIKE 'I62%')\n),\nstroke_patients AS (\n  SELECT DISTINCT a.hadm_id\n  FROM admissions_with_age a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON a.hadm_id = di.hadm_id\n  INNER JOIN stroke_icd s\n    ON di.icd_code = s.icd_code\n),\ncontrol_patients AS (\n  SELECT a.hadm_id\n  FROM admissions_with_age a\n  WHERE NOT EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    WHERE di.hadm_id = a.hadm_id\n      AND di.icd_code IN (SELECT icd_code FROM stroke_icd)\n  )\n),\ncohort AS (\n  SELECT hadm_id, 'stroke' AS cohort_group\n  FROM stroke_patients\n  UNION ALL\n  SELECT hadm_id, 'control' AS cohort_group\n  FROM control_patients\n),\nserotonergic_drugs AS (\n  SELECT drug\n  FROM UNNEST([\n    'Citalopram', 'Escitalopram', 'Fluoxetine', 'Fluvoxamine', 'Paroxetine', 'Sertraline',\n    'Venlafaxine', 'Duloxetine', 'Desvenlafaxine', 'Levomilnacipran', 'Milnacipran',\n    'Amitriptyline', 'Clomipramine', 'Imipramine', 'Doxepin',\n    'Trazodone', 'Nefazodone', 'Mirtazapine',\n    'Sumatriptan', 'Rizatriptan', 'Zolmitriptan', 'Almotriptan', 'Eletriptan', 'Frovatriptan', 'Naratriptan',\n    'Linezolid', 'Tramadol', 'Fentanyl', 'Meperidine', 'Dextromethorphan', 'Lithium', 'Tryptophan'\n  ]) AS drug\n),\ndrug_exposure AS (\n  SELECT\n    p.hadm_id,\n    p.drug,\n    p.starttime\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions p\n  INNER JOIN serotonergic_drugs s\n    ON UPPER(p.drug) = UPPER(s.drug)\n  WHERE p.starttime IS NOT NULL\n),\nfirst_48h_drugs AS (\n  SELECT\n    de.hadm_id,\n    de.drug\n  FROM drug_exposure de\n  INNER JOIN admissions_with_age a\n    ON de.hadm_id = a.hadm_id\n  WHERE de.starttime >= a.admittime\n    AND de.starttime <= DATETIME_ADD(a.admittime, INTERVAL 48 HOUR)\n),\ndrug_count AS (\n  SELECT\n    hadm_id,\n    COUNT(*) AS serotonergic_count\n  FROM first_48h_drugs\n  GROUP BY hadm_id\n),\ncohort_with_drugs AS (\n  SELECT\n    c.hadm_id,\n    c.cohort_group,\n    COALESCE(dc.serotonergic_count, 0) AS serotonergic_count\n  FROM cohort c\n  LEFT JOIN drug_count dc\n    ON c.hadm_id = dc.hadm_id\n),\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (PARTITION BY cohort_group ORDER BY serotonergic_count) AS complexity_quartile\n  FROM cohort_with_drugs\n)\nSELECT\n  q.hadm_id,\n  q.cohort_group,\n  q.serotonergic_count,\n  q.complexity_quartile,\n  DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n  a.hospital_expire_flag AS mortality\nFROM quartiles q\nINNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n  ON q.hadm_id = a.hadm_id;",
+  "execution_success": true,
+  "row_count": 45243,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword TO at [1:24]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword TO at [1:24]\n\nLocation: US\nJob ID: 45e8c3d3-2de0-4c50-a5ba-56a7d5c74654\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 45243,
+      "error": null
+    }
+  ]
+}

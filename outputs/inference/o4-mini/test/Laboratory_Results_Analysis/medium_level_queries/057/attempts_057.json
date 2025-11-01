@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH acs_adms AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%acute%'\n    AND (\n      LOWER(dd.long_title) LIKE '%myocardial infarction%'\n      OR LOWER(dd.long_title) LIKE '%unstable angina%'\n    )\n),\ntroponin_events AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` di\n    ON le.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%troponin t%'\n    AND le.valuenum IS NOT NULL\n),\nfirst_trop AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum AS trop_value\n  FROM troponin_events\n  WHERE rn = 1\n),\nfiltered AS (\n  SELECT\n    ft.subject_id,\n    ft.hadm_id,\n    ft.trop_value\n  FROM first_trop ft\n  JOIN acs_adms a\n    USING(subject_id, hadm_id)\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING(subject_id)\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    USING(subject_id, hadm_id)\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 79 AND 89\n),\ncategorized AS (\n  SELECT\n    CASE\n      WHEN trop_value <= 0.04 THEN 'normal'\n      WHEN trop_value > 0.04 AND trop_value <= 0.1 THEN 'borderline'\n      WHEN trop_value > 0.1 THEN 'elevated'\n    END AS category\n  FROM filtered\n)\nSELECT\n  category,\n  COUNT(*) AS admission_count\nFROM categorized\nGROUP BY category\nORDER BY category;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

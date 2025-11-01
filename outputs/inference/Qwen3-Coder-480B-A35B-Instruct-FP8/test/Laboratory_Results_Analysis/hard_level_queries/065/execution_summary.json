@@ -1,0 +1,16 @@
+{
+  "query": "Consult: 70-year-old woman admitted for lower GI bleeding. For women 65\u201375 with lower GI bleed within first 72 hours, what is the 25th percentile lab instability score? Compare critical lab-event frequency with general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH target_cohort AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age = 70\n    AND LOWER(dd.long_title) LIKE '%lower gastrointestinal hemorrhage%'\n),\n\nlab_scores AS (\n  SELECT\n    tc.hadm_id,\n    COUNT(DISTINCT CASE\n      WHEN l.flag = 'abnormal' OR\n           (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n      THEN l.itemid\n    END) AS instability_score\n  FROM\n    target_cohort tc\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  ON\n    tc.hadm_id = l.hadm_id\n  WHERE\n    l.charttime >= tc.admittime\n    AND l.charttime <= DATETIME_ADD(tc.admittime, INTERVAL 72 HOUR)\n    AND l.valuenum IS NOT NULL\n  GROUP BY\n    tc.hadm_id\n),\n\ngeneral_cohort_labs AS (\n  SELECT\n    l.hadm_id,\n    COUNT(DISTINCT CASE\n      WHEN l.flag = 'abnormal' OR\n           (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n      THEN l.itemid\n    END) AS instability_score\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  WHERE\n    l.valuenum IS NOT NULL\n    AND l.charttime IS NOT NULL\n    AND l.hadm_id IS NOT NULL\n  GROUP BY\n    l.hadm_id\n)\n\nSELECT\n  -- Target cohort stats\n  APPROX_QUANTILES(ls.instability_score, 100)[OFFSET(25)] AS target_25th_percentile_instability,\n  AVG(ls.instability_score) AS target_avg_instability,\n  AVG(gc.instability_score) AS general_avg_instability,\n  AVG(tc.los_days) AS avg_los_days,\n  AVG(tc.hospital_expire_flag) AS mortality_rate\nFROM\n  target_cohort tc\nLEFT JOIN\n  lab_scores ls\nON\n  tc.hadm_id = ls.hadm_id\nCROSS JOIN\n  (SELECT AVG(instability_score) AS instability_score FROM general_cohort_labs) gc;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

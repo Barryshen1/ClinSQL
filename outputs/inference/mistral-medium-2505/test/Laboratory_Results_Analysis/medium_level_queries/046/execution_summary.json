@@ -1,0 +1,16 @@
+{
+  "query": "I have an 88\u2011year\u2011old man with chest pain/AMI and initial troponin T above the 99th percentile. Among male patients aged 83\u201393, provide N, mean age, mean LOS, and troponin summary.",
+  "final_sql": "WITH\n-- Get male patients aged 83-93\nmale_patients AS (\n  SELECT\n    subject_id,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 83 AND 93\n),\n\n-- Get admissions with chest pain/AMI diagnoses\nchest_pain_ami_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    -- Chest pain (R07) or AMI (I21) ICD codes\n    (d.icd_code LIKE 'R07%' OR d.icd_code LIKE 'I21%')\n    AND a.subject_id IN (SELECT subject_id FROM male_patients)\n),\n\n-- Get first troponin T per admission (valuenum > 0.01)\nfirst_troponin AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.valuenum AS troponin_value,\n    ROW_NUMBER() OVER (PARTITION BY l.subject_id, l.hadm_id ORDER BY l.charttime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` di\n    ON l.itemid = di.itemid\n  WHERE\n    di.label = 'Troponin T'\n    AND l.valuenum > 0.01  -- 99th percentile threshold\n    AND l.hadm_id IN (SELECT hadm_id FROM chest_pain_ami_admissions)\n)\n\n-- Final aggregation\nSELECT\n  COUNT(DISTINCT c.subject_id) AS N,\n  AVG(p.anchor_age) AS mean_age,\n  AVG(c.los_days) AS mean_los_days,\n  AVG(f.troponin_value) AS mean_troponin,\n  MIN(f.troponin_value) AS min_troponin,\n  MAX(f.troponin_value) AS max_troponin\nFROM\n  chest_pain_ami_admissions c\nJOIN\n  male_patients p\n  ON c.subject_id = p.subject_id\nJOIN\n  first_troponin f\n  ON c.subject_id = f.subject_id AND c.hadm_id = f.hadm_id AND f.rn = 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

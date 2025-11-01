@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating a 52-year-old woman with intracranial hemorrhage. Among female ICU patients aged 47\u201357 with ICH, what percentile does a first\u201172\u2011hour vital\u2011sign instability score of 75 represent? Also report average ICU length of stay and mortality for the top decile.",
+  "final_sql": "WITH icd_codes AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%intracranial hemorrhage%'\n    OR d.long_title LIKE '%intracerebral hemorrhage%'\n    OR d.long_title LIKE '%subarachnoid hemorrhage%'\n),\npatient_cohort AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag AS mortality\n  FROM `physionet-data.mimiciv_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  JOIN icd_codes ic\n    ON i.hadm_id = ic.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 47 AND 57\n),\nvital_signs AS (\n  SELECT \n    pc.subject_id,\n    pc.hadm_id,\n    pc.stay_id,\n    di.label,\n    ce.charttime,\n    ce.valuenum\n  FROM patient_cohort pc\n  JOIN `physionet-data.mimiciv_icu.chartevents` ce\n    ON pc.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime BETWEEN pc.intime AND DATETIME_ADD(pc.intime, INTERVAL 72 HOUR)\n    AND ce.valuenum IS NOT NULL\n    AND di.label IN (\n      'Heart Rate', \n      'Non Invasive Blood Pressure systolic',\n      'Non Invasive Blood Pressure diastolic',\n      'Respiratory Rate',\n      'SpO2'\n    )\n),\nvital_stddev AS (\n  SELECT \n    stay_id,\n    STDDEV(CASE WHEN label = 'Heart Rate' THEN valuenum END) AS hr_std,\n    STDDEV(CASE WHEN label = 'Non Invasive Blood Pressure systolic' THEN valuenum END) AS sbp_std,\n    STDDEV(CASE WHEN label = 'Non Invasive Blood Pressure diastolic' THEN valuenum END) AS dbp_std,\n    STDDEV(CASE WHEN label = 'Respiratory Rate' THEN valuenum END) AS rr_std,\n    STDDEV(CASE WHEN label = 'SpO2' THEN valuenum END) AS spo2_std\n  FROM vital_signs\n  GROUP BY stay_id\n),\ninstability_scores AS (\n  SELECT \n    vs.stay_id,\n    pc.los,\n    pc.mortality,\n    -- Create composite instability score (0-100 scale)\n    -- Normalize each vital's std dev to 0-100 range using approximate clinical ranges\n    (COALESCE(hr_std, 0)/20 * 25 + \n     COALESCE(sbp_std, 0)/30 * 25 + \n     COALESCE(dbp_std, 0)/20 * 25 + \n     COALESCE(rr_std, 0)/8 * 15 + \n     COALESCE((40-spo2_std), 0)/10 * 10) AS instability_score,\n    PERCENT_RANK() OVER (ORDER BY \n      (COALESCE(hr_std, 0)/20 * 25 + \n       COALESCE(sbp_std, 0)/30 * 25 + \n       COALESCE(dbp_std, 0)/20 * 25 + \n       COALESCE(rr_std, 0)/8 * 15 + \n       COALESCE((40-spo2_std), 0)/10 * 10)\n    ) * 100 AS percentile_rank\n  FROM vital_stddev vs\n  JOIN patient_cohort pc ON vs.stay_id = pc.stay_id\n),\ntop_decile AS (\n  SELECT \n    stay_id,\n    los,\n    mortality,\n    instability_score,\n    percentile_rank\n  FROM instability_scores\n  WHERE percentile_rank >= 90\n)\nSELECT \n  (SELECT percentile_rank \n   FROM instability_scores \n   WHERE instability_score >= 75 \n   ORDER BY instability_score \n   LIMIT 1) AS percentile_for_75,\n  (SELECT AVG(los) FROM top_decile) AS avg_los_top_decile,\n  (SELECT AVG(mortality) FROM top_decile) AS mortality_rate_top_decile\nLIMIT 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "403 Access Denied: Table physionet-data:mimiciv_icu.chartevents: User does not have permission to query table physionet-data:mimiciv_icu.chartevents, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_icu.chartevents: User does not have permission to query table physionet-data:mimiciv_icu.chartevents, or perhaps it does not exist.\n\nLocation: US\nJob ID: f3b9378b-32b1-4808-a4eb-0d4be40836ed\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: quantiles at [42:22]; reason: invalidQuery, location: query, message: Unrecognized name: quantiles at [42:22]\n\nLocation: US\nJob ID: 50a524c6-b09c-4387-b2af-50fa4946d993\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"STDDEV\" at [3:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"STDDEV\" at [3:3]\n\nLocation: US\nJob ID: 07c22a37-be75-4907-8cf7-7b0f952efe27\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "403 Access Denied: Table physionet-data:mimiciv_icu.chartevents: User does not have permission to query table physionet-data:mimiciv_icu.chartevents, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_icu.chartevents: User does not have permission to query table physionet-data:mimiciv_icu.chartevents, or perhaps it does not exist.\n\nLocation: US\nJob ID: f3b9378b-32b1-4808-a4eb-0d4be40836ed\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For a 74-year-old woman: among women 69\u201379 with upper vs lower GI bleed, report in-hospital mortality (%) by LOS (1\u20132, 3\u20135, 6\u20139, \u226510 days) and day\u20111 ICU status, and ICU admission rates.",
+  "final_sql": "WITH \n  -- Identify upper and lower GI bleed cases\n  gi_bleed AS (\n    SELECT \n      di.subject_id,\n      di.hadm_id,\n      CASE \n        WHEN d_icd.long_title LIKE '%Upper GI bleed%' THEN 'Upper GI bleed'\n        WHEN d_icd.long_title LIKE '%Lower GI bleed%' THEN 'Lower GI bleed'\n        ELSE 'Other'\n      END AS bleed_type\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON \n      di.icd_code = d_icd.icd_code AND di.icd_version = d_icd.icd_version\n  ),\n  \n  -- Patient demographics and admission details\n  patient_details AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      p.anchor_age,\n      p.gender,\n      a.admittime,\n      a.dischtime,\n      a.deathtime,\n      a.hospital_expire_flag,\n      TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON \n      a.subject_id = p.subject_id\n  ),\n  \n  -- ICU stay details\n  icu_stays AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      TIMESTAMP_DIFF(outtime, intime, DAY) AS icu_los\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays`\n  ),\n  \n  -- Combine patient details with GI bleed type and ICU stay\n  combined AS (\n    SELECT \n      pd.subject_id,\n      pd.hadm_id,\n      pd.anchor_age,\n      pd.gender,\n      pd.admittime,\n      pd.dischtime,\n      pd.deathtime,\n      pd.hospital_expire_flag,\n      pd.los,\n      gb.bleed_type,\n      CASE \n        WHEN icu.intime IS NOT NULL AND TIMESTAMP_DIFF(icu.intime, pd.admittime, DAY) = 0 THEN 'Yes'\n        ELSE 'No'\n      END AS day1_icu\n    FROM \n      patient_details pd\n    LEFT JOIN \n      gi_bleed gb\n    ON \n      pd.hadm_id = gb.hadm_id\n    LEFT JOIN \n      icu_stays icu\n    ON \n      pd.hadm_id = icu.hadm_id AND pd.admittime = icu.intime\n  )\n\n-- Final analysis\nSELECT \n  bleed_type,\n  CASE \n    WHEN los BETWEEN 1 AND 2 THEN '1-2 days'\n    WHEN los BETWEEN 3 AND 5 THEN '3-5 days'\n    WHEN los BETWEEN 6 AND 9 THEN '6-9 days'\n    ELSE '>=10 days'\n  END AS los_category,\n  day1_icu,\n  COUNT(DISTINCT hadm_id) AS total_patients,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS deaths,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(DISTINCT hadm_id) AS mortality_rate,\n  COUNT(DISTINCT CASE WHEN day1_icu = 'Yes' THEN hadm_id END) / COUNT(DISTINCT hadm_id) AS icu_admission_rate\nFROM \n  combined\nWHERE \n  anchor_age BETWEEN 69 AND 79 AND gender = 'F' AND bleed_type IN ('Upper GI bleed', 'Lower GI bleed')\nGROUP BY \n  bleed_type,\n  los_category,\n  day1_icu\nORDER BY \n  bleed_type,\n  los_category,\n  day1_icu;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [31:7]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [31:7]\n\nLocation: US\nJob ID: 694235c1-60ca-4441-beb9-8713bfdb902b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: icu_stay at [94:28]; reason: invalidQuery, location: query, message: Unrecognized name: icu_stay at [94:28]\n\nLocation: US\nJob ID: 9f06a857-f4e8-4039-8480-d3c03d3fca8a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

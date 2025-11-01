@@ -1,0 +1,28 @@
+{
+  "query": "I have a 65\u2011year\u2011old man admitted with primary pneumonia. In male inpatients aged 60\u201370 with primary pneumonia, what is the 75th percentile of the 72\u2011hour laboratory instability score? Also compare mean critical\u2011event frequency to all inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, p.gender, p.anchor_age, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 60 AND 70\n    AND d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND (\n        d.icd_code LIKE '480%' OR d.icd_code LIKE '481%' OR d.icd_code LIKE '482%' OR\n        d.icd_code LIKE '483%' OR d.icd_code LIKE '484%' OR d.icd_code LIKE '485%' OR\n        d.icd_code LIKE '486%'))\n      OR\n      (d.icd_version = 10 AND (\n        d.icd_code LIKE 'J12%' OR d.icd_code LIKE 'J13%' OR d.icd_code LIKE 'J14%' OR\n        d.icd_code LIKE 'J15%' OR d.icd_code LIKE 'J16%' OR d.icd_code LIKE 'J17%' OR\n        d.icd_code LIKE 'J18%'))\n    )\n),\nlab_instability AS (\n  SELECT\n    le.hadm_id,\n    COUNTIF(\n      (le.valuenum IS NOT NULL) AND (\n        (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower) OR\n        (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper) OR\n        (flag IS NOT NULL AND LOWER(flag) IN ('abnormal','high','low'))\n      )\n    ) AS lab_instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN cohort c ON le.hadm_id = c.hadm_id\n  WHERE le.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY le.hadm_id\n),\ncritical_events_all AS (\n  SELECT\n    a.hadm_id,\n    COUNTIF(ch.warning = 1) AS critical_event_count\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON a.hadm_id = icu.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ch\n    ON icu.stay_id = ch.stay_id\n       AND ch.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n  GROUP BY a.hadm_id\n),\ncritical_events_cohort AS (\n  SELECT\n    c.hadm_id,\n    COUNTIF(ch.warning = 1) AS critical_event_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON c.hadm_id = icu.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ch\n    ON icu.stay_id = ch.stay_id\n       AND ch.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.hadm_id\n)\nSELECT\n  APPROX_QUANTILES(l.lab_instability_score, 100)[OFFSET(75)] AS p75_lab_instability_score,\n  AVG(cc.critical_event_count) AS mean_critical_event_freq_cohort,\n  (SELECT AVG(ca.critical_event_count) FROM critical_events_all ca) AS mean_critical_event_freq_all_inpatients,\n  AVG(TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY)) AS mean_los_days_cohort,\n  AVG(c.hospital_expire_flag) AS mortality_rate_cohort\nFROM cohort c\nLEFT JOIN lab_instability l\n  ON c.hadm_id = l.hadm_id\nLEFT JOIN critical_events_cohort cc\n  ON c.hadm_id = cc.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references l.lab_instability_score which is neither grouped nor aggregated at [63:19]; reason: invalidQuery, location: query, message: SELECT list expression references l.lab_instability_score which is neither grouped nor aggregated at [63:19]\n\nLocation: US\nJob ID: f3612163-1c76-45d6-8df1-7d97db2c2bf4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 49fdc85f-4c8a-4440-9c4f-b4711383fead\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

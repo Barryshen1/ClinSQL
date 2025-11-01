@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 94\u2011year\u2011old man admitted with hemorrhagic stroke. Among male inpatients aged 89\u201399 with hemorrhagic stroke, stratified into quintiles by medication complexity (unique drugs in first 7 hospital days), report LOS, inpatient mortality, and 30\u2011day readmission per quintile.",
+  "final_sql": "WITH stroke_admissions AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los,\n    pat.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 89 AND 99\n    AND REGEXP_CONTAINS(d.icd_code, r'^I6[0-2]')\n  QUALIFY ROW_NUMBER() OVER(PARTITION BY adm.hadm_id ORDER BY diag.seq_num) = 1\n),\n\ndrug_counts AS (\n  SELECT \n    sa.hadm_id,\n    COUNT(DISTINCT pr.drug) AS num_drugs\n  FROM stroke_admissions sa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON sa.hadm_id = pr.hadm_id\n  WHERE DATETIME_DIFF(pr.starttime, sa.admittime, HOUR) BETWEEN 0 AND 168  -- 7 days = 168 hours\n  GROUP BY sa.hadm_id\n),\n\nquintiles AS (\n  SELECT \n    hadm_id,\n    num_drugs,\n    NTILE(5) OVER (ORDER BY num_drugs) AS quintile\n  FROM drug_counts\n),\n\nreadmissions AS (\n  SELECT \n    sa.hadm_id,\n    MAX(\n      CASE WHEN readm.admittime > sa.dischtime \n           AND DATETIME_DIFF(readm.admittime, sa.dischtime, DAY) <= 30 \n           THEN 1 ELSE 0 \n      END\n    ) AS readmit_30day\n  FROM stroke_admissions sa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` readm\n    ON sa.subject_id = readm.subject_id\n    AND readm.admittime != sa.admittime  -- exclude the index admission\n  WHERE sa.hospital_expire_flag = 0\n  GROUP BY sa.hadm_id\n)\n\nSELECT \n  q.quintile,\n  COUNT(*) AS n_admissions,\n  AVG(sa.los) AS avg_los,\n  AVG(sa.hospital_expire_flag) * 100 AS mortality_percent,\n  AVG(COALESCE(r.readmit_30day, 0)) * 100 AS readmit_30day_percent\nFROM stroke_admissions sa\nINNER JOIN quintiles q\n  ON sa.hadm_id = q.hadm_id\nLEFT JOIN readmissions r\n  ON sa.hadm_id = r.hadm_id\nGROUP BY q.quintile\nORDER BY q.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got identifier \"q\" at [63:23]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got identifier \"q\" at [63:23]\n\nLocation: US\nJob ID: 7a229f5c-3390-47cd-9e73-0c26bfa80b37\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

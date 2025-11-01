@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old woman with PE. Among female inpatients aged 74\u201384, within the first 24 hours report medication complexity distribution (mean, min, max, SD), prevalence of QT\u2011prolonging and bleeding\u2011risk drugs, mean complexity percentiles, ICU comparison, and top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH pe_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    dd.icd_code IN ('I260', 'I261', 'I262', 'I263', 'I264', 'I265', 'I266', 'I268', 'I269')\n    AND dd.icd_version = 10\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 74 AND 84\n),\n\nmeds_first24hr AS (\n  SELECT\n    e.hadm_id,\n    COUNT(DISTINCT e.medication) AS med_count,\n    COUNT(DISTINCT CASE \n      WHEN LOWER(e.medication) LIKE '%amiodarone%' \n        OR LOWER(e.medication) LIKE '%sotalol%' \n        OR LOWER(e.medication) LIKE '%levofloxacin%' \n      THEN e.medication \n    END) AS qt_prolonging,\n    COUNT(DISTINCT CASE \n      WHEN LOWER(e.medication) LIKE '%warfarin%' \n        OR LOWER(e.medication) LIKE '%heparin%' \n      THEN e.medication \n    END) AS bleeding_risk\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` e\n  JOIN pe_admissions pa ON e.hadm_id = pa.hadm_id\n  WHERE e.charttime BETWEEN pa.admittime AND DATETIME_ADD(pa.admittime, INTERVAL 24 HOUR)\n  GROUP BY e.hadm_id\n),\n\nmed_complexity_stats AS (\n  SELECT\n    AVG(med_count) AS mean_complexity,\n    MIN(med_count) AS min_complexity,\n    MAX(med_count) AS max_complexity,\n    STDDEV(med_count) AS stddev_complexity\n  FROM meds_first24hr\n),\n\nmean_percentile_stat AS (\n  SELECT AVG(percentile) AS mean_percentile\n  FROM (\n    SELECT med_count, PERCENT_RANK() OVER (ORDER BY med_count) AS percentile\n    FROM meds_first24hr\n  )\n),\n\nicu_flag AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN stay_id IS NOT NULL THEN 1 ELSE 0 END) AS icu_admitted\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\n\nlos_75th_percentile AS (\n  SELECT\n    PERCENTILE_CONT(los_days, 0.75) OVER() AS los_75\n  FROM pe_admissions\n  LIMIT 1\n),\n\nlos_mortality AS (\n  SELECT\n    hadm_id,\n    los_days,\n    hospital_expire_flag\n  FROM pe_admissions\n)\n\nSELECT\n  mcs.mean_complexity,\n  mcs.min_complexity,\n  mcs.max_complexity,\n  mcs.stddev_complexity,\n  mps.mean_percentile,\n  AVG(COALESCE(mf.qt_prolonging, 0)) AS avg_qt_prolonging,\n  AVG(COALESCE(mf.bleeding_risk, 0)) AS avg_bleeding_risk,\n  AVG(COALESCE(icu.icu_admitted, 0)) AS icu_admission_rate,\n  AVG(CASE WHEN lm.los_days >= l75.los_75 THEN 1 ELSE 0 END) AS top_quartile_los_rate,\n  AVG(lm.hospital_expire_flag) AS mortality_rate\nFROM med_complexity_stats mcs\nCROSS JOIN mean_percentile_stat mps\nCROSS JOIN los_75th_percentile l75\nLEFT JOIN meds_first24hr mf ON TRUE\nLEFT JOIN icu_flag icu ON mf.hadm_id = icu.hadm_id\nLEFT JOIN los_mortality lm ON mf.hadm_id = lm.hadm_id\nGROUP BY 1,2,3,4,5, l75.los_75;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic functions cannot be arguments to aggregate functions at [42:5]; reason: invalidQuery, location: query, message: Analytic functions cannot be arguments to aggregate functions at [42:5]\n\nLocation: US\nJob ID: 3f9b43bb-0b9f-47c8-b1ec-204b602b6f59\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic functions cannot be arguments to aggregate functions at [52:5]; reason: invalidQuery, location: query, message: Analytic functions cannot be arguments to aggregate functions at [52:5]\n\nLocation: US\nJob ID: 22e74e3d-0d3b-4e0d-b71c-bf90184db7bd\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

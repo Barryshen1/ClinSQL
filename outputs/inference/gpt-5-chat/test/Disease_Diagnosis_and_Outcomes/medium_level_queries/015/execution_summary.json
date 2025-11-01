@@ -1,0 +1,16 @@
+{
+  "query": "For my 53-year-old female: among female stroke admissions aged 48\u201358, report in\u2011hospital mortality (%) with 95% CIs by ICU vs non\u2011ICU, LOS \u22645 vs >5, and comorbidity burden.",
+  "final_sql": "WITH stroke_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (\n    (icd_version = 9 AND (\n      icd_code LIKE '433%' OR icd_code LIKE '434%' OR icd_code = '436'\n    ))\n    OR\n    (icd_version = 10 AND (\n      icd_code LIKE 'I63%' OR icd_code LIKE 'I61%' OR icd_code = 'I64'\n    ))\n  )\n),\nstroke_admissions AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.hospital_expire_flag,\n         pat.gender,\n         -- calculate age at admission\n         pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN stroke_codes sc\n    ON diag.icd_code = sc.icd_code AND diag.icd_version = sc.icd_version\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) BETWEEN 48 AND 58\n),\nicu_flags AS (\n  SELECT hadm_id, 1 AS icu_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\ncomorbidity_counts AS (\n  SELECT di.hadm_id,\n         COUNT(DISTINCT di.icd_code) AS comorb_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  LEFT JOIN stroke_codes sc\n    ON di.icd_code = sc.icd_code AND di.icd_version = sc.icd_version\n  WHERE sc.icd_code IS NULL  -- exclude stroke codes\n  GROUP BY di.hadm_id\n),\nfinal_cohort AS (\n  SELECT sa.hadm_id,\n         sa.subject_id,\n         sa.hospital_expire_flag,\n         IFNULL(ic.icu_flag,0) AS icu_flag,\n         CASE WHEN DATE_DIFF(sa.dischtime, sa.admittime, DAY) <= 5 THEN '<=5' ELSE '>5' END AS los_group,\n         cc.comorb_count,\n         CASE WHEN cc.comorb_count = 0 THEN '0'\n              WHEN cc.comorb_count BETWEEN 1 AND 2 THEN '1-2'\n              ELSE '>=3' END AS comorb_category\n  FROM stroke_admissions sa\n  LEFT JOIN icu_flags ic ON sa.hadm_id = ic.hadm_id\n  LEFT JOIN comorbidity_counts cc ON sa.hadm_id = cc.hadm_id\n)\nSELECT\n  icu_flag,\n  los_group,\n  comorb_category,\n  COUNT(*) AS n_admissions,\n  SUM(hospital_expire_flag) AS n_deaths,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 1) AS mortality_percent,\n  ROUND(100 * (SUM(hospital_expire_flag) / COUNT(*) - 1.96 * SQRT((SUM(hospital_expire_flag) / COUNT(*)) * (1 - SUM(hospital_expire_flag) / COUNT(*)) / COUNT(*))), 1) AS ci_lower_percent,\n  ROUND(100 * (SUM(hospital_expire_flag) / COUNT(*) + 1.96 * SQRT((SUM(hospital_expire_flag) / COUNT(*)) * (1 - SUM(hospital_expire_flag) / COUNT(*)) / COUNT(*))), 1) AS ci_upper_percent\nFROM final_cohort\nGROUP BY icu_flag, los_group, comorb_category\nORDER BY icu_flag DESC, los_group, comorb_category;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

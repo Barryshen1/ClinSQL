@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating an 80\u2011year\u2011old man. For male inpatients aged 75\u201385 with hepatic failure, during the first 48 hours what was the cohort\u2019s maximum instability score, mortality, average LOS, and how did critical lab frequencies compare to general inpatients?",
+  "final_sql": "WITH \nhepatic_cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    DATETIME_ADD(adm.admittime, INTERVAL 48 HOUR) AS adm_48hr\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE \n    pat.gender = 'M'\n    AND pat.anchor_age + EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year BETWEEN 75 AND 85\n    AND adm.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE \n        (icd_version = 9 AND icd_code IN ('570','571','572.2','572.3','572.4','572.8','573.3','573.4'))\n        OR \n        (icd_version = 10 AND icd_code IN ('K72.0','K72.1','K72.9','K76.2','K76.5','K76.6','K76.7'))\n    )\n),\ncontrol_cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    DATETIME_ADD(adm.admittime, INTERVAL 48 HOUR) AS adm_48hr\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE \n    pat.gender = 'M'\n    AND pat.anchor_age + EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year BETWEEN 75 AND 85\n    AND adm.hadm_id NOT IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE \n        (icd_version = 9 AND icd_code IN ('570','571','572.2','572.3','572.4','572.8','573.3','573.4'))\n        OR \n        (icd_version = 10 AND icd_code IN ('K72.0','K72.1','K72.9','K76.2','K76.5','K76.6','K76.7'))\n    )\n),\nhepatic_instability AS (\n  SELECT \n    hc.hadm_id,\n    COUNT(DISTINCT dlab.category) AS instability_score\n  FROM hepatic_cohort hc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON hc.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN hc.admittime AND hc.adm_48hr\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dlab\n    ON le.itemid = dlab.itemid\n  WHERE \n    le.flag IS NOT NULL \n    AND (le.flag LIKE '%panic%')\n  GROUP BY hc.hadm_id\n),\nhepatic_labs AS (\n  SELECT \n    hc.hadm_id,\n    COUNT(*) AS critical_lab_count\n  FROM hepatic_cohort hc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON hc.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN hc.admittime AND hc.adm_48hr\n  WHERE \n    le.flag IS NOT NULL \n    AND (le.flag LIKE '%panic%')\n  GROUP BY hc.hadm_id\n),\ncontrol_labs AS (\n  SELECT \n    cc.hadm_id,\n    COUNT(*) AS critical_lab_count\n  FROM control_cohort cc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON cc.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN cc.admittime AND cc.adm_48hr\n  WHERE \n    le.flag IS NOT NULL \n    AND (le.flag LIKE '%panic%')\n  GROUP BY cc.hadm_id\n),\nhepatic_summary AS (\n  SELECT \n    'Hepatic failure cohort' AS cohort_type,\n    MAX(COALESCE(hi.instability_score, 0)) AS max_instability_score,\n    AVG(hc.hospital_expire_flag) * 100 AS mortality_percentage,\n    AVG(hc.los_days) AS avg_los_days,\n    AVG(COALESCE(hl.critical_lab_count, 0)) AS avg_critical_labs_per_patient\n  FROM hepatic_cohort hc\n  LEFT JOIN hepatic_instability hi ON hc.hadm_id = hi.hadm_id\n  LEFT JOIN hepatic_labs hl ON hc.hadm_id = hl.hadm_id\n  GROUP BY cohort_type\n),\ncontrol_summary AS (\n  SELECT \n    'Control cohort' AS cohort_type,\n    NULL AS max_instability_score,\n    AVG(cc.hospital_expire_flag) * 100 AS mortality_percentage,\n    AVG(cc.los_days) AS avg_los_days,\n    AVG(COALESCE(cl.critical_lab_count, 0)) AS avg_critical_labs_per_patient\n  FROM control_cohort cc\n  LEFT JOIN control_labs cl ON cc.hadm_id = cl.hadm_id\n  GROUP BY cohort_type\n)\nSELECT * FROM hepatic_summary\nUNION ALL\nSELECT * FROM control_summary;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [25:2]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [25:2]\n\nLocation: US\nJob ID: 393e6590-b96a-437a-8b46-04b013e6e3e4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [25:2]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [25:2]\n\nLocation: US\nJob ID: 55dbc570-9905-44a7-a670-1199521f50b7\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

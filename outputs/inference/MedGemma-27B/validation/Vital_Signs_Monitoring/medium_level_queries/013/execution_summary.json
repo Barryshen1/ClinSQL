@@ -1,0 +1,17 @@
+{
+  "query": "I have a 56\u2011year\u2011old male in the ICU. Among male ICU patients aged 51\u201361, categorize first\u201148\u2011hour per\u2011stay average SpO2 (<90, 90\u201392, 93\u201395, >95) and report patient counts and AKI rates.",
+  "final_sql": "WITH PatientDemographics AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age AS age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n), ICUStays AS (\n  SELECT\n    ic.subject_id,\n    ic.stay_id,\n    ic.intime,\n    ic.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n), SpO2Measurements AS (\n  SELECT\n    ce.subject_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum AS spo2_value\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n  WHERE\n    ce.itemid = 4070 -- SpO2 itemid\n), First48HoursSpO2 AS (\n  SELECT\n    s.subject_id,\n    s.stay_id,\n    s.spo2_value,\n    s.charttime\n  FROM\n    SpO2Measurements AS s\n  INNER JOIN\n    ICUStays AS ic\n    ON s.subject_id = ic.subject_id AND s.stay_id = ic.stay_id\n  WHERE\n    s.charttime BETWEEN ic.intime AND TIMESTAMP_ADD(ic.intime, INTERVAL 48 HOUR)\n), AvgSpO2PerStay AS (\n  SELECT\n    stay_id,\n    AVG(spo2_value) AS avg_spo2\n  FROM\n    First48HoursSpO2\n  GROUP BY\n    stay_id\n), SpO2Categories AS (\n  SELECT\n    stay_id,\n    CASE\n      WHEN avg_spo2 < 90 THEN '<90'\n      WHEN avg_spo2 >= 90 AND avg_spo2 <= 92 THEN '90-92'\n      WHEN avg_spo2 > 92 AND avg_spo2 <= 95 THEN '93-95'\n      ELSE '>95'\n    END AS spo2_category\n  FROM\n    AvgSpO2PerStay\n), AKI AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    1 AS aki_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.inputevents` AS ie\n  WHERE\n    ie.itemid = 220187 -- Urine Output itemid\n    AND ie.valuenum < 500 -- Urine output < 500 ml/24h\n    AND ie.rateuom = 'mL/hr'\n    AND ie.amountuom = 'mL'\n    AND ie.starttime BETWEEN (\n      SELECT\n        ic.intime\n      FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n      WHERE\n        ic.subject_id = ie.subject_id AND ic.stay_id = ie.stay_id\n    ) AND (\n      SELECT\n        TIMESTAMP_ADD(ic.intime, INTERVAL 48 HOUR)\n      FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n      WHERE\n        ic.subject_id = ie.subject_id AND ic.stay_id = ie.stay_id\n    )\n)\nSELECT\n  sc.spo2_category,\n  COUNT(DISTINCT sc.stay_id) AS patient_count,\n  COUNT(DISTINCT CASE WHEN aki.aki_flag = 1 THEN aki.stay_id ELSE NULL END) AS aki_rate\nFROM\n  SpO2Categories AS sc\nLEFT JOIN\n  AKI AS aki\n  ON sc.stay_id = aki.stay_id\nINNER JOIN\n  ICUStays AS ic\n  ON sc.stay_id = ic.stay_id\nINNER JOIN\n  PatientDemographics AS pd\n  ON ic.subject_id = pd.subject_id\nWHERE\n  pd.gender = 'M' AND pd.age BETWEEN 51 AND 61\nGROUP BY\n  sc.spo2_category\nORDER BY\n  sc.spo2_category;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name valuenum not found inside ie at [68:12]; reason: invalidQuery, location: query, message: Name valuenum not found inside ie at [68:12]\n\nLocation: US\nJob ID: 00898c43-3679-4fb7-ac38-c7197602f3b2\n",
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name valuenum not found inside ie at [68:12]; reason: invalidQuery, location: query, message: Name valuenum not found inside ie at [68:12]\n\nLocation: US\nJob ID: 00898c43-3679-4fb7-ac38-c7197602f3b2\n"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+SELECT intime FROM `physionet-data.mimiciv_3_1_icu.icustays` i2 WHERE i2.stay_id = ce_inner.stay_id)
+                                AND DATETIME_ADD((SELECT intime FROM `physionet-data.mimiciv_3_1_icu.icustays` i2 WHERE i2.stay_id = ce_inner.stay_id), INTERVAL 48 HOUR);

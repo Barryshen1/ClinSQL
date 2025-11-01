@@ -1,0 +1,28 @@
+{
+  "query": "For a 65-year-old man: among male ICU patients aged 60\u201370 with intracranial hemorrhage (first ICU stay), what is the 75th percentile of procedure burden in the first 72h? Report mean ICU LOS (days) and hospital mortality versus general ICU population.",
+  "final_sql": "WITH base_stays AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    EXTRACT(YEAR FROM i.intime) - p.anchor_year + p.anchor_age AS approx_age,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime ASC) AS rn_stay,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON i.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON i.hadm_id = a.hadm_id\n),\nfirst_stays AS (\n  SELECT * \n  FROM base_stays \n  WHERE rn_stay = 1\n),\nich_hadms AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND (icd_code LIKE '430%' OR icd_code LIKE '431%' OR icd_code LIKE '432%')) OR\n    (icd_version = 10 AND (icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%'))\n  )\n),\ncohort AS (\n  SELECT fs.*\n  FROM first_stays fs\n  INNER JOIN ich_hadms ih \n    ON fs.hadm_id = ih.hadm_id\n  WHERE fs.gender = 'M' \n    AND fs.approx_age BETWEEN 60 AND 70\n),\nproc_burden_cohort AS (\n  SELECT \n    pe.stay_id,\n    COUNT(*) AS procedure_burden\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  INNER JOIN cohort c \n    ON pe.stay_id = c.stay_id\n  WHERE pe.starttime >= c.intime\n    AND pe.starttime < TIMESTAMP_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY pe.stay_id\n),\ncohort_metrics AS (\n  SELECT \n    PERCENTILE_CONT(COALESCE(pbc.procedure_burden, 0), 0.75) AS p75_procedure_burden,\n    AVG(c.los) AS cohort_mean_los,\n    AVG(CAST(c.hospital_expire_flag AS FLOAT64)) AS cohort_mortality\n  FROM cohort c\n  LEFT JOIN proc_burden_cohort pbc \n    ON c.stay_id = pbc.stay_id\n),\ngeneral_metrics AS (\n  SELECT \n    (SELECT AVG(los) FROM `physionet-data.mimiciv_3_1_icu.icustays`) AS general_mean_los,\n    (SELECT AVG(CAST(a.hospital_expire_flag AS FLOAT64))\n     FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n     INNER JOIN (SELECT DISTINCT hadm_id FROM `physionet-data.mimiciv_3_1_icu.icustays`) i\n       ON a.hadm_id = i.hadm_id) AS general_mortality\n)\nSELECT \n  cm.p75_procedure_burden,\n  cm.cohort_mean_los,\n  cm.cohort_mortality,\n  gm.general_mean_los,\n  gm.general_mortality\nFROM cohort_metrics cm\nCROSS JOIN general_metrics gm;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f0a5b46c-3003-47b6-b3a9-0666f979eded\n",
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [30:6]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [30:6]\n\nLocation: US\nJob ID: c58690db-5dab-4fee-a537-8fe56c4e3f21\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [57:40]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [57:40]\n\nLocation: US\nJob ID: d283bce0-ebca-485c-9182-3108317011cc\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f0a5b46c-3003-47b6-b3a9-0666f979eded\n"
+    }
+  ]
+}

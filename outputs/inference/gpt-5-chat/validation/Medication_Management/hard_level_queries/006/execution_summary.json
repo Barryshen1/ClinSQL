@@ -1,0 +1,28 @@
+{
+  "query": "For a 42\u2011year\u2011old man with a postoperative ICU admission, among male inpatients aged 37\u201347, compute medication complexity over the first 72 hours, stratify into quintiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per quintile and estimate his risk.",
+  "final_sql": "WITH surgical_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    icu.intime,\n    icu.outtime,\n    icu.los\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON a.hadm_id = icu.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n    ON a.hadm_id = pr.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dpr\n    ON pr.icd_code = dpr.icd_code\n    AND pr.icd_version = dpr.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND UPPER(dpr.long_title) LIKE '%SURG%'\n),\nmed_complexity AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    COUNT(DISTINCT prx.drug) AS med_complexity\n  FROM surgical_cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` prx\n    ON c.hadm_id = prx.hadm_id\n    AND prx.starttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.stay_id\n),\nquintiles AS (\n  SELECT\n    mc.*,\n    NTILE(5) OVER (ORDER BY med_complexity) AS complexity_quintile\n  FROM med_complexity mc\n),\nreadmission AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    CASE \n      WHEN MIN(ra.admittime) <= DATETIME_ADD(MIN(a.dischtime), INTERVAL 30 DAY)\n           AND MIN(ra.admittime) > MIN(a.dischtime)\n      THEN 1 ELSE 0 \n    END AS readmit_30d\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` ra\n    ON a.subject_id = ra.subject_id\n    AND ra.hadm_id <> a.hadm_id\n    AND ra.admittime > a.dischtime\n  GROUP BY a.subject_id, a.hadm_id\n),\ncohort_with_quintile AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.anchor_age,\n    q.med_complexity,\n    q.complexity_quintile,\n    c.los,\n    c.hospital_expire_flag,\n    r.readmit_30d\n  FROM surgical_cohort c\n  JOIN quintiles q\n    ON c.subject_id = q.subject_id\n    AND c.stay_id = q.stay_id\n  LEFT JOIN readmission r\n    ON c.subject_id = r.subject_id\n    AND c.hadm_id = r.hadm_id\n),\nagg_per_quintile AS (\n  SELECT\n    complexity_quintile,\n    COUNT(*) AS n_stays,\n    AVG(los) AS avg_icu_los_days,\n    AVG(hospital_expire_flag) AS inhospital_mortality_rate,\n    AVG(readmit_30d) AS readmit_30d_rate\n  FROM cohort_with_quintile\n  GROUP BY complexity_quintile\n)\nSELECT\n  a.*,\n  idx.med_complexity AS index_patient_med_complexity,\n  idx.complexity_quintile AS index_patient_quintile,\n  qavg.avg_icu_los_days AS index_patient_quintile_avg_los,\n  qavg.inhospital_mortality_rate AS index_patient_quintile_mortality,\n  qavg.readmit_30d_rate AS index_patient_quintile_readmit_rate\nFROM agg_per_quintile a\nJOIN (\n  -- pick index patient: 42yo male postoperative ICU (first match)\n  SELECT *\n  FROM cohort_with_quintile\n  WHERE anchor_age = 42\n  LIMIT 1\n) idx\n  ON a.complexity_quintile = idx.complexity_quintile\nJOIN agg_per_quintile qavg\n  ON idx.complexity_quintile = qavg.complexity_quintile\nORDER BY complexity_quintile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references a.dischtime which is neither grouped nor aggregated at [49:49]; reason: invalidQuery, location: query, message: SELECT list expression references a.dischtime which is neither grouped nor aggregated at [49:49]\n\nLocation: US\nJob ID: 6fe78c1c-533d-4ee9-8603-c26d2a3fcd2a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: anchor_age at [101:9]; reason: invalidQuery, location: query, message: Unrecognized name: anchor_age at [101:9]\n\nLocation: US\nJob ID: 172ce759-3843-4e10-a52f-1c444c1cbee6\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

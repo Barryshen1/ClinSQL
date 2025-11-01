@@ -1,0 +1,22 @@
+{
+  "query": "For my 54-year-old male, among men aged 49\u201359 whose initial Troponin T exceeded the dataset 99th-percentile ULN, report cohort size, ULN, p25, median (p50), p75 and value range.",
+  "final_sql": "WITH troponin_t_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\n\n-- Step 2: Define cohort: men aged 49\u201359\ncohort AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 49 AND 59\n),\n\n-- Step 3: Get initial Troponin T per admission\ninitial_troponin AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    MIN(l.charttime) AS initial_charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN troponin_t_items tti ON l.itemid = tti.itemid\n  JOIN cohort c ON l.subject_id = c.subject_id\n  WHERE l.valuenum IS NOT NULL\n    AND l.valuenum > 0\n  GROUP BY l.subject_id, l.hadm_id\n),\n\n-- Step 4: Get initial Troponin T value for each admission\ninitial_troponin_values AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.valuenum AS initial_troponin_t\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN initial_troponin it\n    ON l.subject_id = it.subject_id\n    AND l.hadm_id = it.hadm_id\n    AND l.charttime = it.initial_charttime\n  JOIN troponin_t_items tti ON l.itemid = tti.itemid\n)\n\n-- Step 5: Calculate ULN (99th percentile) for initial Troponin T in cohort\n, uln AS (\n  SELECT\n    APPROX_QUANTILES(initial_troponin_t, 100)[OFFSET(99)] AS uln_99\n  FROM initial_troponin_values\n)\n\n-- Step 6: Filter admissions where initial Troponin T > ULN\n, cohort_exceeding_uln AS (\n  SELECT\n    itv.subject_id,\n    itv.hadm_id,\n    itv.initial_troponin_t\n  FROM initial_troponin_values itv\n  CROSS JOIN uln\n  WHERE itv.initial_troponin_t > uln.uln_99\n)\n\n-- Step 7: Summary statistics\nSELECT\n  COUNT(*) AS cohort_size,\n  (SELECT uln_99 FROM uln) AS uln_99th_percentile,\n  APPROX_QUANTILES(initial_troponin_t, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(initial_troponin_t, 2)[OFFSET(1)] AS median,\n  APPROX_QUANTILES(initial_troponin_t, 4)[OFFSET(3)] AS p75,\n  MIN(initial_troponin_t) AS min_value,\n  MAX(initial_troponin_t) AS max_value\nFROM cohort_exceeding_uln;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references uln.uln_99 which is neither grouped nor aggregated at [64:3]; reason: invalidQuery, location: query, message: SELECT list expression references uln.uln_99 which is neither grouped nor aggregated at [64:3]\n\nLocation: US\nJob ID: 6dfa48e9-81c6-4a96-9f04-7ecaa240eb56\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For a 57-year-old female ICU patient: among female ICU patients aged 52\u201362 who received renal replacement therapy, what percentile is a first\u201172\u2011hour vital-sign instability score of 65? Also report mean ICU length of stay and mortality for the top decile.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON p.subject_id = i.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  INNER JOIN (\n    SELECT DISTINCT\n      subject_id,\n      stay_id\n    FROM `physionet-data.mimiciv_3_1_icu.procedureevents`\n    WHERE itemid IN (220339, 225456, 225457, 225467, 225468)\n  ) r\n    ON i.subject_id = r.subject_id\n    AND i.stay_id = r.stay_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 52 AND 62\n),\nvitals AS (\n  SELECT\n    c.stay_id,\n    COUNT(ce.itemid) AS total_vitals,\n    SUM(\n      CASE\n        WHEN ce.itemid = 220045 AND (ce.valuenum < 60 OR ce.valuenum > 100) THEN 1\n        WHEN ce.itemid = 220179 AND (ce.valuenum < 90 OR ce.valuenum > 180) THEN 1\n        WHEN ce.itemid = 220180 AND (ce.valuenum < 60 OR ce.valuenum > 100) THEN 1\n        WHEN ce.itemid = 220210 AND (ce.valuenum < 12 OR ce.valuenum > 25) THEN 1\n        WHEN ce.itemid = 223762 AND (ce.valuenum < 36 OR ce.valuenum > 38) THEN 1\n        ELSE 0\n      END\n    ) AS abnormal_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n    AND ce.charttime >= c.intime\n    AND ce.charttime <= DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    AND ce.itemid IN (220045, 220179, 220180, 220210, 223762)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY c.stay_id\n),\nscores AS (\n  SELECT\n    c.stay_id,\n    c.los,\n    c.hospital_expire_flag,\n    COALESCE(\n      v.abnormal_count * 100.0 / NULLIF(v.total_vitals, 0),\n      0\n    ) AS score\n  FROM cohort c\n  LEFT JOIN vitals v\n    ON c.stay_id = v.stay_id\n),\nranked AS (\n  SELECT\n    *,\n    NTILE(10) OVER (ORDER BY score DESC) AS decile\n  FROM scores\n)\nSELECT\n  ROUND(\n    (COUNTIF(score <= 65) * 100.0 / COUNT(*)),\n    2\n  ) AS percentile_of_65,\n  ROUND(\n    AVG(CASE WHEN decile = 1 THEN los END),\n    2\n  ) AS mean_los_top_decile,\n  ROUND(\n    AVG(CASE WHEN decile = 1 THEN hospital_expire_flag END),\n    4\n  ) AS mortality_top_decile\nFROM ranked;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

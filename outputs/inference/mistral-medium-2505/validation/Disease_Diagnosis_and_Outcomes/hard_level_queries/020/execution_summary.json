@@ -1,0 +1,28 @@
+{
+  "query": "I have a 51-year-old male inpatient. Among male inpatients 46\u201356 with acute myocardial infarction, stratify by the composite risk score (age plus major complications) into quintiles and report in-hospital mortality%, major complication%, and median survivor LOS per quintile.",
+  "final_sql": "WITH\n-- Get male patients aged 46-56\nmale_patients AS (\n  SELECT\n    subject_id,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 46 AND 56\n),\n\n-- Get AMI admissions (ICD-9: 410.xx, ICD-10: I21.x)\nami_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    d.icd_code,\n    d.icd_version\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    (d.icd_version = 9 AND d.icd_code LIKE '410.%')\n    OR (d.icd_version = 10 AND d.icd_code LIKE 'I21.%')\n),\n\n-- Get major complications (example: cardiac arrest, shock, etc.)\nmajor_complications AS (\n  SELECT\n    di.subject_id,\n    di.hadm_id,\n    COUNT(DISTINCT\n      CASE\n        WHEN (di.icd_version = 9 AND di.icd_code IN ('427.5', '785.51', '995.92'))\n          OR (di.icd_version = 10 AND di.icd_code IN ('I46.9', 'R57.9', 'T81.19'))\n        THEN di.icd_code\n      END\n    ) AS complication_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  GROUP BY\n    di.subject_id, di.hadm_id\n),\n\n-- Combine data and calculate composite score\npatient_scores AS (\n  SELECT\n    m.subject_id,\n    a.hadm_id,\n    m.anchor_age,\n    COALESCE(mc.complication_count, 0) AS complication_count,\n    m.anchor_age + COALESCE(mc.complication_count, 0) AS composite_score,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24 AS los_days\n  FROM\n    male_patients m\n  JOIN\n    ami_admissions a ON m.subject_id = a.subject_id\n  LEFT JOIN\n    major_complications mc ON m.subject_id = mc.subject_id AND a.hadm_id = mc.hadm_id\n),\n\n-- Assign quintiles\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY composite_score) AS quintile\n  FROM\n    patient_scores\n),\n\n-- Calculate median LOS per quintile\nquintile_stats AS (\n  SELECT\n    quintile,\n    PERCENTILE_CONT(CASE WHEN hospital_expire_flag = 0 THEN los_days ELSE NULL END, 0.5)\n      OVER(PARTITION BY quintile) AS median_los_survivors\n  FROM\n    quintiles\n)\n\n-- Final aggregation\nSELECT\n  q.quintile,\n  COUNT(*) AS patient_count,\n  ROUND(100 * SUM(CASE WHEN q.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 1) AS mortality_pct,\n  ROUND(100 * SUM(CASE WHEN q.complication_count > 0 THEN 1 ELSE 0 END) / COUNT(*), 1) AS complication_pct,\n  ROUND(MAX(qs.median_los_survivors), 1) AS median_los_survivors\nFROM\n  quintiles q\nJOIN\n  quintile_stats qs ON q.quintile = qs.quintile\nGROUP BY\n  q.quintile\nORDER BY\n  q.quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name icd_version is ambiguous at [44:15]; reason: invalidQuery, location: query, message: Column name icd_version is ambiguous at [44:15]\n\nLocation: US\nJob ID: eff9e2a3-7446-4c26-95c5-b98314d73abb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [91:9]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [91:9]\n\nLocation: US\nJob ID: 741bc8f7-38fa-4e49-aa88-c46c725eb728\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

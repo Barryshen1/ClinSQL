@@ -1,0 +1,22 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH pe_cohort AS (\n  SELECT DISTINCT d.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = d.subject_id\n  WHERE (\n          d.icd_code LIKE 'I26%'      -- ICD-10: Pulmonary embolism\n          OR d.icd_code LIKE '415%'     -- ICD-9: Pulmonary embolism (and related)\n        )\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 44 AND 54\n),\n\nfirst_icu AS (\n  SELECT t.subject_id, t.hadm_id, t.stay_id, t.intime\n  FROM (\n    SELECT ic.subject_id,\n           ic.hadm_id,\n           ic.stay_id,\n           ic.intime,\n           ROW_NUMBER() OVER (PARTITION BY ic.subject_id ORDER BY ic.intime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n    WHERE ic.subject_id IN (SELECT subject_id FROM pe_cohort)\n  ) AS t\n  WHERE t.rn = 1\n),\n\nintensity AS (\n  SELECT f.subject_id, f.hadm_id, f.stay_id, f.intime,\n         COUNT(DISTINCT pe.itemid) AS intensity_count\n  FROM first_icu AS f\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON pe.stay_id = f.stay_id\n   AND pe.starttime >= f.intime\n   AND pe.starttime < TIMESTAMP_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY f.subject_id, f.hadm_id, f.stay_id, f.intime\n),\n\ncohort_metrics AS (\n  SELECT i.subject_id,\n         i.intensity_count,\n         a.hadm_id,\n         (TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0) AS hosp_los_days,\n         a.hospital_expire_flag AS mortality\n  FROM intensity AS i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.hadm_id = i.hadm_id\n)\n\nSELECT\n  quintile,\n  AVG(intensity_count) AS avg_proc_count,\n  AVG(hosp_los_days) AS avg_hosp_los_days,\n  100.0 * AVG(mortality) AS mortality_percent\nFROM (\n  SELECT intensity_count,\n         hosp_los_days,\n         mortality,\n         NTILE(5) OVER (ORDER BY intensity_count) AS quintile\n  FROM cohort_metrics\n) AS t\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [36:11]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [36:11]\n\nLocation: US\nJob ID: 5df2e33f-7626-49a7-b901-9f657e6d17e6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

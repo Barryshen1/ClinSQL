@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH\n-- 1. Filter ICU stays for female patients aged 48-58\nfiltered_stays AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    icu.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n),\n\n-- 2. Compute per-stay average heart rate in first 48 hours\nstay_hr AS (\n  SELECT\n    fs.stay_id,\n    AVG(ce.valuenum) AS avg_hr\n  FROM\n    filtered_stays fs\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  ON\n    fs.subject_id = ce.subject_id\n    AND fs.hadm_id    = ce.hadm_id\n    AND fs.stay_id    = ce.stay_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di\n  ON\n    ce.itemid = di.itemid\n    AND LOWER(di.label) LIKE '%heart rate%'\n  WHERE\n    ce.charttime BETWEEN fs.intime\n                     AND TIMESTAMP_ADD(fs.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY\n    fs.stay_id\n),\n\n-- 3. Determine AKI flag per hospital admission\naki_flags AS (\n  SELECT\n    diags.hadm_id,\n    COUNTIF(LOWER(dlong.long_title) LIKE '%acute kidney injury%') > 0 AS aki_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diags\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dlong\n  ON\n    diags.icd_code    = dlong.icd_code\n    AND diags.icd_version = dlong.icd_version\n  GROUP BY\n    diags.hadm_id\n),\n\n-- 4. Combine HR, AKI, and define HR category\nstay_summary AS (\n  SELECT\n    hr.stay_id,\n    hr.avg_hr,\n    CASE\n      WHEN hr.avg_hr < 60    THEN '<60'\n      WHEN hr.avg_hr BETWEEN 60 AND 99 THEN '60-99'\n      WHEN hr.avg_hr BETWEEN 100 AND 119 THEN '100-119'\n      ELSE '>=120'\n    END AS hr_category,\n    -- If no record in aki_flags, treat as no AKI\n    IFNULL(af.aki_flag, FALSE) AS aki_flag\n  FROM\n    stay_hr hr\n  LEFT JOIN\n    filtered_stays fs\n  ON\n    hr.stay_id = fs.stay_id\n  LEFT JOIN\n    aki_flags af\n  ON\n    fs.hadm_id = af.hadm_id\n)\n\n-- 5. Final aggregation: percent distribution and AKI rate by HR category\nSELECT\n  ss.hr_category,\n  COUNT(*) AS stay_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS pct_of_stays,\n  ROUND(  SUM(IF(ss.aki_flag, 1, 0)) * 100.0 / COUNT(*), 1) AS aki_rate_pct\nFROM\n  stay_summary ss\nGROUP BY\n  ss.hr_category\nORDER BY\n  CASE ss.hr_category\n    WHEN '<60' THEN 1\n    WHEN '60-99' THEN 2\n    WHEN '100-119' THEN 3\n    WHEN '>=120' THEN 4\n    ELSE 5\n  END;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

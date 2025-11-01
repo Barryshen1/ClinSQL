@@ -1,0 +1,16 @@
+{
+  "query": "I have a 41-year-old woman; among female patients aged 36\u201346 admitted with ischemic heart disease whose initial high-sensitivity Troponin T was >ULN, what are p25, p50, p75 and min\u2013max?",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT p.subject_id, p.gender, a.hadm_id, a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 36 AND 46\n),\n\nihd_admissions AS (\n  SELECT pa.subject_id, pa.hadm_id, pa.admittime\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE di.seq_num = 1  -- primary diagnosis\n    AND d.icd_code LIKE 'I20%'\n    OR d.icd_code LIKE 'I21%'\n    OR d.icd_code LIKE 'I22%'\n    OR d.icd_code LIKE 'I23%'\n    OR d.icd_code LIKE 'I24%'\n    OR d.icd_code LIKE 'I25%'\n),\n\ntroponin_lab AS (\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_labitems\n  WHERE LOWER(label) = 'troponin t high sensitive'\n),\n\nfirst_elevated_troponin AS (\n  SELECT\n    le.hadm_id,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN troponin_lab t\n    ON le.itemid = t.itemid\n  INNER JOIN ihd_admissions ia\n    ON le.hadm_id = ia.hadm_id\n  WHERE le.valuenum IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n    AND le.valuenum > le.ref_range_upper\n    AND le.charttime >= ia.admittime  -- only after admission\n)\n\nSELECT\n  APPROX_QUANTILES(valuenum, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(valuenum, 100)[OFFSET(50)] AS p50,\n  APPROX_QUANTILES(valuenum, 100)[OFFSET(75)] AS p75,\n  MIN(valuenum) AS min_value,\n  MAX(valuenum) AS max_value\nFROM first_elevated_troponin\nWHERE rn = 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

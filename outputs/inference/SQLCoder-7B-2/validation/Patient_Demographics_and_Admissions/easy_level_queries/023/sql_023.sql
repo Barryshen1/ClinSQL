@@ -1,0 +1,1 @@
+SELECT AVG(icu.los) AS average_los FROM patients p JOIN admissions a ON p.subject_id = a.subject_id JOIN icustays icu ON a.stay_id = icu.stay_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dod)) = 73 AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.anchor_year)) BETWEEN 68 AND 78 AND a.admission_type = 'PCI';

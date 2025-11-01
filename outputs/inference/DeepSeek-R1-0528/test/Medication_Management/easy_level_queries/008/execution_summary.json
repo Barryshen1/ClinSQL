@@ -1,0 +1,16 @@
+{
+  "query": "For my hospitalized 69-year-old man: among men 64\u201374 given aspirin plus a P2Y12 inhibitor, median inpatient antiplatelet prescription duration (days)?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M' \n    AND p.anchor_age BETWEEN 64 AND 74\n),\naspirin_prescriptions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE \n    LOWER(drug) LIKE '%aspirin%' \n    OR LOWER(drug) LIKE '%asa%'\n),\np2y12_prescriptions AS (\n  SELECT \n    hadm_id, \n    starttime, \n    stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE \n    LOWER(drug) LIKE '%clopidogrel%'\n    OR LOWER(drug) LIKE '%ticagrelor%'\n    OR LOWER(drug) LIKE '%prasugrel%'\n),\nadmissions_with_both AS (\n  SELECT \n    c.*\n  FROM cohort c\n  WHERE \n    EXISTS (SELECT 1 FROM aspirin_prescriptions a WHERE a.hadm_id = c.hadm_id)\n    AND EXISTS (SELECT 1 FROM p2y12_prescriptions p WHERE p.hadm_id = c.hadm_id)\n),\np2y12_aggregated AS (\n  SELECT \n    a.hadm_id,\n    MIN(p.starttime) AS first_start,\n    MAX(p.stoptime) AS last_stop,\n    ANY_VALUE(a.admittime) AS admittime,\n    ANY_VALUE(a.dischtime) AS dischtime\n  FROM admissions_with_both a\n  INNER JOIN p2y12_prescriptions p\n    ON a.hadm_id = p.hadm_id\n  GROUP BY a.hadm_id\n),\ntherapy_duration AS (\n  SELECT \n    hadm_id,\n    GREATEST(first_start, admittime) AS therapy_start,\n    LEAST(COALESCE(last_stop, dischtime), dischtime) AS therapy_end,\n    TIMESTAMP_DIFF(\n      LEAST(COALESCE(last_stop, dischtime), dischtime),\n      GREATEST(first_start, admittime),\n      SECOND\n    ) / 86400.0 AS duration_days\n  FROM p2y12_aggregated\n)\nSELECT \n  APPROX_QUANTILES(duration_days, 100)[OFFSET(50)] AS median_duration_days\nFROM therapy_duration;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

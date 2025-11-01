@@ -1,0 +1,22 @@
+{
+  "query": "I have a 60-year-old male ICU patient. Among male ICU patients aged 55\u201365, what is the interquartile range of each patient's maximum heart rate recorded during their ICU stay?",
+  "final_sql": "WITH hr_itemids AS (\n  -- Identify heart rate itemids from ICU d_items\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%heart rate%'\n),\n\nicu_male_age AS (\n  -- ICU stays for male patients aged 55-65\n  SELECT icu.*\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 55 AND 65\n),\n\nsubject_max_hr AS (\n  -- For each subject, compute the maximum heart rate observed during any ICU stay\n  SELECT\n    ce.subject_id,\n    MAX(ce.valuenum) AS max_hr\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN hr_itemids h\n    ON ce.itemid = h.itemid\n  JOIN icu_male_age icu\n    ON ce.stay_id = icu.stay_id\n       AND ce.subject_id = icu.subject_id\n       -- ensure the charttime falls within the ICU stay interval\n       AND ce.charttime BETWEEN icu.intime AND icu.outtime\n  WHERE ce.valuenum IS NOT NULL\n    -- plausible physiologic range for heart rate to reduce obvious artifacts\n    AND ce.valuenum BETWEEN 30 AND 300\n  GROUP BY ce.subject_id\n)\n\nSELECT\n  q.arr[OFFSET(1)] AS q1_hr,\n  q.arr[OFFSET(3)] AS q3_hr,\n  SAFE_CAST(q.arr[OFFSET(3)] - q.arr[OFFSET(1)] AS FLOAT64) AS iqr_hr,\n  (SELECT COUNT(*) FROM subject_max_hr) AS n_subjects\nFROM (\n  SELECT APPROX_QUANTILES(max_hr, 4) AS arr\n  FROM subject_max_hr\n) q\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column arr which is neither grouped nor aggregated at [38:3]; reason: invalidQuery, location: query, message: SELECT list expression references column arr which is neither grouped nor aggregated at [38:3]\n\nLocation: US\nJob ID: 4d67cf8d-abee-43b3-9023-b429666265e4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

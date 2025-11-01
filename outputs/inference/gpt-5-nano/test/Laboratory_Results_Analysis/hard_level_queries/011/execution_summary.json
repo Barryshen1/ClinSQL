@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 52-year-old man. Among male inpatients aged 47\u201357 with AKI, what is the mean 72-hour laboratory instability score? Compare critical-event frequency, average length of stay, and in-hospital mortality versus age-matched male controls.",
+  "final_sql": "WITH base AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        WHERE di.subject_id = a.subject_id\n          AND di.hadm_id = a.hadm_id\n          AND (\n            (di.icd_version = 9 AND di.icd_code LIKE '584%')\n            OR (di.icd_version = 10 AND di.icd_code LIKE 'N17%')\n          )\n      ) THEN 1 ELSE 0\n    END AS aki_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'MALE'\n    AND p.anchor_age BETWEEN 47 AND 57\n),\n\nlis_per_adm AS (\n  SELECT b.hadm_id,\n         COALESCE(STDDEV_SAMP(l.valuenum), 0) AS lis72\n  FROM base b\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON l.subject_id = b.subject_id\n   AND l.hadm_id = b.hadm_id\n   AND l.charttime >= b.admittime\n   AND l.charttime < TIMESTAMP_ADD(b.admittime, INTERVAL 72 HOUR)\n   AND l.valuenum IS NOT NULL\n  GROUP BY b.hadm_id\n),\n\nicu_counts AS (\n  SELECT hadm_id, COUNT(*) AS icu_stay_count\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\n\nlos_per_adm AS (\n  SELECT a.hadm_id,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 3600.0 AS los_hr\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN base b ON b.hadm_id = a.hadm_id\n)\n\nSELECT\n  b.aki_flag AS aki_group,\n  AVG(lis72) AS mean_lis72,\n  AVG(COALESCE(ic.icu_stay_count, 0)) AS avg_icu_stay_count,\n  AVG(COALESCE(los.los_hr, 0)) AS avg_los_hrs,\n  AVG(CASE WHEN b.hospital_expire_flag = 1 THEN 1.0 ELSE 0.0 END) AS in_hospital_mortality_rate\nFROM base b\nLEFT JOIN lis_per_adm lis ON lis.hadm_id = b.hadm_id\nLEFT JOIN icu_counts ic ON ic.hadm_id = b.hadm_id\nLEFT JOIN los_per_adm los ON los.hadm_id = b.hadm_id\nGROUP BY b.aki_flag\nORDER BY b.aki_flag;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

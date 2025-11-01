@@ -1,0 +1,16 @@
+{
+  "query": "Among female patients aged 70\u201380 admitted with a heart failure diagnosis, what are in-hospital mortality rates (%) and admission counts (N) for LOS <8 versus \u22658 days, and median time-to-death among non-survivors?",
+  "final_sql": "WITH hf_admissions AS (\n  -- Step 1: Identify all hospital admissions with a heart failure diagnosis\n  SELECT DISTINCT\n    dx.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx\n    ON dx.icd_code = d_dx.icd_code\n    AND dx.icd_version = d_dx.icd_version\n  WHERE\n    LOWER(d_dx.long_title) LIKE '%heart failure%'\n), cohort_admissions AS (\n  -- Step 2: Filter for female patients aged 70-80 at the time of their heart failure admission\n  SELECT\n    ad.hadm_id,\n    ad.admittime,\n    ad.dischtime,\n    ad.deathtime,\n    ad.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON ad.subject_id = p.subject_id\n  INNER JOIN\n    hf_admissions AS hf\n    ON ad.hadm_id = hf.hadm_id\n  WHERE\n    p.gender = 'F'\n    -- Calculate age at admission and filter for 70-80 years old\n    AND (\n      DATETIME_DIFF(ad.admittime, DATETIME(p.anchor_year, 1, 1, 0, 0, 0), YEAR) + p.anchor_age\n    ) BETWEEN 70 AND 80\n), metrics AS (\n  -- Step 3: Calculate LOS, create LOS groups, and determine time-to-death for each admission\n  SELECT\n    hadm_id,\n    hospital_expire_flag,\n    CASE\n      WHEN DATETIME_DIFF(dischtime, admittime, DAY) < 8 THEN '<8 days'\n      ELSE '>=8 days'\n    END AS los_group,\n    -- Calculate time to death in days only for non-survivors\n    CASE\n      WHEN hospital_expire_flag = 1 THEN DATETIME_DIFF(deathtime, admittime, DAY)\n      ELSE NULL\n    END AS time_to_death_days\n  FROM\n    cohort_admissions\n  -- Ensure LOS can be calculated\n  WHERE\n    dischtime IS NOT NULL\n)\n-- Step 4: Aggregate the metrics by LOS group to get the final results\nSELECT\n  los_group,\n  COUNT(hadm_id) AS admission_count,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_rate_percent,\n  -- Calculate the median time to death for non-survivors (APPROX_QUANTILES ignores NULLs)\n  ROUND(APPROX_QUANTILES(time_to_death_days, 100)[OFFSET(50)], 1) AS median_time_to_death_days\nFROM\n  metrics\nGROUP BY\n  los_group\nORDER BY\n  los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

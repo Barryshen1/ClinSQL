@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 62-year-old man. Among male ED admissions aged 57\u201367, report mean, median, p75 and p90 LOS for discharged home vs hospice vs in-hospital death, and percentile rank for 10 days.",
+  "final_sql": "WITH admissions_filtered AS (\n  SELECT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    a.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE (p.gender = 'M' OR p.gender = 'Male')\n    AND p.anchor_age BETWEEN 57 AND 67\n    AND a.admission_type = 'EMERGENCY'\n    AND (\n       a.discharge_location IN ('Home','Hospice')\n       OR a.deathtime IS NOT NULL\n       OR a.hospital_expire_flag = 1\n    )\n),\nlifespan AS (\n  SELECT\n    CASE\n      WHEN discharge_location = 'Home' THEN 'Home'\n      WHEN discharge_location = 'Hospice' THEN 'Hospice'\n      WHEN deathtime IS NOT NULL OR hospital_expire_flag = 1 THEN 'In-hospital death'\n    END AS group_label,\n    -- end time: prefer discharge time; fall back to death time if needed\n    TIMESTAMP_DIFF(COALESCE(dischtime, deathtime), admittime, SECOND) / 86400.0 AS los_days\n  FROM admissions_filtered\n  WHERE\n    CASE\n      WHEN discharge_location = 'Home' THEN 'Home'\n      WHEN discharge_location = 'Hospice' THEN 'Hospice'\n      WHEN deathtime IS NOT NULL OR hospital_expire_flag = 1 THEN 'In-hospital death'\n    END IS NOT NULL\n),\nstats AS (\n  SELECT\n    group_label,\n    AVG(los_days) AS mean_los_days,\n    100.0 * SUM(CASE WHEN los_days <= 10 THEN 1 ELSE 0 END) / COUNT(*) AS pct_le_10_days\n  FROM lifespan\n  GROUP BY group_label\n),\nquantiles AS (\n  SELECT\n    group_label,\n    APPROX_QUANTILES(los_days, 101) AS qa\n  FROM lifespan\n  GROUP BY group_label\n),\nfinal AS (\n  SELECT\n    s.group_label,\n    s.mean_los_days,\n    q.qa[OFFSET(50)] AS median_los_days,\n    q.qa[OFFSET(75)] AS p75_los_days,\n    q.qa[OFFSET(90)] AS p90_los_days,\n    s.pct_le_10_days\n  FROM stats s\n  JOIN quantiles q ON s.group_label = q.group_label\n)\nSELECT *\nFROM final\nORDER BY group_label;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

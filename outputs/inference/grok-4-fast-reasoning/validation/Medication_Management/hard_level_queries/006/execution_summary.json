@@ -1,0 +1,28 @@
+{
+  "query": "For a 42\u2011year\u2011old man with a postoperative ICU admission, among male inpatients aged 37\u201347, compute medication complexity over the first 72 hours, stratify into quintiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per quintile and estimate his risk.",
+  "final_sql": "WITH first_icu AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    first_careunit,\n    intime\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY intime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  )\n  WHERE rn = 1\n),\ncohort_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    fi.stay_id,\n    fi.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN first_icu fi\n    ON a.subject_id = fi.subject_id AND a.hadm_id = fi.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND (LOWER(fi.first_careunit) LIKE '%surg%' OR fi.first_careunit = 'CSRU')\n),\nmed_complexity AS (\n  SELECT\n    ca.subject_id,\n    ca.hadm_id,\n    ca.admittime,\n    ca.dischtime,\n    ca.hospital_expire_flag,\n    ca.stay_id,\n    ca.intime,\n    COUNT(DISTINCT CASE WHEN di.category = 'Medications' THEN ie.itemid END) AS complexity_score\n  FROM cohort_admissions ca\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.inputevents` ie\n    ON ca.stay_id = ie.stay_id\n    AND ie.starttime >= ca.intime\n    AND ie.starttime < TIMESTAMP_ADD(ca.intime, INTERVAL 72 HOUR)\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ie.itemid = di.itemid\n  GROUP BY\n    ca.subject_id,\n    ca.hadm_id,\n    ca.admittime,\n    ca.dischtime,\n    ca.hospital_expire_flag,\n    ca.stay_id,\n    ca.intime\n),\nreadmissions AS (\n  SELECT\n    mc.*,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = mc.subject_id\n        AND a2.hadm_id != mc.hadm_id\n        AND a2.admittime > mc.dischtime\n        AND a2.admittime <= TIMESTAMP_ADD(mc.dischtime, INTERVAL 30 DAY)\n    ) AS readmit_30d\n  FROM med_complexity mc\n  WHERE mc.dischtime IS NOT NULL  -- Exclude any incomplete records\n),\nwith_quintile AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY complexity_score ASC) AS quintile\n  FROM readmissions\n)\nSELECT\n  quintile,\n  ROUND(AVG(DATE_DIFF(dischtime, admittime, DAY)), 2) AS avg_los_days,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)), 4) AS mortality_rate,\n  ROUND(\n    SUM(CAST(readmit_30d AS INT)) * 1.0 /\n    NULLIF(SUM(CASE WHEN hospital_expire_flag = 0 THEN 1 ELSE 0 END), 0),\n    4\n  ) AS readmit_rate,\n  COUNT(*) AS n_patients\nFROM with_quintile\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Star expansion expression references column rn which is neither grouped nor aggregated at [30:5]; reason: invalidQuery, location: query, message: Star expansion expression references column rn which is neither grouped nor aggregated at [30:5]\n\nLocation: US\nJob ID: 653e051b-91a7-4e96-babd-ad7767aea84c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [79:42]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [79:42]\n\nLocation: US\nJob ID: fcf9f8b8-6991-48a2-a3ff-1b4423083d1b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 51-year-old man with stroke. Among male stroke patients 46\u201356, what's the IQR of first-admission ICU LOS in days?",
+  "final_sql": "WITH stroke_patients AS (\n  -- Get patients with stroke diagnosis\n  SELECT\n    di.subject_id,\n    di.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE\n    -- ICD-10 stroke: I60-I64; ICD-9 stroke: 431, 433.x, 434.x, 436\n    (\n      (di.icd_version = 10 AND REGEXP_CONTAINS(di.icd_code, r'^I6[0-4]'))\n      OR\n      (di.icd_version = 9 AND (\n        di.icd_code = '431'\n        OR di.icd_code = '436'\n        OR REGEXP_CONTAINS(di.icd_code, r'^433')\n        OR REGEXP_CONTAINS(di.icd_code, r'^434')\n      ))\n    )\n),\nfirst_admissions AS (\n  -- Get first hospital admission for each patient\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\neligible_patients AS (\n  -- Filter for male patients aged 46-56 at first admission with stroke\n  SELECT\n    fa.subject_id,\n    fa.hadm_id,\n    fa.admittime\n  FROM\n    first_admissions fa\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON fa.subject_id = p.subject_id\n    JOIN stroke_patients sp\n      ON fa.subject_id = sp.subject_id AND fa.hadm_id = sp.hadm_id\n  WHERE\n    fa.rn = 1\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 46 AND 56\n),\nfirst_icu_stays AS (\n  -- Get first ICU stay for each first admission\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.los,\n    ROW_NUMBER() OVER (PARTITION BY icu.hadm_id ORDER BY icu.intime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n),\nfinal_cohort AS (\n  -- Join eligible patients to their first ICU stay\n  SELECT\n    ep.subject_id,\n    ep.hadm_id,\n    fis.stay_id,\n    fis.los\n  FROM\n    eligible_patients ep\n    JOIN first_icu_stays fis\n      ON ep.subject_id = fis.subject_id AND ep.hadm_id = fis.hadm_id\n  WHERE\n    fis.rn = 1\n    AND fis.los IS NOT NULL\n)\nSELECT\n  -- Calculate IQR of ICU LOS in days\n  quantiles[OFFSET(2)] - quantiles[OFFSET(0)] AS icu_los_iqr_days\nFROM (\n  SELECT\n    APPROX_QUANTILES(los, 4) AS quantiles\n  FROM\n    final_cohort\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

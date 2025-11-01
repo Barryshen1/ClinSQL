@@ -1,0 +1,22 @@
+{
+  "query": "For my 68-year-old male inpatient with acute pancreatitis, among male inpatients aged 63\u201373 with AP, what is the 90th percentile of the 72\u2011h lab\u2011instability score? For patients \u2265P90, report mortality, mean LOS, and per\u2011lab critical rates versus general inpatients.",
+  "final_sql": "WITH patients_age AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age,\n    anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients\n  WHERE gender = 'M'\n),\ncohort_ap AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_ADD(a.admittime, INTERVAL 72 HOUR) AS t_72h\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN patients_age p ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd diag ON a.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d_diag \n    ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  WHERE (d_diag.long_title LIKE '%acute pancreatitis%' OR d_diag.icd_code LIKE 'K85%') \n    AND d_diag.icd_version = 10\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 63 AND 73\n),\ngeneral_inpatients AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_ADD(a.admittime, INTERVAL 72 HOUR) AS t_72h\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN patients_age p ON a.subject_id = p.subject_id\n  WHERE (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 63 AND 73\n),\nlab_abnormal_72h_ap AS (\n  SELECT\n    le.hadm_id,\n    COUNT(*) AS abnormal_count\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN cohort_ap ap ON le.hadm_id = ap.hadm_id\n  WHERE le.charttime >= ap.admittime AND le.charttime <= ap.t_72h\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL \n    AND le.ref_range_upper IS NOT NULL\n    AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n  GROUP BY le.hadm_id\n),\nlab_abnormal_72h_general AS (\n  SELECT\n    le.hadm_id,\n    COUNT(*) AS abnormal_count\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN general_inpatients g ON le.hadm_id = g.hadm_id\n  WHERE le.charttime >= g.admittime AND le.charttime <= g.t_72h\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL \n    AND le.ref_range_upper IS NOT NULL\n    AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n  GROUP BY le.hadm_id\n),\np90_score AS (\n  SELECT\n    APPROX_QUANTILES(abnormal_count, 1000)[OFFSET(900)] AS p90_value\n  FROM lab_abnormal_72h_ap\n),\nap_above_p90 AS (\n  SELECT\n    ap.hadm_id,\n    ap.hospital_expire_flag,\n    ap.dischtime,\n    ap.admittime,\n    lab.abnormal_count\n  FROM cohort_ap ap\n  INNER JOIN lab_abnormal_72h_ap lab ON ap.hadm_id = lab.hadm_id\n  CROSS JOIN p90_score\n  WHERE lab.abnormal_count >= p90_score.p90_value\n),\nap_p90_stats AS (\n  SELECT\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(abnormal_count) AS mean_abnormal_labs\n  FROM ap_above_p90\n),\ngeneral_stats AS (\n  SELECT\n    AVG(CAST(g.hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(TIMESTAMP_DIFF(g.dischtime, g.admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(COALESCE(lab.abnormal_count, 0)) AS mean_abnormal_labs\n  FROM general_inpatients g\n  LEFT JOIN lab_abnormal_72h_general lab ON g.hadm_id = lab.hadm_id\n)\nSELECT\n  'AP >= P90' AS cohort,\n  mortality_rate,\n  mean_los_days,\n  mean_abnormal_labs\nFROM ap_p90_stats\nUNION ALL\nSELECT\n  'General Inpatients' AS cohort,\n  mortality_rate,\n  mean_los_days,\n  mean_abnormal_labs\nFROM general_stats;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pancreatitis\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pancreatitis\" at [1:12]\n\nLocation: US\nJob ID: 45ad9ce7-522f-4767-9d2d-1803a6ff70f7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

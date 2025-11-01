@@ -1,0 +1,17 @@
+{
+  "query": "For a 45-year-old female patient: among female patients aged 40\u201350 admitted with AMI, what are the counts of initial Troponin T values categorized as normal, borderline, or elevated?",
+  "final_sql": "WITH filtered_admissions AS (\n  SELECT \n    a.hadm_id,\n    COALESCE(a.edregtime, a.admittime) AS start_time\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    -- Calculate age at admission (year-only approximation)\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 40 AND 50\n    -- Primary AMI diagnosis (ICD-10 codes I21/I22)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.seq_num = 1\n        AND d.icd_version = 10\n        AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%')\n    )\n),\ntroponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'  -- Case-insensitive match\n),\nfirst_troponin AS (\n  SELECT \n    le.hadm_id,\n    le.valuenum,\n    ROW_NUMBER() OVER (\n      PARTITION BY le.hadm_id \n      ORDER BY le.charttime\n    ) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN troponin_items ti \n    ON le.itemid = ti.itemid\n  INNER JOIN filtered_admissions fa \n    ON le.hadm_id = fa.hadm_id\n  WHERE le.charttime >= fa.start_time\n    AND le.valuenum IS NOT NULL  -- Exclude non-numeric results\n)\nSELECT \n  CASE \n    WHEN valuenum <= 14 THEN 'normal'\n    WHEN valuenum <= 28 THEN 'borderline'  -- 14 < valuenum <= 28\n    ELSE 'elevated'\n  END AS category,\n  COUNT(*) AS count\nFROM first_troponin\nWHERE rn = 1  -- Only first measurement per admission\nGROUP BY category\nORDER BY \n  CASE category \n    WHEN 'normal' THEN 1 \n    WHEN 'borderline' THEN 2 \n    ELSE 3 \n  END;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

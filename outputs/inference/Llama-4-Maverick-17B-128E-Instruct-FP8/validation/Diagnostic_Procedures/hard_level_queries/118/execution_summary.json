@@ -1,0 +1,16 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH ami_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  USING (icd_code, icd_version)\n  WHERE long_title LIKE '%Acute myocardial infarction%'  \n),\nfemale_ami_44_54 AS (\n  SELECT p.subject_id, p.anchor_age, a.hadm_id, icu.stay_id, icu.intime\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON p.subject_id = a.subject_id\n  JOIN ami_patients ON a.hadm_id = ami_patients.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_icu`.icustays icu ON a.hadm_id = icu.hadm_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 44 AND 54\n  AND icu.intime = (SELECT MIN(intime) FROM `physionet-data.mimiciv_3_1_icu`.icustays WHERE hadm_id = a.hadm_id)\n),\nprocedure_counts AS (\n  SELECT fa.subject_id, fa.hadm_id, COUNT(pe.itemid) as procedure_count\n  FROM female_ami_44_54 fa\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pe\n  ON fa.stay_id = pe.stay_id AND pe.starttime BETWEEN fa.intime AND TIMESTAMP_ADD(fa.intime, INTERVAL 72 HOUR)\n  GROUP BY fa.subject_id, fa.hadm_id\n),\nhospital_los_mortality AS (\n  SELECT a.hadm_id, \n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS hospital_los,\n         a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN female_ami_44_54 fa ON a.hadm_id = fa.hadm_id\n),\nquartiles AS (\n  SELECT procedure_count,\n         NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM procedure_counts\n),\nsummary_stats AS (\n  SELECT q.quartile,\n         COUNT(*) as n,\n         AVG(pc.procedure_count) as mean_procedure_count,\n         AVG(hlm.hospital_los) as mean_hospital_los,\n         AVG(hlm.hospital_expire_flag) * 100 as in_hospital_mortality_pct\n  FROM quartiles q\n  JOIN procedure_counts pc ON q.procedure_count = pc.procedure_count\n  JOIN hospital_los_mortality hlm ON pc.hadm_id = hlm.hadm_id\n  GROUP BY q.quartile\n)\nSELECT * FROM summary_stats\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

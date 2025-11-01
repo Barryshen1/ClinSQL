@@ -1,0 +1,16 @@
+{
+  "query": "Male patient, 94. Among male ICU patients aged 89\u201399, what is the 95th\u2011percentile 48\u2011hour instability score for ischemic stroke? For the top instability quartile, compare ischemic stroke versus general ICU: N, mean instability, mean abnormal episodes, mean ICU LOS (hrs), and mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    st.subject_id,\n    st.hadm_id,\n    st.stay_id,\n    st.intime,\n    st.outtime,\n    TIMESTAMP_DIFF(st.outtime, st.intime, SECOND) / 3600.0 AS icu_los_hrs,\n    a.deathtime,\n    a.hospital_expire_flag,\n    LOWER(p.gender) AS gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS st\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON st.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON st.subject_id = p.subject_id\n  WHERE LOWER(p.gender) = 'm'\n    AND p.anchor_age BETWEEN 89 AND 99\n),\nstroke_flag AS (\n  SELECT c.stay_id,\n         MAX(CASE\n               WHEN LOWER(dd.long_title) LIKE '%ischemic stroke%' OR LOWER(dd.long_title) LIKE '%cerebral infarction%'\n                 THEN 1\n               ELSE 0\n             END) AS is_ischemic_stroke\n  FROM cohort AS c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = c.subject_id AND di.hadm_id = c.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  GROUP BY c.stay_id\n),\ninstability AS (\n  SELECT\n     c.stay_id,\n     SUM(CASE WHEN le.valuenum IS NOT NULL\n              AND ((le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower)\n                   OR (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper))\n              THEN 1 ELSE 0 END) AS instability_score,\n     COUNT(DISTINCT DATE(le.charttime)) AS abnormal_episodes\n  FROM cohort AS c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.subject_id = c.subject_id\n   AND le.hadm_id = c.hadm_id\n  WHERE le.charttime >= c.intime\n    AND le.charttime <= TIMESTAMP_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY c.stay_id\n),\nmerged AS (\n  SELECT\n     i.stay_id,\n     i.instability_score,\n     i.abnormal_episodes,\n     c.icu_los_hrs,\n     s.is_ischemic_stroke,\n     CASE WHEN c.deathtime IS NOT NULL OR c.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS mortality_flag\n  FROM instability i\n  JOIN stroke_flag s ON i.stay_id = s.stay_id\n  JOIN cohort c ON i.stay_id = c.stay_id\n),\nthreshold AS (\n  SELECT PERCENTILE_CONT(instability_score, 0.75) OVER () AS p75\n  FROM merged\n  LIMIT 1\n)\nSELECT\n  CASE WHEN m.is_ischemic_stroke = 1 THEN 'Ischemic Stroke' ELSE 'General ICU' END AS group_label,\n  COUNT(*) AS N,\n  AVG(m.instability_score) AS mean_instability,\n  AVG(m.abnormal_episodes) AS mean_abnormal_episodes,\n  AVG(m.icu_los_hrs) AS mean_icu_los_hrs,\n  AVG(m.mortality_flag) AS mortality_rate\nFROM merged m\nCROSS JOIN threshold t\nWHERE m.instability_score >= t.p75\nGROUP BY group_label\nORDER BY group_label;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

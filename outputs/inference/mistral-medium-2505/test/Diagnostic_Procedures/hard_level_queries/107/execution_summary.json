@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH\n-- Get female patients aged 65-75 with pulmonary embolism\npe_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND di.icd_code LIKE 'I26.%'\n),\n\n-- Get first ICU stay per admission within 72 hours of admission\nfirst_icu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.los,\n    ROW_NUMBER() OVER (PARTITION BY s.subject_id, s.hadm_id ORDER BY s.intime) AS icu_stay_rank\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    pe_patients p\n    ON s.subject_id = p.subject_id AND s.hadm_id = p.hadm_id\n  WHERE\n    TIMESTAMP_DIFF(s.intime, p.admittime, HOUR) <= 72\n),\n\n-- Count diagnostic procedures within first 72 hours of ICU admission\nprocedure_counts AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    COUNT(DISTINCT pe.orderid) AS procedure_count\n  FROM\n    first_icu_stays f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON f.subject_id = pe.subject_id\n    AND f.hadm_id = pe.hadm_id\n    AND f.stay_id = pe.stay_id\n    AND TIMESTAMP_DIFF(pe.starttime, f.intime, HOUR) <= 72\n  WHERE\n    pe.ordercategoryname LIKE '%Diagnostic%'\n    OR pe.itemid IN (\n      SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items`\n      WHERE category LIKE '%Diagnostic%'\n    )\n  GROUP BY\n    f.subject_id, f.hadm_id, f.stay_id\n),\n\n-- Calculate quartiles\nquartiles AS (\n  SELECT\n    procedure_count,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM\n    procedure_counts\n)\n\n-- Final stratified results\nSELECT\n  q.quartile,\n  COUNT(DISTINCT pc.subject_id) AS N,\n  AVG(pc.procedure_count) AS mean_procedure_count,\n  AVG(f.los) AS mean_icu_los_days,\n  AVG(CASE WHEN p.hospital_expire_flag = 1 THEN 100 ELSE 0 END) AS hospital_mortality_percent\nFROM\n  procedure_counts pc\nJOIN\n  first_icu_stays f\n  ON pc.subject_id = f.subject_id\n  AND pc.hadm_id = f.hadm_id\n  AND pc.stay_id = f.stay_id\nJOIN\n  pe_patients p\n  ON pc.subject_id = p.subject_id\n  AND pc.hadm_id = p.hadm_id\nJOIN\n  quartiles q\n  ON pc.procedure_count = q.procedure_count\nWHERE\n  f.icu_stay_rank = 1  -- Only first ICU stay\nGROUP BY\n  q.quartile\nORDER BY\n  q.quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

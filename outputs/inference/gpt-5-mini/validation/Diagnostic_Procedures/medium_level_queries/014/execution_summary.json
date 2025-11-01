@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating an 88\u2011year\u2011old male. Among male patients 83\u201393 with ACS, stratified by 1\u20134 vs 5\u20137 day stay and primary vs secondary diagnosis, what are mean, min, max ultrasounds per admission?",
+  "final_sql": "WITH acs_codes AS (\n  -- Identify ICD entries that likely represent ACS (text-based)\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%acute coronary%'\n     OR LOWER(long_title) LIKE '%myocardial infarction%'\n     OR LOWER(long_title) LIKE '%unstable angina%'\n),\n\nacs_hadm AS (\n  -- For each admission that has any ACS diagnosis, flag if any ACS diag is primary (seq_num = 1)\n  SELECT d.subject_id,\n         d.hadm_id,\n         MAX(CASE WHEN d.seq_num = 1 THEN 1 ELSE 0 END) AS has_primary_acs\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN acs_codes c\n    ON d.icd_code = c.icd_code\n   AND d.icd_version = c.icd_version\n  GROUP BY d.subject_id, d.hadm_id\n),\n\ncohort AS (\n  -- Build cohort: male patients age 83-93 with an ACS-coded admission, compute LOS group and diagnosis type\n  SELECT a.subject_id,\n         a.hadm_id,\n         p.gender,\n         p.anchor_age,\n         DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) + 1 AS los_days,\n         CASE\n           WHEN DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) + 1 BETWEEN 1 AND 4 THEN '1-4'\n           WHEN DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) + 1 BETWEEN 5 AND 7 THEN '5-7'\n           ELSE NULL\n         END AS los_group,\n         CASE WHEN ah.has_primary_acs = 1 THEN 'primary' ELSE 'secondary' END AS diag_type\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN acs_hadm ah\n    ON a.subject_id = ah.subject_id\n   AND a.hadm_id = ah.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 83 AND 93\n),\n\nultrasounds AS (\n  -- Count HCPCS events per admission where the description indicates an ultrasound\n  SELECT h.hadm_id,\n         COUNT(1) AS us_count\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n    ON h.hcpcs_cd = d.code\n  WHERE LOWER(COALESCE(h.short_description, '') || ' ' || COALESCE(d.long_description, '')) LIKE '%ultrasound%'\n  GROUP BY h.hadm_id\n)\n\nSELECT\n  c.los_group,\n  c.diag_type,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(COALESCE(u.us_count, 0)), 2) AS mean_ultrasounds_per_admission,\n  MIN(COALESCE(u.us_count, 0)) AS min_ultrasounds_per_admission,\n  MAX(COALESCE(u.us_count, 0)) AS max_ultrasounds_per_admission\nFROM cohort c\nLEFT JOIN ultrasounds u\n  ON c.hadm_id = u.hadm_id\nWHERE c.los_group IS NOT NULL\nGROUP BY c.los_group, c.diag_type\nORDER BY c.los_group, c.diag_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

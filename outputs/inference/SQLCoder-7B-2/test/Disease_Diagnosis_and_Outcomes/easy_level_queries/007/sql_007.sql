@@ -1,0 +1,1 @@
+SELECT (q3 - q1) AS interquartile_range FROM (SELECT percentile_cont(0.25) within GROUP (ORDER BY los) AS q1, percentile_cont(0.75) within GROUP (ORDER BY los) AS q3 FROM f) AS q;

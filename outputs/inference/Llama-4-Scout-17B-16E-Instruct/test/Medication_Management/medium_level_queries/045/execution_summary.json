@@ -1,0 +1,22 @@
+{
+  "query": "For my 59\u2011year\u2011old female inpatient: among females 54\u201364 with diabetes and heart failure, report insulin versus oral agent prevalence in first 12 hours and final 48 hours, net change (pp).",
+  "final_sql": "WITH \n-- Identify target population\ntarget_population AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    p.anchor_age, \n    p.gender\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F' \n    AND p.anchor_age BETWEEN 54 AND 64\n    AND a.hadm_id IN (\n      SELECT \n        hadm_id\n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE \n        icd_code IN (\n          SELECT \n            icd_code \n          FROM \n            `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` \n          WHERE \n            long_title IN ('Diabetes mellitus', 'Heart failure')\n        )\n    )\n),\n\n-- Medication orders for target population\nmedications AS (\n  SELECT \n    tp.subject_id, \n    tp.hadm_id, \n    p.starttime, \n    p.drug,\n    CASE \n      WHEN p.drug LIKE '%insulin%' THEN 'insulin'\n      WHEN p.form_rx LIKE '%oral%' THEN 'oral'\n      ELSE 'other'\n    END AS medication_type\n  FROM \n    target_population tp\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p \n      ON tp.hadm_id = p.hadm_id\n),\n\n-- First 12 hours and last 48 hours\ntime_periods AS (\n  SELECT \n    m.hadm_id,\n    m.starttime,\n    a.admittime,\n    a.dischtime,\n    CASE \n      WHEN TIMESTAMP_DIFF(m.starttime, a.admittime, HOUR) <= 12 THEN 'first_12_hours'\n      WHEN TIMESTAMP_DIFF(a.dischtime, m.starttime, HOUR) <= 48 THEN 'last_48_hours'\n      ELSE 'other'\n    END AS time_period\n  FROM \n    medications m\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON m.hadm_id = a.hadm_id\n),\n\n-- Prevalence of insulin vs. oral agents\nprevalence AS (\n  SELECT \n    tp.time_period,\n    m.medication_type,\n    COUNT(DISTINCT m.hadm_id) AS patient_count\n  FROM \n    time_periods tp\n  JOIN \n    medications m \n      ON tp.hadm_id = m.hadm_id AND tp.starttime = m.starttime\n  WHERE \n    m.medication_type IN ('insulin', 'oral')\n  GROUP BY \n    tp.time_period, \n    m.medication_type\n)\n\n-- Calculate net change\nSELECT \n  time_period,\n  medication_type,\n  patient_count,\n  SUM(patient_count) OVER (PARTITION BY medication_type) AS total_patients,\n  LAG(patient_count) OVER (PARTITION BY medication_type ORDER BY time_period) AS prev_period_count,\n  patient_count - LAG(patient_count) OVER (PARTITION BY medication_type ORDER BY time_period) AS net_change\nFROM \n  prevalence\nORDER BY \n  time_period, \n  medication_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [56:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [56:5]\n\nLocation: US\nJob ID: 96104e74-8a98-4235-9252-33625904b524\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

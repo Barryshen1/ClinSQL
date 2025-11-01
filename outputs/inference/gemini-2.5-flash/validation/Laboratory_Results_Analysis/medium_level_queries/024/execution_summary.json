@@ -1,0 +1,28 @@
+{
+  "query": "For a 69-year-old man: among male patients aged 64\u201374 admitted with chest pain whose first hs-Troponin T exceeded the 99th percentile, provide summary statistics and in-hospital mortality rate.",
+  "final_sql": "WITH chest_pain_admissions AS (\n    SELECT DISTINCT\n        diag.subject_id,\n        diag.hadm_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag\n        ON diag.icd_code = d_diag.icd_code\n        AND diag.icd_version = d_diag.icd_version\n    WHERE\n        LOWER(d_diag.long_title) LIKE '%chest pain%'\n),\nfirst_troponin_t_measurements AS (\n    -- Step 2: Identify the first hs-Troponin T measurement for each hospital admission\n    SELECT\n        le.subject_id,\n        le.hadm_id,\n        le.valuenum AS first_troponin_valuenum,\n        ROW_NUMBER() OVER (PARTITION BY le.subject_id, le.hadm_id ORDER BY le.charttime, le.labevent_id) AS rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n    WHERE\n        le.itemid = 51002 -- ItemID for Troponin T (commonly used for hs-TnT in MIMIC-IV studies)\n        AND le.valuenum IS NOT NULL\n        AND le.valuenum >= 0 -- Exclude potentially erroneous negative values\n),\ntroponin_99th_percentile AS (\n    -- Step 1: Calculate the 99th percentile for hs-Troponin T values globally\n    SELECT\n        PERCENTILE_CONT(le.valuenum, 0.99) AS threshold_value -- FIX: Added 'le.valuenum' as the required first argument.\n                                             -- REFINEMENT: Removed OVER() and QUALIFY as PERCENTILE_CONT without OVER()\n                                             -- correctly produces a single aggregate row for the entire dataset.\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n    WHERE\n        le.itemid = 51002 -- ItemID for Troponin T\n        AND le.valuenum IS NOT NULL\n        AND le.valuenum >= 0\n),\nidentified_cohort AS (\n    SELECT\n        p.subject_id,\n        adm.hadm_id,\n        first_troponin.first_troponin_valuenum,\n        adm.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON adm.subject_id = p.subject_id\n    INNER JOIN\n        chest_pain_admissions cpa\n        ON adm.subject_id = cpa.subject_id AND adm.hadm_id = cpa.hadm_id\n    INNER JOIN\n        first_troponin_t_measurements first_troponin\n        ON adm.subject_id = first_troponin.subject_id AND adm.hadm_id = first_troponin.hadm_id\n    CROSS JOIN -- Use CROSS JOIN for scalar CTE\n        troponin_99th_percentile t99\n    WHERE\n        p.gender = 'M'\n        AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 64 AND 74\n        AND first_troponin.rn = 1 -- Ensure it's the first measurement\n        AND first_troponin.first_troponin_valuenum > t99.threshold_value\n)\nSELECT\n    COUNT(DISTINCT subject_id) AS total_unique_patients,\n    COUNT(DISTINCT hadm_id) AS total_admissions_in_cohort,\n    CAST(SUM(hospital_expire_flag) AS NUMERIC) / COUNT(hadm_id) AS in_hospital_mortality_rate,\n    MIN(first_troponin_valuenum) AS min_first_troponin_val,\n    MAX(first_troponin_valuenum) AS max_first_troponin_val,\n    AVG(first_troponin_valuenum) AS avg_first_troponin_val\nFROM\n    identified_cohort;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 3c2d94b3-b7f7-4348-a855-d8982da25c48\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]\n\nLocation: US\nJob ID: 7cd2bebc-c6c8-4532-ac91-fa4eac669b2d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [31:9]; reason: invalidQuery, location: query, message: No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [31:9]\n\nLocation: US\nJob ID: d977089f-a829-4893-8405-f699d613928a\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 3c2d94b3-b7f7-4348-a855-d8982da25c48\n"
+    }
+  ]
+}

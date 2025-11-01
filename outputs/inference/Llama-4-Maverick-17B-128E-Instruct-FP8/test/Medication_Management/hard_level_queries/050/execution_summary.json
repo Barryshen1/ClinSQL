@@ -1,0 +1,28 @@
+{
+  "query": "Patient is female, 86. Among female inpatients age 81\u201391 with AKI, compare medication complexity score distribution and outcomes for those with both CNS\u2011depressant and nephrotoxic drugs versus other AKI patients. Report quartiles, mean complexity, overall LOS and mortality, and top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH patients AS (\n  SELECT subject_id, gender, anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age BETWEEN 81 AND 91\n),\naki_patients AS (\n  -- Simplified AKI identification using creatinine levels from labevents\n  SELECT DISTINCT l.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON l.itemid = d.itemid\n  WHERE d.label LIKE '%Creatinine%' AND l.valuenum > 1.2  -- Simplified AKI criterion\n),\n-- Creating a CTE to manually categorize drugs\ndrug_labels AS (\n  SELECT 'Morphine' AS drug_name, 'CNS-Depressant' AS category UNION ALL\n  SELECT 'Furosemide', 'Nephrotoxic' UNION ALL\n  SELECT 'Gentamicin', 'Nephrotoxic' UNION ALL\n  SELECT 'Lorazepam', 'CNS-Depressant'\n  -- Add more drugs and their categories as needed\n),\ndrug_exposure AS (\n  SELECT p.hadm_id, \n         COUNT(DISTINCT CASE WHEN dl.category = 'CNS-Depressant' THEN p.drug END) AS num_cns_depressant,\n         COUNT(DISTINCT CASE WHEN dl.category = 'Nephrotoxic' THEN p.drug END) AS num_nephrotoxic\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  LEFT JOIN drug_labels dl ON p.drug = dl.drug_name\n  GROUP BY p.hadm_id\n),\nmed_complexity AS (\n  SELECT hadm_id, COUNT(*) AS num_drugs, COUNT(DISTINCT drug) AS num_unique_drugs\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  GROUP BY hadm_id\n),\noutcomes AS (\n  SELECT a.hadm_id, \n         DATETIME_DIFF(a.dischtime, a.admittime, HOUR) AS los,\n         a.deathtime IS NOT NULL AS died_in_hospital\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\ncohort AS (\n  SELECT p.subject_id, a.hadm_id,\n         COALESCE(de.num_cns_depressant, 0) > 0 AND COALESCE(de.num_nephrotoxic, 0) > 0 AS exposed_to_both,\n         mc.num_drugs, mc.num_unique_drugs,\n         o.los, o.died_in_hospital\n  FROM patients p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN aki_patients ap ON a.hadm_id = ap.hadm_id\n  LEFT JOIN drug_exposure de ON a.hadm_id = de.hadm_id\n  LEFT JOIN med_complexity mc ON a.hadm_id = mc.hadm_id\n  JOIN outcomes o ON a.hadm_id = o.hadm_id\n)\nSELECT \n  exposed_to_both,\n  APPROX_QUANTILES(num_drugs, 100) AS drugs_quartiles,\n  AVG(num_drugs) AS mean_num_drugs,\n  AVG(los) AS mean_los,\n  SUM(CAST(died_in_hospital AS INT64)) / COUNT(*) AS mortality,\n  APPROX_QUANTILES(num_drugs, 100)[OFFSET(75)] AS top_quartile_num_drugs,\n  APPROX_QUANTILES(los, 100)[OFFSET(75)] AS top_quartile_los\nFROM cohort\nGROUP BY exposed_to_both;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"drug_labels\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: drug_labels, message: Table \"drug_labels\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: b294534f-fe8b-4ffa-99d3-ad528182405f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e45a6181-0d66-477d-9d26-b6180f3eb494\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

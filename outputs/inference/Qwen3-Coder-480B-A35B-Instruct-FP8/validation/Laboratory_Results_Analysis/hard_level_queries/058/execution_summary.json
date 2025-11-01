@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 45\u2011year\u2011old woman admitted with ACS. Among female inpatients age 40\u201350 with ACS, what is the 90th\u2011percentile first\u201148\u2011hour laboratory instability score? For patients at/above that threshold report mortality, mean LOS, and critical\u2011lab rate versus general inpatients.",
+  "final_sql": "WITH target_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.intime AS icu_intime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND (\n      dd.long_title LIKE '%acute coronary%'\n      OR dd.long_title LIKE '%myocardial infarction%'\n      OR dd.icd_code IN ('410', '4100', '4101', '4102', '4103', '4104', '4105', '4106', '4107', '4108', '4109', '4111', 'I21', 'I22', 'I23', 'I24')\n    )\n),\n\nlab_instability AS (\n  SELECT\n    tp.stay_id,\n    COUNT(*) AS instability_score\n  FROM\n    target_patients tp\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON tp.hadm_id = l.hadm_id\n  WHERE\n    l.flag = 'abnormal'\n    AND l.charttime >= tp.icu_intime\n    AND l.charttime <= DATETIME_ADD(tp.icu_intime, INTERVAL 48 HOUR)\n  GROUP BY\n    tp.stay_id\n),\n\npercentile_90 AS (\n  SELECT\n    PERCENTILE_CONT(instability_score, 0.9) OVER() AS p90_score\n  FROM\n    lab_instability\n  LIMIT 1\n),\n\ncohort_metrics AS (\n  SELECT\n    'High Instability (Top 10%)' AS cohort,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality,\n    AVG(los_days) AS mean_los,\n    AVG(CASE WHEN li.instability_score > 0 THEN 1.0 ELSE 0.0 END) AS critical_lab_rate\n  FROM\n    target_patients tp\n  LEFT JOIN\n    lab_instability li\n    ON tp.stay_id = li.stay_id\n  CROSS JOIN\n    percentile_90 p90\n  WHERE\n    COALESCE(li.instability_score, 0) >= p90.p90_score\n\n  UNION ALL\n\n  SELECT\n    'General Inpatients (40-50 Female ACS)' AS cohort,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality,\n    AVG(los_days) AS mean_los,\n    AVG(CASE WHEN li.instability_score > 0 THEN 1.0 ELSE 0.0 END) AS critical_lab_rate\n  FROM\n    target_patients tp\n  LEFT JOIN\n    lab_instability li\n    ON tp.stay_id = li.stay_id\n)\n\nSELECT * FROM cohort_metrics\nORDER BY cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

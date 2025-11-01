@@ -1,0 +1,23 @@
+{
+  "query": "For my 53-year-old female ICU patient, among ICU stays aged 48\u201358, report percent distribution of per\u2011stay average HR in first 48h (<60; 60\u201399; 100\u2013119; \u2265120) and AKI rate by category.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON p.subject_id = i.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year) BETWEEN 48 AND 58\n),\n\nhr_data AS (\n  SELECT \n    pf.stay_id,\n    AVG(c.valuenum) AS avg_hr\n  FROM patients_filtered pf\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON pf.stay_id = c.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON c.itemid = d.itemid\n  WHERE d.label = 'Heart Rate'\n    AND c.charttime BETWEEN pf.intime AND DATETIME_ADD(pf.intime, INTERVAL 48 HOUR)\n    AND c.valuenum IS NOT NULL\n  GROUP BY pf.stay_id\n),\n\nbaseline_creat AS (\n  SELECT \n    pf.stay_id,\n    MIN(l.valuenum) AS baseline_creat\n  FROM patients_filtered pf\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON pf.hadm_id = l.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d\n    ON l.itemid = d.itemid\n  WHERE d.label = 'Creatinine' AND d.fluid = 'Blood'\n    AND l.charttime BETWEEN pf.intime AND DATETIME_ADD(pf.intime, INTERVAL 24 HOUR)\n    AND l.valuenum IS NOT NULL\n  GROUP BY pf.stay_id\n),\n\naki_data AS (\n  SELECT \n    bc.stay_id,\n    MAX(CASE \n          WHEN l.valuenum >= bc.baseline_creat * 1.5 \n            OR l.valuenum >= bc.baseline_creat + 0.3 \n          THEN 1 ELSE 0 \n        END) AS has_aki\n  FROM baseline_creat bc\n  INNER JOIN patients_filtered pf ON bc.stay_id = pf.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON pf.hadm_id = l.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d\n    ON l.itemid = d.itemid\n  WHERE d.label = 'Creatinine' AND d.fluid = 'Blood'\n    AND l.charttime BETWEEN pf.intime AND pf.outtime\n    AND l.valuenum IS NOT NULL\n  GROUP BY bc.stay_id\n),\n\ncombined AS (\n  SELECT \n    pf.stay_id,\n    hr.avg_hr,\n    COALESCE(aki.has_aki, 0) AS has_aki\n  FROM patients_filtered pf\n  LEFT JOIN hr_data hr ON pf.stay_id = hr.stay_id\n  LEFT JOIN aki_data aki ON pf.stay_id = aki.stay_id\n  WHERE hr.avg_hr IS NOT NULL\n),\n\ncategorized AS (\n  SELECT\n    stay_id,\n    avg_hr,\n    has_aki,\n    CASE \n      WHEN avg_hr < 60 THEN '<60'\n      WHEN avg_hr BETWEEN 60 AND 99 THEN '60-99'\n      WHEN avg_hr BETWEEN 100 AND 119 THEN '100-119'\n      WHEN avg_hr >= 120 THEN '>=120'\n      ELSE NULL\n    END AS hr_category\n  FROM combined\n)\n\nSELECT\n  hr_category,\n  COUNT(*) AS stay_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percent_distribution,\n  ROUND(AVG(has_aki) * 100, 2) AS aki_rate\nFROM categorized\nGROUP BY hr_category\nORDER BY \n  CASE hr_category\n    WHEN '<60' THEN 1\n    WHEN '60-99' THEN 2\n    WHEN '100-119' THEN 3\n    WHEN '>=120' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword BETWEEN at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword BETWEEN at [1:10]\n\nLocation: US\nJob ID: 7832eed8-6480-478a-bbb4-7baa731fcf00\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

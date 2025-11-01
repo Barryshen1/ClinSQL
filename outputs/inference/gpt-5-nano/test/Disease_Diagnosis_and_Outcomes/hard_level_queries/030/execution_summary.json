@@ -1,0 +1,28 @@
+{
+  "query": "For a 69-year-old male inpatient, among male inpatients aged 64\u201374 with upper GI bleeding stratified into quintiles by composite risk score (diagnosis count +20\u00d7major complication), give n, mean score, 30\u2011day mortality %, major complication %, and median LOS among survivors.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    p.gender,\n    p.anchor_age,\n    -- diag_count: number of distinct ICD codes for this admission\n    (\n      SELECT COUNT(DISTINCT di.icd_code)\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n    ) AS diag_count,\n    -- major_comp: 1 if there exists a Major DRG severity for this admission, else 0\n    COALESCE(\n      (\n        SELECT MAX(CASE WHEN gc.drg_severity = 'Major' THEN 1 ELSE 0 END)\n        FROM `physionet-data.mimiciv_3_1_hosp.drgcodes` gc\n        WHERE gc.subject_id = a.subject_id\n          AND gc.hadm_id = a.hadm_id\n      ),\n      0\n    ) AS major_comp\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = a.subject_id\n  WHERE LOWER(p.gender) = 'm'\n    AND p.anchor_age BETWEEN 64 AND 74\n    -- UGIB: ensure this admission has an upper GI bleeding diagnosis\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON dd.icd_code = di.icd_code\n       AND dd.icd_version = di.icd_version\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND (\n          LOWER(dd.long_title) LIKE '%upper gastrointestinal hemorrhage%'\n          OR LOWER(dd.long_title) LIKE '%upper gastrointestinal bleed%'\n          OR LOWER(dd.long_title) LIKE '%gastrointestinal hemorrhage%'\n          OR LOWER(dd.long_title) LIKE '%gastric hemorrhage%'\n          OR di.icd_code IN ('578.0','578.1','578.9') -- common UGIB codes (ICD-9)\n        )\n    )\n),\nscored AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    deathtime,\n    diag_count,\n    major_comp,\n    (diag_count + 20 * major_comp) AS score,\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) + 1 AS los_days,\n    CASE\n      WHEN deathtime IS NOT NULL\n           AND TIMESTAMP_DIFF(deathtime, admittime, DAY) <= 30\n      THEN 1\n      ELSE 0\n    END AS mort30\n  FROM base_admissions\n)\nSELECT\n  quintile,\n  COUNT(*) AS n,\n  AVG(score) AS mean_score,\n  100.0 * SUM(mort30) / COUNT(*) AS mortality_30_day_percent,\n  100.0 * SUM(major_comp) / COUNT(*) AS major_complication_percent,\n  APPROX_MEDIAN(los_days) FILTER (WHERE mort30 = 0) AS median_los_survivors\nFROM (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY score) AS quintile\n  FROM scored\n) t\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got \"(\" at [75:34]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [75:34]\n\nLocation: US\nJob ID: f2d69655-9286-4267-82f4-64c5a8636c36\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [73:27]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [73:27]\n\nLocation: US\nJob ID: 721aa9ea-377a-4a1b-82b4-c530df9f5a66\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [73:34]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [73:34]\n\nLocation: US\nJob ID: 174133ee-31ef-4b21-b0c0-164a467f1f68\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [75:34]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [75:34]\n\nLocation: US\nJob ID: f2d69655-9286-4267-82f4-64c5a8636c36\n"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For 57-year-old female transferred from another hospital, among females 52\u201362 transferred in, report mean \u00b1 SD LOS and percentile rank of 5\u2011day LOS for discharged home, facility, in\u2011hospital death.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admission_location,\n    a.discharge_location,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND (\n      LOWER(a.admission_location) LIKE '%transfer%'\n      OR LOWER(a.admission_location) LIKE '%other hospital%'\n    )\n),\nicu_los AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.discharge_location,\n    c.hospital_expire_flag,\n    i.stay_id,\n    i.los\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n      ON c.subject_id = i.subject_id\n      AND c.hadm_id = i.hadm_id\n  WHERE\n    i.los IS NOT NULL\n),\ndischarge_grouped AS (\n  SELECT\n    *,\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'Death'\n      WHEN LOWER(discharge_location) LIKE '%home%' THEN 'Home'\n      WHEN LOWER(discharge_location) LIKE '%facility%'\n        OR LOWER(discharge_location) LIKE '%nursing%'\n        OR LOWER(discharge_location) LIKE '%rehab%'\n        OR LOWER(discharge_location) LIKE '%skilled%'\n        OR LOWER(discharge_location) LIKE '%long term%'\n        OR LOWER(discharge_location) LIKE '%snf%'\n        THEN 'Facility'\n      ELSE 'Other'\n    END AS discharge_group\n  FROM\n    icu_los\n)\n, stats AS (\n  SELECT\n    discharge_group,\n    COUNT(*) AS n_stays,\n    AVG(los) AS mean_los,\n    STDDEV(los) AS sd_los\n  FROM\n    discharge_grouped\n  WHERE\n    discharge_group IN ('Home', 'Facility', 'Death')\n  GROUP BY\n    discharge_group\n)\n, percentiles AS (\n  SELECT\n    discharge_group,\n    los,\n    PERCENT_RANK() OVER (PARTITION BY discharge_group ORDER BY los) AS los_percentile\n  FROM\n    discharge_grouped\n  WHERE\n    discharge_group IN ('Home', 'Facility', 'Death')\n)\n, percentile_5day AS (\n  -- Find closest LOS to 5 days for each group\n  SELECT\n    discharge_group,\n    los,\n    los_percentile,\n    ABS(los - 5) AS los_diff,\n    ROW_NUMBER() OVER (PARTITION BY discharge_group ORDER BY ABS(los - 5)) AS rn\n  FROM\n    percentiles\n)\nSELECT\n  s.discharge_group,\n  s.n_stays,\n  ROUND(s.mean_los, 2) AS mean_los,\n  ROUND(s.sd_los, 2) AS sd_los,\n  ROUND(p.los_percentile * 100, 1) AS percentile_rank_5day\nFROM\n  stats s\n  LEFT JOIN percentile_5day p\n    ON s.discharge_group = p.discharge_group\n    AND p.rn = 1\nORDER BY\n  s.discharge_group\n;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

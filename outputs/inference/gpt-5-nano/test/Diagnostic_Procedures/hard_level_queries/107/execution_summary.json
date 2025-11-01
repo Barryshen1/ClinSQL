@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH pe_subjects AS (\n  -- Female patients aged 65-75 with pulmonary embolism in their hospitalization\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON di.subject_id = p.subject_id\n  WHERE LOWER(dd.long_title) LIKE '%pulmonary embolism%'\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 65 AND 75\n),\nfirst_stay AS (\n  -- First ICU stay per subject from the PE-subjects pool\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  WHERE s.subject_id IN (SELECT subject_id FROM pe_subjects)\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY s.subject_id ORDER BY s.intime) = 1\n),\nper_stay_metrics AS (\n  -- For each first ICU stay, compute the diagnostic/procedure count within 72 hours\n  SELECT\n    fs.subject_id,\n    fs.hadm_id,\n    fs.stay_id,\n    fs.intime,\n    fs.outtime,\n    fs.los,\n    a.hospital_expire_flag,\n    SUM(\n      CASE\n        WHEN pi.chartdate IS NOT NULL\n             AND DATE(pi.chartdate) BETWEEN DATE(fs.intime) AND DATE_ADD(DATE(fs.intime), INTERVAL 3 DAY)\n             AND (\n                   LOWER(dp.long_title) LIKE '%diagnostic%'\n                   OR LOWER(dp.long_title) LIKE '%imaging%'\n                   OR LOWER(dp.long_title) LIKE '%diagnosis%'\n                 )\n        THEN 1\n        ELSE 0\n      END\n    ) AS proc_count\n  FROM first_stay fs\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON fs.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n    ON pi.subject_id = fs.subject_id\n   AND pi.hadm_id = fs.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n    ON pi.icd_code = dp.icd_code\n   AND pi.icd_version = dp.icd_version\n  GROUP BY\n    fs.subject_id, fs.hadm_id, fs.stay_id, fs.intime, fs.outtime, fs.los, a.hospital_expire_flag\n),\nquartile_ready AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    outtime,\n    los,\n    hospital_expire_flag,\n    proc_count,\n    NTILE(4) OVER (ORDER BY proc_count) AS quartile\n  FROM per_stay_metrics\n)\nSELECT\n  quartile,\n  COUNT(*) AS N,\n  AVG(proc_count) AS mean_proc_count,\n  AVG(los) AS mean_icu_los_days,\n  100 * SUM(hospital_expire_flag) / COUNT(*) AS mortality_percent\nFROM quartile_ready\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WHERE at [21:3]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WHERE at [21:3]\n\nLocation: US\nJob ID: b0784fd3-4547-4666-a1c7-8940da2e5586\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

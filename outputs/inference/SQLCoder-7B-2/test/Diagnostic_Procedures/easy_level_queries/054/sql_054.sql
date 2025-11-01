@@ -1,0 +1,1 @@
+SELECT MAX(COUNT(DISTINCT p.procedure_id)) AS max_procedures FROM patients p JOIN procedures_icd pi ON p.subject_id = pi.subject_id WHERE p.gender = 'F' AND p.anchor_year = 1986 AND EXTRACT(YEAR FROM p.admittime) = 2020 AND pi.icd_code = 'E1111' GROUP BY p.subject_id HAVING COUNT(DISTINCT p.subject_id) > 1;

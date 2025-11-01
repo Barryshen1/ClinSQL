@@ -1,0 +1,16 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH all_admissions AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    pt.gender,\n    pt.anchor_age,\n    pt.anchor_year,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n    ON adm.subject_id = pt.subject_id\n),\n\ncritical_labs AS (\n  SELECT\n    le.hadm_id,\n    COUNT(le.labevent_id) AS critical_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN all_admissions aa\n    ON le.hadm_id = aa.hadm_id\n  WHERE\n    le.charttime BETWEEN aa.admittime AND DATETIME_ADD(aa.admittime, INTERVAL 48 HOUR)\n    AND le.flag IS NOT NULL  -- Critical lab defined by non-null flag\n  GROUP BY le.hadm_id\n),\n\nadmissions_with_labs AS (\n  SELECT\n    aa.*,\n    COALESCE(cl.critical_count, 0) AS critical_count,\n    aa.anchor_age + (EXTRACT(YEAR FROM aa.admittime) - aa.anchor_year) AS age_at_admission\n  FROM all_admissions aa\n  LEFT JOIN critical_labs cl\n    ON aa.hadm_id = cl.hadm_id\n),\n\nhemorrhagic_stroke_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    (icd_version = 9 AND icd_code IN ('430', '431', '432'))\n    OR (icd_version = 10 AND icd_code LIKE 'I6[0-2]%')\n),\n\ncohort AS (\n  SELECT\n    awl.*\n  FROM admissions_with_labs awl\n  INNER JOIN hemorrhagic_stroke_admissions hsa\n    ON awl.hadm_id = hsa.hadm_id\n  WHERE\n    awl.gender = 'M'\n    AND awl.age_at_admission BETWEEN 70 AND 80\n),\n\ncohort_stats AS (\n  SELECT\n    APPROX_QUANTILES(critical_count, 100)[OFFSET(25)] AS percentile_25_score,\n    AVG(critical_count) AS cohort_avg_critical_events,\n    AVG(los_days) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM cohort\n),\n\ngeneral_pop_stats AS (\n  SELECT\n    AVG(critical_count) AS general_avg_critical_events\n  FROM admissions_with_labs\n)\n\nSELECT\n  cs.percentile_25_score,\n  cs.cohort_avg_critical_events,\n  gps.general_avg_critical_events,\n  cs.mean_los,\n  cs.mortality_rate\nFROM cohort_stats cs, general_pop_stats gps;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

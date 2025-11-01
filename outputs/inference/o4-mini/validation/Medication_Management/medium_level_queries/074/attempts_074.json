@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH\n-- 1. Base admissions for female patients aged 48\u201358\nadms AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND a.dischtime IS NOT NULL\n),\n\n-- 2. Identify admissions with both diabetes and heart failure\ndx AS (\n  SELECT\n    di.hadm_id,\n    MAX(CASE WHEN LOWER(d.long_title) LIKE '%diabetes%' THEN 1 ELSE 0 END) AS has_diabetes,\n    MAX(CASE WHEN LOWER(d.long_title) LIKE '%heart failure%' THEN 1 ELSE 0 END) AS has_hf\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n      ON di.icd_code = d.icd_code\n      AND di.icd_version = d.icd_version\n  GROUP BY\n    di.hadm_id\n),\n\n-- 3. Filter cohort to those admissions with both conditions\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    adms a\n    JOIN dx\n      ON a.hadm_id = dx.hadm_id\n  WHERE\n    dx.has_diabetes = 1\n    AND dx.has_hf = 1\n),\n\n-- 4. Flag GLP-1 subcutaneous starts within time windows\nglp_flags AS (\n  SELECT\n    c.hadm_id,\n    MAX(CASE\n          WHEN pr.starttime >= c.admittime\n           AND pr.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR)\n          THEN 1 ELSE 0\n        END) AS first24_flag,\n    MAX(CASE\n          WHEN pr.starttime >= TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR)\n           AND pr.starttime < c.dischtime\n          THEN 1 ELSE 0\n        END) AS final12_flag\n  FROM\n    cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n      ON c.hadm_id = pr.hadm_id\n      AND LOWER(pr.route) LIKE '%sc%'\n      AND LOWER(pr.drug) IN ('liraglutide', 'exenatide', 'dulaglutide', 'semaglutide')\n  GROUP BY\n    c.hadm_id\n)\n\n-- 5. Aggregate for prevalence\nSELECT\n  COUNT(*) AS total_admissions,\n  SUM(first24_flag) AS starts_in_first_24h,\n  ROUND(100.0 * SUM(first24_flag) / COUNT(*), 2) AS pct_first_24h,\n  SUM(final12_flag) AS starts_in_final_12h,\n  ROUND(100.0 * SUM(final12_flag) / COUNT(*), 2) AS pct_final_12h\nFROM\n  glp_flags;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

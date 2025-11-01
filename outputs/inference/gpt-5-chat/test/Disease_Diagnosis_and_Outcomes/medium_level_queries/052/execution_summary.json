@@ -1,0 +1,16 @@
+{
+  "query": "For my 57\u2011year\u2011old male stroke patient: among males 52\u201362, by ICU vs non\u2011ICU, LOS \u22645 vs >5 days and comorbidity tertile, report in\u2011hospital mortality (%) and CKD and diabetes prevalence (%).",
+  "final_sql": "WITH base_cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\nicu_flagged AS (\n  SELECT\n    b.*,\n    CASE WHEN icu.subject_id IS NOT NULL THEN 1 ELSE 0 END AS icu_flag\n  FROM base_cohort b\n  LEFT JOIN (\n    SELECT DISTINCT subject_id, hadm_id\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) icu\n    ON b.subject_id = icu.subject_id\n   AND b.hadm_id = icu.hadm_id\n),\nlos_categorized AS (\n  SELECT\n    *,\n    CASE WHEN DATE_DIFF(dischtime, admittime, DAY) <= 5 THEN '\u22645 days' ELSE '>5 days' END AS los_cat\n  FROM icu_flagged\n),\ncomorbidity_count AS (\n  SELECT\n    lc.subject_id,\n    lc.hadm_id,\n    lc.gender,\n    lc.anchor_age,\n    lc.admittime,\n    lc.dischtime,\n    lc.hospital_expire_flag,\n    lc.icu_flag,\n    lc.los_cat,\n    COUNT(DISTINCT d.icd_code) AS comorb_count\n  FROM los_categorized lc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON lc.subject_id = d.subject_id\n   AND lc.hadm_id = d.hadm_id\n  GROUP BY lc.subject_id, lc.hadm_id, lc.gender, lc.anchor_age,\n           lc.admittime, lc.dischtime, lc.hospital_expire_flag,\n           lc.icu_flag, lc.los_cat\n),\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY comorb_count) AS comorb_tertile\n  FROM comorbidity_count\n),\ndx_flags AS (\n  SELECT\n    t.*,\n    -- Flag CKD per ICD-9/10 pattern in diagnosis text\n    MAX( CASE\n          WHEN (dl.icd_version = 9 AND dl.icd_code LIKE '585%')\n            OR (dl.icd_version = 10 AND dl.icd_code LIKE 'N18%')\n          THEN 1 ELSE 0 END\n        ) AS ckdpresent,\n    MAX( CASE\n          WHEN (dl.icd_version = 9 AND dl.icd_code LIKE '250%')\n            OR (dl.icd_version = 10 AND dl.icd_code LIKE 'E1%' AND SUBSTR(dl.icd_code,1,3) IN ('E10','E11','E12','E13','E14'))\n          THEN 1 ELSE 0 END\n        ) AS diabpresent\n  FROM tertiles t\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dl\n    ON t.subject_id = dl.subject_id\n   AND t.hadm_id = dl.hadm_id\n  GROUP BY t.subject_id, t.hadm_id, t.gender, t.anchor_age, t.admittime,\n           t.dischtime, t.hospital_expire_flag, t.icu_flag, t.los_cat,\n           t.comorb_count, t.comorb_tertile\n)\nSELECT\n  icu_flag,\n  los_cat,\n  comorb_tertile,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(hospital_expire_flag)*100,2) AS mortality_pct,\n  ROUND(AVG(ckdpresent)*100,2) AS ckd_pct,\n  ROUND(AVG(diabpresent)*100,2) AS diabetes_pct\nFROM dx_flags\nGROUP BY icu_flag, los_cat, comorb_tertile\nORDER BY icu_flag, los_cat, comorb_tertile;",
+  "execution_success": true,
+  "row_count": 12,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 12,
+      "error": null
+    }
+  ]
+}

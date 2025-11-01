@@ -1,0 +1,22 @@
+{
+  "query": "For a 92\u2011year\u2011old man with ACS: among male inpatients aged 87\u201397, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u2265P95 report mean LOS, in\u2011hospital mortality, and compare avg critical lab events per patient to general inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 87 AND 97\n),\nlab_instability AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNTIF(LOWER(le.flag) = 'abnormal') AS instability_score\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.subject_id = le.subject_id\n    AND c.hadm_id = le.hadm_id\n  WHERE le.charttime >= c.admittime\n    AND le.charttime < DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.subject_id, c.hadm_id\n),\np95_calc AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(95)] AS p95_score\n  FROM lab_instability\n),\nhigh_instability AS (\n  SELECT li.*, c.dischtime, c.admittime, c.hospital_expire_flag\n  FROM lab_instability li\n  JOIN cohort c\n    ON li.hadm_id = c.hadm_id\n  CROSS JOIN p95_calc p95\n  WHERE li.instability_score >= p95.p95_score\n),\nmetrics_high AS (\n  SELECT\n    AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS mean_los_days,\n    AVG(hospital_expire_flag) AS in_hosp_mortality_rate,\n    AVG(instability_score) AS avg_critical_lab_events_per_patient\n  FROM high_instability\n),\ngeneral_inpatients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    COUNTIF(LOWER(le.flag) = 'abnormal') AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON a.subject_id = le.subject_id\n    AND a.hadm_id = le.hadm_id\n  WHERE le.charttime >= a.admittime\n    AND le.charttime < DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n  GROUP BY a.subject_id, a.hadm_id\n),\nmetrics_general AS (\n  SELECT\n    AVG(instability_score) AS avg_critical_lab_events_per_patient\n  FROM general_inpatients\n)\nSELECT\n  p95_score,\n  mh.mean_los_days,\n  mh.in_hosp_mortality_rate,\n  mh.avg_critical_lab_events_per_patient AS avg_events_high_group,\n  mg.avg_critical_lab_events_per_patient AS avg_events_general_inpatients\nFROM p95_calc\nCROSS JOIN metrics_high mh\nCROSS JOIN metrics_general mg;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 INNER JOIN must have an immediately following ON or USING clause at [72:1]; reason: invalidQuery, location: query, message: INNER JOIN must have an immediately following ON or USING clause at [72:1]\n\nLocation: US\nJob ID: 12285268-e548-49b4-a5e1-e4a5af20f5f7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

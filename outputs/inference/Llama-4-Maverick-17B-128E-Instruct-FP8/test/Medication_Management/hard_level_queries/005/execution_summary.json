@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 48\u2011year\u2011old man. Among male inpatients aged 43\u201353 with hepatic failure, compute medication complexity score over the first 72 hours, stratify into quintiles, and report per quintile: n, min/max/mean score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH \npatients_filtered AS (\n  SELECT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 43 AND 53\n),\nhepatic_failure AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Hepatic failure%' OR dicd.long_title LIKE '%Liver failure%'\n),\nmed_complexity AS (\n  SELECT pf.hadm_id, COUNT(DISTINCT pr.drug) AS med_count\n  FROM patients_filtered pf\n  JOIN hepatic_failure hf ON pf.hadm_id = hf.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON pf.hadm_id = pr.hadm_id\n  WHERE pr.starttime BETWEEN pf.admittime AND TIMESTAMP_ADD(pf.admittime, INTERVAL 72 HOUR)\n  GROUP BY pf.hadm_id\n),\npatient_outcomes AS (\n  SELECT pf.hadm_id, \n         TIMESTAMP_DIFF(pf.dischtime, pf.admittime, HOUR) / 24 AS los,\n         CASE WHEN pf.deathtime IS NOT NULL THEN 1 ELSE 0 END AS in_hospital_mortality,\n         LEAD(pf.admittime, 1) OVER (PARTITION BY pf.subject_id ORDER BY pf.admittime) AS next_admit,\n         pf.dischtime\n  FROM patients_filtered pf\n  JOIN hepatic_failure hf ON pf.hadm_id = hf.hadm_id\n),\ncombined_data AS (\n  SELECT mc.hadm_id, mc.med_count, po.los, po.in_hospital_mortality,\n         CASE WHEN TIMESTAMP_DIFF(po.next_admit, po.dischtime, DAY) <= 30 THEN 1 ELSE 0 END AS readmit_30day\n  FROM med_complexity mc\n  JOIN patient_outcomes po ON mc.hadm_id = po.hadm_id\n),\nquintiles AS (\n  SELECT hadm_id, med_count, los, in_hospital_mortality, readmit_30day,\n         NTILE(5) OVER (ORDER BY med_count) AS quintile\n  FROM combined_data\n)\nSELECT \n  quintile,\n  COUNT(*) AS n,\n  MIN(med_count) AS min_med_count,\n  MAX(med_count) AS max_med_count,\n  AVG(med_count) AS mean_med_count,\n  AVG(los) AS mean_los,\n  AVG(in_hospital_mortality) * 100 AS in_hospital_mortality_pct,\n  AVG(readmit_30day) * 100 AS readmit_30day_pct\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have an 82-year-old male. Among male patients age 77\u201387 admitted with AMI, what's the distribution of initial hs\u2011TnT (normal / borderline / myocardial injury)? Report counts and percentages.",
+  "final_sql": "WITH\n-- Get AMI ICD codes (ICD-9: 410.xx, ICD-10: I21.x)\nami_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code LIKE '410.%' OR icd_code LIKE 'I21.%'\n),\n\n-- Get male patients aged 77-87 with AMI admission\nami_patients AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN ami_codes ac\n    ON d.icd_code = ac.icd_code AND d.icd_version = ac.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 77 AND 87\n),\n\n-- Get first hs-TnT measurement per admission\nfirst_hs_tnt AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d\n    ON l.itemid = d.itemid\n  WHERE l.hadm_id IN (SELECT hadm_id FROM ami_patients)\n    AND d.label = 'Troponin T, High Sensitivity'\n    AND l.valuenum IS NOT NULL\n)\n\n-- Categorize and aggregate\nSELECT\n  CASE\n    WHEN valuenum < 14 THEN 'Normal (< 14 ng/L)'\n    WHEN valuenum BETWEEN 14 AND 50 THEN 'Borderline (14\u201350 ng/L)'\n    WHEN valuenum > 50 THEN 'Myocardial Injury (> 50 ng/L)'\n    ELSE 'Unknown'\n  END AS hs_tnt_category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage\nFROM first_hs_tnt\nWHERE rn = 1  -- Only first measurement per admission\nGROUP BY hs_tnt_category\nORDER BY\n  CASE hs_tnt_category\n    WHEN 'Normal (< 14 ng/L)' THEN 1\n    WHEN 'Borderline (14\u201350 ng/L)' THEN 2\n    WHEN 'Myocardial Injury (> 50 ng/L)' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have an 85-year-old female inpatient. Among females aged 80\u201390, what's the maximum duration of a single IV/oral/sublingual nitrate prescription?",
+  "final_sql": "WITH orders AS (\n  -- prescriptions table\n  SELECT\n    subject_id,\n    hadm_id,\n    drug AS drug_name,\n    route,\n    starttime,\n    stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE starttime IS NOT NULL\n    AND stoptime IS NOT NULL\n\n  UNION ALL\n\n  -- pharmacy table (additional source of hospital medication orders)\n  SELECT\n    subject_id,\n    hadm_id,\n    medication AS drug_name,\n    route,\n    starttime,\n    stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.pharmacy`\n  WHERE starttime IS NOT NULL\n    AND stoptime IS NOT NULL\n),\n\nnitrate_orders AS (\n  -- identify likely nitrate medications by name pattern\n  SELECT\n    o.*,\n    CAST(TIMESTAMP_DIFF(o.stoptime, o.starttime, MINUTE) AS FLOAT64) / 1440.0 AS duration_days\n  FROM orders o\n  WHERE LOWER(COALESCE(o.drug_name, '')) LIKE '%nitro%'\n     OR LOWER(COALESCE(o.drug_name, '')) LIKE '%isosorbide%'\n     OR REGEXP_CONTAINS(LOWER(COALESCE(o.drug_name, '')), r'\\bntg\\b')\n),\n\ninpatient_nitrate_orders AS (\n  -- restrict to female inpatients aged 80-90 and relevant routes (IV/oral/sublingual)\n  SELECT\n    n.subject_id,\n    n.hadm_id,\n    n.drug_name,\n    n.route,\n    n.starttime,\n    n.stoptime,\n    n.duration_days,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime\n  FROM nitrate_orders n\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON n.subject_id = a.subject_id\n   AND n.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON n.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 80 AND 90\n    -- ensure prescription started during the hospital admission (inpatient)\n    AND n.starttime >= a.admittime\n    AND n.starttime <= a.dischtime\n    -- positive duration only\n    AND n.stoptime > n.starttime\n    -- route is IV, oral, or sublingual (case-insensitive, handles variants)\n    AND REGEXP_CONTAINS(LOWER(COALESCE(n.route, '')), r'(iv|intravenous|oral|subling)')\n)\n\nSELECT\n  MAX(duration_days) AS max_duration_days,\n  MAX(duration_days) * 24.0 AS max_duration_hours\nFROM inpatient_nitrate_orders;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: medication at [6:20]; reason: invalidQuery, location: query, message: Unrecognized name: medication at [6:20]\n\nLocation: US\nJob ID: 8e59fa05-49b9-499a-8104-8d529004ee6d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "My 71\u2011year\u2011old female with AMI, no initial shock or respiratory failure: among females 66\u201376 with AMI, report in\u2011hospital mortality (%) and median time\u2011to\u2011death (days) by LOS 1\u20133/4\u20137/\u22658 and emergent vs non\u2011emergent admission.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    adm.hadm_id,\n    pat.subject_id,\n    pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age_at_admission,\n    adm.admittime,\n    adm.dischtime,\n    adm.deathtime,\n    adm.hospital_expire_flag,\n    adm.admission_type\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code LIKE '410%')\n          OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I21%')\n        )\n    )\n),\nfiltered_cohort AS (\n  SELECT \n    *,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS hospital_los_days,\n    CASE \n      WHEN hospital_expire_flag = 1 \n      THEN DATETIME_DIFF(deathtime, admittime, DAY) \n      ELSE NULL \n    END AS time_to_death_days\n  FROM base_cohort\n  WHERE age_at_admission BETWEEN 66 AND 76\n),\ngrouped_data AS (\n  SELECT \n    hadm_id,\n    CASE \n      WHEN hospital_los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN hospital_los_days BETWEEN 4 AND 7 THEN '4-7'\n      WHEN hospital_los_days >= 8 THEN '>=8'\n      ELSE NULL \n    END AS los_group,\n    CASE \n      WHEN admission_type IN ('EMERGENCY', 'URGENT') THEN 'emergent'\n      WHEN admission_type = 'ELECTIVE' THEN 'non-emergent'\n      ELSE NULL \n    END AS admission_category,\n    hospital_expire_flag,\n    time_to_death_days\n  FROM filtered_cohort\n)\nSELECT \n  los_group,\n  admission_category,\n  COUNT(*) AS total_patients,\n  SUM(hospital_expire_flag) AS deaths,\n  ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(*), 2) AS mortality_rate_percent,\n  APPROX_QUANTILES(IF(hospital_expire_flag = 1, time_to_death_days, NULL), 1000)[OFFSET(500)] AS median_time_to_death_days\nFROM grouped_data\nWHERE los_group IS NOT NULL AND admission_category IS NOT NULL\nGROUP BY los_group, admission_category\nORDER BY \n  CASE los_group\n    WHEN '1-3' THEN 1\n    WHEN '4-7' THEN 2\n    WHEN '>=8' THEN 3\n  END,\n  admission_category;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: 916f23a1-6805-43d4-864c-cadcc26a0715\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

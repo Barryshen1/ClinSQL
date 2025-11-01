@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating an 89-year-old woman. Among female patients aged 84\u201394 admitted with ACS whose initial Troponin I exceeded the 99th percentile ULN, report counts and mean, median, IQR.",
+  "final_sql": "WITH troponin_items AS (\n  -- Troponin I itemids (case-insensitive match on label)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin i%'\n),\n\nacs_hadm AS (\n  -- Admissions with an ACS-related diagnosis (text-based match on diagnosis description)\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE\n    (\n      LOWER(d.long_title) LIKE '%acute coronary%'\n      OR LOWER(d.long_title) LIKE '%myocardial infarction%'\n      OR LOWER(d.long_title) LIKE '%unstable angina%'\n      OR LOWER(d.long_title) LIKE '%stemi%'\n      OR LOWER(d.long_title) LIKE '%nstemi%'\n    )\n),\n\ninitial_troponin_events AS (\n  -- All Troponin I lab events that occur during the hospital admission\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum,\n    le.ref_range_upper,\n    le.charttime,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON le.hadm_id = a.hadm_id\n   AND le.subject_id = a.subject_id\n  WHERE\n    -- ensure lab occurred during the admission window\n    le.charttime BETWEEN a.admittime AND a.dischtime\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n),\n\ninitial_tn_per_hadm AS (\n  -- Keep the earliest Troponin I per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum AS initial_tn,\n    ref_range_upper,\n    charttime\n  FROM initial_troponin_events\n  WHERE rn = 1\n),\n\ncohort AS (\n  -- Final cohort: ACS admissions, female, age 84-94 (or masked >89), initial troponin > ref_range_upper\n  SELECT\n    i.hadm_id,\n    i.subject_id,\n    i.initial_tn,\n    i.ref_range_upper\n  FROM initial_tn_per_hadm i\n  JOIN acs_hadm acs\n    ON i.hadm_id = acs.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON i.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    -- anchor_age is the de-identified age field in MIMIC-IV.\n    -- NOTE: ages >89 may be masked (commonly encoded as 300). We include anchor_age = 300 to capture 90-94 (with caveat that 300 includes >94 as well).\n    AND (p.anchor_age BETWEEN 84 AND 94 OR p.anchor_age = 300)\n    AND i.initial_tn > i.ref_range_upper\n),\n\n-- Summary statistics: count and mean\nagg_stats AS (\n  SELECT\n    COUNT(*) AS admission_count,\n    AVG(initial_tn) AS mean_initial_troponin\n  FROM cohort\n),\n\n-- Quantiles: approximate percentiles (0..100)\nquantiles AS (\n  SELECT APPROX_QUANTILES(initial_tn, 100) AS q_arr\n  FROM cohort\n)\n\nSELECT\n  a.admission_count,\n  a.mean_initial_troponin,\n  q.q_arr[OFFSET(25)] AS q1_initial_troponin,\n  q.q_arr[OFFSET(50)] AS median_initial_troponin,\n  q.q_arr[OFFSET(75)] AS q3_initial_troponin,\n  SAFE_SUBTRACT(q.q_arr[OFFSET(75)], q.q_arr[OFFSET(25)]) AS iqr_initial_troponin\nFROM agg_stats a\nCROSS JOIN quantiles q;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"whose\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"whose\" at [1:10]\n\nLocation: US\nJob ID: afeb7fcd-d96a-4aa9-baee-a8218c4b72be\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column q_arr which is neither grouped nor aggregated at [90:3]; reason: invalidQuery, location: query, message: SELECT list expression references column q_arr which is neither grouped nor aggregated at [90:3]\n\nLocation: US\nJob ID: ad3c7545-60f0-4dce-ae75-cc771e91fce3\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

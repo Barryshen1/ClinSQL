@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating an 87\u2011year\u2011old man. Among male ICU patients aged 82\u201392 with cardiogenic shock, stratify first\u201124\u2011hour procedure burden into quintiles and report for each quintile mean procedure count, mean hospital LOS in days, and in\u2011hospital mortality percentage.",
+  "final_sql": "WITH eligible_patients AS (\n  -- Patients aged 82-92, male\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 82 AND 92\n),\n\nfirst_icustays AS (\n  -- First ICU stay per admission for eligible patients\n  SELECT \n    fis.subject_id,\n    fis.hadm_id,\n    fis.stay_id,\n    fis.intime,\n    fis.outtime,\n    ROW_NUMBER() OVER (PARTITION BY fis.hadm_id ORDER BY fis.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` fis\n  INNER JOIN eligible_patients ep ON fis.subject_id = ep.subject_id\n  WHERE fis.intime IS NOT NULL\n    AND fis.outtime IS NOT NULL\n),\n\nshock_cohort AS (\n  -- Add cardiogenic shock filter\n  SELECT \n    fis.*,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM first_icustays fis\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON fis.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON fis.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd ON di.icd_code = icd.icd_code \n    AND di.icd_version = icd.icd_version\n  WHERE fis.rn = 1  -- First stay only\n    AND LOWER(icd.long_title) LIKE '%cardiogenic shock%'\n),\n\nprocedures_24h AS (\n  -- Procedures in first 24h of ICU stay\n  SELECT \n    sc.subject_id,\n    sc.hadm_id,\n    sc.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM shock_cohort sc\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe \n    ON sc.subject_id = pe.subject_id\n    AND sc.hadm_id = pe.hadm_id\n    AND sc.stay_id = pe.stay_id\n    AND (pe.starttime BETWEEN sc.intime AND TIMESTAMP_ADD(sc.intime, INTERVAL 24 HOUR)\n         OR (pe.starttime IS NULL AND pe.endtime BETWEEN sc.intime AND TIMESTAMP_ADD(sc.intime, INTERVAL 24 HOUR)))\n  GROUP BY sc.subject_id, sc.hadm_id, sc.stay_id\n),\n\ncohort_with_procs AS (\n  -- Base cohort with procedures (default to 0 if no procedures)\n  SELECT \n    sc.subject_id,\n    sc.hadm_id,\n    sc.stay_id,\n    COALESCE(p24.procedure_count, 0) AS procedure_count,\n    DATE_DIFF(sc.dischtime, sc.admittime, DAY) AS hospital_los_days,\n    sc.hospital_expire_flag\n  FROM shock_cohort sc\n  LEFT JOIN procedures_24h p24 ON sc.subject_id = p24.subject_id \n    AND sc.hadm_id = p24.hadm_id \n    AND sc.stay_id = p24.stay_id\n)\n\n-- Stratify into quintiles and aggregate\nSELECT \n  quintile,\n  ROUND(AVG(procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(hospital_los_days), 2) AS mean_hospital_los_days,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_percentage\nFROM (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM cohort_with_procs\n)\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

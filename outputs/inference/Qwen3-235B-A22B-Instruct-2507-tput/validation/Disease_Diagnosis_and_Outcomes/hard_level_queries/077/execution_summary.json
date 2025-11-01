@@ -1,0 +1,22 @@
+{
+  "query": "For a 93-year-old male admitted with pneumonia, among males aged 88\u201398 with pneumonia and ICU stay, report cohort size; composite risk score distribution (min, 25th, median, 75th, max); in-hospital mortality, AKI, ARDS rates; and median survival days for decedents.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT DISTINCT\n    pat.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.deathtime,\n    adm.hospital_expire_flag,\n    -- Calculate age at admission\n    (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients pat\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions adm\n    ON pat.subject_id = adm.subject_id\n  WHERE pat.gender = 'M'\n    AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) BETWEEN 88 AND 98\n),\npneumonia_admissions AS (\n  SELECT DISTINCT pa.*\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%pneumonia%'\n),\nicu_patients AS (\n  SELECT DISTINCT pa.*\n  FROM pneumonia_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays icu\n    ON pa.hadm_id = icu.hadm_id\n),\ncohort_with_outcomes AS (\n  SELECT\n    icu.*,\n    drg.drg_severity,\n    -- AKI flag using ICD-10: N179, ICD-9: 5849\n    (\n      SELECT MAX(1)\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n        ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE di.hadm_id = icu.hadm_id\n        AND (\n          (di.icd_version = 10 AND d.icd_code = 'N179') OR\n          (di.icd_version = 9 AND d.icd_code = '5849')\n        )\n    ) AS aki_flag,\n    -- ARDS flag: ICD-10: J80, ICD-9: 51881\n    (\n      SELECT MAX(1)\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n        ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE di.hadm_id = icu.hadm_id\n        AND (\n          (di.icd_version = 10 AND d.icd_code = 'J80') OR\n          (di.icd_version = 9 AND d.icd_code = '51881')\n        )\n    ) AS ards_flag\n  FROM icu_patients icu\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.drgcodes drg\n    ON icu.hadm_id = drg.hadm_id AND drg.drg_type = 'APR'\n),\nfinal_cohort AS (\n  SELECT\n    *,\n    -- Survival days for decedents\n    IF(hospital_expire_flag = 1, DATETIME_DIFF(deathtime, admittime, DAY), NULL) AS survival_days\n  FROM cohort_with_outcomes\n)\n-- Final aggregation\nSELECT\n  COUNT(*) AS cohort_size,\n  -- Distribution of drg_severity (proxy for composite risk score)\n  MIN(drg_severity) AS risk_score_min,\n  APPROX_QUANTILES(drg_severity, 100)[OFFSET(25)] AS risk_score_25th,\n  APPROX_QUANTILES(drg_severity, 100)[OFFSET(50)] AS risk_score_median,\n  APPROX_QUANTILES(drg_severity, 100)[OFFSET(75)] AS risk_score_75th,\n  MAX(drg_severity) AS risk_score_max,\n  -- In-hospital mortality rate\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n  -- AKI rate\n  AVG(CAST(aki_flag AS FLOAT64)) AS aki_rate,\n  -- ARDS rate\n  AVG(CAST(ards_flag AS FLOAT64)) AS ards_rate,\n  -- Median survival days for decedents\n  APPROX_QUANTILES(survival_days, 100 IGNORE NULLS)[OFFSET(50)] AS median_survival_days_decedents\nFROM final_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"who\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"who\" at [1:16]\n\nLocation: US\nJob ID: ed3b2e26-b24b-4990-b18b-8be73f715cfe\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

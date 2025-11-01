@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 49-year-old man with AMI. In male inpatients aged 44\u201354 with AMI, what is the 75th percentile of the first 72\u2011hour lab instability score? Also compare critical lab frequency to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH\n  -- All inpatients for lab reference ranges\n  all_inpatients AS (\n    SELECT DISTINCT p.subject_id, p.gender, p.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n    WHERE a.admission_type LIKE '%INPATIENT%'\n      AND p.anchor_age BETWEEN 44 AND 54\n  ),\n  -- AMI cohort: male inpatients aged 44-54 with AMI\n  ami_cohort AS (\n    SELECT DISTINCT p.subject_id, a.hadm_id, a.admittime, a.dischtime,\n           a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON p.subject_id = a.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON a.hadm_id = di.hadm_id\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 44 AND 54\n      AND di.icd_code LIKE 'I21%'\n      AND di.icd_version = 10\n      AND a.admission_type LIKE '%INPATIENT%'\n  ),\n  -- Lab medians and IQRs from all inpatients (44-54)\n  lab_stats AS (\n    SELECT\n      le.itemid,\n      APPROX_QUANTILES(le.valuenum, 100) [OFFSET(50)] AS median,\n      APPROX_QUANTILES(le.valuenum, 100) [OFFSET(75)] AS q3,\n      APPROX_QUANTILES(le.valuenum, 100) [OFFSET(25)] AS q1,\n      APPROX_QUANTILES(le.valuenum, 100) [OFFSET(75)] - APPROX_QUANTILES(le.valuenum, 100) [OFFSET(25)] AS iqr\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    INNER JOIN all_inpatients ip\n      ON le.subject_id = ip.subject_id\n    WHERE le.valuenum IS NOT NULL\n    GROUP BY le.itemid\n  ),\n  -- Lab events for AMI cohort in first 72 hours\n  ami_labs AS (\n    SELECT\n      ac.subject_id,\n      ac.hadm_id,\n      le.itemid,\n      le.valuenum,\n      ls.median,\n      ls.iqr,\n      -- Instability score for each lab\n      ABS(le.valuenum - ls.median) / NULLIF(ls.iqr, 0) AS instability\n    FROM ami_cohort ac\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON ac.hadm_id = le.hadm_id\n    INNER JOIN lab_stats ls\n      ON le.itemid = ls.itemid\n    WHERE le.charttime BETWEEN ac.admittime AND DATETIME_ADD(ac.admittime, INTERVAL 72 HOUR)\n      AND le.valuenum IS NOT NULL\n  ),\n  -- Max instability per AMI patient\n  ami_max_instability AS (\n    SELECT\n      subject_id,\n      MAX(instability) AS max_instability\n    FROM ami_labs\n    GROUP BY subject_id\n  ),\n  -- Critical labs for AMI cohort (beyond 3*IQR)\n  ami_critical_labs AS (\n    SELECT\n      subject_id,\n      COUNT(*) AS critical_count\n    FROM ami_labs\n    WHERE instability > 3\n    GROUP BY subject_id\n  ),\n  -- Lab events for all inpatients (comparison) in first 72 hours\n  all_ip_labs AS (\n    SELECT\n      ip.subject_id,\n      a.hadm_id,\n      le.itemid,\n      le.valuenum,\n      ls.median,\n      ls.iqr,\n      ABS(le.valuenum - ls.median) / NULLIF(ls.iqr, 0) AS instability\n    FROM all_inpatients ip\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON ip.subject_id = a.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON a.hadm_id = le.hadm_id\n    INNER JOIN lab_stats ls\n      ON le.itemid = ls.itemid\n    WHERE le.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n      AND le.valuenum IS NOT NULL\n  ),\n  -- Critical labs for all inpatients\n  all_ip_critical_labs AS (\n    SELECT\n      subject_id,\n      COUNT(*) AS critical_count\n    FROM all_ip_labs\n    WHERE instability > 3\n    GROUP BY subject_id\n  )\n\n-- Final output\nSELECT\n  (SELECT\n      APPROX_QUANTILES(max_instability, 100)[OFFSET(75)]\n      FROM ami_max_instability) AS percentile_75_max_instability,\n\n  (SELECT\n      AVG(critical_count)\n      FROM ami_critical_labs) AS ami_avg_critical_labs_per_patient,\n\n  (SELECT\n      AVG(critical_count)\n      FROM all_ip_critical_labs) AS all_ip_avg_critical_labs_per_patient,\n\n  (SELECT\n      AVG(DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0)\n      FROM ami_cohort) AS avg_los_days,\n\n  (SELECT\n      AVG(hospital_expire_flag)\n      FROM ami_cohort) AS mortality_rate;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references le.valuenum which is neither grouped nor aggregated at [30:23]; reason: invalidQuery, location: query, message: SELECT list expression references le.valuenum which is neither grouped nor aggregated at [30:23]\n\nLocation: US\nJob ID: 7de2ddbd-cf59-46c2-8968-3daf35f3983c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6a80069d-89d5-4a76-8d87-4a1adcc846d7\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

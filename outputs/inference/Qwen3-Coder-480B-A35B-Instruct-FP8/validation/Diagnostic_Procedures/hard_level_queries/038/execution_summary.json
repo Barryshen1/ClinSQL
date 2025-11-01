@@ -1,0 +1,16 @@
+{
+  "query": "For a 65-year-old man: among male ICU patients aged 60\u201370 with intracranial hemorrhage (first ICU stay), what is the 75th percentile of procedure burden in the first 72h? Report mean ICU LOS (days) and hospital mortality versus general ICU population.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN (\n    SELECT subject_id, MIN(intime) AS first_intime\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    GROUP BY subject_id\n  ) first ON i.subject_id = first.subject_id AND i.intime = first.first_intime\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n),\n\nicu_patients AS (\n  SELECT\n    f.*,\n    p.gender,\n    p.anchor_age\n  FROM first_icu_stays f\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON f.subject_id = p.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 60 AND 70\n),\n\nich_patients AS (\n  SELECT DISTINCT\n    i.*\n  FROM icu_patients i\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON i.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    (d.icd_version = 9 AND d.icd_code LIKE '852%')\n    OR\n    (d.icd_version = 10 AND d.icd_code LIKE 'S06.%')\n    OR\n    LOWER(dd.long_title) LIKE '%intracranial hem%'\n),\n\nprocedures_first_72h AS (\n  SELECT\n    p.stay_id,\n    COUNT(*) AS procedure_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` p\n  JOIN ich_patients i ON p.stay_id = i.stay_id\n  WHERE p.starttime >= i.intime AND p.starttime <= DATETIME_ADD(i.intime, INTERVAL 72 HOUR)\n  GROUP BY p.stay_id\n),\n\ncohort_metrics AS (\n  SELECT\n    APPROX_QUANTILES(COALESCE(p.procedure_count, 0), 100)[OFFSET(75)] AS proc_burden_75th,\n    AVG(i.los) AS mean_icu_los,\n    AVG(CAST(i.hospital_expire_flag AS FLOAT64)) AS hospital_mortality\n  FROM ich_patients i\n  LEFT JOIN procedures_first_72h p ON i.stay_id = p.stay_id\n),\n\ngeneral_icu_population AS (\n  SELECT\n    AVG(los) AS mean_icu_los_general,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS hospital_mortality_general\n  FROM first_icu_stays\n)\n\nSELECT\n  c.proc_burden_75th,\n  c.mean_icu_los,\n  c.hospital_mortality,\n  g.mean_icu_los_general,\n  g.hospital_mortality_general\nFROM cohort_metrics c\nCROSS JOIN general_icu_population g;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

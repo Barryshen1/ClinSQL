@@ -1,0 +1,22 @@
+{
+  "query": "I have a 60-year-old man post\u2013cardiac arrest in the ICU. Among male ICU patients 55\u201365 with post-arrest, what percentile is a first\u201124h vital\u2011sign instability score of 70? Also report mean ICU LOS and mortality for the most unstable decile.",
+  "final_sql": "WITH vitals AS (\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) IN (\n    'heart rate',\n    'systolic blood pressure',\n    'diastolic blood pressure',\n    'respiratory rate',\n    'temperature fahrenheit',\n    'o2 saturation pulseoxymetry'\n  )\n),\n\nadmission_diagnosis AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%cardiac arrest%'\n),\n\neligible_patients AS (\n  SELECT p.subject_id, p.anchor_age, p.gender, icu.stay_id, icu.intime, icu.outtime, icu.los, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON p.subject_id = icu.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN admission_diagnosis ad\n    ON adm.hadm_id = ad.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 55 AND 65\n),\n\nvital_scores AS (\n  SELECT\n    ep.stay_id,\n    SUM(\n      CASE\n        WHEN v.label = 'Heart Rate' AND (ce.valuenum < 50 OR ce.valuenum > 130) THEN 1\n        WHEN v.label = 'Systolic blood pressure' AND (ce.valuenum < 90 OR ce.valuenum > 180) THEN 1\n        WHEN v.label = 'Diastolic blood pressure' AND (ce.valuenum < 60 OR ce.valuenum > 110) THEN 1\n        WHEN v.label = 'Respiratory rate' AND (ce.valuenum < 8 OR ce.valuenum > 30) THEN 1\n        WHEN v.label = 'Temperature Fahrenheit' AND (ce.valuenum < 95 OR ce.valuenum > 101.3) THEN 1\n        WHEN v.label = 'O2 saturation pulseoxymetry' AND ce.valuenum < 90 THEN 1\n        ELSE 0\n      END\n    ) AS instability_score\n  FROM eligible_patients ep\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ep.stay_id = ce.stay_id\n  JOIN vitals v\n    ON ce.itemid = v.itemid\n  WHERE ce.charttime >= ep.intime\n    AND ce.charttime <= DATETIME_ADD(ep.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY ep.stay_id\n),\n\nscore_percentiles AS (\n  SELECT\n    *,\n    PERCENT_RANK() OVER (ORDER BY instability_score) AS percentile_rank,\n    NTILE(10) OVER (ORDER BY instability_score DESC) AS decile\n  FROM vital_scores\n)\n\n-- Final output\nSELECT\n  -- Percentile of score 70\n  (SELECT MAX(percentile_rank) FROM score_percentiles WHERE instability_score <= 70) AS percentile_of_70,\n\n  -- Mean LOS and mortality for top decile\n  AVG(CASE WHEN decile = 1 THEN los ELSE NULL END) AS mean_los_top_decile,\n  AVG(CASE WHEN decile = 1 THEN hospital_expire_flag ELSE NULL END) AS mortality_top_decile\nFROM score_percentiles\nJOIN eligible_patients ep ON score_percentiles.stay_id = ep.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "403 Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.\n\nLocation: US\nJob ID: afc5fda3-8317-4377-ad08-b4dda9cc3ef2\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

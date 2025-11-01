@@ -1,0 +1,16 @@
+{
+  "query": "Concerned about my 75-year-old female ICU patient: among female ICU patients aged 70\u201380, based on maximum SBP in first 24h, report percent by SBP category (<130;130\u2013139;140\u2013159;\u2265160) and stroke rate.",
+  "final_sql": "WITH sbp_candidates AS (\n  -- Max SBP in first 24h of each ICU stay for female patients aged 70-80\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    MAX(ce.valuenum) AS max_sbp\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ce.subject_id = i.subject_id\n   AND ce.hadm_id = i.hadm_id\n   AND ce.stay_id = i.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON ce.itemid = di.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = i.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n    -- SBP-related items\n    AND LOWER(di.label) LIKE '%systolic%'\n    -- first 24 hours after ICU intime\n    AND ce.charttime >= i.intime\n    AND ce.charttime <= TIMESTAMP_ADD(i.intime, INTERVAL 24 HOUR)\n  GROUP BY i.subject_id, i.hadm_id, i.stay_id\n),\nsbp_cat AS (\n  -- categorize the maximum SBP per ICU stay\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.max_sbp,\n    CASE\n      WHEN s.max_sbp < 130 THEN '<130'\n      WHEN s.max_sbp BETWEEN 130 AND 139 THEN '130-139'\n      WHEN s.max_sbp BETWEEN 140 AND 159 THEN '140-159'\n      WHEN s.max_sbp >= 160 THEN '>=160'\n      ELSE NULL\n    END AS sbp_category\n  FROM sbp_candidates s\n  WHERE s.max_sbp IS NOT NULL\n),\nstroke_by_hadm AS (\n  -- stroke flag per admission (hadm_id)\n  SELECT di.hadm_id,\n         MAX(CASE\n               WHEN LOWER(dd.long_title) LIKE '%stroke%' THEN 1\n               ELSE 0\n             END) AS has_stroke\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  GROUP BY di.hadm_id\n),\nsbp_with_stroke AS (\n  -- Attach stroke flag to each ICU-stay (based on hadm_id)\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.max_sbp,\n    c.sbp_category,\n    COALESCE(s.has_stroke, 0) AS has_stroke\n  FROM sbp_cat AS c\n  LEFT JOIN stroke_by_hadm AS s\n    ON s.hadm_id = c.hadm_id\n)\n, category_counts AS (\n  -- Per-category counts and stroke rates\n  SELECT\n    sc.sbp_category AS category,\n    COUNT(*) AS n_in_cat,\n    AVG(has_stroke) AS stroke_rate\n  FROM sbp_with_stroke AS sc\n  GROUP BY sc.sbp_category\n),\ntotal_overall AS (\n  SELECT SUM(n_in_cat) AS total FROM category_counts\n)\nSELECT\n  cc.category,\n  cc.n_in_cat,\n  ROUND(100.0 * cc.n_in_cat / t.total, 2) AS pct_in_cohort,\n  cc.stroke_rate AS stroke_rate\nFROM category_counts cc\nCROSS JOIN total_overall t\nORDER BY cc.category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

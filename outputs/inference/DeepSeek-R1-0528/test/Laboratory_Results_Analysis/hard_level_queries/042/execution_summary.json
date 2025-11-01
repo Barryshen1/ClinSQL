@@ -1,0 +1,16 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 73 AND 83\n    -- ICH diagnosis (ICD-9: 431*, ICD-10: I61*)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE \n        di.subject_id = a.subject_id \n        AND di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 9 AND di.icd_code LIKE '431%')\n          OR (di.icd_version = 10 AND di.icd_code LIKE 'I61%')\n        )\n    )\n),\n\nlabs_abnormal AS (\n  SELECT \n    l.subject_id, \n    l.hadm_id, \n    COUNT(DISTINCT l.itemid) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN cohort c\n    ON l.subject_id = c.subject_id\n    AND l.hadm_id = c.hadm_id\n  WHERE \n    l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.flag IN ('abnormal', 'high', 'low')  -- Abnormal flags\n  GROUP BY l.subject_id, l.hadm_id\n),\n\ncohort_with_score AS (\n  SELECT \n    c.*,\n    COALESCE(l.instability_score, 0) AS instability_score,  -- Default 0 if no labs\n    DATETIME_DIFF(c.dischtime, c.admittime, DAY) AS los_days  -- LOS in days\n  FROM cohort c\n  LEFT JOIN labs_abnormal l\n    ON c.subject_id = l.subject_id\n    AND c.hadm_id = l.hadm_id\n),\n\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile  -- Quartile assignment\n  FROM cohort_with_score\n)\n\n-- Aggregate for overall cohort and quartiles\nSELECT \n  'Overall' AS quartile_group,\n  COUNT(*) AS count_patients,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM cohort_with_score\n\nUNION ALL\n\nSELECT \n  CAST(quartile AS STRING) AS quartile_group,\n  COUNT(*) AS count_patients,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM quartiles\nGROUP BY quartile\nORDER BY \n  CASE quartile_group\n    WHEN 'Overall' THEN 0\n    WHEN '1' THEN 1\n    WHEN '2' THEN 2\n    WHEN '3' THEN 3\n    WHEN '4' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating a 74\u2011year\u2011old female with intracranial hemorrhage. For female inpatients aged 69\u201379 with ICH, stratify admissions into quintiles by the composite risk score and report, per quintile: n, 30\u2011day mortality %, major complication %, and median survivor LOS.",
+  "final_sql": "WITH ich_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    drg.drg_severity,\n    drg.drg_mortality,\n    -- example composite risk score\n    p.anchor_age \n      + 2 * IFNULL(drg.drg_severity,0) \n      + 3 * IFNULL(drg.drg_mortality,0) AS composite_score\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.drgcodes` drg\n    ON a.hadm_id = drg.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 69 AND 79\n    AND LOWER(dd.long_title) LIKE '%intracranial hemorrhage%'\n),\nquintiles AS (\n  SELECT\n    ic.*,\n    NTILE(5) OVER (ORDER BY composite_score) AS quintile\n  FROM ich_cohort ic\n),\ncomplications AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%complication%'\n)\nSELECT\n  quintile,\n  COUNT(*) AS n_admissions,\n  ROUND(100.0 * SUM(CASE \n    WHEN deathtime IS NOT NULL \n         AND TIMESTAMP_DIFF(deathtime, admittime, DAY) <= 30\n    THEN 1 ELSE 0 END) / COUNT(*), 2) AS mortality_30day_pct,\n  ROUND(100.0 * SUM(CASE \n    WHEN q.hadm_id IN (\n         SELECT hadm_id FROM complications\n    )\n    THEN 1 ELSE 0 END) / COUNT(*), 2) AS major_complication_pct,\n  ROUND(APPROX_QUANTILES(TIMESTAMP_DIFF(dischtime, admittime, DAY), 50)[OFFSET(25)],2) \n    AS median_survivor_los_days\nFROM quintiles q\nWHERE NOT (hospital_expire_flag = 1 \n           OR (deathtime IS NOT NULL \n               AND TIMESTAMP_DIFF(deathtime, admittime, DAY) <= 30))\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

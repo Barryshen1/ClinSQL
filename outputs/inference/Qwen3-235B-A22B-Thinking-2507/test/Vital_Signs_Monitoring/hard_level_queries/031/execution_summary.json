@@ -1,0 +1,29 @@
+{
+  "query": "I have a 68\u2011year\u2011old male post\u2011op ICU patient. Among male post\u2011op ICU patients aged 63\u201373 in the top quartile of instability, what is the 95th\u2011percentile instability score and how do fever (>38.5\u00b0C), SpO2<90%, RR>20 episodes, ICU LOS, and in\u2011hospital mortality compare to other post\u2011op patients?",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    icu.stay_id,\n    icu.hadm_id,\n    icu.subject_id,\n    icu.intime,\n    icu.los AS icu_los,\n    adm.hospital_expire_flag,\n    -- Calculate age at admission\n    pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'M'\n    -- Age between 63 and 73\n    AND (pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year)) BETWEEN 63 AND 73\n    -- Post-op: must have at least one procedure\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n      WHERE proc.hadm_id = icu.hadm_id\n        AND DATE(proc.chartdate) <= DATE(icu.intime)\n    )\n),\ninstability_metrics AS (\n  SELECT \n    bc.*,\n    -- Count fever events (>38.5\u00b0C)\n    COALESCE((\n      SELECT COUNT(*)\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      WHERE ce.stay_id = bc.stay_id\n        AND ce.itemid = 223762\n        AND ce.valuenum > 38.5\n        AND ce.valuenum IS NOT NULL\n    ), 0) AS fever_count,\n    -- Count SpO2 < 90% events\n    COALESCE((\n      SELECT COUNT(*)\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      WHERE ce.stay_id = bc.stay_id\n        AND ce.itemid IN (220277, 225312)\n        AND ce.valuenum < 90\n        AND ce.valuenum IS NOT NULL\n    ), 0) AS spo2_count,\n    -- Count RR > 20 events\n    COALESCE((\n      SELECT COUNT(*)\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      WHERE ce.stay_id = bc.stay_id\n        AND ce.itemid IN (220210, 224690, 224422)\n        AND ce.valuenum > 20\n        AND ce.valuenum IS NOT NULL\n    ), 0) AS rr_count\n  FROM base_cohort bc\n),\ncohort_with_score AS (\n  SELECT \n    *,\n    fever_count + spo2_count + rr_count AS instability_score\n  FROM instability_metrics\n),\ncohort_with_quartile AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY instability_score DESC) AS quartile\n  FROM cohort_with_score\n),\ntop_quartile_95th AS (\n  SELECT \n    APPROX_PERCENTILE(instability_score, 0.95) AS instability_score_95th\n  FROM cohort_with_quartile\n  WHERE quartile = 1\n),\ngroup_metrics AS (\n  SELECT \n    CASE WHEN quartile = 1 THEN 'top_quartile' ELSE 'rest' END AS group_label,\n    AVG(fever_count) AS avg_fever_episodes,\n    AVG(spo2_count) AS avg_spo2_episodes,\n    AVG(rr_count) AS avg_rr_episodes,\n    AVG(icu_los) AS avg_icu_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM cohort_with_quartile\n  GROUP BY group_label\n)\nSELECT \n  gm.group_label,\n  CASE WHEN gm.group_label = 'top_quartile' THEN tq95.instability_score_95th ELSE NULL END AS instability_score_95th,\n  gm.avg_fever_episodes,\n  gm.avg_spo2_episodes,\n  gm.avg_rr_episodes,\n  gm.avg_icu_los,\n  gm.mortality_rate\nFROM group_metrics gm\nCROSS JOIN top_quartile_95th tq95\nORDER BY gm.group_label;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: APPROX_PERCENTILE at [73:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [73:5]\n\nLocation: US\nJob ID: 3c6bfcb6-76ed-4945-9609-4fd97b02eb11\n",
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"before\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"before\" at [1:18]\n\nLocation: US\nJob ID: a7468d06-fdda-447f-8099-3ce3c4013ff6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [73:46]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [73:46]\n\nLocation: US\nJob ID: a5b7b24a-1490-477d-9bd2-f9338c191899\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [73:5]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [73:5]\n\nLocation: US\nJob ID: 3c6bfcb6-76ed-4945-9609-4fd97b02eb11\n"
+    }
+  ]
+}

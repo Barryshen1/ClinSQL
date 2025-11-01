@@ -1,0 +1,28 @@
+{
+  "query": "For a 54\u2011year\u2011old man: among male inpatients 49\u201359 with T2DM and heart failure, compare percent on Antidiabetic, Beta\u2011Blocker, ACEi/ARB/ARNI, Loop Diuretic first 24h vs final 48h and show continued/initiated/discontinued counts.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id,\n    adm.hadm_id,\n    pat.gender,\n    pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age_at_admission,\n    MIN(icu.intime) AS icu_intime,\n    MIN(icu.outtime) AS icu_outtime,\n    adm.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON adm.hadm_id = icu.hadm_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) BETWEEN 49 AND 59\n  GROUP BY adm.subject_id, adm.hadm_id, pat.gender, pat.anchor_age, pat.anchor_year, adm.admittime\n),\ndx_flags AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    MAX(CASE WHEN (d.icd_version = 10 AND d.icd_code LIKE 'E11%')\n           OR (d.icd_version = 9 AND d.icd_code LIKE '250._0')\n           OR (d.icd_version = 9 AND d.icd_code LIKE '250._2')\n             THEN 1 ELSE 0 END) AS has_t2dm,\n    MAX(CASE WHEN (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n           OR (d.icd_version = 9 AND d.icd_code LIKE '428%')\n             THEN 1 ELSE 0 END) AS has_hf\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON c.hadm_id = d.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n),\ncohort_filtered AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN dx_flags dx\n    ON c.subject_id = dx.subject_id AND c.hadm_id = dx.hadm_id\n  WHERE dx.has_t2dm = 1 AND dx.has_hf = 1\n),\npresc_classes AS (\n  SELECT \n    cf.subject_id,\n    cf.hadm_id,\n    cf.icu_intime,\n    cf.icu_outtime,\n    p.starttime,\n    CASE \n      WHEN LOWER(p.drug) LIKE '%metformin%' OR LOWER(p.drug) LIKE '%insulin%' \n        OR LOWER(p.drug) LIKE '%glipizide%' OR LOWER(p.drug) LIKE '%glyburide%'\n        OR LOWER(p.drug) LIKE '%pioglitazone%' OR LOWER(p.drug) LIKE '%sitagliptin%'\n        OR LOWER(p.drug) LIKE '%dapagliflozin%' THEN 'Antidiabetic'\n      WHEN LOWER(p.drug) LIKE '%metoprolol%' OR LOWER(p.drug) LIKE '%atenolol%' OR LOWER(p.drug) LIKE '%carvedilol%'\n        THEN 'Beta-Blocker'\n      WHEN LOWER(p.drug) LIKE '%lisinopril%' OR LOWER(p.drug) LIKE '%enalapril%' OR LOWER(p.drug) LIKE '%captopril%'\n        OR LOWER(p.drug) LIKE '%losartan%' OR LOWER(p.drug) LIKE '%valsartan%' OR LOWER(p.drug) LIKE '%sacubitril%'\n        THEN 'ACEi/ARB/ARNI'\n      WHEN LOWER(p.drug) LIKE '%furosemide%' OR LOWER(p.drug) LIKE '%bumetanide%' OR LOWER(p.drug) LIKE '%torsemide%'\n        THEN 'Loop Diuretic'\n    END AS drug_class\n  FROM cohort_filtered cf\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON cf.hadm_id = p.hadm_id\n)\n, presc_windows AS (\n  SELECT \n    subject_id, hadm_id, drug_class,\n    MAX(CASE WHEN starttime BETWEEN icu_intime AND DATETIME_ADD(icu_intime, INTERVAL 24 HOUR) THEN 1 ELSE 0 END) AS in_first_24h,\n    MAX(CASE WHEN starttime BETWEEN DATETIME_SUB(icu_outtime, INTERVAL 48 HOUR) AND icu_outtime THEN 1 ELSE 0 END) AS in_final_48h\n  FROM presc_classes\n  WHERE drug_class IS NOT NULL\n  GROUP BY subject_id, hadm_id, drug_class\n),\nstatus_counts AS (\n  SELECT \n    drug_class,\n    SUM(CASE WHEN in_first_24h = 1 AND in_final_48h = 1 THEN 1 ELSE 0 END) AS continued_cnt,\n    SUM(CASE WHEN in_first_24h = 0 AND in_final_48h = 1 THEN 1 ELSE 0 END) AS initiated_cnt,\n    SUM(CASE WHEN in_first_24h = 1 AND in_final_48h = 0 THEN 1 ELSE 0 END) AS discontinued_cnt,\n    COUNT(DISTINCT hadm_id) AS total_patients\n  FROM presc_windows\n  GROUP BY drug_class\n)\nSELECT \n  drug_class,\n  continued_cnt,\n  initiated_cnt,\n  discontinued_cnt,\n  total_patients,\n  ROUND(continued_cnt / total_patients * 100, 1) AS continued_pct,\n  ROUND(initiated_cnt / total_patients * 100, 1) AS initiated_pct,\n  ROUND(discontinued_cnt / total_patients * 100, 1) AS discontinued_pct\nFROM status_counts\nORDER BY drug_class;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got keyword ESCAPE at [23:63]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got keyword ESCAPE at [23:63]\n\nLocation: US\nJob ID: 83fb7790-4fb4-4d45-a2ad-3cbd64e92cf6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references adm.admittime which is neither grouped nor aggregated at [6:41]; reason: invalidQuery, location: query, message: SELECT list expression references adm.admittime which is neither grouped nor aggregated at [6:41]\n\nLocation: US\nJob ID: 30495a2c-3d8d-4374-a2c0-dd74cb4b9ea1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

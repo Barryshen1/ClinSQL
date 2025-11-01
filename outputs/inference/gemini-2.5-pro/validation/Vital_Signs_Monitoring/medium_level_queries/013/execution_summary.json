@@ -1,0 +1,16 @@
+{
+  "query": "I have a 56\u2011year\u2011old male in the ICU. Among male ICU patients aged 51\u201361, categorize first\u201148\u2011hour per\u2011stay average SpO2 (<90, 90\u201392, 93\u201395, >95) and report patient counts and AKI rates.",
+  "final_sql": "WITH\n  -- Step 1: Identify male patients aged 51-61\n  patient_cohort AS (\n    SELECT\n      p.subject_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    WHERE\n      p.gender = 'M'\n      AND p.anchor_age BETWEEN 51 AND 61\n  ),\n\n  -- Step 2: Get all ICU stays for this patient cohort\n  icu_stays_cohort AS (\n    SELECT\n      icu.subject_id,\n      icu.hadm_id,\n      icu.stay_id,\n      icu.intime\n    FROM\n      `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN\n      patient_cohort AS pc\n      ON icu.subject_id = pc.subject_id\n  ),\n\n  -- Step 3: Calculate average SpO2 for the first 48 hours of each ICU stay\n  first_48hr_avg_spo2 AS (\n    SELECT\n      ce.stay_id,\n      AVG(ce.valuenum) AS avg_spo2\n    FROM\n      `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    INNER JOIN\n      icu_stays_cohort AS isc\n      ON ce.stay_id = isc.stay_id\n    WHERE\n      ce.itemid = 220277 -- SpO2 from pulse oximeter\n      AND ce.valuenum > 0\n      AND ce.valuenum <= 100 -- Data cleaning for plausible values\n      AND ce.charttime BETWEEN isc.intime AND DATETIME_ADD(isc.intime, INTERVAL 48 HOUR)\n    GROUP BY\n      ce.stay_id\n  ),\n\n  -- Step 4: Identify hospital admissions with an AKI diagnosis\n  aki_admissions AS (\n    SELECT DISTINCT\n      diag.hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n    WHERE\n      (diag.icd_version = 9 AND diag.icd_code LIKE '584%') -- ICD-9 for Acute kidney failure\n      OR (diag.icd_version = 10 AND diag.icd_code LIKE 'N17%') -- ICD-10 for Acute kidney injury\n  )\n\n-- Step 5: Combine, categorize, and report results\nSELECT\n  CASE\n    WHEN spo2.avg_spo2 < 90 THEN '<90'\n    WHEN spo2.avg_spo2 >= 90 AND spo2.avg_spo2 <= 92 THEN '90-92'\n    WHEN spo2.avg_spo2 > 92 AND spo2.avg_spo2 <= 95 THEN '93-95'\n    WHEN spo2.avg_spo2 > 95 THEN '>95'\n  END AS first_48hr_avg_spo2_category,\n  COUNT(DISTINCT isc.stay_id) AS number_of_icu_stays,\n  AVG(CASE WHEN aki.hadm_id IS NOT NULL THEN 1 ELSE 0 END) * 100 AS aki_rate_percent\nFROM\n  first_48hr_avg_spo2 AS spo2\nINNER JOIN\n  icu_stays_cohort AS isc\n  ON spo2.stay_id = isc.stay_id\nLEFT JOIN\n  aki_admissions AS aki\n  ON isc.hadm_id = aki.hadm_id\nGROUP BY\n  first_48hr_avg_spo2_category\nORDER BY\n  CASE\n    WHEN first_48hr_avg_spo2_category = '<90' THEN 1\n    WHEN first_48hr_avg_spo2_category = '90-92' THEN 2\n    WHEN first_48hr_avg_spo2_category = '93-95' THEN 3\n    WHEN first_48hr_avg_spo2_category = '>95' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

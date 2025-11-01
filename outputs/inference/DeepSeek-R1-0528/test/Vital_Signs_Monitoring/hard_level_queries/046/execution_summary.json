@@ -1,0 +1,28 @@
+{
+  "query": "89-year-old male ICU patient with ischemic stroke: among male ICU patients aged 84\u201394 with ischemic stroke, what percentile is a first 72 hours vital-sign instability score of 80? Also report ICU LOS and mortality for the top instability quartile.",
+  "final_sql": "WITH vital_items AS (\n  SELECT 220045 AS itemid, 60 AS low, 100 AS high UNION ALL  -- Heart Rate\n  SELECT 220179, 90, 140 UNION ALL   -- Systolic BP\n  SELECT 220180, 60, 90 UNION ALL    -- Diastolic BP\n  SELECT 220181, 70, 105 UNION ALL   -- Mean BP\n  SELECT 220210, 12, 20 UNION ALL    -- Respiratory Rate\n  SELECT 223761, 97, 99 UNION ALL    -- Temperature (F)\n  SELECT 223762, 97, 99 UNION ALL    -- Temperature (C to F converted)\n  SELECT 220277, 95, 100             -- SpO2\n),\ncohort_base AS (\n  SELECT \n    p.subject_id, \n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON a.hadm_id = i.hadm_id\n  INNER JOIN (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      (icd_version = 9 AND icd_code IN ('43301','43311','43321','43331','43381','43391','43401','43411','43491','436'))\n      OR \n      (icd_version = 10 AND (icd_code LIKE 'I63%' OR icd_code = 'I64'))\n  ) stroke ON a.hadm_id = stroke.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 84 AND 94\n),\ncohort_vitals AS (\n  SELECT \n    c.stay_id,\n    CASE \n      WHEN ce.itemid = 223762 THEN ce.valuenum * 1.8 + 32  -- Convert \u00b0C to \u00b0F\n      ELSE ce.valuenum \n    END AS value_f,\n    v.low,\n    v.high,\n    CASE \n      WHEN ce.itemid = 223762 AND (ce.valuenum * 1.8 + 32) BETWEEN v.low AND v.high THEN 0\n      WHEN ce.itemid != 223762 AND ce.valuenum BETWEEN v.low AND v.high THEN 0\n      ELSE 1 \n    END AS abnormal\n  FROM cohort_base c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  INNER JOIN vital_items v \n    ON ce.itemid = v.itemid\n  WHERE ce.valuenum IS NOT NULL\n),\ncohort_scores AS (\n  SELECT \n    stay_id,\n    (SUM(abnormal) * 100.0 / COUNT(*)) AS score\n  FROM cohort_vitals\n  GROUP BY stay_id\n),\nscores_with_flags AS (\n  SELECT \n    cs.stay_id,\n    cs.score,\n    c.los,\n    c.hadm_id,  -- Added for distinct admission counting\n    c.hospital_expire_flag\n  FROM cohort_scores cs\n  INNER JOIN cohort_base c ON cs.stay_id = c.stay_id\n),\npercentile_80 AS (\n  SELECT \n    (COUNT(CASE WHEN score <= 80 THEN 1 END) * 100.0 / COUNT(*)) AS percentile_80\n  FROM scores_with_flags\n),\nq3_value AS (\n  SELECT \n    APPROX_QUANTILES(score, 100)[OFFSET(75)] AS q3\n  FROM scores_with_flags\n),\ntop_quartile_stats AS (\n  SELECT \n    AVG(los) AS avg_icu_los,\n    (COUNT(DISTINCT CASE WHEN hospital_expire_flag = 1 THEN hadm_id END) * 100.0 / COUNT(DISTINCT hadm_id)) AS mortality_rate_percent\n  FROM scores_with_flags\n  CROSS JOIN q3_value\n  WHERE score >= q3_value.q3\n)\nSELECT \n  percentile_80.percentile_80,\n  80 AS target_score,\n  top_quartile_stats.avg_icu_los,\n  top_quartile_stats.mortality_rate_percent\nFROM percentile_80, top_quartile_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got string literal ' AS low, ' at [2:30]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got string literal ' AS low, ' at [2:30]\n\nLocation: US\nJob ID: b3495be8-76da-4b1c-a2ef-cb8aaa9ec925\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got keyword FILTER at [81:15]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got keyword FILTER at [81:15]\n\nLocation: US\nJob ID: e106f670-2b89-4255-9873-fb968b774f51\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

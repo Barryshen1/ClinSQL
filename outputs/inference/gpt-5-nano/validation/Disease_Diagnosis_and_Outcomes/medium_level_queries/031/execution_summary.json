@@ -1,0 +1,28 @@
+{
+  "query": "Patient: 58-year-old female. Among females 53\u201363 with sepsis vs septic shock, for LOS \u22647 vs >7 days report N, in\u2011hospital mortality (%), median time\u2011to\u2011death (non\u2011survivors), absolute and relative mortality differences.",
+  "final_sql": "WITH base AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n),\nsepsis_flags AS (\n  SELECT\n    b.hadm_id,\n    MAX(CASE WHEN LOWER(ddi.long_title) LIKE '%septic shock%' THEN 1 ELSE 0 END) AS has_shock,\n    MAX(CASE WHEN LOWER(ddi.long_title) LIKE '%sepsis%' OR LOWER(ddi.long_title) LIKE '%septicemia%' THEN 1 ELSE 0 END) AS has_sepsis\n  FROM base AS b\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.hadm_id = b.hadm_id AND di.subject_id = b.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddi\n    ON ddi.icd_code = di.icd_code AND ddi.icd_version = di.icd_version\n  GROUP BY b.hadm_id\n),\ncohort AS (\n  SELECT\n    b.hadm_id,\n    b.subject_id,\n    b.admittime,\n    b.dischtime,\n    b.deathtime,\n    CASE\n      WHEN s.has_shock = 1 THEN 'Septic Shock'\n      WHEN s.has_sepsis = 1 THEN 'Sepsis'\n      ELSE NULL\n    END AS sepsis_group\n  FROM base AS b\n  JOIN sepsis_flags AS s ON b.hadm_id = s.hadm_id\n  WHERE CASE\n          WHEN s.has_shock = 1 THEN 'Septic Shock'\n          WHEN s.has_sepsis = 1 THEN 'Sepsis'\n          ELSE NULL\n        END IS NOT NULL\n),\ncohort_with_los AS (\n  SELECT\n    c.hadm_id,\n    c.subject_id,\n    c.admittime,\n    c.dischtime,\n    c.deathtime,\n    c.sepsis_group,\n    CASE\n      WHEN TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY) <= 7 THEN '<=7'\n      ELSE '>7'\n    END AS los_group\n  FROM cohort c\n),\nmed_input AS (\n  SELECT\n    cw.sepsis_group,\n    cw.los_group,\n    CASE WHEN cw.deathtime IS NOT NULL THEN TIMESTAMP_DIFF(cw.deathtime, cw.admittime, SECOND) / 86400.0\n    END AS time_to_death_days\n  FROM cohort_with_los cw\n),\nagg AS (\n  SELECT\n    sepsis_group,\n    los_group,\n    COUNT(*) AS N,\n    SUM(CASE WHEN time_to_death_days IS NOT NULL THEN 1 ELSE 0 END) AS Deaths,\n    APPROX_QUANTILES(time_to_death_days, 100)[OFFSET(50)] AS median_time_to_death_days\n  FROM med_input\n  GROUP BY sepsis_group, los_group\n)\nSELECT\n  g.sepsis_group,\n  MAX(CASE WHEN g.los_group = '<=7' THEN g.N END) AS N_LE7,\n  MAX(CASE WHEN g.los_group = '<=7' THEN 100.0 * g.Deaths / NULLIF(g.N, 0) END) AS mort_rate_LE7_pct,\n  MAX(CASE WHEN g.los_group = '<=7' THEN g.median_time_to_death_days END) AS median_time_to_death_LE7_days,\n  MAX(CASE WHEN g.los_group = '>7' THEN g.N END) AS N_GT7,\n  MAX(CASE WHEN g.los_group = '>7' THEN 100.0 * g.Deaths / NULLIF(g.N, 0) END) AS mort_rate_GT7_pct,\n  MAX(CASE WHEN g.los_group = '>7' THEN g.median_time_to_death_days END) AS median_time_to_death_GT7_days,\n  (\n    MAX(CASE WHEN g.los_group = '<=7' THEN 100.0 * g.Deaths / NULLIF(g.N, 0) END)\n    - MAX(CASE WHEN g.los_group = '>7' THEN 100.0 * g.Deaths / NULLIF(g.N, 0) END)\n  ) AS abs_mort_diff_pct,\n  CASE\n    WHEN MAX(CASE WHEN g.los_group = '>7' THEN 100.0 * g.Deaths / NULLIF(g.N, 0) END) > 0\n    THEN MAX(CASE WHEN g.los_group = '<=7' THEN 100.0 * g.Deaths / NULLIF(g.N, 0) END)\n         / MAX(CASE WHEN g.los_group = '>7' THEN 100.0 * g.Deaths / NULLIF(g.N, 0) END)\n    ELSE NULL\n  END AS rel_mort_diff_ratio\nFROM agg AS g\nGROUP BY g.sepsis_group\nORDER BY g.sepsis_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [68:5]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [68:5]\n\nLocation: US\nJob ID: 7ca3e418-9328-43b6-9eb7-520853ab276b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: sg at [72:5]; reason: invalidQuery, location: query, message: Unrecognized name: sg at [72:5]\n\nLocation: US\nJob ID: 3bdaf991-c509-4479-bc2e-9b8d5d1bbdb3\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating a 79\u2011year\u2011old man with hemorrhagic stroke. Among male ICU patients 74\u201384, what is the 90th\u2011percentile first\u201148\u2011h instability (hours with fever>38.5\u00b0C, SpO2<90% or RR>20), and for the top decile report n, mean ICU LOS, mortality%, and mean hours fever, hypoxemia, tachypnea?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    physionet-data.mimiciv_3_1_icu.icustays i\n  ON\n    p.subject_id = i.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  ON\n    i.hadm_id = a.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 74 AND 84\n),\n\nvitals AS (\n  SELECT\n    c.stay_id,\n    c.charttime,\n    MAX(CASE WHEN di.label = 'Temperature Celsius' AND c.valuenum > 38.5 THEN 1 ELSE 0 END) AS fever,\n    MAX(CASE WHEN di.label = 'SpO2' AND c.valuenum < 90 THEN 1 ELSE 0 END) AS hypoxemia,\n    MAX(CASE WHEN di.label = 'Respiratory Rate' AND c.valuenum > 20 THEN 1 ELSE 0 END) AS tachypnea\n  FROM\n    physionet-data.mimiciv_3_1_icu.chartevents c\n  JOIN\n    physionet-data.mimiciv_3_1_icu.d_items di\n  ON\n    c.itemid = di.itemid\n  WHERE\n    di.label IN ('Temperature Celsius', 'SpO2', 'Respiratory Rate')\n    AND c.valuenum IS NOT NULL\n  GROUP BY\n    c.stay_id, c.charttime\n),\n\ninstability_per_hour AS (\n  SELECT\n    v.stay_id,\n    DATETIME_TRUNC(v.charttime, HOUR) AS chart_hour,\n    MAX(v.fever) AS fever,\n    MAX(v.hypoxemia) AS hypoxemia,\n    MAX(v.tachypnea) AS tachypnea\n  FROM\n    vitals v\n  JOIN\n    cohort c\n  ON\n    v.stay_id = c.stay_id\n  WHERE\n    v.charttime >= c.intime\n    AND v.charttime <= DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    v.stay_id, chart_hour\n),\n\ninstability_per_stay AS (\n  SELECT\n    stay_id,\n    COUNT(*) AS instability_hours,\n    SUM(fever) AS fever_hours,\n    SUM(hypoxemia) AS hypoxemia_hours,\n    SUM(tachypnea) AS tachypnea_hours\n  FROM\n    instability_per_hour\n  GROUP BY\n    stay_id\n),\n\npercentile_90 AS (\n  SELECT\n    APPROX_QUANTILES(instability_hours, 10)[OFFSET(9)] AS p90\n  FROM\n    instability_per_stay\n),\n\ntop_decile AS (\n  SELECT\n    ips.*\n  FROM\n    instability_per_stay ips\n  CROSS JOIN\n    percentile_90 p90\n  WHERE\n    ips.instability_hours >= p90.p90\n),\n\ntop_decile_summary AS (\n  SELECT\n    COUNT(*) AS n,\n    AVG(c.los) AS mean_icu_los,\n    AVG(c.hospital_expire_flag) AS mortality_rate,\n    AVG(ips.fever_hours) AS mean_fever_hours,\n    AVG(ips.hypoxemia_hours) AS mean_hypoxemia_hours,\n    AVG(ips.tachypnea_hours) AS mean_tachypnea_hours\n  FROM\n    top_decile ips\n  JOIN\n    cohort c\n  ON\n    ips.stay_id = c.stay_id\n)\n\nSELECT\n  (SELECT p90 FROM percentile_90) AS p90_instability_hours,\n  n,\n  mean_icu_los,\n  mortality_rate * 100 AS mortality_percent,\n  mean_fever_hours,\n  mean_hypoxemia_hours,\n  mean_tachypnea_hours\nFROM\n  top_decile_summary;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY num_procedures) AS percentile FROM (SELECT COUNT(icd_code) AS num_procedures FROM procedures_icd JOIN f ON subject_id = f.subject_id WHERE icd_code = '777070' GROUP BY hadm_id) AS e;

@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 68-year-old man. For male inpatients 63\u201373 with T2DM and HF, report prevalence (%) of insulin and oral agents in first vs final 24h of admission and net change (pp).",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 63 AND 73\n    AND a.dischtime IS NOT NULL\n    AND DATETIME_DIFF(a.dischtime, a.admittime, HOUR) >= 24\n),\n\ndiabetes_hf AS (\n  SELECT DISTINCT\n    c.subject_id,\n    c.hadm_id\n  FROM\n    cohort c\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON c.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    (dd.icd_code LIKE 'E11%' OR dd.long_title LIKE '%Type 2 diabetes%')\n    AND (dd.icd_code LIKE 'I50%' OR dd.long_title LIKE '%Heart failure%')\n),\n\nmeds_first_24h AS (\n  SELECT DISTINCT\n    dh.subject_id,\n    CASE WHEN LOWER(e.medication) LIKE '%insulin%' THEN 1 ELSE 0 END AS insulin_first,\n    CASE WHEN LOWER(e.medication) NOT LIKE '%insulin%' AND e.medication IS NOT NULL THEN 1 ELSE 0 END AS oral_first\n  FROM\n    diabetes_hf dh\n  JOIN\n    cohort c\n    ON dh.hadm_id = c.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.emar e\n    ON dh.hadm_id = e.hadm_id\n  WHERE\n    e.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 1 DAY)\n),\n\nmeds_last_24h AS (\n  SELECT DISTINCT\n    dh.subject_id,\n    CASE WHEN LOWER(e.medication) LIKE '%insulin%' THEN 1 ELSE 0 END AS insulin_last,\n    CASE WHEN LOWER(e.medication) NOT LIKE '%insulin%' AND e.medication IS NOT NULL THEN 1 ELSE 0 END AS oral_last\n  FROM\n    diabetes_hf dh\n  JOIN\n    cohort c\n    ON dh.hadm_id = c.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.emar e\n    ON dh.hadm_id = e.hadm_id\n  WHERE\n    e.charttime BETWEEN DATETIME_SUB(c.dischtime, INTERVAL 1 DAY) AND c.dischtime\n),\n\nfirst_agg AS (\n  SELECT\n    subject_id,\n    MAX(insulin_first) AS insulin_first,\n    MAX(oral_first) AS oral_first\n  FROM meds_first_24h\n  GROUP BY subject_id\n),\n\nlast_agg AS (\n  SELECT\n    subject_id,\n    MAX(insulin_last) AS insulin_last,\n    MAX(oral_last) AS oral_last\n  FROM meds_last_24h\n  GROUP BY subject_id\n),\n\ncombined AS (\n  SELECT\n    dh.subject_id,\n    COALESCE(f.insulin_first, 0) AS insulin_first,\n    COALESCE(f.oral_first, 0) AS oral_first,\n    COALESCE(l.insulin_last, 0) AS insulin_last,\n    COALESCE(l.oral_last, 0) AS oral_last\n  FROM\n    diabetes_hf dh\n  LEFT JOIN\n    first_agg f ON dh.subject_id = f.subject_id\n  LEFT JOIN\n    last_agg l ON dh.subject_id = l.subject_id\n)\n\nSELECT\n  ROUND(AVG(insulin_first) * 100, 2) AS insulin_first_24h_pct,\n  ROUND(AVG(insulin_last) * 100, 2) AS insulin_last_24h_pct,\n  ROUND((AVG(insulin_last) - AVG(insulin_first)) * 100, 2) AS insulin_net_change_pp,\n  ROUND(AVG(oral_first) * 100, 2) AS oral_first_24h_pct,\n  ROUND(AVG(oral_last) * 100, 2) AS oral_last_24h_pct,\n  ROUND((AVG(oral_last) - AVG(oral_first)) * 100, 2) AS oral_net_change_pp\nFROM\n  combined;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name admittime not found inside dh at [47:28]; reason: invalidQuery, location: query, message: Name admittime not found inside dh at [47:28]\n\nLocation: US\nJob ID: 97fd7bc4-2eb5-4859-8c4b-74fc24e66f3d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

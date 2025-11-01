@@ -1,0 +1,28 @@
+{
+  "query": "For a 42\u2011year\u2011old female: among female inpatients 37\u201347 with diabetes and heart failure (stay \u2265144h), compare % on antidiabetics, beta\u2011blockers, ACEi/ARB/ARNI, loop diuretics in first vs final 72h and report continued/initiated/discontinued counts.",
+  "final_sql": "WITH \n-- Define patients with diabetes and heart failure\ndiabetes_patients AS (\n  SELECT DISTINCT h.subject_id, h.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` h\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON h.icd_code = d.icd_code AND h.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%Diabetes%' AND h.icd_version = 10\n),\nheart_failure_patients AS (\n  SELECT DISTINCT h.subject_id, h.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` h\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON h.icd_code = d.icd_code AND h.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%Heart failure%' AND h.icd_version = 10\n),\n\n-- Define female patients aged 37-47 with diabetes and heart failure\ntarget_patients AS (\n  SELECT p.subject_id, p.gender, ic.stay_id, ic.hadm_id, \n         ic.intime, ic.outtime,  -- Include intime and outtime\n         TIMESTAMP_DIFF(ic.outtime, ic.intime, HOUR) AS los_hours\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ic\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON ic.subject_id = p.subject_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 37 AND 47\n  AND ic.subject_id IN (SELECT subject_id FROM diabetes_patients)\n  AND ic.subject_id IN (SELECT subject_id FROM heart_failure_patients)\n  AND TIMESTAMP_DIFF(ic.outtime, ic.intime, HOUR) >= 144\n),\n\n-- Medication use in first and last 72 hours\nmedication_use AS (\n  SELECT tp.subject_id, tp.stay_id, p.drug,\n         CASE \n           WHEN p.starttime <= tp.intime + INTERVAL 72 HOUR THEN 'first_72'\n           ELSE 'last_72'\n         END AS period\n  FROM target_patients tp\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON tp.hadm_id = p.hadm_id\n  WHERE (p.starttime <= tp.intime + INTERVAL 72 HOUR OR \n         p.starttime >= tp.outtime - INTERVAL 72 HOUR)\n),\n\nmedication_status AS (\n  SELECT m1.subject_id, m1.stay_id, m1.drug,\n         CASE \n           WHEN m1.period = 'first_72' AND m2.period = 'last_72' THEN 'continued'\n           WHEN m1.period = 'first_72' AND m2.period IS NULL THEN 'discontinued'\n           WHEN m1.period = 'last_72' AND m2.period IS NULL THEN 'initiated'\n         END AS status\n  FROM medication_use m1\n  LEFT JOIN medication_use m2 ON m1.subject_id = m2.subject_id AND m1.stay_id = m2.stay_id AND m1.drug = m2.drug AND m2.period = 'last_72'\n  WHERE m1.period = 'first_72'\n  UNION ALL\n  SELECT m2.subject_id, m2.stay_id, m2.drug, 'initiated' AS status\n  FROM medication_use m2\n  WHERE m2.period = 'last_72' AND CONCAT(m2.subject_id, m2.stay_id, m2.drug) NOT IN (SELECT CONCAT(subject_id, stay_id, drug) FROM medication_use WHERE period = 'first_72')\n)\n\nSELECT drug, status, COUNT(*) AS count\nFROM medication_status\nGROUP BY drug, status;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"medication_use\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: medication_use, message: Table \"medication_use\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: f4ae1a56-27ca-4259-9798-faaab8a10bba\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside tp at [37:28]; reason: invalidQuery, location: query, message: Name intime not found inside tp at [37:28]\n\nLocation: US\nJob ID: b4bac382-04e8-43c7-8678-5b049242e875\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

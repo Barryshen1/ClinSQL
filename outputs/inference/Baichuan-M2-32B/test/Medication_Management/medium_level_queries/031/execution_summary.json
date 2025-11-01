@@ -1,0 +1,23 @@
+{
+  "query": "Male patient age 58: among male inpatients 53\u201363 with diabetes and heart failure, give percentages with injectable GLP\u20111 RA initiated within first 24 hours versus final 12 hours before discharge.",
+  "final_sql": "WITH eligible_admissions AS (\n    SELECT \n        a.hadm_id,\n        a.subject_id,\n        a.admittime,\n        a.dischtime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n        ON a.subject_id = p.subject_id\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 53 AND 63\n),\ndiagnoses AS (\n    SELECT \n        d1.hadm_id,\n        COUNT(DISTINCT CASE \n            WHEN d1.icd_code LIKE 'E1%' THEN 'diabetes'\n            WHEN d1.icd_code LIKE 'I50%' THEN 'heart_failure'\n        END) AS diagnosis_count\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d1\n    WHERE d1.icd_code LIKE 'E1%' OR d1.icd_code LIKE 'I50%'\n    GROUP BY d1.hadm_id\n    HAVING diagnosis_count = 2\n),\ncohort AS (\n    SELECT \n        e.hadm_id,\n        e.subject_id,\n        e.admittime,\n        e.dischtime\n    FROM eligible_admissions e\n    INNER JOIN diagnoses d ON e.hadm_id = d.hadm_id\n),\nglp1_prescriptions AS (\n    SELECT \n        p.hadm_id,\n        p.starttime,\n        ROW_NUMBER() OVER (PARTITION BY p.hadm_id ORDER BY p.starttime) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    WHERE \n        (LOWER(p.drug) LIKE '%semaglutide%' \n         OR LOWER(p.drug) LIKE '%liraglutide%' \n         OR LOWER(p.drug) LIKE '%exenatide%' \n         OR LOWER(p.drug) LIKE '%dulaglutide%' \n         OR LOWER(p.drug) LIKE '%tirzepatide%' \n         OR LOWER(p.drug) LIKE '%albiglutide%') \n        AND LOWER(p.route) IN ('inj', 'sc', 'im', 'subcutaneous', 'intramuscular')\n),\nfirst_glp1 AS (\n    SELECT \n        g.hadm_id,\n        g.starttime\n    FROM glp1_prescriptions g\n    WHERE g.rn = 1\n),\ntime_windows AS (\n    SELECT \n        c.hadm_id,\n        c.admittime,\n        c.dischtime,\n        CASE \n            WHEN g.starttime BETWEEN c.admittime AND c.admittime + INTERVAL 24 HOUR THEN 'first_24h'\n            WHEN g.starttime BETWEEN c.dischtime - INTERVAL 12 HOUR AND c.dischtime THEN 'final_12h'\n            ELSE NULL \n        END AS time_window\n    FROM cohort c\n    LEFT JOIN first_glp1 g ON c.hadm_id = g.hadm_id\n)\nSELECT \n    COUNT(CASE WHEN time_window = 'first_24h' THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0) AS pct_first_24h,\n    COUNT(CASE WHEN time_window = 'final_12h' THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0) AS pct_final_12h\nFROM time_windows;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 4b0b22ff-59ae-4e7e-b1f8-63f3126fbb21\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 60\u2011year\u2011old female with asthma exacerbation. Among female inpatients aged 55\u201365, what is the 95th percentile of the lab instability score in the first 48 hours? For that top tier, report LOS, mortality, and critical lab rate versus general inpatients.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.hadm_id,\n    p.subject_id,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n),\nasthma_diagnoses AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%asthma%'\n    OR di.icd_code IN ('J45', 'J450', 'J451', 'J458', 'J459', 'J46')\n),\ncohort AS (\n  SELECT pa.*\n  FROM patient_admissions pa\n  JOIN asthma_diagnoses ad ON pa.hadm_id = ad.hadm_id\n  WHERE pa.age_at_admit >= 55 AND pa.age_at_admit <= 65\n),\nlab_abnormalities AS (\n  SELECT\n    l.hadm_id,\n    COUNT(*) AS abnormal_lab_count\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents l\n  JOIN cohort c ON l.hadm_id = c.hadm_id\n  WHERE l.charttime >= c.admittime\n    AND l.charttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.valuenum IS NOT NULL\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n    AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n  GROUP BY l.hadm_id\n),\npercentile_95 AS (\n  SELECT\n    APPROX_QUANTILES(abnormal_lab_count, 1000)[OFFSET(950)] AS p95\n  FROM lab_abnormalities\n),\ngrouped_cohort AS (\n  SELECT\n    c.*,\n    COALESCE(la.abnormal_lab_count, 0) AS abnormal_lab_count,\n    CASE\n      WHEN la.abnormal_lab_count >= p.p95 THEN 'top_5_percentile'\n      ELSE 'general'\n    END AS group_label\n  FROM cohort c\n  LEFT JOIN lab_abnormalities la ON c.hadm_id = la.hadm_id\n  CROSS JOIN percentile_95 p\n)\nSELECT\n  group_label,\n  AVG(EXTRACT(DAY FROM (dischtime - admittime)) + \n      EXTRACT(HOUR FROM (dischtime - admittime))/24.0) AS avg_los_days,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  AVG(abnormal_lab_count) AS avg_abnormal_lab_count\nFROM grouped_cohort\nGROUP BY group_label\nORDER BY group_label;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function MAKE_INTERVAL\n  Argument types: years => INT64\n  Signature: MAKE_INTERVAL([[year=>]INT64], [[month=>]INT64], [[day=>]INT64], [[hour=>]INT64], [[minute=>]INT64], [[second=>]INT64])\n    Named argument `years` does not exist in signature at [6:20]; reason: invalidQuery, location: query, message: No matching signature for function MAKE_INTERVAL\n  Argument types: years => INT64\n  Signature: MAKE_INTERVAL([[year=>]INT64], [[month=>]INT64], [[day=>]INT64], [[hour=>]INT64], [[minute=>]INT64], [[second=>]INT64])\n    Named argument `years` does not exist in signature at [6:20]\n\nLocation: US\nJob ID: 68b305ce-1db9-4fb8-91c2-898b9755d7a6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

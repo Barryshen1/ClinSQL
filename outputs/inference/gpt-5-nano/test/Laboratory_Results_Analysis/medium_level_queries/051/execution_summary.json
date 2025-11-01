@@ -1,0 +1,16 @@
+{
+  "query": "I have an 85-year-old man. Among male patients 80\u201390 admitted with ACS, report counts, percentages, and mean hospital length of stay for the first hs\u2011TnT categorized as Normal/Borderline/Myocardial Injury.",
+  "final_sql": "WITH troponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin%'\n    AND (LOWER(label) LIKE '%hs%' OR LOWER(label) LIKE '%high-sensitivity%')\n),\nearly_tn AS (\n  SELECT le.subject_id,\n         le.hadm_id,\n         le.charttime,\n         le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti ON le.itemid = ti.itemid\n),\nfirst_tn AS (\n  SELECT subject_id, hadm_id, charttime, valuenum,\n         ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id\n                            ORDER BY charttime ASC, valuenum DESC) AS rn\n  FROM early_tn\n),\nfirst_tn_per_adm AS (\n  SELECT subject_id, hadm_id, charttime, valuenum\n  FROM first_tn\n  WHERE rn = 1\n),\nacs_cohort AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 80 AND 90\n    AND (\n          di.icd_code LIKE '410%' OR di.icd_code LIKE '411%' OR\n          di.icd_code LIKE '412%' OR di.icd_code LIKE '413%' OR di.icd_code LIKE '414%'\n        )\n),\njoined AS (\n  SELECT ac.subject_id, ac.hadm_id, ac.admittime, ac.dischtime, tn.valuenum\n  FROM acs_cohort ac\n  JOIN first_tn_per_adm tn\n    ON ac.subject_id = tn.subject_id AND ac.hadm_id = tn.hadm_id\n),\ntot AS (\n  SELECT COUNT(*) AS total FROM joined\n)\nSELECT\n  CASE\n    WHEN j.valuenum < 14 THEN 'Normal'\n    WHEN j.valuenum >= 14 AND j.valuenum <= 53 THEN 'Borderline'\n    WHEN j.valuenum > 53 THEN 'Myocardial Injury'\n    ELSE 'Unknown'\n  END AS hs_tnT_category,\n  COUNT(*) AS count_in_category,\n  SAFE_DIVIDE(COUNT(*), t.total) * 100.0 AS percentage_of_total,\n  AVG(TIMESTAMP_DIFF(j.dischtime, j.admittime, SECOND) / 86400.0) AS mean_hospital_los_days\nFROM joined j\nCROSS JOIN tot t\nGROUP BY hs_tnT_category, t.total\nORDER BY hs_tnT_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

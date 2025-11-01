@@ -1,0 +1,22 @@
+{
+  "query": "I have a 59-year-old man. Among male ICU patients 54\u201364, categorize per-stay average RR during first 48 hours as <12, 12\u201320, 21\u201329, \u226530 and give n, mean, median, IQR.",
+  "final_sql": "WITH male_icu_patients AS (\n  -- Get male patients aged 54-64 with ICU stays\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  ON\n    p.subject_id = i.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n),\n\nrr_data AS (\n  -- Get RR measurements in first 48 hours of ICU stay\n  SELECT\n    m.stay_id,\n    c.charttime,\n    c.valuenum AS rr_value\n  FROM\n    male_icu_patients m\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  ON\n    m.subject_id = c.subject_id\n    AND m.hadm_id = c.hadm_id\n    AND m.stay_id = c.stay_id\n  WHERE\n    c.itemid = 220210  -- RR itemid\n    AND c.charttime BETWEEN m.intime AND TIMESTAMP_ADD(m.intime, INTERVAL 48 HOUR)\n    AND c.valuenum IS NOT NULL\n),\n\navg_rr_per_stay AS (\n  -- Calculate average RR per stay\n  SELECT\n    stay_id,\n    AVG(rr_value) AS avg_rr\n  FROM\n    rr_data\n  GROUP BY\n    stay_id\n),\n\npercentiles AS (\n  -- Calculate overall percentiles\n  SELECT\n    PERCENTILE_CONT(avg_rr, 0.25) OVER() AS q1_rr,\n    PERCENTILE_CONT(avg_rr, 0.5) OVER() AS median_rr,\n    PERCENTILE_CONT(avg_rr, 0.75) OVER() AS q3_rr,\n    PERCENTILE_CONT(avg_rr, 0.75) OVER() - PERCENTILE_CONT(avg_rr, 0.25) OVER() AS iqr_rr\n  FROM\n    avg_rr_per_stay\n  LIMIT 1\n)\n\n-- Categorize and aggregate results\nSELECT\n  CASE\n    WHEN a.avg_rr < 12 THEN '<12'\n    WHEN a.avg_rr BETWEEN 12 AND 20 THEN '12-20'\n    WHEN a.avg_rr BETWEEN 21 AND 29 THEN '21-29'\n    WHEN a.avg_rr >= 30 THEN '>=30'\n    ELSE 'Unknown'\n  END AS rr_category,\n  COUNT(a.stay_id) AS n,\n  ROUND(AVG(a.avg_rr), 2) AS mean_rr,\n  ROUND(p.median_rr, 2) AS median_rr,\n  ROUND(p.q1_rr, 2) AS q1_rr,\n  ROUND(p.q3_rr, 2) AS q3_rr,\n  ROUND(p.iqr_rr, 2) AS iqr_rr\nFROM\n  avg_rr_per_stay a\nCROSS JOIN\n  percentiles p\nGROUP BY\n  rr_category,\n  p.median_rr,\n  p.q1_rr,\n  p.q3_rr,\n  p.iqr_rr\nORDER BY\n  CASE rr_category\n    WHEN '<12' THEN 1\n    WHEN '12-20' THEN 2\n    WHEN '21-29' THEN 3\n    WHEN '>=30' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column avg_rr which is neither grouped nor aggregated at [64:25]; reason: invalidQuery, location: query, message: SELECT list expression references column avg_rr which is neither grouped nor aggregated at [64:25]\n\nLocation: US\nJob ID: 10c039c1-f7dd-4e66-8806-136b83f35019\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

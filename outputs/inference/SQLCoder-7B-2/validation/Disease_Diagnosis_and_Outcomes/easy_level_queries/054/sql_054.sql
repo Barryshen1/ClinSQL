@@ -1,0 +1,1 @@
+SELECT stddev(icustays.los) AS standard_deviation FROM patients JOIN icustays ON patients.subject_id = icustays.subject_id WHERE patients.gender = 'M' AND patients.anchor_age = 56 AND icustays.hadm_id IN (SELECT hadm_id FROM diagnoses_icd WHERE icd_code = '887.1' AND icd_version = '2019-09-01');

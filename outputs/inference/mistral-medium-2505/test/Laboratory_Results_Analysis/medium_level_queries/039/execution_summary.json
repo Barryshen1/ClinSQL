@@ -1,0 +1,16 @@
+{
+  "query": "For my 92\u2011year\u2011old female patient: among female patients 87\u201397 admitted with chest pain, report counts, percentages, and mean, median, IQR of index hs\u2011TnT by category (Normal\u22640.04; Borderline 0.04\u20130.1; Injury>0.1).",
+  "final_sql": "WITH\n-- Get female patients aged 87-97\neligible_patients AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 87 AND 97\n),\n\n-- Get admissions with chest pain diagnosis\nchest_pain_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM eligible_patients)\n    AND LOWER(di.long_title) LIKE '%chest pain%'\n),\n\n-- Get hs-TnT measurements (first per admission)\nhs_tnt_measurements AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.itemid,\n    l.charttime,\n    l.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime) AS measurement_rank\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON l.itemid = dl.itemid\n  WHERE\n    l.hadm_id IN (SELECT hadm_id FROM chest_pain_admissions)\n    AND dl.label = 'High Sensitivity Troponin T'\n    AND l.valuenum IS NOT NULL\n),\n\n-- Get only the first measurement per admission\nindex_hs_tnt AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum AS hs_tnt_value\n  FROM\n    hs_tnt_measurements\n  WHERE\n    measurement_rank = 1\n),\n\n-- Categorize the hs-TnT values\ncategorized_hs_tnt AS (\n  SELECT\n    hs_tnt_value,\n    CASE\n      WHEN hs_tnt_value <= 0.04 THEN 'Normal'\n      WHEN hs_tnt_value > 0.04 AND hs_tnt_value <= 0.1 THEN 'Borderline'\n      WHEN hs_tnt_value > 0.1 THEN 'Injury'\n    END AS category\n  FROM\n    index_hs_tnt\n)\n\n-- Final statistics\nSELECT\n  category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n  ROUND(AVG(hs_tnt_value), 4) AS mean,\n  ROUND(PERCENTILE_CONT(hs_tnt_value, 0.5) OVER (PARTITION BY category), 4) AS median,\n  ROUND(PERCENTILE_CONT(hs_tnt_value, 0.25) OVER (PARTITION BY category), 4) AS q1,\n  ROUND(PERCENTILE_CONT(hs_tnt_value, 0.75) OVER (PARTITION BY category), 4) AS q3,\n  ROUND(PERCENTILE_CONT(hs_tnt_value, 0.75) OVER (PARTITION BY category) -\n        PERCENTILE_CONT(hs_tnt_value, 0.25) OVER (PARTITION BY category), 4) AS iqr\nFROM\n  categorized_hs_tnt\nGROUP BY\n  category, hs_tnt_value\nORDER BY\n  category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 80\u2011year\u2011old man. For male inpatients aged 75\u201385 with hepatic failure, during the first 48 hours what was the cohort\u2019s maximum instability score, mortality, average LOS, and how did critical lab frequencies compare to general inpatients?",
+  "final_sql": "WITH hepatic_failure_icds AS (\n  -- ICD-9: 570 (Acute necrosis of liver), 572.x (other liver failure)\n  -- ICD-10: K72.x (hepatic failure)\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE (icd_version = 9 AND (icd_code LIKE '570%' OR icd_code LIKE '572%'))\n     OR (icd_version = 10 AND icd_code LIKE 'K72%')\n),\nhepatic_failure_admissions AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN hepatic_failure_icds h\n    ON d.icd_code = h.icd_code AND d.icd_version = h.icd_version\n),\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN hepatic_failure_admissions hfa\n    ON a.subject_id = hfa.subject_id AND a.hadm_id = hfa.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 75 AND 85\n),\ncohort_icu AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    c.hospital_expire_flag\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON c.subject_id = i.subject_id AND c.hadm_id = i.hadm_id\n),\ncohort_labs_48h AS (\n  SELECT\n    ci.stay_id,\n    COUNTIF(l.flag = 'abnormal') AS critical_lab_count\n  FROM cohort_icu ci\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON ci.subject_id = l.subject_id AND ci.hadm_id = l.hadm_id\n  WHERE l.charttime >= ci.intime\n    AND l.charttime <= TIMESTAMP_ADD(ci.intime, INTERVAL 48 HOUR)\n  GROUP BY ci.stay_id\n),\ngeneral_inpatients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 75 AND 85\n),\ngeneral_inpatients_icu AS (\n  SELECT\n    gi.subject_id,\n    gi.hadm_id,\n    i.stay_id,\n    i.intime\n  FROM general_inpatients gi\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON gi.subject_id = i.subject_id AND gi.hadm_id = i.hadm_id\n),\ngeneral_labs_48h AS (\n  SELECT\n    giu.stay_id,\n    COUNTIF(l.flag = 'abnormal') AS critical_lab_count\n  FROM general_inpatients_icu giu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON giu.subject_id = l.subject_id AND giu.hadm_id = l.hadm_id\n  WHERE l.charttime >= giu.intime\n    AND l.charttime <= TIMESTAMP_ADD(giu.intime, INTERVAL 48 HOUR)\n  GROUP BY giu.stay_id\n)\nSELECT\n  -- Hepatic failure cohort metrics\n  COUNT(DISTINCT cohort_icu.stay_id) AS hepatic_failure_icu_stays,\n  AVG(cohort_icu.los) AS avg_los_days,\n  AVG(CASE WHEN cohort_icu.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS hospital_mortality_rate,\n  NULL AS max_instability_score, -- SOFA not available in MIMIC-IV tables\n  AVG(cl.critical_lab_count) AS avg_critical_labs_per_stay,\n  -- General inpatients metrics\n  AVG(gl.critical_lab_count) AS avg_critical_labs_general_inpatients\nFROM cohort_icu\nLEFT JOIN cohort_labs_48h cl ON cohort_icu.stay_id = cl.stay_id\nLEFT JOIN general_labs_48h gl ON TRUE -- For overall average, not per-stay comparison;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_icu.sofa_scores was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_icu.sofa_scores was not found in location US\n\nLocation: US\nJob ID: 566f84d1-a19e-4544-b59b-b2ba85754a15\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

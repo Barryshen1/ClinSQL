@@ -1,0 +1,28 @@
+{
+  "query": "For a 92-year-old woman: among female ICU patients aged 87\u201397 with lower GI bleeding (first ICU stay), stratify by quintiles of distinct procedures in the first 48 hours and report mean procedure count, mean ICU LOS (days), and in-hospital mortality%.",
+  "final_sql": "WITH female_elderly AS (\n  SELECT subject_id, anchor_age\n  FROM physionet-data.mimiciv_3_1_hosp.patients\n  WHERE gender = 'F' \n    AND anchor_age BETWEEN 87 AND 97\n),\n\nfirst_icu_stay AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN female_elderly f ON i.subject_id = f.subject_id\n),\n\nlower_gi_bleeding AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_diag\n    ON d.icd_code = d_diag.icd_code AND d.icd_version = d_diag.icd_version\n  WHERE LOWER(d_diag.long_title) LIKE '%lower%gastrointestin%' \n     OR LOWER(d_diag.long_title) LIKE '%lower%gi%bleed%'\n     OR LOWER(d_diag.long_title) LIKE '%gastrointestinal hemorrhage, lower%'\n),\n\nprocedures_in_48h AS (\n  SELECT \n    i.stay_id,\n    COUNT(DISTINCT p.itemid) AS distinct_procedure_count\n  FROM first_icu_stay i\n  INNER JOIN physionet-data.mimiciv_3_1_icu.procedureevents p\n    ON i.stay_id = p.stay_id\n  WHERE p.starttime >= i.intime \n    AND p.starttime <= TIMESTAMP_ADD(i.intime, INTERVAL 48 HOUR)\n  GROUP BY i.stay_id\n),\n\ncohort_with_procedures AS (\n  SELECT \n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.los,\n    COALESCE(p.distinct_procedure_count, 0) AS distinct_procedure_count,\n    a.hospital_expire_flag\n  FROM first_icu_stay f\n  INNER JOIN lower_gi_bleeding l ON f.hadm_id = l.hadm_id\n  LEFT JOIN procedures_in_48h p ON f.stay_id = p.stay_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a ON f.hadm_id = a.hadm_id\n  WHERE f.rn = 1\n),\n\nquintiles AS (\n  SELECT *,\n    NTILE(5) OVER (ORDER BY distinct_procedure_count) AS procedure_quintile\n  FROM cohort_with_procedures\n)\n\nSELECT \n  procedure_quintile,\n  AVG(distinct_procedure_count) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_percent\nFROM quintiles\nGROUP BY procedure_quintile\nORDER BY procedure_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [26:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [26:27]\n\nLocation: US\nJob ID: 1e09e54d-70de-44a3-863f-c31fbdf63c8a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [68:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [68:36]\n\nLocation: US\nJob ID: 9f86cfca-aa9f-472b-adec-b28fa7f75630\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

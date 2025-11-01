@@ -1,0 +1,28 @@
+{
+  "query": "I have a 90\u2011year\u2011old male. Among male ICU patients aged 85\u201395 with acute respiratory failure, what is the percentile rank of a first\u201124\u2011hour vital\u2011sign instability score of 85? Also report average ICU length\u2011of\u2011stay and in\u2011hospital mortality for the most unstable quartile.",
+  "final_sql": "WITH \n-- Step 1: Filter patients\neligible_patients AS (\n  SELECT p.subject_id, p.gender, icu.hadm_id, icu.stay_id, \n         p.anchor_age + EXTRACT(YEAR FROM icu.intime) - p.anchor_year AS age,\n         icu.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON p.subject_id = icu.subject_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age + EXTRACT(YEAR FROM icu.intime) - p.anchor_year BETWEEN 85 AND 95\n    AND icu.hadm_id IN (SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` WHERE icd_code IN ('J9600', 'J9601', 'J9602'))\n),\n\n-- Step 2: Calculate vital sign instability score\nvital_signs AS (\n  SELECT icu.stay_id, \n         MAX(CASE WHEN di.label = 'Heart Rate' THEN ce.valuenum END) AS max_hr,\n         MIN(CASE WHEN di.label = 'Heart Rate' THEN ce.valuenum END) AS min_hr,\n         MAX(CASE WHEN di.label = 'Systolic Blood Pressure' THEN ce.valuenum END) AS max_sbp,\n         MIN(CASE WHEN di.label = 'Systolic Blood Pressure' THEN ce.valuenum END) AS min_sbp,\n         MAX(CASE WHEN di.label = 'Respiratory Rate' THEN ce.valuenum END) AS max_rr,\n         MIN(CASE WHEN di.label = 'Respiratory Rate' THEN ce.valuenum END) AS min_rr\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON icu.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  WHERE di.label IN ('Heart Rate', 'Systolic Blood Pressure', 'Respiratory Rate')\n    AND ce.charttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n  GROUP BY icu.stay_id\n),\n\ninstability_score AS (\n  SELECT stay_id, \n         (max_hr - min_hr) + (max_sbp - min_sbp) + (max_rr - min_rr) AS score\n  FROM vital_signs\n),\n\n-- Step 3 & 4: Percentile rank and analysis for the most unstable quartile\nquartile_analysis AS (\n  SELECT stay_id, score,\n         CASE WHEN PERCENT_RANK() OVER (ORDER BY score) >= 0.75 THEN 'Most Unstable Quartile' ELSE 'Other' END AS quartile_category\n  FROM instability_score\n),\n\n-- Outcomes\noutcomes AS (\n  SELECT icu.stay_id, \n         icu.los,\n         CASE WHEN adm.deathtime IS NOT NULL THEN 1 ELSE 0 END AS in_hospital_mortality\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm ON icu.hadm_id = adm.hadm_id\n)\n\n-- Final query\nSELECT \n  -- Percentile rank of a score of 85\n  (SELECT PERCENT_RANK() OVER (ORDER BY score) FROM instability_score WHERE score <= 85 ORDER BY score DESC LIMIT 1) AS percentile_rank_85,\n  -- Average ICU LOS and in-hospital mortality for the most unstable quartile\n  AVG(CASE WHEN qa.quartile_category = 'Most Unstable Quartile' THEN o.los END) AS avg_icu_los_most_unstable,\n  AVG(CASE WHEN qa.quartile_category = 'Most Unstable Quartile' THEN o.in_hospital_mortality END) AS avg_in_hospital_mortality_most_unstable\nFROM quartile_analysis qa\nJOIN outcomes o ON qa.stay_id = o.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \",\" at [5:70]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \",\" at [5:70]\n\nLocation: US\nJob ID: 3a3920da-de47-47fd-ac24-b25e41de6ed2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator >= for argument types: STRUCT<stay_id INT64, score FLOAT64, percentile_rank FLOAT64>, FLOAT64\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRUCT<stay_id INT64, score DOUBLE, percentile_rank DOUBLE>} at [47:20]; reason: invalidQuery, location: query, message: No matching signature for operator >= for argument types: STRUCT<stay_id INT64, score FLOAT64, percentile_rank FLOAT64>, FLOAT64\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRUCT<stay_id INT64, score DOUBLE, percentile_rank DOUBLE>} at [47:20]\n\nLocation: US\nJob ID: 0158989a-97d9-4891-8706-ba269fbfb2a4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

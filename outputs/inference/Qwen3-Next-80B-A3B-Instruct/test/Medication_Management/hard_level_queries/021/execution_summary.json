@@ -1,0 +1,28 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH qualifying_patients AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 41 AND 51\n    AND EXISTS (\n      -- Neutropenia within first 48h\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl ON le.itemid = dl.itemid\n      WHERE le.subject_id = a.subject_id\n        AND le.hadm_id = a.hadm_id\n        AND le.charttime BETWEEN a.admittime AND a.admittime + INTERVAL 48 HOUR\n        AND dl.label = 'Neutrophils'\n        AND le.valuenum < 1500\n    )\n    AND EXISTS (\n      -- Fever within first 48h\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n      WHERE ce.subject_id = a.subject_id\n        AND ce.hadm_id = a.hadm_id\n        AND ce.charttime BETWEEN a.admittime AND a.admittime + INTERVAL 48 HOUR\n        AND di.label = 'Temperature'\n        AND ce.valuenum >= 38.0\n    )\n),\nmedication_counts AS (\n  SELECT\n    qp.subject_id,\n    qp.hadm_id,\n    COUNT(DISTINCT p.drug) AS unique_med_count\n  FROM qualifying_patients qp\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON qp.hadm_id = p.hadm_id\n    AND p.starttime BETWEEN qp.admittime AND qp.admittime + INTERVAL 48 HOUR\n  GROUP BY qp.subject_id, qp.hadm_id\n),\ntertiles AS (\n  SELECT\n    mc.*,\n    NTILE(3) OVER (ORDER BY mc.unique_med_count) AS medication_tertile\n  FROM medication_counts mc\n),\nreadmissions AS (\n  SELECT\n    a1.subject_id,\n    a1.hadm_id,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = a1.subject_id\n          AND a2.hadm_id != a1.hadm_id\n          AND a2.admittime >= a1.dischtime\n          AND a2.admittime <= a1.dischtime + INTERVAL 30 DAY\n      ) THEN 1\n      ELSE 0\n    END AS thirty_day_readmission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a1\n),\nfinal_analysis AS (\n  SELECT\n    t.medication_tertile,\n    AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24 * 60 * 60)) AS los_days,\n    AVG(CAST(a.hospital_expire_flag AS FLOAT)) * 100 AS in_hospital_mortality_pct,\n    AVG(CAST(r.thirty_day_readmission AS FLOAT)) * 100 AS thirty_day_readmission_pct\n  FROM tertiles t\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON t.hadm_id = a.hadm_id\n  LEFT JOIN readmissions r ON t.hadm_id = r.hadm_id\n  GROUP BY t.medication_tertile\n  ORDER BY t.medication_tertile\n)\nSELECT\n  medication_tertile,\n  ROUND(los_days, 2) AS los_days,\n  ROUND(in_hospital_mortality_pct, 2) AS in_hospital_mortality_pct,\n  ROUND(thirty_day_readmission_pct, 2) AS thirty_day_readmission_pct\nFROM final_analysis;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Type not found: FLOAT at [72:40]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [72:40]\n\nLocation: US\nJob ID: 67d2fd40-df63-4dd4-9d27-cb7ca9742168\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \")\" at [22:5]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \")\" at [22:5]\n\nLocation: US\nJob ID: 616d35d8-d7a1-485c-85d5-89dfae58f641\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXTRACT does not support arguments of type: INTERVAL at [71:29]; reason: invalidQuery, location: query, message: EXTRACT does not support arguments of type: INTERVAL at [71:29]\n\nLocation: US\nJob ID: 348198e5-13da-4ac1-839e-7529df084ab5\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [72:40]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [72:40]\n\nLocation: US\nJob ID: 67d2fd40-df63-4dd4-9d27-cb7ca9742168\n"
+    }
+  ]
+}

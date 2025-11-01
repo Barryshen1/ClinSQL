@@ -1,0 +1,17 @@
+{
+  "query": "I have an 81\u2011year\u2011old woman with pneumonia. Among female inpatients aged 76\u201386 with pneumonia, stratify admissions into tertiles by medication complexity (unique drugs in first 7 hospital days) and report counts, min/avg/max score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 76 AND 86\n),\nall_admissions AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    MAX(CASE WHEN d.icd_code IN ('J18.0','J18.9') AND d.icd_version=10 THEN 1 ELSE 0 END) AS has_pneumonia\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN eligible_patients p ON a.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  GROUP BY a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n),\npneumonia_admissions AS (\n  SELECT subject_id, hadm_id, admittime, dischtime, hospital_expire_flag\n  FROM all_admissions\n  WHERE has_pneumonia = 1\n),\nmedication_complexity AS (\n  SELECT \n    a.hadm_id,\n    COUNT(DISTINCT p.drug) AS unique_drugs\n  FROM pneumonia_admissions a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p \n    ON a.hadm_id = p.hadm_id\n    AND p.starttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 7 DAY)\n  GROUP BY a.hadm_id\n),\nadmission_metrics AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    CASE \n      WHEN LEAD(a.admittime) OVER w IS NOT NULL \n        AND TIMESTAMP_DIFF(LEAD(a.admittime) OVER w, a.dischtime, DAY) <= 30 \n      THEN 1 \n      ELSE 0 \n    END AS readmission_flag\n  FROM all_admissions a\n  WINDOW w AS (PARTITION BY a.subject_id ORDER BY a.admittime)\n),\ncombined_data AS (\n  SELECT \n    p.hadm_id,\n    p.admittime,\n    p.dischtime,\n    p.hospital_expire_flag,\n    mc.unique_drugs,\n    am.los,\n    am.readmission_flag\n  FROM pneumonia_admissions p\n  INNER JOIN medication_complexity mc ON p.hadm_id = mc.hadm_id\n  INNER JOIN admission_metrics am ON p.hadm_id = am.hadm_id\n),\ntertiles AS (\n  SELECT \n    *,\n    NTILE(3) OVER (ORDER BY unique_drugs) AS tertile\n  FROM combined_data\n)\nSELECT \n  tertile,\n  COUNT(*) AS count_admissions,\n  MIN(unique_drugs) AS min_unique_drugs,\n  AVG(unique_drugs) AS avg_unique_drugs,\n  MAX(unique_drugs) AS max_unique_drugs,\n  AVG(los) AS mean_los,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_percent,\n  AVG(readmission_flag) * 100 AS readmission_percent\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 64\u2011year\u2011old woman hospitalized with heart failure. Among female inpatients aged 59\u201369 with HF, report in\u2011hospital mortality, AKI and ARDS rates, median survival among in\u2011hospital deaths, and the composite risk score distribution (min, P25, median, P75, P90, max).",
+  "final_sql": "WITH hf_cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n    -- Heart failure ICD codes: 428.* (ICD9) or I50.* (ICD10)\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '428%')\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n    )\n)\n, dx_flags AS (\n  SELECT\n    h.*,\n    -- AKI flag\n    MAX(\n      CASE\n        WHEN (d.icd_version = 9 AND d.icd_code LIKE '584%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n        THEN 1 ELSE 0\n      END\n    ) AS aki_flag,\n    -- ARDS flag\n    MAX(\n      CASE\n        WHEN (d.icd_version = 9 AND (d.icd_code = '51882' OR d.icd_code = '51885'))\n          OR (d.icd_version = 10 AND d.icd_code = 'J80')\n        THEN 1 ELSE 0\n      END\n    ) AS ards_flag\n  FROM hf_cohort h\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON h.hadm_id = d.hadm_id\n  GROUP BY h.subject_id, h.hadm_id, h.anchor_age, h.gender,\n           h.admittime, h.dischtime, h.deathtime, h.hospital_expire_flag\n)\n, scored AS (\n  SELECT\n    *,\n    hospital_expire_flag AS mortality_flag,\n    -- survival in days if died in hospital\n    CASE\n      WHEN hospital_expire_flag = 1 AND deathtime IS NOT NULL\n      THEN DATETIME_DIFF(deathtime, admittime, DAY)\n    END AS survival_days,\n    -- Composite risk score\n    (hospital_expire_flag + aki_flag + ards_flag) AS composite_score\n  FROM dx_flags\n)\nSELECT\n  COUNT(*) AS n_admissions,\n  AVG(mortality_flag) AS mortality_rate,\n  AVG(aki_flag) AS aki_rate,\n  AVG(ards_flag) AS ards_rate,\n  APPROX_QUANTILES(survival_days, 2)[OFFSET(1)] AS median_survival_days_among_deaths,\n  MIN(composite_score) AS comp_min,\n  APPROX_QUANTILES(composite_score, 4)[OFFSET(1)] AS comp_p25,\n  APPROX_QUANTILES(composite_score, 2)[OFFSET(1)] AS comp_median,\n  APPROX_QUANTILES(composite_score, 4)[OFFSET(3)] AS comp_p75,\n  APPROX_QUANTILES(composite_score, 10)[OFFSET(9)] AS comp_p90,\n  MAX(composite_score) AS comp_max\nFROM scored;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name aki_flag is ambiguous at [70:7]; reason: invalidQuery, location: query, message: Column name aki_flag is ambiguous at [70:7]\n\nLocation: US\nJob ID: fd2a9643-43ac-4bf9-9d03-f25f9d548cba\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For a 63‑year‑old male patient: among male inpatients 58–68 with T2DM and heart failure (admissions ≥72h), report % started on GLP‑1 agonists in first 72h versus final 12h and absolute difference (pp).",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    -- Age at admission: 58-68 inclusive\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 58 AND 68\n    AND a.dischtime IS NOT NULL\n    AND a.admittime IS NOT NULL\n    -- Admission duration ≥72 hours\n    AND (a.dischtime - a.admittime) >= INTERVAL '72' HOUR\n    -- T2DM diagnosis (ICD-10 E11.*)\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      WHERE d.hadm_id = a.hadm_id \n        AND d.icd_version = 10 \n        AND d.icd_code LIKE 'E11%'\n    )\n    -- Heart failure diagnosis (ICD-10 I50.*)\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n      WHERE d.hadm_id = a.hadm_id \n        AND d.icd_version = 10 \n        AND d.icd_code LIKE 'I50%'\n    )\n),\nglp1_starts AS (\n  SELECT \n    p.hadm_id,\n    MIN(p.starttime) AS first_glagon_start\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  WHERE LOWER(p.drug) IN (\n    'exenatide', 'liraglutide', 'dulaglutide', 'semaglutide', 'lixisenatide', 'albiglutide',\n    'victoza', 'saxenda', 'trulicity', 'ozempic', 'rybelsus', 'byetta', 'bydureon', 'adlyxin', 'tanzeum'\n  )\n    AND p.starttime IS NOT NULL\n  GROUP BY p.hadm_id\n),\nflags AS (\n  SELECT \n    c.hadm_id,\n    CASE \n      WHEN g.first_glagon_start IS NOT NULL \n        AND g.first_glagon_start >= c.admittime \n        AND g.first_glagon_start <= c.admittime + INTERVAL '72' HOUR \n      THEN 1 ELSE 0 \n    END AS started_first_72h,\n    CASE \n      WHEN g.first_glagon_start IS NOT NULL \n        AND g.first_glagon_start >= c.dischtime - INTERVAL '12' HOUR \n        AND g.first_glagon_start <= c.dischtime \n      THEN 1 ELSE 0 \n    END AS started_final_12h\n  FROM cohort c\n  LEFT JOIN glp1_starts g\n    ON c.hadm_id = g.hadm_id\n)\nSELECT \n  (SUM(started_first_72h) * 100.0 / COUNT(*)) AS percent_first_72h,\n  (SUM(started_final_12h) * 100.0 / COUNT(*)) AS percent_final_12h,\n  ABS(\n    (SUM(started_first_72h) * 100.0 / COUNT(*)) \n    - (SUM(started_final_12h) * 100.0 / COUNT(*))\n  ) AS absolute_difference\nFROM flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "qwen3-235b-a22b-thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

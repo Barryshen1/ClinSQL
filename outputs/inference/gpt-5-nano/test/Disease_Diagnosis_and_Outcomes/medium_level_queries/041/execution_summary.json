@@ -1,0 +1,28 @@
+{
+  "query": "I have a 55-year-old female. For women aged 50\u201360 with sepsis excluding septic shock, give in-hospital mortality (%) for LOS \u22647 vs >7 days, absolute/relative difference, and median time-to-death.",
+  "final_sql": "WITH\n  -- 1) Base population: female 50-60 with a hospital stay\n  base_population AS (\n    SELECT\n      a.subject_id,\n      a.hadm_id,\n      a.admittime,\n      a.dischtime,\n      a.deathtime,\n      TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS LOS_DAYS\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n    WHERE p.gender = 'F'\n      AND p.anchor_age BETWEEN 50 AND 60\n      AND a.dischtime IS NOT NULL\n  ),\n\n  -- 2) Sepsis cases excluding septic shock\n  sepsis_admissions AS (\n    SELECT bp.subject_id, bp.hadm_id, bp.admittime, bp.dischtime, bp.deathtime, bp.LOS_DAYS\n    FROM base_population AS bp\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      ON bp.subject_id = di.subject_id AND bp.hadm_id = di.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n      ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n    WHERE (di.icd_code LIKE 'A40%' OR di.icd_code LIKE 'A41%' OR dd.long_title LIKE '%sepsis%')\n      -- Exclude septic shock\n      AND NOT EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di2\n        JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd2\n          ON di2.icd_code = dd2.icd_code AND di2.icd_version = dd2.icd_version\n        WHERE di2.subject_id = bp.subject_id\n          AND di2.hadm_id = bp.hadm_id\n          AND di2.icd_code = 'R57.2'\n      )\n  ),\n\n  -- 3) Group-level statistics by LOS category\n  group_stats AS (\n    SELECT\n      CASE WHEN LOS_DAYS <= 7 THEN '\u22647' ELSE '>7' END AS los_group,\n      COUNT(*) AS cohort_size,\n      SUM(CASE WHEN deathtime IS NOT NULL THEN 1 ELSE 0 END) AS deaths,\n      SAFE_DIVIDE(SUM(CASE WHEN deathtime IS NOT NULL THEN 1 ELSE 0 END), COUNT(*)) * 100 AS mortality_pct,\n      MEDIAN(TIMESTAMP_DIFF(deathtime, admittime, SECOND) / 3600.0) AS median_time_to_death_hours\n    FROM sepsis_admissions\n    GROUP BY los_group\n  ),\n\n  -- 4) Differences/ratios between LOS groups\n  diff AS (\n    SELECT\n      MAX(CASE WHEN los_group = '\u22647' THEN mortality_pct END) AS mor_le7,\n      MAX(CASE WHEN los_group = '>7' THEN mortality_pct END) AS mor_gt7,\n      MAX(CASE WHEN los_group = '\u22647' THEN median_time_to_death_hours END) AS median_le7,\n      MAX(CASE WHEN los_group = '>7' THEN median_time_to_death_hours END) AS median_gt7\n    FROM group_stats\n  )\n\n-- 5) Present results: include mortality, medians, and differences\nSELECT label, value\nFROM (\n  -- Mortality by LOS group\n  SELECT CAST('LOS \u22647 days mortality (%)' AS STRING) AS label, mor_le7 AS value FROM diff\n  UNION ALL\n  SELECT CAST('LOS >7 days mortality (%)',) AS label, mor_gt7 AS value FROM diff\n  UNION ALL\n  -- Absolute/Relative mortality differences\n  SELECT CAST('Absolute difference in mortality (\u22647 - >7)' AS STRING), mor_le7 - mor_gt7 FROM diff\n  UNION ALL\n  SELECT CAST('Relative difference in mortality (\u22647 / >7)' AS STRING), CASE WHEN mor_gt7 = 0 THEN NULL ELSE mor_le7 / mor_gt7 END FROM diff\n  UNION ALL\n  -- Median time-to-death by LOS group\n  SELECT CAST('Median time-to-death hours (LOS \u22647)' AS STRING), median_le7 FROM diff\n  UNION ALL\n  SELECT CAST('Median time-to-death hours (LOS >7)' AS STRING), median_gt7 FROM diff\n  UNION ALL\n  -- Difference in medians\n  SELECT CAST('Difference in median time-to-death (\u22647 - >7)' AS STRING), median_le7 - median_gt7 FROM diff\n  UNION ALL\n  SELECT CAST('Relative difference in median time-to-death (\u22647 / >7)' AS STRING), CASE WHEN median_gt7 = 0 THEN NULL ELSE median_le7 / median_gt7 END FROM diff\n) AS t;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected keyword AS but got \",\" at [68:42]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [68:42]\n\nLocation: US\nJob ID: 6d55a2bb-5c9b-4646-b33d-a56f234990de\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [47:7]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [47:7]\n\nLocation: US\nJob ID: 03f5bf9a-1b98-4e2f-b25f-554e522f1a9c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_MEDIAN at [47:7]; reason: invalidQuery, location: query, message: Function not found: APPROX_MEDIAN at [47:7]\n\nLocation: US\nJob ID: 18c4c303-9748-4ef2-b4b2-4c6d49052db9\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [68:42]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [68:42]\n\nLocation: US\nJob ID: 6d55a2bb-5c9b-4646-b33d-a56f234990de\n"
+    }
+  ]
+}

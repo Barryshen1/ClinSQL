@@ -1,0 +1,16 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  -- All female ICU stays age 53-63\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    pat.anchor_age,\n    pat.gender\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 53 AND 63\n),\n\nsepsis_hadm AS (\n  -- hadm_id with sepsis diagnosis\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE\n    (\n      -- ICD-10 sepsis\n      (d.icd_version = 10 AND (LEFT(d.icd_code, 3) = 'A40' OR LEFT(d.icd_code, 3) = 'A41'))\n      -- ICD-9 sepsis\n      OR (d.icd_version = 9 AND d.icd_code IN ('99591', '99592', '78552'))\n    )\n),\n\nprocedures_24h AS (\n  -- Count procedures in first 24h of ICU stay\n  SELECT\n    c.stay_id,\n    COUNT(p.icd_code) AS proc_count\n  FROM\n    cohort c\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    ON c.subject_id = p.subject_id\n    AND c.hadm_id = p.hadm_id\n    AND p.chartdate >= c.intime\n    AND p.chartdate < DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY\n    c.stay_id\n),\n\noutcomes AS (\n  -- Add LOS and hospital mortality\n  SELECT\n    c.stay_id,\n    c.hadm_id,\n    c.los,\n    COALESCE(proc.proc_count, 0) AS proc_count,\n    a.hospital_expire_flag,\n    CASE WHEN c.hadm_id IN (SELECT hadm_id FROM sepsis_hadm) THEN 'sepsis' ELSE 'non_sepsis' END AS cohort_type\n  FROM\n    cohort c\n  LEFT JOIN\n    procedures_24h proc\n    ON c.stay_id = proc.stay_id\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON c.hadm_id = a.hadm_id\n)\n\nSELECT\n  cohort_type,\n  APPROX_QUANTILES(proc_count, 100)[75] AS proc_count_75th_percentile,\n  APPROX_QUANTILES(proc_count, 100)[90] AS proc_count_90th_percentile,\n  AVG(los) AS avg_icu_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS hospital_mortality_rate\nFROM\n  outcomes\nGROUP BY\n  cohort_type\nORDER BY\n  cohort_type;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

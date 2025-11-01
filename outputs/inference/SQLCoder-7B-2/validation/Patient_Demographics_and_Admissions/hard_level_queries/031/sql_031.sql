@@ -1,0 +1,1 @@
+SELECT COUNT(DISTINCT a.hadm_id) AS total_admissions FROM admissions a JOIN patients p ON a.subject_id = p.subject_id JOIN diagnoses_icd d ON a.subject_id = d.subject_id WHERE p.gender = 'F' AND p.anchor_age = 67 AND p.insurance = 'Medicare' AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2015 AND 2016 AND d.icd_code IN ('780.2', 'R55') AND d.seq_num = 1;

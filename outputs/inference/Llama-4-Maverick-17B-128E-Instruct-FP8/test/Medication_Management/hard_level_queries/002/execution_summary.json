@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 72-year-old man with AMI. Among male inpatients aged 67-77 with AMI, stratified into tertiles by first-24-hour medication complexity score, report per tertile: admission count, score range and mean, mean LOS (days), in-hospital mortality%, and 30-day readmission%.",
+  "final_sql": "WITH ami_patients AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, p.anchor_age, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 67 AND 77\n  AND d.icd_code IN (SELECT icd_code FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` WHERE long_title LIKE '%Acute myocardial infarction%')\n),\nmed_complexity AS (\n  SELECT a.subject_id, a.hadm_id, COUNT(DISTINCT pr.drug) as med_count\n  FROM ami_patients a\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON a.hadm_id = pr.hadm_id\n  WHERE pr.starttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 24 HOUR)\n  GROUP BY a.subject_id, a.hadm_id\n),\ntertiles AS (\n  SELECT hadm_id, med_count,\n  NTILE(3) OVER (ORDER BY med_count) as tertile\n  FROM med_complexity\n),\nstats AS (\n  SELECT t.tertile,\n  COUNT(t.hadm_id) as admission_count,\n  MIN(m.med_count) as score_min, MAX(m.med_count) as score_max, AVG(m.med_count) as score_mean,\n  AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY)) as los_mean,\n  SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(t.hadm_id) * 100 as mortality_percent,\n  SUM(CASE WHEN EXISTS (\n    SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    WHERE a2.subject_id = a.subject_id AND a2.admittime > a.dischtime AND TIMESTAMP_DIFF(a2.admittime, a.dischtime, DAY) <= 30\n  ) THEN 1 ELSE 0 END) / COUNT(t.hadm_id) * 100 as readmission_percent\n  FROM tertiles t\n  JOIN med_complexity m ON t.hadm_id = m.hadm_id\n  JOIN ami_patients a ON t.hadm_id = a.hadm_id\n  GROUP BY t.tertile\n)\nSELECT * FROM stats\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

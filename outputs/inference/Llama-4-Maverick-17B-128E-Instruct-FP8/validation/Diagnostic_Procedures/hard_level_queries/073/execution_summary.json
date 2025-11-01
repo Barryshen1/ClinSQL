@@ -1,0 +1,22 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH \neligible_patients AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 90 AND 100\n),\nfirst_icu_stay AS (\n  SELECT subject_id, hadm_id, stay_id, intime,\n         ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) as icu_stay_num\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  WHERE subject_id IN (SELECT subject_id FROM eligible_patients)\n),\nhepatic_failure_patients AS (\n  SELECT DISTINCT d.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Hepatic failure%' \n  AND d.subject_id IN (SELECT subject_id FROM first_icu_stay WHERE icu_stay_num = 1)\n),\ndiagnostic_procedures AS (\n  SELECT fis.stay_id, COUNT(DISTINCT pe.itemid) as num_procedures\n  FROM first_icu_stay fis\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe ON fis.stay_id = pe.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON pe.itemid = di.itemid\n  WHERE pe.starttime <= fis.intime + INTERVAL 3 DAY AND di.category = 'Diagnostic'\n  AND fis.icu_stay_num = 1 AND fis.subject_id IN (SELECT subject_id FROM hepatic_failure_patients)\n  GROUP BY fis.stay_id\n),\nquartiles AS (\n  SELECT num_procedures, \n         NTILE(4) OVER (ORDER BY num_procedures) as quartile\n  FROM diagnostic_procedures\n),\nstats AS (\n  SELECT \n    q.quartile,\n    COUNT(*) as num_patients,\n    MIN(q.num_procedures) as min_procedures,\n    MAX(q.num_procedures) as max_procedures,\n    AVG(q.num_procedures) as mean_procedures,\n    AVG(i.los) as mean_los,\n    AVG(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100 as mortality_percent\n  FROM quartiles q\n  JOIN diagnostic_procedures dp ON q.num_procedures = dp.num_procedures\n  JOIN first_icu_stay fis ON dp.stay_id = fis.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON fis.stay_id = i.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON fis.hadm_id = a.hadm_id\n  WHERE fis.icu_stay_num = 1\n  GROUP BY q.quartile\n)\n\nSELECT * FROM stats ORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: 20e2e47b-ac0c-478a-a927-5d34764c26b9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

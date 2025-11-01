@@ -1,0 +1,16 @@
+{
+  "query": "For my 82\u2011year\u2011old female with ACS: among ACS admissions age 77\u201387, report mean, min, max radiography/CT counts for 1\u20134 vs 5\u20138\u2011day stays, stratified by primary vs secondary diagnosis.",
+  "final_sql": "WITH admissions_acs AS (\n  -- Identify ACS admissions for 77-87 year old females and classify as primary/secondary\n  SELECT\n    a.hadm_id,\n    a.admittime,\n    COALESCE(a.dischtime, a.deathtime) AS endtime,\n    CASE\n      WHEN MAX(CASE WHEN d.icd_code LIKE 'I2%' AND d.seq_num = 1 THEN 1 ELSE 0 END) = 1 THEN 'primary'\n      ELSE 'secondary'\n    END AS acs_type,\n    DATE_DIFF(DATE(COALESCE(a.dischtime, a.deathtime)), DATE(a.admittime), DAY) + 1 AS length_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON d.hadm_id = a.hadm_id\n  WHERE p.anchor_age BETWEEN 77 AND 87\n    AND p.gender = 'F'\n  GROUP BY a.hadm_id, a.admittime, a.dischtime, a.deathtime\n  HAVING\n    MAX(CASE WHEN d.icd_code LIKE 'I2%' AND d.seq_num = 1 THEN 1 ELSE 0 END) = 1\n     OR MAX(CASE WHEN d.icd_code LIKE 'I2%' THEN 1 ELSE 0 END) = 1\n),\nadmissions_bucket AS (\n  -- Bucket stays into 1-4 vs 5-8 days\n  SELECT\n    hadm_id,\n    admittime,\n    endtime,\n    acs_type,\n    length_days,\n    CASE\n      WHEN length_days BETWEEN 1 AND 4 THEN '1-4'\n      WHEN length_days BETWEEN 5 AND 8 THEN '5-8'\n      ELSE NULL\n    END AS length_group\n  FROM admissions_acs\n  WHERE acs_type IS NOT NULL\n),\nimaging_counts AS (\n  -- Imaging (radiology/CT) counts per admission within stay window\n  SELECT\n    ab.hadm_id,\n    SUM(\n      CASE\n        WHEN ce.charttime IS NOT NULL\n             AND ce.charttime >= ab.admittime\n             AND ce.charttime <= ab.endtime\n             AND (di.category LIKE '%Radiology%' OR LOWER(di.label) LIKE '%x-ray%' OR LOWER(di.label) LIKE '%ct%')\n        THEN 1\n        ELSE 0\n      END\n    ) AS imaging_count\n  FROM admissions_bucket AS ab\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ce.hadm_id = ab.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON ce.itemid = di.itemid\n  GROUP BY ab.hadm_id\n)\nSELECT\n  ab.acs_type,\n  ab.length_group,\n  -- Use COALESCE to treat missing imaging as 0\n  AVG(COALESCE(ic.imaging_count, 0)) AS mean_count,\n  MIN(COALESCE(ic.imaging_count, 0)) AS min_count,\n  MAX(COALESCE(ic.imaging_count, 0)) AS max_count\nFROM admissions_bucket AS ab\nLEFT JOIN imaging_counts AS ic\n  ON ic.hadm_id = ab.hadm_id\nGROUP BY ab.acs_type, ab.length_group\nORDER BY ab.acs_type, ab.length_group;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

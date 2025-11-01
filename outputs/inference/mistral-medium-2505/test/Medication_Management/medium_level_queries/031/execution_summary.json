@@ -1,0 +1,22 @@
+{
+  "query": "Male patient age 58: among male inpatients 53\u201363 with diabetes and heart failure, give percentages with injectable GLP\u20111 RA initiated within first 24 hours versus final 12 hours before discharge.",
+  "final_sql": "WITH\n-- Define our target population: male patients 53-63 with diabetes and heart failure\ntarget_patients AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND a.hospital_expire_flag = 0\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE diag.subject_id = p.subject_id\n        AND diag.hadm_id = a.hadm_id\n        AND diag.icd_code LIKE 'E11%'  -- Diabetes\n    )\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE diag.subject_id = p.subject_id\n        AND diag.hadm_id = a.hadm_id\n        AND diag.icd_code LIKE 'I50%'  -- Heart failure\n    )\n),\n\n-- Identify GLP-1 RA prescriptions\nglp1_prescriptions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    starttime,\n    drug,\n    route\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    (LOWER(drug) LIKE '%glp-1%'\n     OR LOWER(drug) LIKE '%exenatide%'\n     OR LOWER(drug) LIKE '%liraglutide%'\n     OR LOWER(drug) LIKE '%dulaglutide%'\n     OR LOWER(drug) LIKE '%semaglutide%')\n    AND (LOWER(route) LIKE '%inject%'\n         OR LOWER(route) LIKE '%subcutaneous%'\n         OR LOWER(route) LIKE '%sc%')\n),\n\n-- Calculate time windows for each admission\ntime_windows AS (\n  SELECT\n    hadm_id,\n    admittime,\n    dischtime,\n    TIMESTAMP_ADD(admittime, INTERVAL 24 HOUR) AS first_24h_end,\n    TIMESTAMP_SUB(dischtime, INTERVAL 12 HOUR) AS final_12h_start\n  FROM\n    target_patients\n),\n\n-- Classify prescriptions by timing\nprescription_timing AS (\n  SELECT\n    tp.hadm_id,\n    CASE\n      WHEN gp.starttime BETWEEN tw.admittime AND tw.first_24h_end THEN 'first_24h'\n      WHEN gp.starttime BETWEEN tw.final_12h_start AND tw.dischtime THEN 'final_12h'\n      ELSE 'other'\n    END AS timing_category\n  FROM\n    target_patients tp\n  JOIN\n    time_windows tw ON tp.hadm_id = tw.hadm_id\n  LEFT JOIN\n    glp1_prescriptions gp\n    ON tp.subject_id = gp.subject_id AND tp.hadm_id = gp.hadm_id\n  WHERE\n    gp.hadm_id IS NOT NULL\n),\n\n-- Count patients in each category\ntiming_counts AS (\n  SELECT\n    timing_category,\n    COUNT(DISTINCT hadm_id) AS patient_count\n  FROM\n    prescription_timing\n  GROUP BY\n    timing_category\n),\n\n-- Get total number of target patients\ntotal_patients AS (\n  SELECT\n    COUNT(DISTINCT hadm_id) AS total_count\n  FROM\n    target_patients\n)\n\n-- Calculate percentages\nSELECT\n  tc.timing_category,\n  tc.patient_count,\n  ROUND((tc.patient_count / tp.total_count) * 100, 2) AS percentage\nFROM\n  timing_counts tc\nCROSS JOIN\n  total_patients tp\nWHERE\n  tc.timing_category IN ('first_24h', 'final_12h')\nORDER BY\n  tc.timing_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name first_24h_end not found inside tp at [72:53]; reason: invalidQuery, location: query, message: Name first_24h_end not found inside tp at [72:53]\n\nLocation: US\nJob ID: 325bc38e-cf27-45fb-818e-b5256c4baeea\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

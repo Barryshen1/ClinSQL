@@ -1,0 +1,28 @@
+{
+  "query": "For a 45\u2011year\u2011old man with AMI (no shock or respiratory failure), among males 40\u201350 report in\u2011hospital mortality (%) and median LOS by LOS \u22645 vs >5 and day\u20111 ICU status.",
+  "final_sql": "WITH ami_admissions AS (\n  SELECT DISTINCT h.subject_id, h.hadm_id, h.admittime, h.dischtime, h.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS h\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON h.subject_id = p.subject_id\n  WHERE p.gender = 'Male'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n        ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n      WHERE di.subject_id = h.subject_id\n        AND di.hadm_id = h.hadm_id\n        AND (\n          LOWER(dd.long_title) LIKE '%acute myocardial infarction%' OR\n          LOWER(dd.long_title) LIKE '%myocardial infarction%'\n        )\n    )\n),\nday1_status AS (\n  SELECT a.subject_id,\n         a.hadm_id,\n         CASE\n           WHEN EXISTS (\n             SELECT 1\n             FROM `physionet-data.mimiciv_3_1_icu.icustays` ic\n             WHERE ic.hadm_id = a.hadm_id\n               AND ic.intime >= a.admittime\n               AND ic.intime <= TIMESTAMP_ADD(a.admittime, INTERVAL 1 DAY)\n           ) THEN 'ICU_on_day1'\n           ELSE 'No_ICU_on_day1'\n         END AS day1_icu_status,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days,\n         a.hospital_expire_flag\n  FROM ami_admissions a\n),\nenriched AS (\n  SELECT s.day1_icu_status,\n         CASE WHEN s.los_days <= 5.0 THEN '\u22645' ELSE '>5' END AS los_group,\n         s.los_days,\n         s.hospital_expire_flag\n  FROM day1_status s\n),\ngrouped_stats AS (\n  SELECT day1_icu_status,\n         los_group,\n         COUNT(*) AS n_patients,\n         SUM(hospital_expire_flag) AS deaths,\n         SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)) * 100 AS in_hospital_mortality_percent\n  FROM enriched\n  GROUP BY day1_icu_status, los_group\n),\nmedian_vals AS (\n  SELECT day1_icu_status,\n         los_group,\n         AVG(los_days) AS median_los_days\n  FROM (\n     SELECT day1_icu_status,\n            los_group,\n            los_days,\n            ROW_NUMBER() OVER (\n              PARTITION BY day1_icu_status, los_group\n              ORDER BY los_days\n            ) AS rn,\n            COUNT(*) OVER (\n              PARTITION BY day1_icu_status, los_group\n            ) AS total_cnt\n     FROM enriched\n  )\n  WHERE rn IN (FLOOR((total_cnt + 1) / 2), CEIL((total_cnt + 1) / 2))\n  GROUP BY day1_icu_status, los_group\n)\nSELECT gs.day1_icu_status,\n       gs.los_group,\n       gs.n_patients,\n       gs.deaths,\n       gs.in_hospital_mortality_percent,\n       mv.median_los_days\nFROM grouped_stats gs\nLEFT JOIN median_vals mv\n  ON gs.day1_icu_status = mv.day1_icu_status\n  AND gs.los_group = mv.los_group\nORDER BY gs.day1_icu_status, gs.los_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_hosp.icustays was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_hosp.icustays was not found in location US\n\nLocation: US\nJob ID: 49926ae3-59ae-4708-b2ae-2d85d9959703\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [46:3]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [46:3]\n\nLocation: US\nJob ID: 75781f9c-1d08-4b77-94ea-9df9c791e143\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

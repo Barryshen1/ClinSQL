@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old man. In male inpatients aged 74\u201384 with AKI, what are the cohort\u2019s median risk score (IQR) and 30\u2011day mortality? Compare ARDS rate and survivor LOS to general male inpatients 74\u201384 and give the risk percentile.",
+  "final_sql": "WITH base_pop AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.gender,\n    -- approximate age at admission\n    pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age_at_adm,\n    adm.admittime,\n    adm.dischtime,\n    pat.dod,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat USING (subject_id)\n  WHERE pat.gender = 'M'\n),\npop74_84 AS (\n  SELECT *\n  FROM base_pop\n  WHERE age_at_adm BETWEEN 74 AND 84\n),\naki_flag AS (\n  SELECT DISTINCT\n    diags.subject_id,\n    diags.hadm_id,\n    1 AS aki\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diags\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddesc\n    ON diags.icd_code = ddesc.icd_code\n    AND diags.icd_version = ddesc.icd_version\n  WHERE ( (diags.icd_version = 9 AND diags.icd_code LIKE '584%')\n       OR (diags.icd_version = 10 AND diags.icd_code LIKE 'N17%') )\n),\nards_flag AS (\n  SELECT DISTINCT\n    diags.subject_id,\n    diags.hadm_id,\n    1 AS ards\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diags\n  WHERE ( (diags.icd_version = 9 AND diags.icd_code = '51882')\n       OR (diags.icd_version = 10 AND diags.icd_code = 'J80') )\n),\nrisk_scores AS (\n  -- Placeholder for real risk score extraction\n  SELECT\n    subject_id,\n    SAFE_CAST(result_value AS FLOAT64) AS risk_score\n  FROM `physionet-data.mimiciv_3_1_hosp.omr`\n  WHERE LOWER(result_name) LIKE '%risk score%'\n)\n,\npop_with_flags AS (\n  SELECT\n    p.*,\n    IF(aki.aki IS NOT NULL, 1, 0) AS aki,\n    IF(ards.ards IS NOT NULL, 1, 0) AS ards,\n    rs.risk_score,\n    -- 30-day mortality flag\n    CASE\n      WHEN p.dod IS NULL THEN 0\n      WHEN p.dod <= p.admittime + INTERVAL 30 DAY THEN 1 ELSE 0\n    END AS mort_30d,\n    -- LOS in days\n    TIMESTAMP_DIFF(p.dischtime, p.admittime, DAY) AS los_days\n  FROM pop74_84 p\n  LEFT JOIN aki_flag aki\n    ON p.subject_id = aki.subject_id AND p.hadm_id = aki.hadm_id\n  LEFT JOIN ards_flag ards\n    ON p.subject_id = ards.subject_id AND p.hadm_id = ards.hadm_id\n  LEFT JOIN risk_scores rs\n    ON p.subject_id = rs.subject_id\n)\n,\naki_group AS (\n  SELECT *\n  FROM pop_with_flags\n  WHERE aki = 1\n),\ngeneral_group AS (\n  SELECT *\n  FROM pop_with_flags\n  WHERE aki = 0\n),\naki_summary AS (\n  SELECT\n    'AKI' AS group_name,\n    COUNT(*) AS n,\n    APPROX_QUANTILES(risk_score, 100)[OFFSET(50)] AS median_risk,\n    APPROX_QUANTILES(risk_score, 100)[OFFSET(25)] AS q1,\n    APPROX_QUANTILES(risk_score, 100)[OFFSET(75)] AS q3,\n    ROUND(100 * SUM(mort_30d)/COUNT(*),2) AS mort30d_pct,\n    ROUND(100 * SUM(ards)/COUNT(*),2) AS ards_rate_pct,\n    AVG(CASE WHEN mort_30d=0 THEN los_days END) AS mean_los_survivors\n  FROM aki_group\n),\ngeneral_summary AS (\n  SELECT\n    'General' AS group_name,\n    COUNT(*) AS n,\n    NULL AS median_risk,\n    NULL AS q1,\n    NULL AS q3,\n    NULL AS mort30d_pct,\n    ROUND(100 * SUM(ards)/COUNT(*),2) AS ards_rate_pct,\n    AVG(CASE WHEN mort_30d=0 THEN los_days END) AS mean_los_survivors\n  FROM general_group\n),\nrisk_percentile_for_79yo AS (\n  SELECT\n    '79yo_index_patient' AS label,\n    rs.risk_score,\n    ROUND(100 * SUM(CASE WHEN g.risk_score <= rs.risk_score THEN 1 ELSE 0 END)/COUNT(*), 2) AS percentile_rank\n  FROM aki_group g\n  JOIN (\n    SELECT risk_score\n    FROM aki_group\n    WHERE age_at_adm = 79\n    LIMIT 1\n  ) rs\n  ON TRUE\n  GROUP BY rs.risk_score\n)\nSELECT * FROM aki_summary\nUNION ALL\nSELECT * FROM general_summary\nUNION ALL\nSELECT label AS group_name, NULL, risk_score, NULL, NULL, percentile_rank, NULL, NULL\nFROM risk_percentile_for_79yo;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hadm_id at [46:5]; reason: invalidQuery, location: query, message: Unrecognized name: hadm_id at [46:5]\n\nLocation: US\nJob ID: 21493cd5-d3ee-4ffe-bda7-9606c8926f0d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references rs.risk_score which is neither grouped nor aggregated at [110:5]; reason: invalidQuery, location: query, message: SELECT list expression references rs.risk_score which is neither grouped nor aggregated at [110:5]\n\nLocation: US\nJob ID: e1545e09-23be-4dd6-baee-8a7bd08a2a5e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

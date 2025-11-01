@@ -1,0 +1,23 @@
+{
+  "query": "I have an 83\u2011year\u2011old female inpatient post\u2011cardiac arrest. For females 78\u201388 years, stratified by tertiles of a 7\u2011day medication complexity score (unique drugs + 2\u00d7 high\u2011risk drugs + routes), report counts, score ranges, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH high_risk_drugs AS (\n  SELECT 'Warfarin' AS drug\n  UNION ALL SELECT 'Insulin'\n  UNION ALL SELECT 'Digoxin'\n  -- Placeholder list; in practice replace with clinical criteria\n),\nbase_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 78 AND 88\n    AND a.dischtime IS NOT NULL\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND d.icd_code IN ('I46.0', 'I46.1', 'I46.2', 'I46.8', 'I46.9')\n    )\n),\nmedication_scores AS (\n  SELECT \n    b.hadm_id,\n    COUNT(DISTINCT pr.drug) AS unique_drugs,\n    COUNT(DISTINCT CASE WHEN pr.drug IN (SELECT drug FROM high_risk_drugs) THEN pr.drug END) AS high_risk_count,\n    COUNT(DISTINCT pr.route) AS routes,\n    COUNT(DISTINCT pr.drug) + 2 * COUNT(DISTINCT CASE WHEN pr.drug IN (SELECT drug FROM high_risk_drugs) THEN pr.drug END) + COUNT(DISTINCT pr.route) AS score\n  FROM base_admissions b\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON b.hadm_id = pr.hadm_id\n    AND pr.starttime >= b.admittime\n    AND pr.starttime < TIMESTAMP_ADD(b.admittime, INTERVAL 7 DAY)\n  GROUP BY b.hadm_id\n),\nreadmission_flag AS (\n  SELECT \n    b.hadm_id,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = b.subject_id\n          AND a2.admittime > b.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(b.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM base_admissions b\n),\ncombined AS (\n  SELECT \n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.hospital_expire_flag,\n    m.score,\n    r.readmitted_30d,\n    TIMESTAMP_DIFF(b.dischtime, b.admittime, SECOND) / (24*60*60.0) AS los_days\n  FROM base_admissions b\n  LEFT JOIN medication_scores m ON b.hadm_id = m.hadm_id\n  LEFT JOIN readmission_flag r ON b.hadm_id = r.hadm_id\n),\nwith_tertiles AS (\n  SELECT \n    *,\n    NTILE(3) OVER (ORDER BY score) AS tertile_group\n  FROM combined\n)\nSELECT \n  tertile_group,\n  COUNT(*) AS count,\n  MIN(score) AS min_score,\n  MAX(score) AS max_score,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) * 100 AS mortality_pct,\n  AVG(readmitted_30d) * 100 AS readmission_pct\nFROM with_tertiles\nGROUP BY tertile_group\nORDER BY tertile_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected string literal 'I46' at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected string literal 'I46' at [1:6]\n\nLocation: US\nJob ID: 3f97f160-3311-46d1-b343-e8cbe3387472\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

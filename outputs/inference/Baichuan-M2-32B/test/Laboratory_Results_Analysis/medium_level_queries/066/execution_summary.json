@@ -1,0 +1,17 @@
+{
+  "query": "For my 44\u2011year\u2011old male with chest pain: among men aged 39\u201349 admitted for chest pain, report counts, percentages, and mean, median, IQR of initial hs\u2011TnT by category (normal/borderline/myocardial injury).",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    -- Compute age at admission: anchor_age + (year of admission - anchor_year)\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 39 AND 49\n),\n\nchest_pain_admissions AS (\n  SELECT DISTINCT\n    da.subject_id,\n    da.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` da\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d \n    ON da.icd_code = d.icd_code AND da.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%chest pain%'\n    AND da.icd_version = 10\n),\n\n-- Get the hs-TnT itemid(s)\nhs_tnt_itemid AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE label LIKE '%troponin T%'\n    AND label LIKE '%high-sensitivity%'\n),\n\n-- Get the first hs-TnT lab per admission in ng/L\nfirst_hs_tnt AS (\n  SELECT \n    le.subject_id,\n    le.hadm_id,\n    le.valuenum,\n    le.charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN hs_tnt_itemid h \n    ON le.itemid = h.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND le.valueuom = 'ng/L'  -- ensure unit is ng/L\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) = 1\n)\n\n-- Now combine and compute statistics\nSELECT \n  CASE \n    WHEN f.valuenum < 14 THEN 'Normal'\n    WHEN f.valuenum BETWEEN 14 AND 50 THEN 'Borderline'\n    WHEN f.valuenum > 50 THEN 'Myocardial injury'\n    ELSE 'Unknown'  -- though we filtered NULL, but still\n  END AS category,\n  COUNT(*) AS count,\n  (COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ()) AS percentage,\n  APPROX_QUANTILES(f.valuenum, 100)[OFFSET(50)] AS median,\n  APPROX_QUANTILES(f.valuenum, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(f.valuenum, 100)[OFFSET(75)] AS p75,\n  (APPROX_QUANTILES(f.valuenum, 100)[OFFSET(75)] - APPROX_QUANTILES(f.valuenum, 100)[OFFSET(25)]) AS iqr,\n  AVG(f.valuenum) AS mean\nFROM patient_admissions pa\nINNER JOIN chest_pain_admissions c \n  ON pa.subject_id = c.subject_id AND pa.hadm_id = c.hadm_id\nINNER JOIN first_hs_tnt f \n  ON pa.subject_id = f.subject_id AND pa.hadm_id = f.hadm_id\nGROUP BY category\nORDER BY \n  CASE category \n    WHEN 'Normal' THEN 1 \n    WHEN 'Borderline' THEN 2 \n    WHEN 'Myocardial injury' THEN 3 \n    ELSE 4 \n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

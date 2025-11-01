@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) <= 7 THEN '\u22647'\n      ELSE '>7'\n    END AS los_cat,\n    -- Determine if any ICU stay begins within 24h of admission\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n        WHERE icu.hadm_id = a.hadm_id\n          AND icu.intime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 24 HOUR)\n      ) THEN 'yes'\n      ELSE 'no'\n    END AS icu_day1\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = a.subject_id\n  -- Male, age 67\u201377\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 67 AND 77\n    -- Acute decompensated heart failure diagnosis\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON dd.icd_code = d.icd_code\n       AND dd.icd_version = d.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%acute%'\n        AND LOWER(dd.long_title) LIKE '%heart failure%'\n    )\n),\ncomorbid AS (\n  SELECT\n    c.hadm_id,\n    -- CKD indicator\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%chronic kidney disease%' THEN 1 ELSE 0 END) AS ckd_flag,\n    -- Diabetes indicator\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%diabetes%' THEN 1 ELSE 0 END) AS dm_flag\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON d.hadm_id = c.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON dd.icd_code = d.icd_code\n   AND dd.icd_version = d.icd_version\n  GROUP BY c.hadm_id\n)\nSELECT\n  c.los_cat,\n  c.icu_day1,\n  COUNT(1) AS n_admissions,\n  100.0 * SUM(c.hospital_expire_flag) / COUNT(1) AS pct_inhospital_mortality,\n  100.0 * SUM(co.ckd_flag)           / COUNT(1) AS pct_ckd,\n  100.0 * SUM(co.dm_flag)            / COUNT(1) AS pct_diabetes\nFROM cohort c\nJOIN comorbid co\n  ON co.hadm_id = c.hadm_id\nGROUP BY\n  c.los_cat,\n  c.icu_day1\nORDER BY\n  c.los_cat,\n  c.icu_day1;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

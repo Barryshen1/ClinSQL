@@ -1,0 +1,29 @@
+{
+  "query": "As a consultant for a 47\u2011year\u2011old man, among male inpatients aged 42\u201352 with DVT, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u226595th percentile report mortality, mean LOS, and compare critical lab rates to all inpatients.",
+  "final_sql": "WITH \n-- Step 1: Define DVT ICD-10 codes\ndvt_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_version = 10\n    AND icd_code IN (\n      'I80.2', 'I80.3', 'I80.8', 'I80.9', \n      'I82.0', 'I82.1', 'I82.2', 'I82.3', 'I82.4', 'I82.5', 'I82.6', 'I82.7', 'I82.8', 'I82.9'\n    )\n),\n-- Step 2: Cohort of admissions (male, age 42-52, with DVT)\ncohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    -- Compute age at admission\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 42 AND 52\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE icd_version = 10\n        AND icd_code IN (SELECT icd_code FROM dvt_codes)\n    )\n),\n-- Step 3: For each admission in cohort, count critical lab events in first 72h\nlab_instability AS (\n  SELECT \n    c.hadm_id,\n    COUNT(*) AS instability_score\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n  WHERE l.charttime >= c.admittime\n    AND l.charttime <= c.admittime + INTERVAL '72' HOUR\n    AND l.flag IN ('critical', 'critical high', 'critical low')\n  GROUP BY c.hadm_id\n),\n-- Step 4: Get instability scores for all cohort members (including 0 for those with no critical labs)\ninstability_scores AS (\n  SELECT \n    c.hadm_id,\n    COALESCE(li.instability_score, 0) AS instability_score\n  FROM cohort c\n  LEFT JOIN lab_instability li\n    ON c.hadm_id = li.hadm_id\n),\n-- Step 5: Calculate 95th percentile of instability scores (FIXED: BigQuery-compatible percentile)\npercentile AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 100)[OFFSET(95)] AS p95\n  FROM instability_scores\n),\n-- Step 6: Get statistics for high instability group (>= 95th percentile)\nhigh_group AS (\n  SELECT \n    c.hadm_id,\n    c.hospital_expire_flag,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, SECOND) / (24*60*60) AS los_days,\n    iscore.instability_score\n  FROM cohort c\n  INNER JOIN instability_scores iscore\n    ON c.hadm_id = iscore.hadm_id\n  CROSS JOIN percentile p\n  WHERE iscore.instability_score >= p.p95\n),\nhigh_group_stats AS (\n  SELECT \n    AVG(hospital_expire_flag) AS mortality_high,\n    AVG(los_days) AS mean_los_high,\n    AVG(instability_score) AS critical_lab_rate_high\n  FROM high_group\n),\n-- Step 7: Calculate average critical lab rate for all inpatients\nall_inpatients AS (\n  SELECT \n    a.hadm_id,\n    COUNT(l.hadm_id) AS critical_count\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime >= a.admittime\n    AND l.charttime <= a.admittime + INTERVAL '72' HOUR\n    AND l.flag IN ('critical', 'critical high', 'critical low')\n  GROUP BY a.hadm_id\n),\nall_inpatients_avg AS (\n  SELECT AVG(critical_count) AS critical_lab_rate_all\n  FROM all_inpatients\n)\n-- Final result\nSELECT \n  p.p95 AS percentile_95,\n  h.mortality_high,\n  h.mean_los_high,\n  h.critical_lab_rate_high,\n  a.critical_lab_rate_all\nFROM percentile p\nCROSS JOIN high_group_stats h\nCROSS JOIN all_inpatients_avg a;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: 55749f74-6291-4aa9-b8a5-60cc25e9d8fa\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [58:46]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [58:46]\n\nLocation: US\nJob ID: 74bf4d79-2991-4196-bdde-4abd9f157cd0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

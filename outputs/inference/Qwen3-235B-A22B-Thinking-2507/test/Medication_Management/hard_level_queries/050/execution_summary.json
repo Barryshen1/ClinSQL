@@ -1,0 +1,23 @@
+{
+  "query": "Patient is female, 86. Among female inpatients age 81\u201391 with AKI, compare medication complexity score distribution and outcomes for those with both CNS\u2011depressant and nephrotoxic drugs versus other AKI patients. Report quartiles, mean complexity, overall LOS and mortality, and top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 81 AND 91\n),\naki_admissions AS (\n  SELECT \n    pf.subject_id,\n    pf.hadm_id,\n    pf.admittime,\n    pf.dischtime,\n    pf.hospital_expire_flag,\n    pf.age_at_admission\n  FROM patients_filtered pf\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n    WHERE d.hadm_id = pf.hadm_id\n      AND d.icd_version = 10\n      AND d.icd_code LIKE 'N17%'\n  )\n),\ndrug_exposure AS (\n  SELECT \n    a.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity,\n    MAX(CASE WHEN pr.drug IN ('MORPHINE', 'FENTANYL', 'HYDROMORPHONE', 'OXYCODONE', 'MIDAZOLAM', 'DIAZEPAM', 'LORAZEPAM', 'ALPRAZOLAM', 'PHENOBARBITAL', 'PROPOFOL', 'ETOMIDATE') THEN 1 ELSE 0 END) AS has_cns,\n    MAX(CASE WHEN pr.drug IN ('IBUPROFEN', 'CELECOXIB', 'INDOMETHACIN', 'VANCOMYCIN', 'AMIKACIN', 'GENTAMICIN', 'TOBRAMYCIN', 'CEFOXITIN', 'ACICLOVIR', 'AMPHOTERICIN B', 'CYCLOSPORINE', 'TACROLIMUS') THEN 1 ELSE 0 END) AS has_nephro\n  FROM aki_admissions a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.prescriptions pr\n    ON a.hadm_id = pr.hadm_id\n  GROUP BY a.hadm_id\n),\nbase AS (\n  SELECT \n    a.hadm_id,\n    a.hospital_expire_flag,\n    -- Compute LOS in days (precise decimal)\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) AS los_days,\n    COALESCE(de.complexity, 0) AS complexity,\n    COALESCE(de.has_cns, 0) AS has_cns,\n    COALESCE(de.has_nephro, 0) AS has_nephro,\n    CASE \n      WHEN COALESCE(de.has_cns, 0) = 1 AND COALESCE(de.has_nephro, 0) = 1 THEN 'both'\n      ELSE 'other'\n    END AS drug_group\n  FROM aki_admissions a\n  LEFT JOIN drug_exposure de\n    ON a.hadm_id = de.hadm_id\n),\ngroup_quartiles AS (\n  SELECT\n    drug_group,\n    APPROX_QUANTILES(complexity, 1000)[OFFSET(250)] AS q25,\n    APPROX_QUANTILES(complexity, 1000)[OFFSET(500)] AS q50,\n    APPROX_QUANTILES(complexity, 1000)[OFFSET(750)] AS q75\n  FROM base\n  GROUP BY drug_group\n),\nbase_with_q75 AS (\n  SELECT \n    b.*,\n    g.q75\n  FROM base b\n  JOIN group_quartiles g ON b.drug_group = g.drug_group\n),\nbase_with_top AS (\n  SELECT \n    *,\n    complexity >= q75 AS in_top_quartile\n  FROM base_with_q75\n)\nSELECT\n  b.drug_group,\n  g.q25, \n  g.q50, \n  g.q75,\n  AVG(b.complexity) AS mean_complexity,\n  AVG(b.los_days) AS overall_los,\n  AVG(b.hospital_expire_flag) AS overall_mortality,\n  AVG(IF(b.in_top_quartile, b.los_days, NULL)) AS top_quartile_los,\n  AVG(IF(b.in_top_quartile, b.hospital_expire_flag, NULL)) AS top_quartile_mortality\nFROM base_with_top b\nJOIN group_quartiles g ON b.drug_group = g.drug_group\nGROUP BY b.drug_group, g.q25, g.q50, g.q75;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 8d46b5da-45ca-4597-89b6-8c75f911e740\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

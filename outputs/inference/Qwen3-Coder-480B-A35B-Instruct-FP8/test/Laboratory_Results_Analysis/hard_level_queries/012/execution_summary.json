@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 49-year-old man with AMI. In male inpatients aged 44\u201354 with AMI, what is the 75th percentile of the first 72\u2011hour lab instability score? Also compare critical lab frequency to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH ami_cohort AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n  ON\n    d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n    )\n),\n\nfirst_abnormal_labs AS (\n  SELECT\n    l.hadm_id,\n    COUNT(DISTINCT l.itemid) AS lab_instability_score\n  FROM\n    physionet-data.mimiciv_3_1_hosp.labevents l\n  JOIN\n    ami_cohort a\n  ON\n    l.hadm_id = a.hadm_id\n  WHERE\n    l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND (\n      l.flag = 'abnormal'\n      OR\n      (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n    )\n  GROUP BY\n    l.hadm_id\n),\n\ngeneral_abnormal_labs AS (\n  SELECT\n    l.hadm_id,\n    COUNT(DISTINCT l.itemid) AS abnormal_lab_count\n  FROM\n    physionet-data.mimiciv_3_1_hosp.labevents l\n  WHERE\n    l.flag = 'abnormal'\n    OR\n    (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper)\n  GROUP BY\n    l.hadm_id\n)\n\nSELECT\n  -- 75th percentile of instability score\n  APPROX_QUANTILES(COALESCE(f.lab_instability_score, 0), 100)[OFFSET(75)] AS percentile_75_lab_instability_score,\n\n  -- Average abnormal labs in AMI cohort\n  AVG(COALESCE(f.lab_instability_score, 0)) AS avg_abnormal_labs_ami,\n\n  -- Average abnormal labs in general inpatients\n  AVG(COALESCE(g.abnormal_lab_count, 0)) AS avg_abnormal_labs_general,\n\n  -- Average LOS and mortality in AMI cohort\n  AVG(a.los_days) AS avg_los_days,\n  AVG(CAST(a.hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM\n  ami_cohort a\nLEFT JOIN\n  first_abnormal_labs f\nON\n  a.hadm_id = f.hadm_id\nLEFT JOIN\n  general_abnormal_labs g\nON\n  a.hadm_id = g.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

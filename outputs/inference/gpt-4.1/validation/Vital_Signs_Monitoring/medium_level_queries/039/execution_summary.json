@@ -1,0 +1,16 @@
+{
+  "query": "I have an 88-year-old male ICU patient. Among male ICU patients aged 83\u201393, what percentile is a per-stay average MAP of 60 mmHg during the first 48 hours (\u22653 measurements)?",
+  "final_sql": "WITH map_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%mean arterial pressure%' OR LOWER(label) LIKE '%map%'\n),\n\n-- Step 2: Get male ICU stays aged 83-93\ncohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    pat.anchor_age,\n    pat.gender\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 83 AND 93\n),\n\n-- Step 3: Get MAP measurements in first 48h of ICU stay\nmap_measurements AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.subject_id = ce.subject_id\n    AND c.hadm_id = ce.hadm_id\n    AND c.stay_id = ce.stay_id\n  JOIN map_items mi\n    ON ce.itemid = mi.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0 -- exclude erroneous values\n    AND TIMESTAMP_DIFF(ce.charttime, c.intime, HOUR) BETWEEN 0 AND 48\n),\n\n-- Step 4: Compute per-stay MAP averages (only stays with >=3 MAP measurements)\nstay_map_avg AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    COUNT(*) AS n_map_measurements,\n    AVG(valuenum) AS avg_map\n  FROM map_measurements\n  GROUP BY subject_id, hadm_id, stay_id\n  HAVING COUNT(*) >= 3\n),\n\n-- Step 5: Identify the target patient (88-year-old male)\ntarget_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.avg_map\n  FROM stay_map_avg s\n  JOIN cohort c\n    ON s.subject_id = c.subject_id\n    AND s.stay_id = c.stay_id\n  WHERE c.anchor_age = 88\n    AND c.gender = 'M'\n)\n\n-- Step 6: Calculate percentile of target patient's avg_map among cohort\nSELECT\n  t.subject_id,\n  t.stay_id,\n  t.avg_map AS target_avg_map,\n  ROUND(100.0 * (\n    SELECT COUNT(*) FROM stay_map_avg WHERE avg_map <= t.avg_map\n  ) / (SELECT COUNT(*) FROM stay_map_avg), 2) AS percentile\nFROM target_stays t;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

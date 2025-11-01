@@ -1,0 +1,1 @@
+WHEN starttime BETWEEN TIMESTAMP_SUB(a.admittime, INTERVAL 48 HOUR);

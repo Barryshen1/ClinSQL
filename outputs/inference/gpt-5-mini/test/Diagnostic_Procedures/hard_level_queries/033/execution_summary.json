@@ -1,0 +1,16 @@
+{
+  "query": "42-year-old male with pneumonia: among male ICU patients aged 37\u201347 in their first ICU stay, stratify distinct procedures in the first 48 hours into quintiles and report mean procedure count, mean ICU LOS (days), and hospital mortality by quintile.",
+  "final_sql": "WITH first_icustay_per_subject AS (\n  -- select each subject's first ICU stay (earliest intime)\n  SELECT\n    icustays.*\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_icu.icustays`\n  ) icustays\n  WHERE rn = 1\n),\n\ncohort AS (\n  -- cohort: male patients aged 37-47 on their first ICU stay\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.outtime,\n    f.los\n  FROM\n    first_icustay_per_subject f\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON f.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n),\n\nproc_counts AS (\n  -- count distinct procedures (by itemid) occurring within first 48 hours of ICU intime\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    COALESCE(count_distinct_itemid, 0) AS proc_count\n  FROM\n    cohort c\n  LEFT JOIN (\n    SELECT\n      pe.stay_id,\n      COUNT(DISTINCT pe.itemid) AS count_distinct_itemid\n    FROM\n      `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    JOIN\n      -- join to cohort stays to apply the 48-hour window cleanly\n      (SELECT stay_id, intime FROM first_icustay_per_subject) fi\n      ON pe.stay_id = fi.stay_id\n    WHERE\n      pe.starttime IS NOT NULL\n      AND pe.starttime BETWEEN fi.intime AND TIMESTAMP_ADD(fi.intime, INTERVAL 48 HOUR)\n    GROUP BY\n      pe.stay_id\n  ) pc\n  ON c.stay_id = pc.stay_id\n),\n\ncohort_with_counts AS (\n  -- attach LOS and hospital mortality\n  SELECT\n    cc.subject_id,\n    cc.hadm_id,\n    cc.stay_id,\n    cc.proc_count,\n    co.los,\n    adm.hospital_expire_flag\n  FROM\n    proc_counts cc\n  JOIN\n    cohort co\n    ON cc.stay_id = co.stay_id\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON cc.hadm_id = adm.hadm_id\n),\n\nquintiled AS (\n  -- assign quintiles by proc_count (ascending). tie-breaker subject_id for determinism.\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY proc_count, subject_id) AS proc_count_quintile\n  FROM\n    cohort_with_counts\n)\n\nSELECT\n  proc_count_quintile AS quintile,\n  COUNT(*) AS n_patients,\n  ROUND(AVG(proc_count), 3) AS mean_proc_count,\n  ROUND(AVG(los), 3) AS mean_icu_los_days,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)), 4) AS hospital_mortality_rate\nFROM\n  quintiled\nGROUP BY\n  proc_count_quintile\nORDER BY\n  proc_count_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

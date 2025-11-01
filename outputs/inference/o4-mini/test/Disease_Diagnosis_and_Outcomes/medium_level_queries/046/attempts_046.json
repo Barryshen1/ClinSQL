@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH hf_admissions AS (\n  -- Identify admissions of 72-82yo males with any HF diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 72 AND 82\n    AND EXISTS (\n      SELECT 1\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n        ON d.icd_code = dd.icd_code\n        AND d.icd_version = dd.icd_version\n      WHERE\n        d.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%heart failure%'\n    )\n),\nadmit_with_flags AS (\n  -- Add ICU flag, compute LOS days, comorbidity count\n  SELECT\n    h.subject_id,\n    h.hadm_id,\n    h.hospital_expire_flag,\n    TIMESTAMP_DIFF(h.dischtime, h.admittime, DAY) AS los_days,\n    CASE \n      WHEN icustay.stay_id IS NOT NULL THEN 'ICU'\n      ELSE 'Non-ICU'\n    END AS icu_flag,\n    -- Bucket LOS\n    CASE\n      WHEN TIMESTAMP_DIFF(h.dischtime, h.admittime, DAY) <= 3 THEN '0-3'\n      WHEN TIMESTAMP_DIFF(h.dischtime, h.admittime, DAY) BETWEEN 4 AND 6 THEN '4-6'\n      WHEN TIMESTAMP_DIFF(h.dischtime, h.admittime, DAY) BETWEEN 7 AND 10 THEN '7-10'\n      ELSE '>10'\n    END AS los_bucket,\n    -- Count distinct diagnoses per admission as comorbidity count\n    (\n      SELECT COUNT(DISTINCT icd_code)\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = h.hadm_id\n    ) AS comorb_count\n  FROM\n    hf_admissions AS h\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` AS icustay\n    ON h.hadm_id = icustay.hadm_id\n)\nSELECT\n  icu_flag,\n  los_bucket,\n  COUNT(*) AS n_admissions,\n  ROUND(100 * AVG(hospital_expire_flag), 1) AS pct_mortality,\n  -- Approximate median LOS\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los_days,\n  ROUND(AVG(comorb_count), 2) AS avg_comorbidity_count\nFROM\n  admit_with_flags\nGROUP BY\n  icu_flag,\n  los_bucket\nORDER BY\n  icu_flag,\n  los_bucket;",
+      "success": true,
+      "error": null,
+      "row_count": 8
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 8
+}

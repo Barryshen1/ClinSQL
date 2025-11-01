@@ -1,0 +1,16 @@
+{
+  "query": "For a 55-year-old male: among male patients 50\u201360 admitted with chest pain or AMI whose initial hs\u2011TnT > ULN (0.014 ng/mL), report patient and admission counts, mean, median, IQR.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 50 AND 60\n),\ndx_filtered AS (\n  SELECT DISTINCT pa.subject_id, pa.hadm_id, pa.age_at_admission\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses ddx\n    ON di.icd_code = ddx.icd_code AND di.icd_version = ddx.icd_version\n  WHERE LOWER(ddx.long_title) LIKE '%chest pain%'\n     OR LOWER(ddx.long_title) LIKE '%myocardial infarction%'\n     OR LOWER(ddx.long_title) LIKE '%acute mi%'\n     OR LOWER(ddx.long_title) LIKE '%ami%'\n),\nlab_items AS (\n  SELECT itemid, LOWER(label) AS label\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_labitems\n  WHERE LOWER(label) LIKE '%troponin%t%'\n    AND LOWER(label) NOT LIKE '%calcium%'\n    AND LOWER(label) NOT LIKE '%troponin i%'\n),\nfirst_tnt AS (\n  SELECT \n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN lab_items li ON le.itemid = li.itemid\n  WHERE le.valuenum IS NOT NULL\n),\ninitial_tnt_above_uln AS (\n  SELECT \n    dx.subject_id,\n    dx.hadm_id,\n    ft.valuenum AS initial_tnt\n  FROM dx_filtered dx\n  INNER JOIN first_tnt ft\n    ON dx.hadm_id = ft.hadm_id\n  WHERE ft.rn = 1\n    AND ft.valuenum > 0.014\n)\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(*) AS admission_count,\n  AVG(initial_tnt) AS mean_initial_tnt,\n  APPROX_QUANTILES(initial_tnt, 100)[OFFSET(50)] AS median_initial_tnt,\n  APPROX_QUANTILES(initial_tnt, 100)[OFFSET(25)] AS q1_initial_tnt,\n  APPROX_QUANTILES(initial_tnt, 100)[OFFSET(75)] AS q3_initial_tnt\nFROM initial_tnt_above_uln;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

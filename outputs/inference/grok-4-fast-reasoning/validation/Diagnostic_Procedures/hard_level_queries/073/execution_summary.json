@@ -1,0 +1,22 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    i.los AS icu_los,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN (\n    SELECT \n      subject_id, \n      hadm_id, \n      stay_id, \n      intime, \n      outtime, \n      los,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) i ON p.subject_id = i.subject_id AND i.rn = 1\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age >= 90\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = p.subject_id \n        AND d.hadm_id = i.hadm_id\n        AND d.icd_version = 10\n        AND d.icd_code LIKE 'K72%'\n    )\n),\nprocs AS (\n  SELECT \n    c.*,\n    COUNT(DISTINCT l.itemid) AS num_diagnostic_procs\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` l \n    ON l.subject_id = c.subject_id\n    AND l.stay_id = c.stay_id\n    AND l.starttime >= c.intime\n    AND l.starttime < TIMESTAMP_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY \n    c.subject_id, \n    c.anchor_age, \n    c.stay_id, \n    c.hadm_id, \n    c.intime, \n    c.outtime, \n    c.icu_los,\n    c.admittime, \n    c.dischtime, \n    c.hospital_expire_flag\n),\nwith_quartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY num_diagnostic_procs) AS quartile\n  FROM procs\n)\nSELECT \n  quartile,\n  COUNT(*) AS num_patients,\n  MIN(num_diagnostic_procs) AS min_procs,\n  MAX(num_diagnostic_procs) AS max_procs,\n  AVG(num_diagnostic_procs) AS mean_procs,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct\nFROM with_quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [33:13]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [33:13]\n\nLocation: US\nJob ID: e30deffd-ff3f-4924-b0f3-9b0623cf91ac\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

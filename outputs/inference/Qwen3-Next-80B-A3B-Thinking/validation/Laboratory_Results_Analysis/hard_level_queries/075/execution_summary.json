@@ -1,0 +1,23 @@
+{
+  "query": "As a consultant for a 47\u2011year\u2011old man, among male inpatients aged 42\u201352 with DVT, what is the 95th percentile of the 72\u2011hour lab instability score? For patients \u226595th percentile report mortality, mean LOS, and compare critical lab rates to all inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 42 AND 52\n),\ndvt_cohort AS (\n  SELECT \n    c.subject_id, \n    c.hadm_id, \n    c.admittime, \n    c.dischtime, \n    c.hospital_expire_flag\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n    ON c.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d \n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%deep vein thrombosis%'\n),\ncreatinine_std AS (\n  SELECT \n    c.hadm_id, \n    STDDEV(l.valuenum) AS creatinine_std\n  FROM dvt_cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l \n    ON c.hadm_id = l.hadm_id\n    AND l.itemid = 50912\n    AND l.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.hadm_id\n),\np95 AS (\n  SELECT \n    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY creatinine_std) AS p95\n  FROM creatinine_std\n),\nhigh_instability AS (\n  SELECT \n    c.hadm_id, \n    c.hospital_expire_flag, \n    c.dischtime, \n    c.admittime\n  FROM dvt_cohort c\n  JOIN creatinine_std cs \n    ON c.hadm_id = cs.hadm_id\n  JOIN p95 \n    ON cs.creatinine_std >= p95.p95\n),\nmortality_and_los AS (\n  SELECT \n    AVG(CAST(hospital_expire_flag AS INT64)) AS mortality_rate,\n    AVG(DATE_DIFF(dischtime, admittime, DAY)) AS mean_los\n  FROM high_instability\n),\ncritical_lab_high AS (\n  SELECT \n    SAFE_DIVIDE(\n      COUNTIF(k.valuenum < 3.5 OR k.valuenum > 5.0),\n      COUNT(DISTINCT hi.hadm_id)\n    ) AS critical_lab_rate_high\n  FROM high_instability hi\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` k \n    ON hi.hadm_id = k.hadm_id\n    AND k.itemid = 50971\n    AND k.charttime BETWEEN hi.admittime AND TIMESTAMP_ADD(hi.admittime, INTERVAL 72 HOUR)\n),\ncritical_lab_all AS (\n  SELECT \n    SAFE_DIVIDE(\n      COUNTIF(k.valuenum < 3.5 OR k.valuenum > 5.0),\n      COUNT(DISTINCT a.hadm_id)\n    ) AS critical_lab_rate_all\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` k \n    ON a.hadm_id = k.hadm_id\n    AND k.itemid = 50971\n    AND k.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n)\nSELECT \n  mortality_rate,\n  mean_los,\n  critical_lab_rate_high,\n  critical_lab_rate_all\nFROM mortality_and_los, critical_lab_high, critical_lab_all;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [42:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [42:27]\n\nLocation: US\nJob ID: 15d313e3-463d-4732-9432-af2fc7864a81\n",
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [42:43]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [42:43]\n\nLocation: US\nJob ID: 1d8ce063-1b47-4eb4-a3a7-3cd65878e299\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [42:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [42:27]\n\nLocation: US\nJob ID: 15d313e3-463d-4732-9432-af2fc7864a81\n"
+    }
+  ]
+}

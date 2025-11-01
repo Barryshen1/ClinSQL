@@ -1,0 +1,22 @@
+{
+  "query": "For a 63\u2011year\u2011old female ICU patient: among women 58\u201368 on renal replacement therapy, in the first 72h report IQR and 25th/50th/75th/90th percentiles of the vital\u2011instability index (avg concurrent MAP<65, HR>100) and compare hypotensive/tachycardic hours, ICU LOS, mortality to other RRT patients.",
+  "final_sql": "WITH rrt_patients AS (\n  SELECT DISTINCT pe.subject_id, pe.hadm_id, pe.stay_id\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  WHERE LOWER(pe.ordercategorydescription) LIKE '%dialysis%'\n     OR LOWER(pe.ordercategorydescription) LIKE '%rrt%'\n     OR LOWER(pe.ordercategorydescription) LIKE '%renal replacement%'\n),\ndemo AS (\n  SELECT p.subject_id, p.gender, p.anchor_age, a.hadm_id, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n),\nicu_info AS (\n  SELECT i.subject_id, i.hadm_id, i.stay_id, i.intime, i.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n),\nvitals AS (\n  SELECT c.subject_id, c.hadm_id, c.stay_id,\n         TIMESTAMP_DIFF(c.charttime, i.intime, HOUR) AS hr_since_icu,\n         CASE WHEN c.itemid IN (220052, 52) THEN c.valuenum END AS map_val,\n         CASE WHEN c.itemid IN (220045, 211) THEN c.valuenum END AS hr_val\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN icu_info i\n    ON c.subject_id = i.subject_id\n   AND c.stay_id = i.stay_id\n  WHERE c.itemid IN (220052, 52, 220045, 211)\n    AND c.valuenum IS NOT NULL\n    AND TIMESTAMP_DIFF(c.charttime, i.intime, HOUR) BETWEEN 0 AND 72\n),\nhourly_avg AS (\n  SELECT subject_id, hadm_id, stay_id, hr_since_icu,\n         AVG(map_val) AS avg_map,\n         AVG(hr_val) AS avg_hr\n  FROM vitals\n  GROUP BY subject_id, hadm_id, stay_id, hr_since_icu\n),\ninstability_hours AS (\n  SELECT subject_id, hadm_id, stay_id,\n         SUM(CASE WHEN avg_map < 65 AND avg_hr > 100 THEN 1 ELSE 0 END) AS unstable_hours,\n         COUNT(*) AS total_hours\n  FROM hourly_avg\n  GROUP BY subject_id, hadm_id, stay_id\n),\nvital_index AS (\n  SELECT ih.subject_id, ih.hadm_id, ih.stay_id,\n         ih.unstable_hours,\n         ih.total_hours,\n         SAFE_DIVIDE(ih.unstable_hours, ih.total_hours) AS vital_instability_index\n  FROM instability_hours ih\n),\ncohort AS (\n  SELECT vi.subject_id, vi.hadm_id, vi.stay_id,\n         d.gender, d.anchor_age, i.los, d.hospital_expire_flag,\n         vi.vital_instability_index, vi.unstable_hours\n  FROM vital_index vi\n  JOIN demo d ON vi.subject_id = d.subject_id AND vi.hadm_id = d.hadm_id\n  JOIN icu_info i ON vi.subject_id = i.subject_id AND vi.stay_id = i.stay_id\n  JOIN rrt_patients rp ON vi.subject_id = rp.subject_id AND vi.stay_id = rp.stay_id\n)\nSELECT\n  CASE WHEN gender = 'F' AND anchor_age = 63 THEN '63yo_female'\n       ELSE 'other_rrt'\n  END AS subgroup,\n  COUNT(*) AS n_patients,\n  ROUND(APPROX_QUANTILES(vital_instability_index, 100)[SAFE_OFFSET(25)], 3) AS p25_vii,\n  ROUND(APPROX_QUANTILES(vital_instability_index, 100)[SAFE_OFFSET(50)], 3) AS p50_vii,\n  ROUND(APPROX_QUANTILES(vital_instability_index, 100)[SAFE_OFFSET(75)], 3) AS p75_vii,\n  ROUND(APPROX_QUANTILES(vital_instability_index, 100)[SAFE_OFFSET(90)], 3) AS p90_vii,\n  ROUND(APPROX_QUANTILES(unstable_hours, 100)[SAFE_OFFSET(25)], 1) AS p25_hours,\n  ROUND(APPROX_QUANTILES(unstable_hours, 100)[SAFE_OFFSET(50)], 1) AS p50_hours,\n  ROUND(APPROX_QUANTILES(unstable_hours, 100)[SAFE_OFFSET(75)], 1) AS p75_hours,\n  ROUND(APPROX_QUANTILES(unstable_hours, 100)[SAFE_OFFSET(90)], 1) AS p90_hours,\n  ROUND(APPROX_QUANTILES(los, 100)[SAFE_OFFSET(50)], 2) AS median_icu_los,\n  ROUND(\n    APPROX_QUANTILES(los, 100)[SAFE_OFFSET(75)] - APPROX_QUANTILES(los, 100)[SAFE_OFFSET(25)],\n    2\n  ) AS iqr_icu_los,\n  SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)) AS mortality_rate\nFROM cohort\nGROUP BY subgroup\nORDER BY subgroup;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 690085ed-f83d-4f65-b4f1-e96af59c5f35\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 92\u2011year\u2011old female patient: among female patients 87\u201397 admitted with chest pain, report counts, percentages, and mean, median, IQR of index hs\u2011TnT by category (Normal\u22640.04; Borderline 0.04\u20130.1; Injury>0.1).",
+  "final_sql": "WITH chest_pain_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%chest pain%'\n),\neligible_admissions AS (\n  SELECT a.hadm_id, p.subject_id, p.gender,\n         (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  JOIN chest_pain_codes cp ON di.icd_code = cp.icd_code AND di.icd_version = cp.icd_version\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 87 AND 97\n),\nhstnt_item AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin%t%high%sensit%'\n),\nindex_hstnt AS (\n  SELECT le.hadm_id, le.valuenum,\n         ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN hstnt_item h ON le.itemid = h.itemid\n  JOIN eligible_admissions e ON le.hadm_id = e.hadm_id\n  WHERE le.valuenum IS NOT NULL\n),\nfirst_hstnt AS (\n  SELECT hadm_id, valuenum AS index_hstnt\n  FROM index_hstnt\n  WHERE rn = 1\n),\ncategorized AS (\n  SELECT \n    index_hstnt,\n    CASE\n      WHEN index_hstnt <= 0.04 THEN 'Normal'\n      WHEN index_hstnt > 0.04 AND index_hstnt <= 0.1 THEN 'Borderline'\n      WHEN index_hstnt > 0.1 THEN 'Injury'\n      ELSE 'Unknown'\n    END AS category\n  FROM first_hstnt\n),\nsummary_stats AS (\n  SELECT\n    category,\n    COUNT(*) AS count_patients,\n    AVG(index_hstnt) AS mean_hstnt,\n    PERCENTILE_CONT(index_hstnt, 0.25) OVER (PARTITION BY category) AS q1_hstnt,\n    PERCENTILE_CONT(index_hstnt, 0.5) OVER (PARTITION BY category) AS median_hstnt,\n    PERCENTILE_CONT(index_hstnt, 0.75) OVER (PARTITION BY category) AS q3_hstnt\n  FROM categorized\n  WHERE category != 'Unknown'\n  GROUP BY category, index_hstnt\n),\naggregated AS (\n  SELECT\n    category,\n    COUNT(*) AS count_patients,\n    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,\n    AVG(mean_hstnt) AS mean_hstnt,\n    AVG(median_hstnt) AS median_hstnt,\n    AVG(q1_hstnt) AS q1_hstnt,\n    AVG(q3_hstnt) AS q3_hstnt\n  FROM summary_stats\n  GROUP BY category\n)\nSELECT\n  category,\n  count_patients,\n  percentage,\n  ROUND(mean_hstnt, 4) AS mean_hstnt,\n  ROUND(median_hstnt, 4) AS median_hstnt,\n  CONCAT(ROUND(q1_hstnt, 4), ' - ', ROUND(q3_hstnt, 4)) AS iqr_hstnt\nFROM aggregated\nORDER BY\n  CASE category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Injury' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column category which is neither grouped nor aggregated at [47:5]; reason: invalidQuery, location: query, message: SELECT list expression references column category which is neither grouped nor aggregated at [47:5]\n\nLocation: US\nJob ID: caffe67e-02d8-4175-8393-82fcc5f598c3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have an 83-year-old man transferred from another hospital. Among male inpatients aged 78\u201388 transferred, report number of admissions and LOS p50/p75/p90/p95 stratified by survived vs in-hospital death, plus percentile rank of a 10-day LOS.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.deathtime,\n    CASE\n      WHEN a.hospital_expire_flag = 1 OR a.deathtime IS NOT NULL THEN 'InHospitalDeath'\n      ELSE 'Survived'\n    END AS death_status,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.anchor_age BETWEEN 78 AND 88\n    AND UPPER(p.gender) LIKE 'M%'\n    AND a.dischtime IS NOT NULL\n    -- Require a transfer event for the admission\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.transfers` AS t\n      WHERE t.subject_id = a.subject_id\n        AND t.hadm_id = a.hadm_id\n        AND UPPER(t.eventtype) LIKE '%TRANSFER%'\n    )\n),\nquantiles AS (\n  SELECT\n    death_status,\n    APPROX_QUANTILES(los_days, 100) AS q\n  FROM cohort\n  GROUP BY death_status\n)\nSELECT\n  c.death_status,\n  COUNT(*) AS admissions,\n  (SELECT d.q[OFFSET(50)] FROM quantiles d WHERE d.death_status = c.death_status) AS p50,\n  (SELECT d.q[OFFSET(75)] FROM quantiles d WHERE d.death_status = c.death_status) AS p75,\n  (SELECT d.q[OFFSET(90)] FROM quantiles d WHERE d.death_status = c.death_status) AS p90,\n  (SELECT d.q[OFFSET(95)] FROM quantiles d WHERE d.death_status = c.death_status) AS p95,\n  100.0 * SUM(CASE WHEN c.los_days <= 10.0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0) AS ten_day_los_rank\nFROM cohort AS c\nGROUP BY c.death_status\nORDER BY c.death_status;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 63af1772-d99b-426e-be5d-6a4cb5e9fe99\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [33:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [33:3]\n\nLocation: US\nJob ID: 1be7fb94-4148-49a6-b3be-b3d1a304547c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

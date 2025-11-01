@@ -1,0 +1,1 @@
+SELECT (SELECT proportion_glp_12h FROM admission_glp) - (SELECT proportion_glp_48h FROM discharge_glp) AS percentage_change;

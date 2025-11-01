@@ -1,0 +1,29 @@
+{
+  "query": "For a 91\u2011year\u2011old female inpatient: among females 86\u201396 with DM and HF, report by class (Insulin vs Oral Agents) early (first 12h) and late (final 72h) rates (%) and early\u2192late transitions.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.admittime, TIMESTAMP(CONCAT(p.anchor_year - p.anchor_age, '-01-01')), DAY) AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND TIMESTAMP_DIFF(a.admittime, TIMESTAMP(CONCAT(p.anchor_year - p.anchor_age, '-01-01')), DAY) BETWEEN 86 AND 96\n),\ndiagnoses AS (\n  SELECT\n    d.hadm_id,\n    CASE\n      WHEN di.long_title LIKE '%diabetes%' THEN 'DM'\n      WHEN di.long_title LIKE '%heart failure%' THEN 'HF'\n    END AS condition\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n),\nadmissions_with_conditions AS (\n  SELECT\n    ba.*\n  FROM\n    base_admissions ba\n  INNER JOIN (\n    SELECT\n      hadm_id\n    FROM\n      diagnoses\n    WHERE\n      condition IS NOT NULL\n    GROUP BY\n      hadm_id\n    HAVING\n      COUNT(DISTINCT condition) = 2  -- Both DM and HF\n  ) c\n  ON ba.hadm_id = c.hadm_id\n),\nmedications AS (\n  SELECT\n    p.hadm_id,\n    p.drug,\n    CASE\n      WHEN LOWER(p.drug) LIKE '%insulin%' THEN 'Insulin'\n      WHEN LOWER(p.drug) LIKE ANY OF ('%metformin%', '%glipizide%', '%glyburide%', '%glimepiride%', '%pioglitazone%', '%rosiglitazone%', '%saxagliptin%', '%sitagliptin%', '%linagliptin%', '%alogliptin%', '%dapagliflozin%', '%empagliflozin%', '%canagliflozin%', '%sulfonylurea%', '%thiazolidinedione%', '%dpp-4%', '%sodium-glucose%', '%glucagon-like peptide-1%') THEN 'Oral Agents'\n      ELSE NULL\n    END AS class\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  WHERE\n    p.drug IS NOT NULL\n),\nmedication_periods AS (\n  SELECT\n    m.hadm_id,\n    m.class,\n    m.drug,\n    p.starttime,\n    p.endtime\n  FROM\n    medications m\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.pharmacy` p\n    ON m.hadm_id = p.hadm_id AND m.drug = p.medication\n),\nadmission_periods AS (\n  SELECT\n    hadm_id,\n    admittime,\n    dischtime,\n    CASE\n      WHEN TIMESTAMP_DIFF(dischtime, admittime, HOUR) >= 72 THEN dischtime - INTERVAL 72 HOUR\n      ELSE admittime\n    END AS late_start\n  FROM\n    admissions_with_conditions\n),\nearly_late_flags AS (\n  SELECT\n    ap.hadm_id,\n    mp.class,\n    -- Early: first 12h\n    MAX(CASE WHEN mp.starttime BETWEEN ap.admittime AND ap.admittime + INTERVAL 12 HOUR THEN 1 ELSE 0 END) AS early_present,\n    -- Late: last 72h (or entire admission if shorter)\n    MAX(CASE WHEN mp.starttime BETWEEN ap.late_start AND ap.dischtime THEN 1 ELSE 0 END) AS late_present\n  FROM\n    admission_periods ap\n  LEFT JOIN\n    medication_periods mp\n    ON ap.hadm_id = mp.hadm_id\n  GROUP BY\n    ap.hadm_id, mp.class\n),\naggregated AS (\n  SELECT\n    class,\n    COUNT(DISTINCT hadm_id) AS total_admissions,\n    SUM(early_present) AS early_count,\n    SUM(late_present) AS late_count,\n    -- Transitions: among early users, how many continued (late_present=1) or stopped (late_present=0)\n    SUM(CASE WHEN early_present = 1 AND late_present = 1 THEN 1 ELSE 0 END) AS continued_count,\n    SUM(CASE WHEN early_present = 1 AND late_present = 0 THEN 1 ELSE 0 END) AS stopped_count\n  FROM\n    early_late_flags\n  GROUP BY\n    class\n)\nSELECT\n  class,\n  -- Rates as percentages\n  ROUND(100.0 * early_count / total_admissions, 2) AS early_rate,\n  ROUND(100.0 * late_count / total_admissions, 2) AS late_rate,\n  -- Transitions: only for patients with early medication\n  ROUND(100.0 * continued_count / NULLIF(SUM(CASE WHEN early_present = 1 THEN 1 ELSE 0 END), 0), 2) AS continued_percent,\n  ROUND(100.0 * stopped_count / NULLIF(SUM(CASE WHEN early_present = 1 THEN 1 ELSE 0 END), 0), 2) AS stopped_percent\nFROM\n  aggregated\nGROUP BY\n  class\nORDER BY\n  class;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword OF at [55:35]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword OF at [55:35]\n\nLocation: US\nJob ID: 4ba97c29-1b6c-48a8-9102-a36a83f05146\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword ON at [1:24]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword ON at [1:24]\n\nLocation: US\nJob ID: db00292f-ee90-4080-af75-5db0c3be929a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword AS at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AS at [1:6]\n\nLocation: US\nJob ID: 02d3ac41-4d81-4db9-bea2-616497140fdd\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword OF at [55:35]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword OF at [55:35]\n\nLocation: US\nJob ID: 4ba97c29-1b6c-48a8-9102-a36a83f05146\n"
+    }
+  ]
+}

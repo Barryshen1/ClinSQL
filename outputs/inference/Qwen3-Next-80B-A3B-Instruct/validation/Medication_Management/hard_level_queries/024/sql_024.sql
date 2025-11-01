@@ -1,0 +1,1 @@
+LOWER(f.medication) LIKE CONCAT('%', LOWER(sd.drug), '%');

@@ -1,0 +1,22 @@
+{
+  "query": "I have an 89\u2011year\u2011old female inpatient with AKI. Among female admissions aged 84\u201394 with AKI, stratified into quintiles by medication complexity score over the entire admission, report per quintile: LOS, inpatient mortality %, 30\u2011day readmission %, and anticoagulant\u2013opioid coadministration counts.",
+  "final_sql": "WITH eligible AS (\n  -- Select female admissions aged 84-94 with AKI (ICD-10 N17% or ICD-9 584%)\n  SELECT DISTINCT a.hadm_id,\n                   a.subject_id,\n                   a.admittime,\n                   a.dischtime,\n                   a.hospital_expire_flag,\n                   TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND)/86400.0 AS LOS_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 84 AND 94\n    AND ((di.icd_version = 10 AND di.icd_code LIKE 'N17%')\n         OR (di.icd_version = 9 AND di.icd_code LIKE '584%'))\n),\nadmission_metrics AS (\n  SELECT\n    e.hadm_id,\n    e.subject_id,\n    e.admittime,\n    e.dischtime,\n    e.LOS_days,\n    e.hospital_expire_flag,\n    -- 30-day readmission flag\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` b\n      WHERE b.subject_id = e.subject_id\n        AND b.hadm_id <> e.hadm_id\n        AND b.admittime >= e.admittime\n        AND b.admittime < TIMESTAMP_ADD(e.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmit_30d,\n    -- Medication Complexity Score proxy: number of distinct drugs prescribed in this hadm\n    (SELECT COUNT(DISTINCT LOWER(pr.drug))\n     FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n     WHERE pr.hadm_id = e.hadm_id) AS mcs_proxy,\n    -- Coadministration flags: whether there is at least one anticoagulant and at least one opioid in this hadm\n    CASE\n      WHEN\n        ((SELECT COUNT(1)\n          FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n          WHERE pr.hadm_id = e.hadm_id AND (\n            LOWER(pr.drug) LIKE '%heparin%' OR LOWER(pr.drug) LIKE '%warfarin%' OR LOWER(pr.drug) LIKE '%enoxaparin%' OR\n            LOWER(pr.drug) LIKE '%apixaban%' OR LOWER(pr.drug) LIKE '%rivaroxaban%' OR LOWER(pr.drug) LIKE '%edoxaban%' OR\n            LOWER(pr.drug) LIKE '%dabigatran%' OR LOWER(pr.drug) LIKE '%fondaparinux%'\n          )\n        ) > 0)\n      AND\n        ((SELECT COUNT(1)\n          FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` po\n          WHERE po.hadm_id = e.hadm_id AND (\n            LOWER(po.drug) LIKE '%morphine%' OR LOWER(po.drug) LIKE '%fentanyl%' OR LOWER(po.drug) LIKE '%hydromorphone%' OR\n            LOWER(po.drug) LIKE '%oxycodone%' OR LOWER(po.drug) LIKE '%codeine%' OR LOWER(po.drug) LIKE '%meperidine%' OR LOWER(po.drug) LIKE '%tramadol%'\n          )\n        ) > 0)\n      THEN 1 ELSE 0 END AS coadmin\n  FROM eligible e\n),\nwith_quintile AS (\n  SELECT\n    hadm_id,\n    LOS_days AS los_days,\n    hospital_expire_flag,\n    readmit_30d,\n    mcs_proxy,\n    coadmin,\n    NTILE(5) OVER (ORDER BY mcs_proxy) AS quintile\n  FROM admission_metrics\n)\nSELECT\n  quintile,\n  AVG(los_days) AS avg_los_days,\n  AVG(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100 AS inpatient_mortality_pct,\n  AVG(readmit_30d) * 100 AS thirty_day_readmit_pct,\n  SUM(coadmin) AS anticoagulant_opioid_coadmin_count\nFROM with_quintile\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name disptime not found inside e at [24:7]; reason: invalidQuery, location: query, message: Name disptime not found inside e at [24:7]\n\nLocation: US\nJob ID: 012d95dc-e845-4039-a93a-58856f2d0a65\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

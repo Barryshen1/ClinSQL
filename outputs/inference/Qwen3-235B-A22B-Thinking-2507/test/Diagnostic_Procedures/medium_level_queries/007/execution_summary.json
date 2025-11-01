@@ -1,0 +1,23 @@
+{
+  "query": "For a 55\u2011year\u2011old woman, among female patients 50\u201360 with ACS, report p25, p50, p75 diagnostic procedures per admission, stratified by LOS (1\u20134 vs 5\u20138 days) and primary vs secondary diagnosis.",
+  "final_sql": "WITH acs_patients AS (\n  -- Identify ACS patients who are female and aged 50-60\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 50 AND 60\n    AND EXISTS (\n      -- Check if patient has ACS diagnosis\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          -- ICD-9 codes for ACS\n          (d.icd_version = 9 AND (d.icd_code LIKE '410%' OR d.icd_code LIKE '411%'))\n          OR\n          -- ICD-10 codes for ACS\n          (d.icd_version = 10 AND (\n            d.icd_code LIKE 'I20.0%' OR\n            d.icd_code LIKE 'I21%' OR\n            d.icd_code LIKE 'I22%' OR\n            d.icd_code LIKE 'I24%'\n          ))\n        )\n    )\n),\n\nprocedure_counts AS (\n  -- Count procedures per admission\n  SELECT \n    ap.hadm_id,\n    COUNT(*) AS procedure_count\n  FROM acs_patients ap\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.procedures_icd p\n    ON ap.hadm_id = p.hadm_id\n  GROUP BY ap.hadm_id\n),\n\nlos_groups AS (\n  -- Calculate LOS and categorize\n  SELECT \n    ap.hadm_id,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE \n      WHEN DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 5 AND 8 THEN '5-8 days'\n    END AS los_group\n  FROM acs_patients ap\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON ap.hadm_id = a.hadm_id\n  WHERE DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 8\n),\n\ndiagnosis_type AS (\n  -- Determine if ACS is primary diagnosis\n  SELECT \n    ap.hadm_id,\n    MAX(CASE WHEN d.seq_num = 1 AND (\n        (d.icd_version = 9 AND (d.icd_code LIKE '410%' OR d.icd_code LIKE '411%'))\n        OR\n        (d.icd_version = 10 AND (\n          d.icd_code LIKE 'I20.0%' OR\n          d.icd_code LIKE 'I21%' OR\n          d.icd_code LIKE 'I22%' OR\n          d.icd_code LIKE 'I24%'\n        ))\n      ) THEN 1 ELSE 0 END) AS is_primary\n  FROM acs_patients ap\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n    ON ap.hadm_id = d.hadm_id\n  GROUP BY ap.hadm_id\n)\n\n-- Final query to calculate percentiles\nSELECT \n  lg.los_group,\n  CASE WHEN dt.is_primary = 1 THEN 'primary' ELSE 'secondary' END AS diagnosis_position,\n  APPROX_QUANTILES(pc.procedure_count, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(pc.procedure_count, 100)[OFFSET(50)] AS p50,\n  APPROX_QUANTILES(pc.procedure_count, 100)[OFFSET(75)] AS p75\nFROM procedure_counts pc\nINNER JOIN los_groups lg\n  ON pc.hadm_id = lg.hadm_id\nINNER JOIN diagnosis_type dt\n  ON pc.hadm_id = dt.hadm_id\nGROUP BY lg.los_group, diagnosis_position\nORDER BY lg.los_group, diagnosis_position;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: e3902615-9608-4eed-a1bf-033be1e00e0a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "53\u2011year\u2011old female inpatient. Among female inpatients 48\u201358 with hemorrhagic stroke, what is the 90th\u2011percentile lab\u2011instability score (lab systems with critical values in first 72 h)? For patients \u2265P90 report mortality%, mean LOS, and avg critical labs/patient vs age\u2011matched cohort.",
+  "final_sql": "WITH cohort_base AS (\n    SELECT DISTINCT\n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.Hospital_expire_flag,\n        p.gender,\n        p.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON a.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n        ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS did\n        ON di.icd_code = did.icd_code AND di.icd_version = did.icd_version\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 48 AND 58\n        AND (\n            (did.icd_version = 10 AND (did.icd_code LIKE 'I60%' OR did.icd_code LIKE 'I61%' OR did.icd_code LIKE 'I62%'))\n            OR (did.icd_version = 9 AND (did.icd_code IN ('430', '431') OR did.icd_code LIKE '432%'))\n        )\n),\ncritical_lab_counts AS (\n    SELECT\n        cb.subject_id,\n        cb.hadm_id,\n        COUNT(le.labevent_id) AS critical_lab_events_72h\n    FROM cohort_base AS cb\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n        ON cb.subject_id = le.subject_id AND cb.hadm_id = le.hadm_id\n    WHERE\n        le.charttime BETWEEN cb.Admittime AND TIMESTAMP_ADD(cb.admittime, INTERVAL 72 HOUR)\n        AND le.flag IN ('Abnormal', 'High', 'Low', 'Critical High', 'Critical Low') -- Updated to specifically look for critical flags\n        AND le.valuenum IS NOT NULL -- Ensure it's a measurable numeric result\n    GROUP BY\n        cb.subject_id,\n        cb.hadm_id\n),\ncohort_with_scores_and_percentile AS (\n    SELECT\n        cb.subject_id,\n        cb.hadm_id,\n        cb.admittime,\n        cb.dischtime,\n        cb.hospital_expire_flag,\n        cb.anchor_age,\n        COALESCE(clc.critical_lab_events_72h, 0) AS lab_instability_score,\n        -- Calculate the 90th percentile of lab_instability_score across the entire cohort\n        PERCENTILE_CONT(COALESCE(clc.critical_lab_events_72h, 0), 0.9) OVER () AS p90_lab_score_threshold\n    FROM cohort_base AS cb\n    LEFT JOIN critical_lab_counts AS clc\n        ON cb.subject_id = clc.subject_id AND cb.hadm_id = clc.hadm_id\n)\n-- Final aggregation to get metrics for both groups in a single result row\nSELECT\n    ANY_VALUE(cws.p90_lab_score_threshold) AS p90_lab_score_threshold,\n\n    -- Metrics for P90+ patients\n    SUM(CASE WHEN cws.lab_instability_score >= cws.p90_lab_score_threshold THEN 1 ELSE 0 END) AS num_patients_p90_plus,\n    AVG(CASE WHEN cws.lab_instability_score >= cws.p90_lab_score_threshold THEN cws.hospital_expire_flag END) * 100 AS mortality_rate_p90_plus_percent,\n    AVG(CASE WHEN cws.lab_instability_score >= cws.p90_lab_score_threshold THEN DATE_DIFF(cws.dischtime, cws.admittime, HOUR) / 24.0 END) AS mean_los_p90_plus_days,\n    AVG(CASE WHEN cws.lab_instability_score >= cws.p90_lab_score_threshold THEN cws.lab_instability_score END) AS avg_critical_labs_p90_plus_per_patient,\n\n    -- Metrics for age-matched cohort (all patients in cohort_with_scores_and_percentile)\n    COUNT(DISTINCT cws.hadm_id) AS num_patients_age_matched,\n    AVG(cws.hospital_expire_flag) * 100 AS mortality_rate_age_matched_percent,\n    AVG(DATE_DIFF(cws.dischtime, cws.admittime, HOUR) / 24.0) AS mean_los_age_matched_days,\n    AVG(cws.lab_instability_score) AS avg_critical_labs_age_matched_per_patient\nFROM cohort_with_scores_and_percentile AS cws;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [79:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [79:1]\n\nLocation: US\nJob ID: b3fa4aac-5f66-4da8-89bd-443c691ee8f1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references p90st.threshold_value which is neither grouped nor aggregated at [62:5]; reason: invalidQuery, location: query, message: SELECT list expression references p90st.threshold_value which is neither grouped nor aggregated at [62:5]\n\nLocation: US\nJob ID: d471ed8e-5745-4241-b25c-ba11997f2b98\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

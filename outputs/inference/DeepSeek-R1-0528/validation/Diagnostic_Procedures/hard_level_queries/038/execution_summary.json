@@ -1,0 +1,22 @@
+{
+  "query": "For a 65-year-old man: among male ICU patients aged 60\u201370 with intracranial hemorrhage (first ICU stay), what is the 75th percentile of procedure burden in the first 72h? Report mean ICU LOS (days) and hospital mortality versus general ICU population.",
+  "final_sql": "WITH first_icu AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    stay_id,\n    intime,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\ncohort_stays AS (\n  SELECT \n    fi.stay_id,\n    fi.intime\n  FROM first_icu fi\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm \n    ON fi.hadm_id = adm.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON fi.subject_id = p.subject_id\n  WHERE fi.rn = 1\n    AND p.gender = 'M'\n    AND adm.admittime IS NOT NULL\n    AND p.anchor_year IS NOT NULL\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 60 AND 70\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag \n      WHERE diag.hadm_id = fi.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code IN ('430', '431', '432')) \n          OR \n          (diag.icd_version = 10 AND diag.icd_code IN ('I60', 'I61', 'I62'))\n        )\n    )\n),\nprocedure_counts AS (\n  SELECT \n    cs.stay_id,\n    COUNT(*) AS procedure_count  -- Fixed: Count procedure events (rows)\n  FROM cohort_stays cs\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe \n    ON cs.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN cs.intime AND DATETIME_ADD(cs.intime, INTERVAL 72 HOUR)\n  GROUP BY cs.stay_id\n)\nSELECT \n  APPROX_QUANTILES(procedure_count, 100)[OFFSET(75)] AS procedure_burden_75_percentile\nFROM procedure_counts;\n\n-- Part 2: Mean ICU LOS and mortality for cohort vs. general ICU population\nWITH first_icu AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    stay_id,\n    los,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nall_first_stays AS (\n  SELECT \n    fi.stay_id,\n    fi.los,\n    adm.hospital_expire_flag,\n    CASE \n      WHEN p.gender = 'M'\n        AND adm.admittime IS NOT NULL\n        AND p.anchor_year IS NOT NULL\n        AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 60 AND 70\n        AND EXISTS (\n          SELECT 1 \n          FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag \n          WHERE diag.hadm_id = fi.hadm_id\n            AND (\n              (diag.icd_version = 9 AND diag.icd_code IN ('430', '431', '432')) \n              OR \n              (diag.icd_version = 10 AND diag.icd_code IN ('I60', 'I61', 'I62'))\n            )\n        ) THEN 1\n      ELSE 0\n    END AS in_cohort\n  FROM first_icu fi\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm \n    ON fi.hadm_id = adm.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON fi.subject_id = p.subject_id\n  WHERE fi.rn = 1\n)\nSELECT \n  'Intracranial Hemorrhage Cohort' AS group_name,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) AS hospital_mortality_rate\nFROM all_first_stays\nWHERE in_cohort = 1\nUNION ALL\nSELECT \n  'General ICU Population' AS group_name,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) AS hospital_mortality_rate\nFROM all_first_stays;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/a236c840-f76b-4f59-b8d9-40f19e7cc4be?maxResults=0&location=US&prettyPrint=false: Query error: Name procedure_id not found inside pe at [38:23]\n\nLocation: US\nJob ID: a236c840-f76b-4f59-b8d9-40f19e7cc4be\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

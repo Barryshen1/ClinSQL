@@ -1,0 +1,16 @@
+{
+  "query": "I have a 73-year-old female Medicare patient. Among female Medicare patients aged 68\u201378 admitted from the ED with a principal hemorrhagic stroke, what are the 30-day readmission rate, median index LOS for readmitted vs non-readmitted, and % with LOS >4 days?",
+  "final_sql": "WITH principal_hemorrhagic AS (\n  -- index admissions with principal (seq_num=1) hemorrhagic stroke diagnosis\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.admission_type,\n    a.admission_location,\n    a.insurance,\n    p.gender,\n    p.anchor_age,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING(subject_id)\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code\n    AND d.icd_version = dicd.icd_version\n  WHERE d.seq_num = 1\n    -- text match for hemorrhagic / subarachnoid / intracerebral descriptions\n    AND (\n      LOWER(dicd.long_title) LIKE '%hemorrhag%' \n      OR LOWER(dicd.long_title) LIKE '%haemorrhag%'\n      OR LOWER(dicd.long_title) LIKE '%subarachnoid%'\n      OR LOWER(dicd.long_title) LIKE '%intracerebral%'\n    )\n    -- female Medicare patients aged 68-78\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND LOWER(COALESCE(a.insurance, '')) LIKE '%medicare%'\n    -- admitted from the ED: admission_type or admission_location heuristics\n    AND (\n      a.admission_type = 'EMERGENCY'\n      OR LOWER(COALESCE(a.admission_location, '')) LIKE '%emergency%'\n      OR LOWER(COALESCE(a.admission_location, '')) LIKE '%ed%'\n    )\n    -- require valid timestamps and exclude in-hospital deaths (cannot be readmitted)\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.hospital_expire_flag = 0\n),\n\nindex_with_readmit AS (\n  -- flag whether each index admission has any readmission within 30 days\n  SELECT\n    ph.*,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = ph.subject_id\n        AND a2.admittime > ph.dischtime\n        AND TIMESTAMP_DIFF(a2.admittime, ph.dischtime, DAY) <= 30\n    ) AS has_readmit\n  FROM principal_hemorrhagic ph\n)\n\nSELECT\n  COUNT(*) AS n_index_admissions,\n  SUM(CASE WHEN has_readmit THEN 1 ELSE 0 END) AS n_readmitted_within_30d,\n  SAFE_DIVIDE(SUM(CASE WHEN has_readmit THEN 1 ELSE 0 END), COUNT(*)) AS readmission_rate_30d,  -- fraction\n  -- approximate medians (50th percentile) for LOS in days\n  APPROX_QUANTILES(IF(has_readmit, los_days, NULL), 100)[OFFSET(50)] AS median_los_readmitted_days,\n  APPROX_QUANTILES(IF(NOT has_readmit, los_days, NULL), 100)[OFFSET(50)] AS median_los_not_readmitted_days,\n  SAFE_DIVIDE(SUM(CASE WHEN los_days > 4 THEN 1 ELSE 0 END), COUNT(*)) AS fraction_los_gt_4_days  -- fraction\nFROM index_with_readmit;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 64-year-old male patient with ACS, among males 59\u201369 what are p25/p50/p75 of diagnostic procedures per admission, stratified by 1\u20133 vs 4\u20137 days and primary vs secondary diagnosis?",
+  "final_sql": "WITH acs_icd_codes AS (\n  -- List ACS ICD codes (ICD-9 and ICD-10)\n  SELECT '410' AS icd_code, 9 AS icd_version UNION ALL\n  SELECT '411', 9 UNION ALL\n  SELECT '413', 9 UNION ALL\n  SELECT 'I20', 10 UNION ALL\n  SELECT 'I21', 10 UNION ALL\n  SELECT 'I22', 10 UNION ALL\n  SELECT 'I23', 10\n),\ndiagnostic_proc_codes AS (\n  -- ICD-9 diagnostic procedures: codes starting with 87\u201399\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^(87|88|89|90|91|92|93|94|95|96|97|98|99)'))\n),\nacs_admissions AS (\n  -- Admissions for males 59\u201369 with ACS diagnosis\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.anchor_age,\n    pat.gender,\n    adm.admittime,\n    adm.dischtime,\n    diag.icd_code,\n    diag.icd_version,\n    diag.seq_num\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN acs_icd_codes acs\n    ON diag.icd_code = acs.icd_code AND diag.icd_version = acs.icd_version\n  WHERE pat.anchor_age BETWEEN 59 AND 69\n    AND pat.gender = 'M'\n),\nacs_admission_type AS (\n  -- For each ACS admission, determine if ACS was primary or secondary\n  SELECT\n    subject_id,\n    hadm_id,\n    MIN(seq_num) AS min_seq_num\n  FROM acs_admissions\n  GROUP BY subject_id, hadm_id\n),\nadmission_los AS (\n  -- Calculate LOS and group\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.min_seq_num,\n    TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    CASE\n      WHEN TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3'\n      WHEN TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7'\n      ELSE NULL\n    END AS los_group,\n    CASE\n      WHEN a.min_seq_num = 1 THEN 'primary'\n      ELSE 'secondary'\n    END AS diagnosis_type\n  FROM acs_admission_type a\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON a.hadm_id = adm.hadm_id\n  WHERE TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 7\n),\ndiagnostic_proc_counts AS (\n  -- Count diagnostic procedures per admission\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.los_group,\n    adm.diagnosis_type,\n    COUNT(proc.icd_code) AS num_diag_procs\n  FROM admission_los adm\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n    ON adm.hadm_id = proc.hadm_id\n    AND proc.icd_version = 9\n  LEFT JOIN diagnostic_proc_codes dpc\n    ON proc.icd_code = dpc.icd_code AND proc.icd_version = dpc.icd_version\n  WHERE adm.los_group IS NOT NULL\n  GROUP BY adm.subject_id, adm.hadm_id, adm.los_group, adm.diagnosis_type\n),\nfinal_stats AS (\n  -- Aggregate percentiles per group\n  SELECT\n    los_group,\n    diagnosis_type,\n    APPROX_QUANTILES(num_diag_procs, 4)[OFFSET(1)] AS p25,\n    APPROX_QUANTILES(num_diag_procs, 4)[OFFSET(2)] AS p50,\n    APPROX_QUANTILES(num_diag_procs, 4)[OFFSET(3)] AS p75\n  FROM diagnostic_proc_counts\n  WHERE los_group IS NOT NULL\n  GROUP BY los_group, diagnosis_type\n)\nSELECT\n  los_group,\n  diagnosis_type,\n  p25,\n  p50,\n  p75\nFROM final_stats\nORDER BY los_group, diagnosis_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 IN subquery is not supported inside join predicate.; reason: invalidQuery, location: query, message: IN subquery is not supported inside join predicate.\n\nLocation: US\nJob ID: 6234b74e-5b20-4a46-a5c1-34ead41bb66d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

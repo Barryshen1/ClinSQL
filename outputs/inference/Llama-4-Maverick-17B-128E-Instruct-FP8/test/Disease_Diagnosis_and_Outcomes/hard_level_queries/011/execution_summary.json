@@ -1,0 +1,22 @@
+{
+  "query": "For my 93-year-old female with AMI who had an ICU stay, among female inpatients 88\u201398 with AMI post-ICU, what is the average composite risk percentile? Report cohort 30\u2011day mortality, AKI and ARDS rates, and median survival of decedents.",
+  "final_sql": "WITH \n-- Step 1: Identify patients with AMI and ICU stay\nami_patients AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON a.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON a.hadm_id = icu.hadm_id\n  WHERE p.gender = 'F' AND p.anchor_age BETWEEN 88 AND 98\n  AND d_diag.long_title LIKE '%Acute myocardial infarction%'\n),\n\n-- Step 2: Calculate composite risk percentile (simplified example)\ncomposite_risk AS (\n  SELECT subject_id, hadm_id, \n         -- Example: Using a simple lab value (e.g., creatinine) as a proxy for risk\n         PERCENT_RANK() OVER (ORDER BY MAX(valuenum)) AS risk_percentile\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents`\n  WHERE itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` WHERE label = 'Creatinine')\n  GROUP BY subject_id, hadm_id\n),\n\n-- Step 3: Calculate outcomes\noutcomes AS (\n  SELECT a.subject_id, a.hadm_id,\n         -- 30-day Mortality\n         CASE WHEN a.dischtime <= p.dod AND DATE_DIFF(p.dod, a.dischtime, DAY) <= 30 THEN 1 ELSE 0 END AS mortality_30d,\n         -- AKI (simplified, actual implementation may vary based on KDIGO criteria)\n         MAX(CASE WHEN dl.label = 'Creatinine' AND le.valuenum > 2 THEN 1 ELSE 0 END) AS aki,\n         -- ARDS (simplified, might require more complex logic or additional data)\n         MAX(CASE WHEN d_diag.long_title LIKE '%Acute respiratory distress syndrome%' THEN 1 ELSE 0 END) AS ards\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le ON a.hadm_id = le.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl ON le.itemid = dl.itemid\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag ON a.hadm_id = diag.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag ON diag.icd_code = d_diag.icd_code AND diag.icd_version = d_diag.icd_version\n  GROUP BY a.subject_id, a.hadm_id, a.dischtime, p.dod\n)\n\n-- Final Query\nSELECT \n  AVG(c.risk_percentile) AS avg_composite_risk,\n  AVG(o.mortality_30d) AS mortality_30d_rate,\n  AVG(o.aki) AS aki_rate,\n  AVG(o.ards) AS ards_rate,\n  APPROX_QUANTILES(DATE_DIFF(p.dod, a.dischtime, DAY), 1000)[OFFSET(500)] AS median_survival_days\nFROM ami_patients ap\nINNER JOIN composite_risk c ON ap.subject_id = c.subject_id AND ap.hadm_id = c.hadm_id\nINNER JOIN outcomes o ON ap.hadm_id = o.hadm_id\nINNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON ap.hadm_id = a.hadm_id\nLEFT JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON ap.subject_id = p.subject_id\nWHERE o.mortality_30d = 1;  -- Filter to decedents for survival analysis;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name long_title not found inside diag at [32:29]; reason: invalidQuery, location: query, message: Name long_title not found inside diag at [32:29]\n\nLocation: US\nJob ID: c396c2e5-98db-4c86-90cb-c46e81cef9dc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

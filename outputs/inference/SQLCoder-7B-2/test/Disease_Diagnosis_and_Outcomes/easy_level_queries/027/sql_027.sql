@@ -1,0 +1,1 @@
+SELECT MAX(a.dischtime - a.admittime) AS max_length_of_stay FROM admissions a JOIN patients p ON a.subject_id = p.subject_id JOIN diagnoses_icd d ON a.subject_id = d.subject_id WHERE p.gender = 'F' AND p.anchor_age = 54 AND d.icd_code = 'G401' AND d.icd_version = '4';

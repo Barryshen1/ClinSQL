@@ -1,0 +1,28 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / (24 * 60 * 60) AS los_days,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS admission_seq\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  WHERE p.gender = 'M'\n    AND a.insurance = 'Medicare'\n    AND (LOWER(a.admission_location) LIKE '%emergency%' OR LOWER(a.admission_location) LIKE '%er%')\n    AND di.seq_num = 1\n    AND (\n      (di.icd_version = 9 AND di.icd_code IN ('562.11', '562.13', '569.83', '569.2'))\n      OR\n      (di.icd_version = 10 AND di.icd_code IN ('K55.2', 'K57.1', 'K57.32', 'K57.81', 'K57.91', 'K62.5'))\n    )\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 50 AND 60\n),\nindex_admissions AS (\n  SELECT *\n  FROM eligible_admissions\n  WHERE admission_seq = 1\n),\nreadmission_flags AS (\n  SELECT\n    i.*,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = i.subject_id\n          AND a2.admittime > i.dischtime\n          AND a2.admittime <= DATETIME_ADD(i.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM index_admissions i\n)\nSELECT\n  -- 30-day readmission rate\n  AVG(CAST(readmitted_30d AS FLOAT64)) AS readmission_rate_30d,\n  -- Median LOS for readmitted vs not\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los_days END, 100)[OFFSET(50)] AS median_los_not_readmitted,\n  -- Percent with LOS > 6 days, by readmission status\n  AVG(CASE WHEN readmitted_30d = 1 THEN CAST(los_days > 6 AS INT64) ELSE NULL END) AS pct_los_gt_6_readmitted,\n  AVG(CASE WHEN readmitted_30d = 0 THEN CAST(los_days > 6 AS INT64) ELSE NULL END) AS pct_los_gt_6_not_readmitted\nFROM readmission_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"=\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"=\" at [1:16]\n\nLocation: US\nJob ID: d8c685cf-997b-4a56-9fc0-8d35cd1872b1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [50:46]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [50:46]\n\nLocation: US\nJob ID: d7598ca7-5616-4314-ad91-4d8def2030da\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

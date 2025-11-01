@@ -1,0 +1,23 @@
+{
+  "query": "My 81-year-old man is on dual antiplatelet therapy. Among men 76\u201386 on DAPT, average ICU LOS (days) for first admission?",
+  "final_sql": "WITH eligible_patients AS (\n    SELECT\n        p.subject_id,\n        p.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 76 AND 86\n),\nfirst_admissions AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN eligible_patients ep ON a.subject_id = ep.subject_id\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) = 1\n),\ndapt_drugs AS (\n    SELECT DISTINCT\n        subject_id,\n        hadm_id,\n        drug,\n        starttime,  -- Added to fix error\n        stoptime    -- Added to fix error\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n    WHERE drug IN (\n        'aspirin', 'clopidogrel', 'ticagrelor', 'prasugrel', 'dipyridamole', \n        'cilostazol', 'ticlopidine'\n    )\n),\ndapt_status AS (\n    SELECT\n        fa.subject_id,\n        fa.hadm_id,\n        COUNT(DISTINCT dd.drug) AS num_antiplatelet_drugs\n    FROM first_admissions fa\n    LEFT JOIN dapt_drugs dd \n        ON fa.subject_id = dd.subject_id \n        AND fa.hadm_id = dd.hadm_id\n        -- Ensure the prescription overlaps with the admission\n        AND dd.starttime <= fa.dischtime\n        AND (dd.stoptime >= fa.admittime OR dd.stoptime IS NULL)\n    GROUP BY fa.subject_id, fa.hadm_id\n    HAVING num_antiplatelet_drugs >= 2\n),\nfirst_icu_stays AS (\n    SELECT\n        icu.subject_id,\n        icu.hadm_id,\n        icu.stay_id,\n        icu.intime,\n        icu.outtime,\n        -- Convert LOS from hours to days\n        icu.los / 24.0 AS los_days\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN first_admissions fa \n        ON icu.subject_id = fa.subject_id \n        AND icu.hadm_id = fa.hadm_id\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY icu.subject_id, icu.hadm_id ORDER BY icu.intime) = 1\n)\nSELECT\n    AVG(fis.los_days) AS avg_icu_los_days\nFROM dapt_status ds\nJOIN first_icu_stays fis \n    ON ds.subject_id = fis.subject_id \n    AND ds.hadm_id = fis.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name starttime not found inside dd at [40:16]; reason: invalidQuery, location: query, message: Name starttime not found inside dd at [40:16]\n\nLocation: US\nJob ID: 3d40688f-98a9-4f03-91aa-021e29fc46e7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

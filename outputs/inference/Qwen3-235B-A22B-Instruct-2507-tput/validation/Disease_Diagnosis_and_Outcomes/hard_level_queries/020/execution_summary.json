@@ -1,0 +1,22 @@
+{
+  "query": "I have a 51-year-old male inpatient. Among male inpatients 46\u201356 with acute myocardial infarction, stratify by the composite risk score (age plus major complications) into quintiles and report in-hospital mortality%, major complication%, and median survivor LOS per quintile.",
+  "final_sql": "WITH patients_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission,\n    a.admission_type\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\n-- Filter inpatient types\ninpatient_admissions AS (\n  SELECT *\n  FROM patients_age\n  WHERE admission_type IN ('ELECTIVE', 'EMERGENCY', 'URGENT')\n    AND age_at_admission BETWEEN 46 AND 56\n),\n-- AMI diagnosis: ICD-10 I21 or ICD-9 410\nami_cohort AS (\n  SELECT DISTINCT ia.*\n  FROM inpatient_admissions ia\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON ia.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (d.icd_version = 9 AND d.icd_code LIKE '410%')\n     OR (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n),\n-- Major complications: define list of ICD codes for complications\ncomplication_codes AS (\n  SELECT 'I46' AS icd_code, 9 AS icd_version UNION ALL\n  SELECT '427.5', 9 UNION ALL\n  SELECT 'R57.0', 10 UNION ALL\n  SELECT 'I50', 10 UNION ALL\n  SELECT 'I49.01', 10 UNION ALL\n  SELECT 'R09.02', 10\n),\n-- Patients with major complications in same admission\ncomplications AS (\n  SELECT DISTINCT ac.hadm_id\n  FROM ami_cohort ac\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON ac.hadm_id = di.hadm_id\n  INNER JOIN complication_codes cc\n    ON di.icd_code = cc.icd_code AND di.icd_version = cc.icd_version\n),\n-- Final cohort with composite risk score\ncohort_with_score AS (\n  SELECT\n    ac.*,\n    DATETIME_DIFF(ac.dischtime, ac.admittime, SECOND) / (24*60*60) AS los_days,\n    COALESCE(c.hadm_id IS NOT NULL, FALSE) AS has_major_complication,\n    ac.age_at_admission + (CASE WHEN c.hadm_id IS NOT NULL THEN 1 ELSE 0 END) AS composite_risk_score\n  FROM ami_cohort ac\n  LEFT JOIN complications c ON ac.hadm_id = c.hadm_id\n),\n-- Assign quintiles\nquintiles AS (\n  SELECT *,\n    NTILE(5) OVER (ORDER BY composite_risk_score) AS risk_quintile\n  FROM cohort_with_score\n)\n-- Final aggregation\nSELECT\n  risk_quintile,\n  -- In-hospital mortality %\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100, 2) AS mortality_pct,\n  -- Major complication %\n  ROUND(AVG(CAST(has_major_complication AS INT64)) * 100, 2) AS complication_pct,\n  -- Median survivor LOS (in days)\n  ROUND(APPROX_QUANTILES(CASE WHEN hospital_expire_flag = 0 THEN los_days END, 100)[OFFSET(50)], 2) AS median_survivor_los_days\nFROM quintiles\nGROUP BY risk_quintile\nORDER BY risk_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [79:18]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [79:18]\n\nLocation: US\nJob ID: 11eb6825-c43d-4ffd-8269-ee2cd8a64d46\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH index_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.subject_id = d.subject_id\n     AND a.hadm_id    = d.hadm_id\n     AND d.seq_num    = 1\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code    = dd.icd_code\n     AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 61 AND 71\n    AND a.insurance = 'Medicare'\n    AND LOWER(a.admission_location) LIKE '%nurs%'\n    AND LOWER(dd.long_title) LIKE '%acute kidney injury%'\n),\n\nreadmissions AS (\n  SELECT\n    ic.*,\n    CASE\n      WHEN MIN(nxt.admittime) OVER (PARTITION BY ic.subject_id, ic.hadm_id) IS NOT NULL THEN 1\n      ELSE 0\n    END AS readmit_flag\n  FROM\n    index_cohort ic\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` nxt\n      ON ic.subject_id = nxt.subject_id\n     AND nxt.admittime > ic.dischtime\n     AND nxt.admittime <= ic.dischtime + INTERVAL 30 DAY\n),\n\nmetrics AS (\n  SELECT\n    COUNT(*) AS total_index_stays,\n    SUM(readmit_flag) AS num_readmitted,\n    AVG(readmit_flag) AS readmission_rate,\n    -- Median LOS among readmitted\n    (SELECT APPROX_QUANTILES(los, 2)[OFFSET(1)]\n     FROM readmissions\n     WHERE readmit_flag = 1) AS median_los_readmitted,\n    -- Median LOS among non\u2010readmitted\n    (SELECT APPROX_QUANTILES(los, 2)[OFFSET(1)]\n     FROM readmissions\n     WHERE readmit_flag = 0) AS median_los_non_readmitted,\n    -- Percent of index stays with LOS > 6 days\n    SUM(IF(los > 6, 1, 0)) / COUNT(*) AS pct_los_gt_6\n  FROM\n    readmissions\n)\n\nSELECT\n  total_index_stays,\n  num_readmitted,\n  ROUND(readmission_rate, 4) AS readmission_rate,\n  median_los_readmitted,\n  median_los_non_readmitted,\n  ROUND(pct_los_gt_6, 4) AS pct_los_gt_6\nFROM\n  metrics;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

@@ -1,0 +1,28 @@
+{
+  "query": "67-year-old female with AMI: among females 62\u201372 without shock or respiratory failure, compare in\u2011hospital mortality LOS \u22645 vs >5 days; report mortality rates, CKD and diabetes prevalence, and absolute/relative mortality differences.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 62 AND 72\n    AND LOWER(d_icd.long_title) LIKE '%acute myocardial infarction%'\n    AND a.hadm_id IS NOT NULL\n),\n\ncohort_excluded AS (\n  SELECT c.*\n  FROM cohort c\n  WHERE NOT EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n      ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n    WHERE d.hadm_id = c.hadm_id\n      AND (\n        LOWER(d_icd.long_title) LIKE '%shock%'\n        OR LOWER(d_icd.long_title) LIKE '%respiratory failure%'\n      )\n  )\n),\n\ncomorbidities AS (\n  SELECT\n    c.hadm_id,\n    MAX(CASE WHEN LOWER(d_icd.long_title) LIKE '%chronic kidney disease%' THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN LOWER(d_icd.long_title) LIKE '%diabetes%' THEN 1 ELSE 0 END) AS has_diabetes\n  FROM cohort_excluded c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON c.hadm_id = d.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  GROUP BY c.hadm_id\n),\n\nfinal_cohort AS (\n  SELECT\n    c.hadm_id,\n    c.hospital_expire_flag,\n    c.los_days,\n    CASE\n      WHEN c.los_days <= 5 THEN 'LOS <= 5'\n      WHEN c.los_days > 5 THEN 'LOS > 5'\n    END AS los_group,\n    co.has_ckd,\n    co.has_diabetes\n  FROM cohort_excluded c\n  INNER JOIN comorbidities co ON c.hadm_id = co.hadm_id\n),\n\ngrouped AS (\n  SELECT\n    los_group,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(has_ckd) AS ckd_prevalence,\n    AVG(has_diabetes) AS diabetes_prevalence\n  FROM final_cohort\n  GROUP BY los_group\n),\n\ndiffs AS (\n  SELECT\n    MAX(CASE WHEN los_group = 'LOS > 5' THEN mortality_rate END) - \n    MAX(CASE WHEN los_group = 'LOS <= 5' THEN mortality_rate END) AS abs_mortality_diff,\n    MAX(CASE WHEN los_group = 'LOS > 5' THEN mortality_rate END) / \n    MAX(CASE WHEN los_group = 'LOS <= 5' THEN mortality_rate END) AS rel_mortality_diff\n  FROM grouped\n)\n\nSELECT\n  g.los_group,\n  g.mortality_rate,\n  g.ckd_prevalence,\n  g.diabetes_prevalence,\n  d.abs_mortality_diff,\n  d.rel_mortality_diff\nFROM grouped g\nCROSS JOIN diffs d\nORDER BY g.los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword IN at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword IN at [1:16]\n\nLocation: US\nJob ID: 829d4f84-77c2-44a2-9297-63e74535c085\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXTRACT does not support arguments of type: INTERVAL at [10:25]; reason: invalidQuery, location: query, message: EXTRACT does not support arguments of type: INTERVAL at [10:25]\n\nLocation: US\nJob ID: 925a0776-4657-4b77-8c5b-a4919fa3a152\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

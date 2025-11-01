@@ -1,0 +1,17 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH relevant_patients AS (\n  -- Select patients matching the criteria: female, age 44-54, AMI diagnosis\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    di.icd_code\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON p.subject_id = di.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND di.icd_code = 'I21.9' -- AMI code\n),\nicu_admissions AS (\n  -- Select ICU admissions for the relevant patients\n  SELECT\n    rp.subject_id,\n    ic.hadm_id,\n    ic.stay_id,\n    ic.intime,\n    ic.outtime,\n    ic.los\n  FROM\n    relevant_patients AS rp\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` AS ic\n    ON rp.subject_id = ic.subject_id\n),\nprocedures_in_first_72h AS (\n  -- Select procedures performed within the first 72 hours of ICU stay\n  SELECT\n    ia.hadm_id,\n    ia.stay_id,\n    pe.starttime,\n    pe.endtime\n  FROM\n    icu_admissions AS ia\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON ia.hadm_id = pe.hadm_id AND ia.stay_id = pe.stay_id\n  WHERE\n    pe.starttime BETWEEN ia.intime AND TIMESTAMP_ADD(ia.intime, INTERVAL 72 HOUR)\n),\nprocedure_counts AS (\n  -- Count the number of procedures per ICU stay\n  SELECT\n    hadm_id,\n    stay_id,\n    COUNT(*) AS procedure_count\n  FROM\n    procedures_in_first_72h\n  GROUP BY\n    hadm_id,\n    stay_id\n),\nquartiles AS (\n  -- Calculate quartiles based on procedure count\n  SELECT\n    hadm_id,\n    stay_id,\n    procedure_count,\n    NTILE(4) OVER (ORDER BY procedure_count) AS procedure_quartile\n  FROM\n    procedure_counts\n),\nhospital_los AS (\n  -- Calculate hospital LOS for each admission\n  SELECT\n    hadm_id,\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS hospital_los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE\n    hadm_id IN (SELECT DISTINCT hadm_id FROM icu_admissions)\n),\nmortality AS (\n  -- Determine in-hospital mortality\n  SELECT\n    hadm_id,\n    hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE\n    hadm_id IN (SELECT DISTINCT hadm_id FROM icu_admissions)\n)\n-- Final result: Stratify by procedure quartile and report statistics\nSELECT\n  q.procedure_quartile,\n  COUNT(DISTINCT q.hadm_id) AS n_per_quartile,\n  AVG(q.procedure_count) AS mean_procedure_count,\n  AVG(h.hospital_los) AS mean_hospital_los,\n  AVG(CASE WHEN m.hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100 AS mortality_percent\nFROM\n  quartiles AS q\nLEFT JOIN\n  hospital_los AS h\n  ON q.hadm_id = h.hadm_id\nLEFT JOIN\n  mortality AS m\n  ON q.hadm_id = m.hadm_id\nGROUP BY\n  q.procedure_quartile\nORDER BY\n  q.procedure_quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

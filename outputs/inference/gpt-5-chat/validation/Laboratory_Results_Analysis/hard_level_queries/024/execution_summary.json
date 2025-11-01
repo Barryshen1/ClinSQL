@@ -1,0 +1,16 @@
+{
+  "query": "I have a 58-year-old woman after cardiac arrest. Among female inpatients 53\u201363 with post\u2011arrest, what is the 90th percentile 48\u2011hour lab instability score? For those \u2265 that value, report count, mortality, mean LOS, and compare critical lab frequency to all inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT p.subject_id, p.gender, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a USING (subject_id)\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d USING (subject_id, hadm_id)\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND LOWER(dd.long_title) LIKE '%cardiac arrest%'\n),\nlab_scores AS (\n  SELECT c.subject_id, c.hadm_id,\n         COUNTIF(\n           (l.flag IS NOT NULL AND LOWER(l.flag) = 'abnormal')\n           OR (l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower)\n           OR (l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper)\n         ) AS score\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.subject_id = l.subject_id AND c.hadm_id = l.hadm_id\n  WHERE l.charttime >= c.admittime\n    AND l.charttime < DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.subject_id, c.hadm_id\n),\nscore_stats AS (\n  SELECT PERCENTILE_CONT(score, 0.9) OVER() AS p90_score\n  FROM lab_scores\n  LIMIT 1\n),\nhigh_group AS (\n  SELECT ls.subject_id, ls.hadm_id, ls.score, c.admittime, c.dischtime, c.hospital_expire_flag\n  FROM lab_scores ls\n  CROSS JOIN score_stats ss\n  JOIN cohort c USING (subject_id, hadm_id)\n  WHERE ls.score >= ss.p90_score\n),\nhigh_metrics AS (\n  SELECT\n    COUNT(*) AS high_count,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR)/24.0) AS mean_los_days,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(score) AS mean_abnormal_labs\n  FROM high_group\n),\nall_metrics AS (\n  SELECT AVG(score) AS mean_abnormal_labs_all\n  FROM lab_scores\n)\nSELECT\n  hm.high_count,\n  hm.mean_los_days,\n  hm.mortality_rate,\n  hm.mean_abnormal_labs AS mean_abnormal_labs_high,\n  am.mean_abnormal_labs_all\nFROM high_metrics hm\nCROSS JOIN all_metrics am;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

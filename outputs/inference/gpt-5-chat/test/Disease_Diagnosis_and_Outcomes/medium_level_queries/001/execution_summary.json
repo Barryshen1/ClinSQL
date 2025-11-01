@@ -1,0 +1,16 @@
+{
+  "query": "Among male patients 67\u201377 admitted with acute decompensated heart failure, report in-hospital mortality (%) and CKD and diabetes prevalence stratified by LOS (\u22647 vs >7 days) and day\u20111 ICU status.",
+  "final_sql": "WITH adhf_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- hospital LOS in days\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 67 AND 77\n    AND (\n      -- ICD-9 CHF: 428.x\n      (d.icd_version = 9 AND d.icd_code LIKE '428%')\n      -- ICD-10 CHF: I50.x\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n    )\n),\ncomorbidities AS (\n  SELECT\n    hadm_id,\n    MAX(CASE \n        WHEN (icd_version = 9 AND icd_code LIKE '585%')\n          OR (icd_version = 10 AND icd_code LIKE 'N18%')\n        THEN 1 ELSE 0 END) AS ckd,\n    MAX(CASE \n        WHEN (icd_version = 9 AND icd_code LIKE '250%')\n          OR (icd_version = 10 AND (\n               icd_code LIKE 'E10%' OR icd_code LIKE 'E11%' OR icd_code LIKE 'E13%')\n             )\n        THEN 1 ELSE 0 END) AS dm\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nicu_day1 AS (\n  SELECT\n    a.hadm_id,\n    CASE WHEN MIN(TIMESTAMP_DIFF(i.intime, a.admittime, HOUR)) <= 24 THEN 1 ELSE 0 END AS day1_icu_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  GROUP BY a.hadm_id\n)\nSELECT\n  CASE WHEN c.los_days <= 7 THEN 'LOS <=7d' ELSE 'LOS >7d' END AS los_group,\n  i.day1_icu_flag,\n  COUNT(*) AS n_admissions,\n  ROUND(100 * SUM(c.hospital_expire_flag) / COUNT(*), 1) AS mortality_pct,\n  ROUND(100 * SUM(cb.ckd) / COUNT(*), 1) AS ckd_pct,\n  ROUND(100 * SUM(cb.dm) / COUNT(*), 1) AS dm_pct\nFROM adhf_cohort c\nLEFT JOIN comorbidities cb\n  ON c.hadm_id = cb.hadm_id\nLEFT JOIN icu_day1 i\n  ON c.hadm_id = i.hadm_id\nGROUP BY los_group, i.day1_icu_flag\nORDER BY los_group, i.day1_icu_flag;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

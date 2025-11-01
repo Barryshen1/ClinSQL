@@ -1,0 +1,28 @@
+{
+  "query": "I have an 83\u2011year\u2011old female inpatient post\u2011cardiac arrest. For females 78\u201388 years, stratified by tertiles of a 7\u2011day medication complexity score (unique drugs + 2\u00d7 high\u2011risk drugs + routes), report counts, score ranges, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cardiac_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    dd.icd_code IN ('I460', 'I461', 'I469') -- Cardiac arrest codes\n),\n\nfiltered_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  WHERE\n    p.gender = 'F' AND p.anchor_age BETWEEN 78 AND 88\n),\n\neligible_admissions AS (\n  SELECT\n    ca.*\n  FROM\n    cardiac_admissions ca\n  JOIN\n    filtered_patients fp\n    ON ca.subject_id = fp.subject_id\n),\n\nmed_complexity AS (\n  SELECT\n    ea.hadm_id,\n    COUNT(DISTINCT p.drug) AS unique_drugs,\n    COUNT(DISTINCT CASE WHEN p.drug IN (\n      'Heparin', 'Warfarin', 'Insulin', 'Furosemide', 'Digoxin'\n    ) THEN p.drug END) AS high_risk_drugs,\n    COUNT(DISTINCT p.route) AS distinct_routes\n  FROM\n    eligible_admissions ea\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.prescriptions p\n    ON ea.hadm_id = p.hadm_id\n  WHERE\n    p.starttime >= ea.admittime\n    AND p.starttime <= DATETIME_ADD(ea.admittime, INTERVAL 7 DAY)\n  GROUP BY\n    ea.hadm_id\n),\n\nscored_admissions AS (\n  SELECT\n    ea.*,\n    COALESCE(mc.unique_drugs, 0) AS unique_drugs,\n    COALESCE(mc.high_risk_drugs, 0) AS high_risk_drugs,\n    COALESCE(mc.distinct_routes, 0) AS distinct_routes,\n    COALESCE(mc.unique_drugs, 0) + 2 * COALESCE(mc.high_risk_drugs, 0) + COALESCE(mc.distinct_routes, 0) AS complexity_score\n  FROM\n    eligible_admissions ea\n  LEFT JOIN\n    med_complexity mc\n    ON ea.hadm_id = mc.hadm_id\n),\n\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS score_tertile\n  FROM\n    scored_admissions\n),\n\nreadmissions AS (\n  SELECT\n    t1.subject_id,\n    t1.hadm_id AS index_hadm_id,\n    t1.dischtime AS index_dischtime,\n    t1.hospital_expire_flag,\n    t1.los,\n    t1.complexity_score,\n    t1.score_tertile,\n    MIN(t2.admittime) AS next_admittime\n  FROM\n    tertiles t1\n  LEFT JOIN\n    tertiles t2\n    ON t1.subject_id = t2.subject_id\n    AND t2.admittime > t1.dischtime\n    AND DATETIME_DIFF(t2.admittime, t1.dischtime, DAY) <= 30\n    AND t1.hospital_expire_flag = 0\n  GROUP BY\n    t1.subject_id, t1.hadm_id, t1.dischtime, t1.hospital_expire_flag, t1.los, t1.complexity_score, t1.score_tertile\n),\n\nfinal_stats AS (\n  SELECT\n    score_tertile,\n    COUNT(*) AS admission_count,\n    MIN(complexity_score) AS min_score,\n    MAX(complexity_score) AS max_score,\n    AVG(los) AS mean_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hosp_mortality_pct,\n    AVG(\n      CASE\n        WHEN hospital_expire_flag = 0 AND next_admittime IS NOT NULL THEN 1.0\n        ELSE 0.0\n      END\n    ) * 100 AS readmission_30d_pct\n  FROM\n    readmissions\n  GROUP BY\n    score_tertile\n)\n\nSELECT\n  score_tertile,\n  admission_count,\n  min_score,\n  max_score,\n  ROUND(mean_los, 2) AS mean_los,\n  ROUND(in_hosp_mortality_pct, 2) AS in_hosp_mortality_pct,\n  ROUND(readmission_30d_pct, 2) AS readmission_30d_pct\nFROM\n  final_stats\nORDER BY\n  score_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [9:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [9:7]\n\nLocation: US\nJob ID: af55bc5b-1226-486a-9a40-6cb48309a3a8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [114:38]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [114:38]\n\nLocation: US\nJob ID: 6e4504a0-27c7-4b64-bb7c-6aeb6a0d070a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "58-year-old woman with ACS: among female inpatients 53\u201363 with ACS, compute a 72\u2011hour lab instability score (count of critical lab categories), split into quartiles, report mortality (%) and avg LOS per quartile, and compare critical lab rates to age\u2011matched controls",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS admission_age,\n    CASE WHEN d.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS acs_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id \n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      (icd_version = 9 AND (icd_code LIKE '410%' OR icd_code IN ('411.1', '411.81')))\n      OR \n      (icd_version = 10 AND (icd_code LIKE 'I21%' OR icd_code LIKE 'I22%' OR icd_code IN ('I20.0', 'I24.8', 'I24.9')))\n  ) d \n    ON a.hadm_id = d.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 53 AND 63\n),\nlabs AS (\n  SELECT \n    le.hadm_id,\n    le.itemid,\n    le.valuenum,\n    le.charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN base_cohort b\n    ON le.hadm_id = b.hadm_id\n  WHERE \n    le.charttime BETWEEN b.admittime AND DATETIME_ADD(b.admittime, INTERVAL 72 HOUR)\n    AND le.itemid IN (50971, 50983, 50912, 50931, 51222)\n    AND le.valuenum IS NOT NULL\n),\nlab_flags AS (\n  SELECT \n    hadm_id,\n    MAX(CASE WHEN itemid = 50971 AND (valuenum < 3.0 OR valuenum > 6.0) THEN 1 ELSE 0 END) AS potassium_critical,\n    MAX(CASE WHEN itemid = 50983 AND (valuenum < 130 OR valuenum > 150) THEN 1 ELSE 0 END) AS sodium_critical,\n    MAX(CASE WHEN itemid = 50912 AND valuenum > 1.5 THEN 1 ELSE 0 END) AS creatinine_critical,\n    MAX(CASE WHEN itemid = 50931 AND (valuenum < 50 OR valuenum > 400) THEN 1 ELSE 0 END) AS glucose_critical,\n    MAX(CASE WHEN itemid = 51222 AND valuenum < 7 THEN 1 ELSE 0 END) AS hemoglobin_critical\n  FROM labs\n  GROUP BY hadm_id\n),\ncohort_with_labs AS (\n  SELECT \n    b.*,\n    COALESCE(l.potassium_critical, 0) AS potassium_critical,\n    COALESCE(l.sodium_critical, 0) AS sodium_critical,\n    COALESCE(l.creatinine_critical, 0) AS creatinine_critical,\n    COALESCE(l.glucose_critical, 0) AS glucose_critical,\n    COALESCE(l.hemoglobin_critical, 0) AS hemoglobin_critical\n  FROM base_cohort b\n  LEFT JOIN lab_flags l\n    ON b.hadm_id = l.hadm_id\n),\nacs_cohort AS (\n  SELECT \n    *,\n    potassium_critical + sodium_critical + creatinine_critical + \n    glucose_critical + hemoglobin_critical AS instability_score\n  FROM cohort_with_labs\n  WHERE acs_flag = 1\n),\nacs_with_quartile AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM acs_cohort\n)\n-- Part 1: Mortality & LOS per quartile for ACS patients\nSELECT \n  'Part1' AS part,\n  quartile,\n  COUNT(*) AS num_patients,\n  AVG(hospital_expire_flag) * 100 AS mortality_percentage,\n  AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS avg_los_days,\n  NULL AS group_name,\n  NULL AS potassium_critical_rate,\n  NULL AS sodium_critical_rate,\n  NULL AS creatinine_critical_rate,\n  NULL AS glucose_critical_rate,\n  NULL AS hemoglobin_critical_rate\nFROM acs_with_quartile\nGROUP BY quartile\n\nUNION ALL\n\n-- Part 2: Critical lab rates for ACS vs. controls\nSELECT \n  'Part2' AS part,\n  NULL AS quartile,\n  NULL AS num_patients,\n  NULL AS mortality_percentage,\n  NULL AS avg_los_days,\n  CASE \n    WHEN acs_flag = 1 THEN 'ACS Patients' \n    ELSE 'Control Group' \n  END AS group_name,\n  AVG(potassium_critical) * 100 AS potassium_critical_rate,\n  AVG(sodium_critical) * 100 AS sodium_critical_rate,\n  AVG(creatinine_critical) * 100 AS creatinine_critical_rate,\n  AVG(glucose_critical) * 100 AS glucose_critical_rate,\n  AVG(hemoglobin_critical) * 100 AS hemoglobin_critical_rate\nFROM cohort_with_labs\nGROUP BY group_name\nORDER BY part, quartile, group_name;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \"/\" at [1:5]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \"/\" at [1:5]\n\nLocation: US\nJob ID: 44c0b41f-d8a2-4b37-9163-1354fe40549d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name icd_code not found inside d at [11:18]; reason: invalidQuery, location: query, message: Name icd_code not found inside d at [11:18]\n\nLocation: US\nJob ID: 4408c45d-5a26-4c64-89bd-ac0233742205\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 65-year-old female patient. Among hospitalized women aged 60\u201370, what's the IQR (days) of atorvastatin 40\u201380 mg prescriptions?",
+  "final_sql": "WITH PatientAdmissions AS (\n    -- Select female patients aged 60-70 at the time of their hospital admission\n    SELECT\n        pa.subject_id,\n        ad.hadm_id,\n        -- Calculate age at admission. MIMIC-IV uses anchor_age and anchor_year\n        -- to preserve relative age while de-identifying actual birth year.\n        EXTRACT(YEAR FROM ad.admittime) - pa.anchor_year + pa.anchor_age AS age_at_admission\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` pa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON pa.subject_id = ad.subject_id\n    WHERE\n        pa.gender = 'F'\n        AND (EXTRACT(YEAR FROM ad.admittime) - pa.anchor_year + pa.anchor_age) BETWEEN 60 AND 70\n),\nAtorvastatinPrescriptions AS (\n    -- Filter for Atorvastatin prescriptions with dose 40-80 mg for the target population\n    SELECT\n        pa.subject_id,\n        pa.hadm_id,\n        pres.starttime,\n        pres.stoptime,\n        SAFE_CAST(pres.dose_val_rx AS FLOAT64) AS numeric_dose_val_rx -- Cast to numeric type\n    FROM\n        PatientAdmissions pa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n        ON pa.subject_id = pres.subject_id AND pa.hadm_id = pres.hadm_id\n    WHERE\n        LOWER(pres.drug) = 'atorvastatin' -- Ensure drug is Atorvastatin, case-insensitive\n        AND pres.dose_unit_rx = 'mg'        -- Ensure unit is milligrams\n        AND SAFE_CAST(pres.dose_val_rx AS FLOAT64) IS NOT NULL -- Ensure a valid number can be parsed\n        AND SAFE_CAST(pres.dose_val_rx AS FLOAT64) >= 40       -- Dose value is 40mg or more\n        AND SAFE_CAST(pres.dose_val_rx AS FLOAT64) <= 80       -- Dose value is 80mg or less\n        AND pres.starttime IS NOT NULL   -- Ensure start time exists\n        AND pres.stoptime IS NOT NULL    -- Ensure stop time exists\n        AND pres.stoptime >= pres.starttime -- Ensure stop time is not before start time\n),\nPrescriptionDurations AS (\n    -- Calculate the duration of each qualifying prescription in days\n    SELECT\n        DATETIME_DIFF(stoptime, starttime, DAY) AS duration_days\n    FROM\n        AtorvastatinPrescriptions\n    WHERE\n        DATETIME_DIFF(stoptime, starttime, DAY) >= 0 -- Ensure non-negative duration\n)\n-- Calculate the Interquartile Range (IQR) of the prescription durations\nSELECT\n    PERCENTILE_CONT(duration_days, 0.75) OVER() - PERCENTILE_CONT(duration_days, 0.25) OVER() AS iqr_duration_days\nFROM\n    PrescriptionDurations\nLIMIT 1; -- Use LIMIT 1 because the analytic function with OVER() without PARTITION BY produces the same result for all rows.;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator >= for argument types: STRING, INT64\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [33:13]; reason: invalidQuery, location: query, message: No matching signature for operator >= for argument types: STRING, INT64\n  Signature: T1 >= T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [33:13]\n\nLocation: US\nJob ID: 68dd9c8b-d538-46fa-b71c-9ce44905962d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 66-year-old man with chest pain. Among male patients aged 61\u201371 admitted for chest pain, what's the percent distribution of initial hs\u2011TnT: normal, borderline, myocardial injury?",
+  "final_sql": "WITH\n-- Define chest pain ICD codes (common codes for chest pain)\nchest_pain_icd AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%chest pain%'\n    OR icd_code IN ('R07.1', 'R07.2', 'R07.89', 'R07.9', 'I20.9', 'I21.9', 'I24.9')\n),\n\n-- Get male patients aged 61-71 with chest pain admission\neligible_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN chest_pain_icd c ON d.icd_code = c.icd_code\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 61 AND 71\n    AND a.admission_type != 'NEWBORN'  -- Exclude newborn admissions\n),\n\n-- Get first hs-TnT measurement per admission\nfirst_hs_tnt AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) as rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli ON le.itemid = dli.itemid\n  WHERE\n    dli.label = 'Troponin T, High Sensitivity'\n    AND le.hadm_id IN (SELECT hadm_id FROM eligible_patients)\n    AND le.valuenum IS NOT NULL\n),\n\n-- Categorize hs-TnT values\nhs_tnt_categories AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    CASE\n      WHEN valuenum < 14 THEN 'Normal (<14 ng/L)'\n      WHEN valuenum BETWEEN 14 AND 50 THEN 'Borderline (14-50 ng/L)'\n      WHEN valuenum > 50 THEN 'Myocardial Injury (>50 ng/L)'\n      ELSE 'Unknown'\n    END AS hs_tnt_category\n  FROM first_hs_tnt\n  WHERE rn = 1  -- Only first measurement per admission\n)\n\n-- Calculate percentage distribution\nSELECT\n  hs_tnt_category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage\nFROM hs_tnt_categories\nGROUP BY hs_tnt_category\nORDER BY\n  CASE hs_tnt_category\n    WHEN 'Normal (<14 ng/L)' THEN 1\n    WHEN 'Borderline (14-50 ng/L)' THEN 2\n    WHEN 'Myocardial Injury (>50 ng/L)' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

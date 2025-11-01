@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83\u2011year\u2011old female inpatient post\u2011cardiac arrest. For females 78\u201388 years, stratified by tertiles of a 7\u2011day medication complexity score (unique drugs + 2\u00d7 high\u2011risk drugs + routes), report counts, score ranges, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 78 AND 88\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 9 AND di.icd_code LIKE '427.5%') \n          OR (di.icd_version = 10 AND di.icd_code LIKE 'I46%')\n        )\n    )\n),\nmed_scores AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT pres.drug) AS num_drugs,\n    COUNT(DISTINCT CASE \n      WHEN LOWER(COALESCE(pres.drug, '')) LIKE '%morphine%' \n        OR LOWER(pres.drug) LIKE '%fentanyl%' \n        OR LOWER(pres.drug) LIKE '%heparin%' \n        OR LOWER(pres.drug) LIKE '%warfarin%' \n        OR LOWER(pres.drug) LIKE '%insulin%' \n      THEN pres.drug \n    END) AS num_hr,\n    COUNT(DISTINCT CASE WHEN pres.route IS NOT NULL AND TRIM(pres.route) != '' THEN pres.route END) AS num_routes\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n    ON pres.hadm_id = c.hadm_id\n    AND pres.starttime >= c.admittime\n    AND pres.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n    AND pres.drug IS NOT NULL \n    AND TRIM(pres.drug) != ''\n  GROUP BY c.hadm_id\n),\nscores AS (\n  SELECT \n    hadm_id,\n    COALESCE(num_drugs, 0) + 2 * COALESCE(num_hr, 0) + COALESCE(num_routes, 0) AS score\n  FROM med_scores\n),\ncohort_with_readmit AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    LOGICAL_OR(\n      a.admittime > c.dischtime \n      AND a.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n      AND a.hadm_id != c.hadm_id\n    ) AS has_readmit\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON c.subject_id = a.subject_id\n  GROUP BY \n    c.subject_id, \n    c.hadm_id, \n    c.admittime, \n    c.dischtime, \n    c.hospital_expire_flag\n),\njoined AS (\n  SELECT \n    s.hadm_id,\n    s.score,\n    cwr.admittime,\n    cwr.dischtime,\n    cwr.hospital_expire_flag,\n    cwr.has_readmit,\n    NTILE(3) OVER (ORDER BY s.score ASC) AS tertile\n  FROM scores s\n  JOIN cohort_with_readmit cwr \n    ON s.hadm_id = cwr.hadm_id\n)\nSELECT \n  tertile,\n  COUNT(*) AS counts,\n  MIN(score) AS min_score,\n  MAX(score) AS max_score,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0) AS mean_los_days,\n  AVG(hospital_expire_flag * 100.0) AS mortality_pct,\n  AVG(IF(has_readmit, 100.0, 0.0)) AS readmission_30d_pct\nFROM joined\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column tertile contains an analytic function, which is not allowed in GROUP BY at [86:10]; reason: invalidQuery, location: query, message: Column tertile contains an analytic function, which is not allowed in GROUP BY at [86:10]\n\nLocation: US\nJob ID: 98f3534c-2e81-450f-ba0d-4dd9636546d5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

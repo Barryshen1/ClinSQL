@@ -1,0 +1,22 @@
+{
+  "query": "I have a 70\u2011year\u2011old female. Among inpatients 65\u201375 with diabetes and heart failure (\u226596h), report for basal, bolus, basal\u2013bolus and sliding\u2011scale: % in first 48h vs final 48h and early\u2192discharge transitions.",
+  "final_sql": "WITH \n-- Filter patients with diabetes and heart failure\npatients_with_conditions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.anchor_age BETWEEN 65 AND 75\n    AND p.gender = 'F'\n    AND a.dischtime - a.admittime >= INTERVAL 4 DAY\n    AND a.hadm_id IN (\n      SELECT \n        hadm_id\n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE \n        icd_code IN (\n          SELECT \n            icd_code \n          FROM \n            `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` \n          WHERE \n            long_title IN ('Diabetes mellitus', 'Heart failure')\n        )\n    )\n),\n\n-- Identify insulin therapy types\ninsulin_therapy AS (\n  SELECT \n    p.subject_id,\n    p.hadm_id,\n    pr.starttime,\n    pr.stoptime,\n    pr.drug,\n    pr.route,\n    ph.doses_per_24_hrs,\n    ph.basal_rate,\n    ph.infusion_type\n  FROM \n    patients_with_conditions p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr \n      ON p.hadm_id = pr.hadm_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.pharmacy` ph \n      ON pr.hadm_id = ph.hadm_id AND pr.pharmacy_id = ph.pharmacy_id\n  WHERE \n    pr.drug LIKE '%Insulin%'\n),\n\n-- Categorize insulin therapy\ntherapy_categories AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    starttime,\n    stoptime,\n    drug,\n    route,\n    doses_per_24_hrs,\n    basal_rate,\n    infusion_type,\n    CASE\n      WHEN infusion_type = 'Basal' THEN 'Basal'\n      WHEN infusion_type = 'Bolus' THEN 'Bolus'\n      WHEN basal_rate > 0 AND doses_per_24_hrs > 0 THEN 'Basal-bolus'\n      WHEN doses_per_24_hrs = 0 AND basal_rate > 0 THEN 'Basal'\n      ELSE 'Sliding-scale'\n    END AS therapy_type\n  FROM \n    insulin_therapy\n)\n\n-- Analyze insulin administration patterns\nSELECT \n  tc.therapy_type,\n  COUNT(DISTINCT tc.hadm_id) AS num_patients,\n  SUM(CASE WHEN tc.starttime - (p.admittime + INTERVAL 2 DAY) < INTERVAL 0 DAY AND tc.starttime - (p.admittime + INTERVAL 2 DAY) > INTERVAL -2 DAY THEN 1 ELSE 0 END) AS first_48h,\n  SUM(CASE WHEN tc.starttime - (p.dischtime - INTERVAL 2 DAY) < INTERVAL 2 DAY AND tc.starttime - (p.dischtime - INTERVAL 2 DAY) > INTERVAL 0 DAY THEN 1 ELSE 0 END) AS final_48h\nFROM \n  therapy_categories tc\n  JOIN patients_with_conditions p ON tc.hadm_id = p.hadm_id\nGROUP BY \n  tc.therapy_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [87:18]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [87:18]\n\nLocation: US\nJob ID: 64eca34e-6050-40c0-b72a-2013dae06da3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "75-year-old man: among male ICU patients 70\u201380 with RRT, what is the 90th percentile of the 48\u2011hour composite vital instability score? For the top decile, compare hypotension (MAP<65), tachycardia episodes, ICU LOS and mortality versus males 70\u201380 without RRT.",
+  "final_sql": "WITH cohort AS (\n  -- Male ICU patients aged 70-80\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    pat.anchor_age,\n    pat.gender\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON icu.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 70 AND 80\n),\n\nrrt_stays AS (\n  -- ICU stays with RRT procedure\n  SELECT DISTINCT\n    proc.stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.procedureevents` proc\n  WHERE\n    proc.itemid IN (\n      225468, -- CRRT\n      225477, -- Dialysis\n      225810, -- CVVH\n      225803, -- CVVHD\n      225805, -- CVVHDF\n      225806  -- SCUF\n    )\n),\n\nvitals_48h AS (\n  -- Get vital sign episodes in first 48h of ICU stay\n  SELECT\n    c.stay_id,\n    c.hadm_id,\n    c.subject_id,\n    c.intime,\n    c.outtime,\n    c.los,\n    CASE WHEN rrt.stay_id IS NOT NULL THEN 1 ELSE 0 END AS has_rrt,\n    -- Hypotension: MAP < 65\n    SUM(CASE WHEN ce.itemid = 220074 AND ce.valuenum < 65 THEN 1 ELSE 0 END) AS hypotension_episodes,\n    -- Tachycardia: HR > 120\n    SUM(CASE WHEN ce.itemid = 220045 AND ce.valuenum > 120 THEN 1 ELSE 0 END) AS tachycardia_episodes\n  FROM\n    cohort c\n    LEFT JOIN rrt_stays rrt ON c.stay_id = rrt.stay_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      ON c.stay_id = ce.stay_id\n      AND ce.charttime BETWEEN c.intime AND TIMESTAMP_ADD(c.intime, INTERVAL 48 HOUR)\n      AND ce.itemid IN (220074, 220045) -- MAP, HR\n      AND ce.valuenum IS NOT NULL\n  GROUP BY\n    c.stay_id, c.hadm_id, c.subject_id, c.intime, c.outtime, c.los, has_rrt\n),\n\ncomposite_scores AS (\n  -- Composite score = hypotension + tachycardia episodes\n  SELECT\n    v.*,\n    (v.hypotension_episodes + v.tachycardia_episodes) AS composite_score\n  FROM\n    vitals_48h v\n),\n\nrrt_scores AS (\n  -- RRT patients\n  SELECT composite_score\n  FROM composite_scores\n  WHERE has_rrt = 1\n),\n\npercentile_90 AS (\n  -- 90th percentile of composite score among RRT patients\n  SELECT\n    APPROX_QUANTILES(composite_score, 10)[9] AS p90_score\n  FROM rrt_scores\n),\n\nadmissions_mortality AS (\n  -- Get hospital mortality for each ICU stay\n  SELECT\n    icu.stay_id,\n    adm.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n      ON icu.hadm_id = adm.hadm_id\n)\n\nSELECT\n  CASE WHEN cs.has_rrt = 1 THEN 'RRT' ELSE 'No RRT' END AS group_type,\n  COUNT(*) AS n_stays,\n  AVG(cs.hypotension_episodes) AS avg_hypotension_episodes,\n  APPROX_QUANTILES(cs.hypotension_episodes, 2)[1] AS median_hypotension_episodes,\n  AVG(cs.tachycardia_episodes) AS avg_tachycardia_episodes,\n  APPROX_QUANTILES(cs.tachycardia_episodes, 2)[1] AS median_tachycardia_episodes,\n  AVG(cs.los) AS avg_icu_los,\n  APPROX_QUANTILES(cs.los, 2)[1] AS median_icu_los,\n  AVG(CAST(am.hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM\n  composite_scores cs\n  CROSS JOIN percentile_90 p\n  LEFT JOIN admissions_mortality am ON cs.stay_id = am.stay_id\nWHERE\n  cs.composite_score >= p.p90_score\nGROUP BY\n  group_type\nORDER BY\n  group_type;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [102:3]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [102:3]\n\nLocation: US\nJob ID: 8f9968dc-c4e9-45d3-9722-145ee8f22e55\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

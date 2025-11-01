@@ -1,0 +1,28 @@
+{
+  "query": "For my 94yo female ICU patient, among female ICU patients aged 89\u201399 report per-measurement temperature categories (<36, 36\u201337.9, \u226538\u00b0C) with mean, median, IQR, unique patient and measurement counts, MI rate.",
+  "final_sql": "WITH temp_measurements AS (\n  -- Base CTE: Filter to female ICU patients aged 89-99, join to chartevents for temperatures\n  SELECT \n    p.subject_id,\n    i.stay_id,\n    c.valuenum,\n    c.itemid,\n    -- Convert to Celsius, handling both units\n    CASE \n      WHEN c.itemid = 676 THEN c.valuenum  -- Already Celsius\n      WHEN c.itemid = 678 THEN (c.valuenum - 32) * 5.0 / 9  -- Fahrenheit to Celsius\n      ELSE NULL \n    END AS temp_celsius\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON i.subject_id = c.subject_id \n    AND i.stay_id = c.stay_id\n    AND c.charttime BETWEEN i.intime AND i.outtime  -- Ensure within ICU stay\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON c.itemid = d.itemid\n  WHERE \n    p.gender = 'F'\n    AND EXTRACT(YEAR FROM i.intime) - p.anchor_year BETWEEN 89 AND 99  -- Age at ICU admission\n    AND c.itemid IN (676, 678)  -- Temperature items\n    AND d.category = 'Temperature'  -- Ensure correct category\n    AND c.valuenum IS NOT NULL  -- Non-null values for conversion\n),\nvalid_temps AS (\n  -- Filter to plausible temperatures (15-45\u00b0C)\n  SELECT \n    subject_id,\n    temp_celsius\n  FROM temp_measurements\n  WHERE \n    temp_celsius IS NOT NULL\n    AND temp_celsius >= 15\n    AND temp_celsius <= 45\n),\ncategorized_temps AS (\n  -- Categorize temperatures\n  SELECT \n    subject_id,\n    temp_celsius,\n    CASE \n      WHEN temp_celsius < 36 THEN '<36'\n      WHEN temp_celsius >= 36 AND temp_celsius <= 37.9 THEN '36-37.9'\n      WHEN temp_celsius >= 38 THEN '>=38'\n      ELSE 'Missing/Invalid'\n    END AS temp_category\n  FROM valid_temps\n),\nall_temp_events AS (\n  -- For MI rate: All temperature events (including unparseable valuenum)\n  SELECT \n    i.subject_id\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON i.subject_id = c.subject_id \n    AND i.stay_id = c.stay_id\n    AND c.charttime BETWEEN i.intime AND i.outtime\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON c.itemid = d.itemid\n  WHERE \n    p.gender = 'F'\n    AND EXTRACT(YEAR FROM i.intime) - p.anchor_year BETWEEN 89 AND 99\n    AND c.itemid IN (676, 678)\n    AND d.category = 'Temperature'\n),\nagg_stats AS (\n  SELECT \n    temp_category,\n    COUNT(*) AS measurement_count,\n    COUNT(DISTINCT subject_id) AS unique_patient_count,\n    ROUND(AVG(temp_celsius), 2) AS mean_temp,\n    PERCENTILE_CONT(temp_celsius, 0.5) OVER (PARTITION BY temp_category) AS median_temp,\n    PERCENTILE_CONT(temp_celsius, 0.25) OVER (PARTITION BY temp_category) AS iqr_lower,\n    PERCENTILE_CONT(temp_celsius, 0.75) OVER (PARTITION BY temp_category) AS iqr_upper,\n    COUNT(*) AS valid_measurement_count\n  FROM categorized_temps\n  GROUP BY temp_category\n),\ntotals AS (\n  SELECT \n    COUNT(*) AS total_events,\n    COUNT(DISTINCT subject_id) AS total_unique_patients\n  FROM all_temp_events\n)\nSELECT \n  s.temp_category,\n  s.mean_temp,\n  s.median_temp,\n  s.iar_lower,\n  s.iqr_upper,\n  s.measurement_count,\n  s.unique_patient_count,\n  ROUND(((t.total_events - s.valid_measurement_count) * 1.0 / t.total_events) * 100, 2) AS mi_rate_percent\nFROM agg_stats s\nCROSS JOIN totals t\nORDER BY \n  CASE s.temp_category\n    WHEN '<36' THEN 1\n    WHEN '36-37.9' THEN 2\n    WHEN '>=38' THEN 3\n  END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column temp_celsius which is neither grouped nor aggregated at [87:21]; reason: invalidQuery, location: query, message: SELECT list expression references column temp_celsius which is neither grouped nor aggregated at [87:21]\n\nLocation: US\nJob ID: b4685d46-56ff-4b9b-9028-f684821b3c09\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column temp_celsius which is neither grouped nor aggregated at [70:21]; reason: invalidQuery, location: query, message: SELECT list expression references column temp_celsius which is neither grouped nor aggregated at [70:21]\n\nLocation: US\nJob ID: b7f6cfac-3d0f-46a4-bdf0-ca83b0590550\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [61:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [61:5]\n\nLocation: US\nJob ID: 8a96922a-49fb-48dc-b522-7d22252fee35\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column temp_celsius which is neither grouped nor aggregated at [87:21]; reason: invalidQuery, location: query, message: SELECT list expression references column temp_celsius which is neither grouped nor aggregated at [87:21]\n\nLocation: US\nJob ID: b4685d46-56ff-4b9b-9028-f684821b3c09\n"
+    }
+  ]
+}

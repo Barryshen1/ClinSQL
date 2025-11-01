@@ -1,0 +1,28 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH amifemale AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 44 AND 54\n    AND LOWER(dicd.long_title) LIKE '%acute myocardial infarction%'\n),\n\nfirst_icu_stay AS (\n  SELECT\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS rn\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN amifemale af ON i.hadm_id = af.hadm_id\n),\n\nfirst_icu_procedures AS (\n  SELECT\n    f.stay_id,\n    COUNT(*) AS procedure_count\n  FROM first_icu_stay f\n  INNER JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON f.stay_id = pe.stay_id\n  WHERE pe.starttime >= f.intime\n    AND pe.starttime <= DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n    AND pe.starttime IS NOT NULL\n  GROUP BY f.stay_id\n),\n\nquartiles AS (\n  SELECT\n    af.subject_id,\n    af.hadm_id,\n    af.los_days,\n    af.hospital_expire_flag,\n    COALESCE(fp.procedure_count, 0) AS procedure_count,\n    NTILE(4) OVER (ORDER BY COALESCE(fp.procedure_count, 0)) AS quartile\n  FROM amifemale af\n  LEFT JOIN first_icu_stay fis ON af.hadm_id = fis.hadm_id\n  LEFT JOIN first_icu_procedures fp ON fis.stay_id = fp.stay_id\n)\n\nSELECT\n  quartile,\n  COUNT(*) AS n_per_quartile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(los_days) AS mean_hospital_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_percent\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside p at [4:7]; reason: invalidQuery, location: query, message: Name hadm_id not found inside p at [4:7]\n\nLocation: US\nJob ID: 328203d8-ba07-41f0-bc54-9956e250dd5c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [62:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [62:36]\n\nLocation: US\nJob ID: 28680228-6c2d-4845-88ea-b884ea9e5b1b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

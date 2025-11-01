@@ -1,0 +1,16 @@
+{
+  "query": "For my 45-year-old female: among female admissions aged 40\u201350 with primary sepsis/septic shock, what's the hospital length-of-stay IQR?",
+  "final_sql": "WITH sepsis_diagnoses AS (\n  -- First, identify all ICD codes related to Sepsis or Septic Shock\n  -- This approach captures relevant codes across both ICD-9 and ICD-10 versions.\n  SELECT\n    icd_code,\n    icd_version\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE\n    LOWER(long_title) LIKE '%sepsis%' OR LOWER(long_title) LIKE '%septic shock%'\n), cohort_admissions AS (\n  -- Next, build the cohort of admissions meeting all specified criteria.\n  SELECT\n    adm.hadm_id,\n    -- Calculate hospital length of stay (LOS) in fractional days for accuracy.\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  -- Join to get patient demographic information (gender, age anchors).\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  -- Join to get the diagnoses for the hospital admission.\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    ON adm.hadm_id = dx.hadm_id\n  -- Join with our list of sepsis codes to filter for relevant diagnoses.\n  INNER JOIN\n    sepsis_diagnoses AS s_dx\n    ON dx.icd_code = s_dx.icd_code AND dx.icd_version = s_dx.icd_version\n  WHERE\n    -- Filter 1: Diagnosis must be the primary one (sequence number 1).\n    dx.seq_num = 1\n    -- Filter 2: Patient must be female.\n    AND pat.gender = 'F'\n    -- Filter 3: Patient's age at admission must be between 40 and 50.\n    AND (\n      EXTRACT(\n        YEAR\n        FROM\n          adm.admittime\n      ) - pat.anchor_year + pat.anchor_age\n    ) BETWEEN 40 AND 50\n)\n-- Finally, calculate the Interquartile Range (IQR) of the hospital LOS for the cohort.\nSELECT\n  -- APPROX_QUANTILES(value, 4) returns an array: [min, 25th_pctl, median, 75th_pctl, max].\n  -- We subtract the 25th percentile (index 1) from the 75th (index 3).\n  APPROX_QUANTILES(los_days, 4) [\n  OFFSET\n    (3)] - APPROX_QUANTILES(los_days, 4) [\n  OFFSET\n    (1)] AS hospital_los_iqr\nFROM\n  cohort_admissions\n-- Ensure we only include valid LOS calculations.\nWHERE\n  los_days IS NOT NULL;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

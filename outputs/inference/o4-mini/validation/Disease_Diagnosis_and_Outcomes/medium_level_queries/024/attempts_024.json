@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH diag_flags AS (\n  SELECT\n    d.subject_id,\n    d.hadm_id,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%sepsis%' THEN 1 ELSE 0 END)       AS has_sepsis,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%septic shock%' THEN 1 ELSE 0 END) AS has_septic_shock,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%chronic kidney disease%' THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN LOWER(dd.long_title) LIKE '%diabetes mellitus%' THEN 1 ELSE 0 END)   AS has_diabetes\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    -- restrict to ICD descriptions of interest\n    LOWER(dd.long_title) LIKE '%sepsis%'\n    OR LOWER(dd.long_title) LIKE '%septic shock%'\n    OR LOWER(dd.long_title) LIKE '%chronic kidney disease%'\n    OR LOWER(dd.long_title) LIKE '%diabetes mellitus%'\n  GROUP BY\n    d.subject_id,\n    d.hadm_id\n),\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    df.has_sepsis,\n    df.has_septic_shock,\n    df.has_ckd,\n    df.has_diabetes,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    LEFT JOIN diag_flags df\n      ON a.subject_id = df.subject_id\n      AND a.hadm_id = df.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND df.has_sepsis = 1\n    AND df.has_septic_shock = 0\n),\ncohort_icu AS (\n  SELECT\n    c.*,\n    CASE\n      WHEN i.stay_id IS NOT NULL\n       AND i.intime <= TIMESTAMP_ADD(c.admittime, INTERVAL 1 DAY)\n      THEN TRUE\n      ELSE FALSE\n    END AS icu_day1\n  FROM\n    cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n      ON c.hadm_id = i.hadm_id\n)\nSELECT\n  CASE WHEN los_days <= 5 THEN '\u22645' ELSE '>5' END AS los_category,\n  IF(icu_day1, 'ICU Day 1', 'Non-ICU Day 1') AS icu_day1_status,\n  COUNT(*) AS N,\n  100 * AVG(hospital_expire_flag)                    AS mortality_pct,\n  100 * AVG(IF(has_ckd = 1, 1, 0))                   AS ckd_prevalence_pct,\n  100 * AVG(IF(has_diabetes = 1, 1, 0))              AS diabetes_prevalence_pct\nFROM\n  cohort_icu\nGROUP BY\n  los_category,\n  icu_day1_status\nORDER BY\n  los_category,\n  icu_day1_status;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

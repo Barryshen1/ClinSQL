@@ -1,0 +1,29 @@
+{
+  "query": "I'm evaluating an 88\u2011year\u2011old male. Among male patients 83\u201393 with ACS, stratified by 1\u20134 vs 5\u20137 day stay and primary vs secondary diagnosis, what are mean, min, max ultrasounds per admission?",
+  "final_sql": "WITH\n-- Compute birthdate from anchor_year and anchor_age\npatients_with_birthdate AS (\n    SELECT \n        subject_id,\n        anchor_year,\n        anchor_age,\n        DATE_SUB(CAST(CONCAT(anchor_year, '-01-01') AS DATE), INTERVAL anchor_age YEAR) AS birthdate\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n),\n-- Admissions with age at admission, filtered by gender and non-null discharge time\nadmissions_with_age AS (\n    SELECT \n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        FLOOR(DATEDIFF(a.admittime, p.birthdate) / 365.25) AS age_at_admission,\n        a.gender,\n        DATEDIFF(a.dischtime, a.admittime) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN patients_with_birthdate p ON a.subject_id = p.subject_id\n    WHERE \n        a.gender = 'M'\n        AND a.dischtime IS NOT NULL\n),\n-- ACS ICD codes (expanded list for completeness)\nacs_codes AS (\n    SELECT icd_code\n    FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n    WHERE \n        long_title LIKE '%Acute Coronary Syndrome%' OR\n        icd_code LIKE 'I20%' OR\n        icd_code LIKE 'I21%' OR\n        icd_code LIKE 'I22%' OR\n        icd_code LIKE 'I23%' OR\n        icd_code LIKE 'I24%' OR\n        icd_code LIKE 'I25%'\n),\n-- Minimum seq_num for ACS per admission\nadmissions_with_acs AS (\n    SELECT \n        hadm_id,\n        MIN(seq_num) AS min_acs_seq_num\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_code IN (SELECT icd_code FROM acs_codes)\n    GROUP BY hadm_id\n),\n-- Primary/secondary diagnosis flag for ACS\nacs_diagnosis_type AS (\n    SELECT \n        hadm_id,\n        CASE \n            WHEN min_acs_seq_num = 1 THEN 'primary'\n            WHEN min_acs_seq_num > 1 THEN 'secondary'\n            ELSE NULL \n        END AS acs_diagnosis_type\n    FROM admissions_with_acs\n),\n-- Ultrasound HCPCS codes (sample; expand with full list in practice)\nultrasound_codes AS (\n    SELECT '76600' AS code UNION ALL\n    SELECT '76605' UNION ALL\n    SELECT '76610' UNION ALL\n    SELECT '76615' UNION ALL\n    SELECT '76620' UNION ALL\n    SELECT '76625' UNION ALL\n    SELECT '76630' UNION ALL\n    SELECT '76635' UNION ALL\n    SELECT '76640' UNION ALL\n    SELECT '76645' UNION ALL\n    SELECT '76650' UNION ALL\n    SELECT '76655' UNION ALL\n    SELECT '76660' UNION ALL\n    SELECT '76665' UNION ALL\n    SELECT '76670' UNION ALL\n    SELECT '76675' UNION ALL\n    SELECT '76680' UNION ALL\n    SELECT '76685' UNION ALL\n    SELECT '76690' UNION ALL\n    SELECT '76695'\n),\n-- Count ultrasounds per admission\nultrasound_counts AS (\n    SELECT \n        h.hadm_id,\n        COUNT(*) AS ultrasound_count\n    FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n    INNER JOIN ultrasound_codes uc ON h.hcpcs_cd = uc.code\n    GROUP BY h.hadm_id\n),\n-- Final dataset with filtering and grouping\nfinal_data AS (\n    SELECT \n        a.hadm_id,\n        a.age_at_admission,\n        a.los_days,\n        CASE \n            WHEN a.los_days BETWEEN 1 AND 4 THEN '1-4 days'\n            WHEN a.los_days BETWEEN 5 AND 7 THEN '5-7 days'\n            ELSE 'Other' \n        END AS los_group,\n        adt.acs_diagnosis_type,\n        COALESCE(uc.ultrasound_count, 0) AS ultrasound_count\n    FROM admissions_with_age a\n    INNER JOIN acs_diagnosis_type adt ON a.hadm_id = adt.hadm_id\n    LEFT JOIN ultrasound_counts uc ON a.hadm_id = uc.hadm_id\n    WHERE \n        a.age_at_admission BETWEEN 83 AND 93\n        AND a.los_days BETWEEN 1 AND 7\n)\n-- Aggregate results\nSELECT \n    los_group,\n    acs_diagnosis_type,\n    AVG(ultrasound_count) AS mean_ultrasounds,\n    MIN(ultrasound_count) AS min_ultrasounds,\n    MAX(ultrasound_count) AS max_ultrasounds\nFROM final_data\nWHERE los_group IN ('1-4 days', '5-7 days')\nGROUP BY los_group, acs_diagnosis_type\nORDER BY los_group, acs_diagnosis_type;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name gender not found inside a at [24:11]; reason: invalidQuery, location: query, message: Name gender not found inside a at [24:11]\n\nLocation: US\nJob ID: f8d442c2-28c6-4b94-8c5f-255a9332bf42\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: e74baf08-a948-4494-b389-1ae6848c47e1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 77c1f607-2739-4984-9255-fbf1cb1bad5c\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name gender not found inside a at [24:11]; reason: invalidQuery, location: query, message: Name gender not found inside a at [24:11]\n\nLocation: US\nJob ID: f8d442c2-28c6-4b94-8c5f-255a9332bf42\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "Male patient age 58: among male inpatients 53\u201363 with diabetes and heart failure, give percentages with injectable GLP\u20111 RA initiated within first 24 hours versus final 12 hours before discharge.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: males 53-63 with both diabetes and heart failure diagnoses\n  SELECT DISTINCT p.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 53 AND 63\n    AND a.hospital_expire_flag = 0  -- Alive discharges only\n    AND EXISTS (\n      -- Diabetes: any diagnosis with ICD-10 E08-E13\n      SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n      WHERE d2.hadm_id = a.hadm_id\n        AND d2.icd_version = '10'\n        AND d2.icd_code LIKE 'E[0-9][0-9]%'\n        AND CAST(SUBSTR(d2.icd_code, 2, 2) AS INT64) BETWEEN 8 AND 13\n    )\n    AND EXISTS (\n      -- Heart failure: any diagnosis with relevant ICD-10 codes\n      SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d3\n      WHERE d3.hadm_id = a.hadm_id\n        AND d3.icd_version = '10'\n        AND (d3.icd_code LIKE 'I50%' \n             OR d3.icd_code IN ('I11.0', 'I13.0', 'I13.2', 'I42.0'))\n    )\n),\n\nglp1_items AS (\n  -- Injectable GLP-1 RA itemids from d_items\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE ANY(\n    '%semaglutide%', '%liraglutide%', '%dulaglutide%', '%exenatide%',\n    '%albiglutide%', '%lixisenatide%', '%teduglutide%'  -- Common injectables\n  )\n),\n\nglp1_events AS (\n  -- GLP-1 RA administrations (focus on ICU inputs for injectables)\n  SELECT DISTINCT ie.hadm_id, ie.starttime\n  FROM `physionet-data.mimiciv_3_1_icu.inputevents` ie\n  INNER JOIN cohort c ON ie.hadm_id = c.hadm_id\n  INNER JOIN glp1_items g ON ie.itemid = g.itemid\n  WHERE ie.amount > 0\n    AND ie.ordercategoryname IN ('Continuous Med', 'Patient Med')\n    AND ie.starttime >= c.admittime\n    AND ie.starttime < c.dischtime\n),\n\ntiming_flags AS (\n  SELECT \n    c.hadm_id,\n    -- First 24h from admission\n    MAX(CASE WHEN ge.starttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR) \n             THEN 1 ELSE 0 END) AS has_init_24h,\n    -- Final 12h pre-discharge\n    MAX(CASE WHEN ge.starttime >= TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR) \n             AND ge.starttime < c.dischtime THEN 1 ELSE 0 END) AS has_pre_disch_12h\n  FROM cohort c\n  LEFT JOIN glp1_events ge ON c.hadm_id = ge.hadm_id\n  GROUP BY c.hadm_id, c.admittime, c.dischtime\n)\n\n-- Final aggregations: percentages\nSELECT \n  COUNT(DISTINCT c.hadm_id) AS total_cohort_size,\n  SUM(tf.has_init_24h) AS num_with_24h_initiation,\n  ROUND(SUM(tf.has_init_24h) * 100.0 / COUNT(DISTINCT c.hadm_id), 2) AS pct_24h_initiation,\n  SUM(tf.has_pre_disch_12h) AS num_with_12h_predischarge,\n  ROUND(SUM(tf.has_pre_disch_12h) * 100.0 / COUNT(DISTINCT c.hadm_id), 2) AS pct_12h_predischarge\nFROM cohort c\nINNER JOIN timing_flags tf ON c.hadm_id = tf.hadm_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:13]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:13]\n\nLocation: US\nJob ID: 9a8c73d0-9f90-4f67-a733-3c310d2f13d7\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword IS at [46:10]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword IS at [46:10]\n\nLocation: US\nJob ID: ab0b1ebb-2eb0-429a-a440-7c7661ccda03\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:13]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:13]\n\nLocation: US\nJob ID: 45dcf0c4-93c0-42fd-8dd4-6d6cec342062\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:13]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:13]\n\nLocation: US\nJob ID: 9a8c73d0-9f90-4f67-a733-3c310d2f13d7\n"
+    }
+  ]
+}

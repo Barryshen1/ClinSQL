@@ -1,0 +1,22 @@
+{
+  "query": "For my 46-year-old male patient: among males 41\u201351, what's the 75th percentile of distinct ECG/telemetry procedures per patient?",
+  "final_sql": "WITH patients_cohort AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 41 AND 51\n),\n\n-- HOSP: HCPCS/CPT events (short_description)\nhosp_hcpcs_ecg AS (\n  SELECT\n    subject_id,\n    CONCAT('hcpcs|', COALESCE(hcpcs_cd, '')) AS proc_code,\n    COALESCE(short_description, '') AS proc_desc\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n  WHERE subject_id IS NOT NULL\n    AND REGEXP_CONTAINS(LOWER(COALESCE(short_description, '')),\n        r'(ecg|ekg|electrocardio|telemetry|telemetric|rhythm|rhythm strip|cardiac monitor|heart monitor)')\n),\n\n-- HOSP: ICD procedures (join to d_icd_procedures long_title)\nhosp_icdproc_ecg AS (\n  SELECT\n    p.subject_id,\n    CONCAT('icdproc|', p.icd_code) AS proc_code,\n    COALESCE(d.long_title, '') AS proc_desc\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d\n    ON p.icd_code = d.icd_code AND p.icd_version = d.icd_version\n  WHERE p.subject_id IS NOT NULL\n    AND REGEXP_CONTAINS(LOWER(COALESCE(d.long_title, '')),\n        r'(ecg|ekg|electrocardio|telemetry|telemetric|rhythm|rhythm strip|cardiac monitor|heart monitor)')\n),\n\n-- ICU: procedureevents (join to d_items for label)\nicu_proc_ecg AS (\n  SELECT\n    pe.subject_id,\n    CONCAT('icu_item|', CAST(pe.itemid AS STRING)) AS proc_code,\n    COALESCE(di.label, CAST(pe.value AS STRING), '') AS proc_desc\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON pe.itemid = di.itemid\n  WHERE pe.subject_id IS NOT NULL\n    AND REGEXP_CONTAINS(LOWER(COALESCE(di.label, CAST(pe.value AS STRING), '')),\n        r'(ecg|ekg|electrocardio|telemetry|telemetric|rhythm|rhythm strip|cardiac monitor|heart monitor)')\n),\n\n-- Union all candidate ECG/telemetry procedure \"types\" per subject, deduplicate types per subject\nsubject_proc_types AS (\n  SELECT DISTINCT subject_id, proc_code\n  FROM (\n    SELECT subject_id, proc_code FROM hosp_hcpcs_ecg\n    UNION ALL\n    SELECT subject_id, proc_code FROM hosp_icdproc_ecg\n    UNION ALL\n    SELECT subject_id, proc_code FROM icu_proc_ecg\n  )\n  WHERE subject_id IS NOT NULL\n),\n\n-- Count distinct procedure types per subject (only for those who have at least one)\nper_subject_counts AS (\n  SELECT\n    subject_id,\n    COUNT(*) AS proc_count\n  FROM subject_proc_types\n  GROUP BY subject_id\n),\n\n-- Include zeros for cohort members with no matching procedures\ncounts_with_zeros AS (\n  SELECT\n    pc.subject_id,\n    COALESCE(ps.proc_count, 0) AS proc_count\n  FROM patients_cohort pc\n  LEFT JOIN per_subject_counts ps\n    ON pc.subject_id = ps.subject_id\n)\n\n-- final: compute 75th percentile (approx)\nSELECT\n  (SELECT quantiles[OFFSET(75)]\n   FROM (\n     SELECT APPROX_QUANTILES(proc_count, 100) AS quantiles\n     FROM counts_with_zeros\n   )\n  ) AS p75_distinct_ecg_telemetry_procedures_per_patient\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function COALESCE\n  Argument types: STRING, FLOAT64, STRING\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRING, STRING} at [44:31]; reason: invalidQuery, location: query, message: No matching signature for function COALESCE\n  Argument types: STRING, FLOAT64, STRING\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRING, STRING} at [44:31]\n\nLocation: US\nJob ID: 0876100c-7487-4053-9bb9-9f5e5aed6cb8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

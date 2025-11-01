@@ -1,0 +1,16 @@
+{
+  "query": "I have a 48\u2011year\u2011old female inpatient. In female admissions aged 43\u201353 with sepsis, what is the 25th\u2011percentile instability score (critical lab event count) in the first 72 hours? Report cohort and general mean critical events per admission, LOS, and mortality.",
+  "final_sql": "WITH sepsis_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE REGEXP_CONTAINS(long_title, r'(?i)sepsis')\n),\ncohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS admission_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      INNER JOIN sepsis_codes sc\n        ON diag.icd_code = sc.icd_code\n        AND diag.icd_version = sc.icd_version\n      WHERE\n        diag.subject_id = a.subject_id\n        AND diag.hadm_id = a.hadm_id\n    )\n),\nfiltered_cohort AS (\n  SELECT *\n  FROM cohort\n  WHERE admission_age BETWEEN 43 AND 53\n),\ncohort_lab AS (\n  SELECT\n    fc.hadm_id,\n    fc.los_days,\n    fc.hospital_expire_flag,\n    -- Count critical lab events (abnormal only) in first 72h\n    COUNTIF(l.flag IS NOT NULL AND l.flag != 'normal') AS critical_lab_count\n  FROM filtered_cohort fc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON fc.subject_id = l.subject_id\n    AND fc.hadm_id = l.hadm_id\n    AND l.charttime >= fc.admittime\n    AND l.charttime <= DATETIME_ADD(fc.admittime, INTERVAL 72 HOUR)\n  GROUP BY fc.hadm_id, fc.los_days, fc.hospital_expire_flag\n)\nSELECT\n  COUNT(hadm_id) AS num_admissions,\n  APPROX_QUANTILES(critical_lab_count, 100)[OFFSET(25)] AS percentile_25_instability,\n  AVG(critical_lab_count) AS mean_instability,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM cohort_lab;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

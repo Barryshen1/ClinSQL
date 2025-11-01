@@ -1,0 +1,16 @@
+{
+  "query": "For my 63-year-old female ICU patient: among female ICU stays aged 58\u201368, what percentile does a 48\u2011hour per\u2011stay mean MAP of 85 mmHg represent in this cohort?",
+  "final_sql": "WITH map_itemids AS (\n  -- Identify itemids that correspond to mean arterial pressure (MAP)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE \n    -- match common labels/abbreviations for mean arterial pressure\n    LOWER(label) LIKE '%mean arterial%'\n    OR LOWER(label) LIKE '%mean blood pressure%'\n    OR LOWER(label) LIKE '%mean blood pressure%'\n    OR LOWER(label) LIKE '%mean bp%'\n    OR LOWER(abbreviation) LIKE '%map%'\n    OR LOWER(label) LIKE '%map%'\n),\n\nfemale_icustays AS (\n  -- ICU stays for female patients aged 58-68 (anchor_age) inclusive\n  SELECT s.*\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 58 AND 68\n),\n\nstay_map_stats AS (\n  -- Compute the mean MAP per ICU stay within the first 48 hours of that stay\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    AVG(ce.valuenum) AS mean_map,\n    COUNT(*) AS n_measurements\n  FROM female_icustays s\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON s.subject_id = ce.subject_id\n    AND s.stay_id = ce.stay_id\n  JOIN map_itemids mi\n    ON ce.itemid = mi.itemid\n  WHERE ce.charttime IS NOT NULL\n    -- limit to first 48 hours of ICU stay\n    AND ce.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n    -- prefer mmHg units when present (allow NULL unit entries too)\n    AND (LOWER(ce.valueuom) LIKE '%mmhg%' OR ce.valueuom IS NULL)\n  GROUP BY s.subject_id, s.hadm_id, s.stay_id\n  HAVING COUNT(*) >= 1\n)\n\nSELECT\n  COUNT(*) AS total_stays_with_map,\n  SUM(CASE WHEN mean_map <= 85 THEN 1 ELSE 0 END) AS stays_mean_map_le_85,\n  SAFE_DIVIDE(SUM(CASE WHEN mean_map <= 85 THEN 1 ELSE 0 END), COUNT(*)) * 100.0 AS percentile_of_85_mmHg\nFROM stay_map_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

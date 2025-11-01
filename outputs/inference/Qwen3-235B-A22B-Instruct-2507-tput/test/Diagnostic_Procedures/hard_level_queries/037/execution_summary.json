@@ -1,0 +1,22 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    a.hadm_id,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 53 AND 63\n    AND p.gender = 'F'\n),\nsepsis_diagnoses AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_version = 10\n    AND (\n      (d.icd_code LIKE 'A41%' OR d.icd_code = 'A409')\n      OR d.icd_code = 'R6520'\n      OR d.icd_code = 'R6521'\n    )\n),\nall_age_matched AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    CASE WHEN sd.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_sepsis\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays i\n    ON a.hadm_id = i.hadm_id\n  LEFT JOIN sepsis_diagnoses sd\n    ON a.hadm_id = sd.hadm_id\n  WHERE p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 53 AND 63\n),\nprocedure_counts AS (\n  SELECT\n    i.stay_id,\n    COUNT(pv.itemid) AS procedure_count\n  FROM all_age_matched i\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pv\n    ON i.stay_id = pv.stay_id\n    AND pv.starttime >= i.intime\n    AND pv.starttime < DATETIME_ADD(i.intime, INTERVAL 24 HOUR)\n  GROUP BY i.stay_id\n),\nstay_summary AS (\n  SELECT\n    i.stay_id,\n    i.has_sepsis,\n    i.los,\n    i.hospital_expire_flag,\n    COALESCE(pc.procedure_count, 0) AS procedure_count\n  FROM all_age_matched i\n  LEFT JOIN procedure_counts pc\n    ON i.stay_id = pc.stay_id\n),\ngroup_stats AS (\n  SELECT\n    CASE WHEN has_sepsis = 1 THEN 'Sepsis' ELSE 'Control' END AS patient_group,\n    APPROX_QUANTILES(procedure_count, 1000)[OFFSET(750)] AS proc_75th,\n    APPROX_QUANTILES(procedure_count, 1000)[OFFSET(900)] AS proc_90th,\n    AVG(los) AS avg_los,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS hosp_mortality_rate\n  FROM stay_summary\n  GROUP BY has_sepsis\n)\nSELECT\n  patient_group,\n  proc_75th,\n  proc_90th,\n  avg_los,\n  hosp_mortality_rate\nFROM group_stats\nORDER BY patient_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:12]\n\nLocation: US\nJob ID: f1a440e9-e176-4e83-9493-19b1bd012835\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

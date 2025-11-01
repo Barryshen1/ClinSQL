@@ -1,0 +1,29 @@
+{
+  "query": "For my 92\u2011year\u2011old female patient: among female patients 87\u201397 admitted with chest pain, report counts, percentages, and mean, median, IQR of index hs\u2011TnT by category (Normal\u22640.04; Borderline 0.04\u20130.1; Injury>0.1).",
+  "final_sql": "WITH\n  -- Step 1: Identify index admissions for female patients aged 87-97\n  index_admissions AS (\n    SELECT\n      subject_id,\n      hadm_id,\n      admittime,\n      anchor_age\n    FROM (\n      SELECT\n        p.subject_id,\n        a.hadm_id,\n        a.admittime,\n        p.anchor_age,\n        ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY a.admittime) AS rn\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n      JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n      WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 87 AND 97\n    )\n    WHERE rn = 1\n  ),\n  -- Step 2: Filter admissions with chest pain diagnosis\n  chest_pain_admissions AS (\n    SELECT\n      ia.subject_id,\n      ia.hadm_id\n    FROM\n      index_admissions ia\n    JOIN\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON ia.hadm_id = di.hadm_id\n    JOIN\n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n      ON di.icd_code = d.icd_code\n      AND di.icd_version = d.icd_version\n    WHERE\n      LOWER(d.long_title) LIKE '%chest pain%'\n  ),\n  -- Step 3: Identify hs-TnT itemid (using d_labitems) - removed valueuom condition\n  hs_tnt_itemid AS (\n    SELECT\n      itemid\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.d_labitems`\n    WHERE\n      LOWER(label) LIKE '%hs-tnt%'\n    LIMIT 1  -- Use one itemid if multiple exist\n  ),\n  -- Step 4: Get first hs-TnT test per admission - added unit filter\n  first_hstnt AS (\n    SELECT\n      cpa.subject_id,\n      cpa.hadm_id,\n      le.valuenum AS hs_tnt_value\n    FROM\n      chest_pain_admissions cpa\n    JOIN\n      `physionet-data.mimiciv_3_1_hosp.labevents` le\n      ON cpa.hadm_id = le.hadm_id\n    WHERE\n      le.itemid = (SELECT itemid FROM hs_tnt_itemid)\n      AND le.valuenum IS NOT NULL  -- Exclude non-numeric values\n      AND LOWER(le.valueuom) = 'ng/ml'  -- Ensure unit is ng/mL (case-insensitive)\n    QUALIFY\n      ROW_NUMBER() OVER (PARTITION BY cpa.hadm_id ORDER BY le.charttime) = 1\n  ),\n  -- Step 5: Categorize hs-TnT values\n  categorized AS (\n    SELECT\n      subject_id,\n      hadm_id,\n      hs_tnt_value,\n      CASE\n        WHEN hs_tnt_value <= 0.04 THEN 'Normal'\n        WHEN hs_tnt_value > 0.04 AND hs_tnt_value <= 0.1 THEN 'Borderline'\n        WHEN hs_tnt_value > 0.1 THEN 'Injury'\n        ELSE 'Unknown'  -- Safety for unexpected values\n      END AS category\n    FROM\n      first_hstnt\n  ),\n  -- Step 6: Aggregate by category\n  aggregated AS (\n    SELECT\n      category,\n      COUNT(*) AS count,\n      COUNT(*) * 100.0 / SUM(COUNT(*)) OVER () AS percentage,\n      AVG(hs_tnt_value) AS mean,\n      APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(50)] AS median,\n      APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(75)] - APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(25)] AS iqr\n    FROM\n      categorized\n    GROUP BY\n      category\n  )\nSELECT\n  category,\n  count,\n  ROUND(percentage, 2) AS percentage,  -- Round percentage to 2 decimals\n  ROUND(mean, 4) AS mean,              -- Round mean to 4 decimals\n  ROUND(median, 4) AS median,          -- Round median to 4 decimals\n  ROUND(iqr, 4) AS iqr                 -- Round IQR to 4 decimals\nFROM\n  aggregated\nORDER BY\n  category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in WHERE clause at [18:11]; reason: invalidQuery, location: query, message: Analytic function not allowed in WHERE clause at [18:11]\n\nLocation: US\nJob ID: 3449b950-93b5-4683-8917-6bc6409a96d2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: valueuom at [52:17]; reason: invalidQuery, location: query, message: Unrecognized name: valueuom at [52:17]\n\nLocation: US\nJob ID: 4759bfd9-d079-4eb5-9223-b48d22f0ad97\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

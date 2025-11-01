@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 64\u2011year\u2011old woman. Among female inpatients aged 59\u201369 with cardiac arrest, stratified into quartiles by composite risk score, report for each quartile: 30\u2011day mortality, cardiovascular and neurologic complication rates, median survivor LOS, and baseline 30\u2011day mortality for all female 59\u201369.",
+  "final_sql": "WITH cardiac_arrest_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.dod\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND LOWER(did.long_title) LIKE '%cardiac arrest%'\n),\n\nsofa_scores AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    MIN(c.valuenum) AS first_sofa_score\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON i.stay_id = c.stay_id\n  WHERE c.itemid = 228287  -- SOFA score\n    AND c.charttime >= i.intime\n    AND c.charttime <= i.intime + INTERVAL '24 hour'\n    AND c.valuenum IS NOT NULL\n  GROUP BY i.subject_id, i.hadm_id, i.stay_id\n),\n\ncohort_with_risk AS (\n  SELECT\n    ca.*,\n    s.first_sofa_score,\n    CASE\n      WHEN ca.deathtime IS NOT NULL AND ca.deathtime <= ca.admittime + INTERVAL '30 day' THEN 1\n      WHEN ca.dod IS NOT NULL AND CAST(ca.dod AS TIMESTAMP) <= ca.admittime + INTERVAL '30 day' THEN 1\n      ELSE 0\n    END AS thirty_day_mortality\n  FROM cardiac_arrest_cohort ca\n  INNER JOIN sofa_scores s\n    ON ca.subject_id = s.subject_id AND ca.hadm_id = s.hadm_id\n),\n\ncomplications AS (\n  SELECT\n    d.hadm_id,\n    MAX(CASE\n      WHEN LOWER(did.long_title) LIKE '%myocardial infarction%'\n        OR LOWER(did.long_title) LIKE '%heart failure%'\n        OR LOWER(did.long_title) LIKE '%cardiogenic shock%'\n        OR LOWER(did.long_title) LIKE '%ventricular fibrillation%'\n        OR LOWER(did.long_title) LIKE '%ventricular tachycardia%'\n        OR LOWER(did.long_title) LIKE '%arrhythmia%'\n        OR LOWER(did.long_title) LIKE '%cardiac arrest%'\n      THEN 1 ELSE 0 END) AS cardiovascular_complication,\n    MAX(CASE\n      WHEN LOWER(did.long_title) LIKE '%stroke%'\n        OR LOWER(did.long_title) LIKE '%cerebral infarction%'\n        OR LOWER(did.long_title) LIKE '%intracerebral hemorrhage%'\n        OR LOWER(did.long_title) LIKE '%subarachnoid hemorrhage%'\n        OR LOWER(did.long_title) LIKE '%seizure%'\n        OR LOWER(did.long_title) LIKE '%coma%'\n        OR LOWER(did.long_title) LIKE '%neurologic deficit%'\n      THEN 1 ELSE 0 END) AS neurologic_complication\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE d.hadm_id IN (SELECT hadm_id FROM cohort_with_risk)\n  GROUP BY d.hadm_id\n),\n\nfinal_cohort AS (\n  SELECT\n    c.*,\n    COALESCE(comp.cardiovascular_complication, 0) AS cardiovascular_complication,\n    COALESCE(comp.neurologic_complication, 0) AS neurologic_complication,\n    NTILE(4) OVER (ORDER BY c.first_sofa_score) AS risk_quartile,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY) AS los_days\n  FROM cohort_with_risk c\n  LEFT JOIN complications comp ON c.hadm_id = comp.hadm_id\n  WHERE c.first_sofa_score IS NOT NULL\n)\n\nSELECT\n  risk_quartile,\n  AVG(thirty_day_mortality) AS thirty_day_mortality_rate,\n  AVG(cardiovascular_complication) AS cardiovascular_complication_rate,\n  AVG(neurologic_complication) AS neurologic_complication_rate,\n  PERCENTILE_CONT(CASE WHEN thirty_day_mortality = 0 THEN los_days END, 0.5) AS median_survivor_los_days,\n  (SELECT AVG(thirty_day_mortality) FROM final_cohort) AS baseline_thirty_day_mortality\nFROM final_cohort\nGROUP BY risk_quartile\nORDER BY risk_quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword GROUP at [36:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [36:3]\n\nLocation: US\nJob ID: 0c6574c1-34d1-4076-857d-c7e259981344\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"female\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"female\" at [1:16]\n\nLocation: US\nJob ID: 52634413-614d-4bed-ac91-213dca4bfdd2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [36:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [36:3]\n\nLocation: US\nJob ID: bf34a957-864b-45df-ba0e-4eb06405f890\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [36:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [36:3]\n\nLocation: US\nJob ID: 0c6574c1-34d1-4076-857d-c7e259981344\n"
+    }
+  ]
+}

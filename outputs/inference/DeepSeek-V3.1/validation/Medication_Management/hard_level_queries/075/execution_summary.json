@@ -1,0 +1,22 @@
+{
+  "query": "I have a 63\u2011year\u2011old man admitted for COPD exacerbation. Among male patients 58\u201368, stratified into tertiles by medication complexity during the first 72h, report for each tertile: n, min/max and mean complexity score, mean LOS, mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE adm.subject_id = diag.subject_id\n        AND adm.hadm_id = diag.hadm_id\n        AND (\n          (diag.icd_version = 10 AND diag.icd_code = 'J441')\n          OR (diag.icd_version = 9 AND diag.icd_code = '49121')\n        )\n    )\n),\n\nmeds_complexity AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.hadm_id = pr.hadm_id\n    AND pr.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY c.subject_id, c.hadm_id\n),\n\nwith_tertile AS (\n  SELECT \n    c.*,\n    COALESCE(mc.complexity_score, 0) AS complexity_score,\n    NTILE(3) OVER (ORDER BY COALESCE(mc.complexity_score, 0)) AS tertile\n  FROM cohort c\n  LEFT JOIN meds_complexity mc\n    ON c.hadm_id = mc.hadm_id AND c.subject_id = mc.subject_id\n),\n\nreadmission_flag AS (\n  SELECT \n    wt.*,\n    CASE \n      WHEN wt.hospital_expire_flag = 1 THEN 0  -- died in hospital, cannot be readmitted\n      ELSE \n        CASE WHEN EXISTS (\n          SELECT 1\n          FROM `physionet-data.mimiciv_3_1_hosp.admissions` readm\n          WHERE readm.subject_id = wt.subject_id\n            AND readm.admittime > wt.dischtime\n            AND readm.admittime <= DATETIME_ADD(wt.dischtime, INTERVAL 30 DAY)\n        ) THEN 1 ELSE 0 END\n    END AS readmitted_30d\n  FROM with_tertile wt\n)\n\nSELECT \n  tertile,\n  COUNT(*) AS n,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  AVG(complexity_score) AS mean_complexity,\n  AVG(los_days) AS mean_los,\n  100 * AVG(hospital_expire_flag) AS mortality_pct,\n  100 * AVG(readmitted_30d) AS readmission_30d_pct\nFROM readmission_flag\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator CASE; all THEN/ELSE arguments must be coercible to a common type but found: BOOL, INT64; actual argument types (WHEN THEN) ELSE: (BOOL INT64) BOOL at [52:5]; reason: invalidQuery, location: query, message: No matching signature for operator CASE; all THEN/ELSE arguments must be coercible to a common type but found: BOOL, INT64; actual argument types (WHEN THEN) ELSE: (BOOL INT64) BOOL at [52:5]\n\nLocation: US\nJob ID: 756412bb-6eae-4f31-8acc-48930a5185fd\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

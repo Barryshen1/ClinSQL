@@ -1,0 +1,28 @@
+{
+  "query": "I have a 95-year-old man admitted with chest pain. Among male patients aged 90\u2013100 with chest pain and an initially elevated Troponin I, report p25, p50, p75 and range.",
+  "final_sql": "WITH troponin_i_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin i%'\n),\n\n-- First Troponin I measurement per hadm_id\nfirst_troponin AS (\n  SELECT\n    le.hadm_id,\n    le.valuenum,\n    le.charttime,\n    le.ref_range_upper\n  FROM (\n    SELECT\n      le.hadm_id,\n      le.charttime,\n      le.valuenum,\n      le.ref_range_upper,\n      ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    JOIN troponin_i_items ti ON le.itemid = ti.itemid\n    WHERE le.valuenum IS NOT NULL\n  ) AS t\n  WHERE t.rn = 1\n),\n\n-- Check if the first troponin is elevated\nelevated_first_troponin AS (\n  SELECT hadm_id, valuenum\n  FROM first_troponin ft\n  WHERE ft.valuenum > ft.ref_range_upper\n),\n\n-- Chest pain admissions\nchest_pain_hadm AS (\n  SELECT DISTINCT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dic\n    ON a.subject_id = dic.subject_id AND a.hadm_id = dic.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON dic.icd_code = d.icd_code AND dic.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%chest pain%'\n),\n\n-- Age and gender filter (male, age 90-100)\nage_gender_hadm AS (\n  SELECT DISTINCT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 90 AND 100\n),\n\n-- Final cohort: hadm_ids that satisfy all conditions\ncohort_hadm AS (\n  SELECT e.hadm_id\n  FROM elevated_first_troponin e\n  JOIN chest_pain_hadm cp ON e.hadm_id = cp.hadm_id\n  JOIN age_gender_hadm ag ON e.hadm_id = ag.hadm_id\n),\n\n-- Values for the final cohort\ncohort_values AS (\n  SELECT e.valuenum\n  FROM elevated_first_troponin e\n  JOIN cohort_hadm c ON e.hadm_id = c.hadm_id\n)\n\n-- Compute p25, p50, p75 and range\nSELECT\n  quantiles[OFFSET(25)] AS p25,\n  quantiles[OFFSET(50)] AS p50,\n  quantiles[OFFSET(75)] AS p75,\n  min_val,\n  max_val\nFROM (\n  SELECT quantiles\n  FROM (\n    SELECT APPROX_QUANTILES(valuenum, 100) AS quantiles\n    FROM cohort_values\n  ) AS q\n) AS a\nCROSS JOIN (\n  SELECT MIN(valuenum) AS min_val, MAX(valuenum) AS max_val\n  FROM cohort_values\n) AS mv;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: le at [10:5]; reason: invalidQuery, location: query, message: Unrecognized name: le at [10:5]\n\nLocation: US\nJob ID: 46abff06-4e3a-409a-986d-03db80f57236\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: le at [10:5]; reason: invalidQuery, location: query, message: Unrecognized name: le at [10:5]\n\nLocation: US\nJob ID: 4e47ca6b-93e3-4c0e-9fa3-915492601c28\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: valuenum at [75:7]; reason: invalidQuery, location: query, message: Unrecognized name: valuenum at [75:7]\n\nLocation: US\nJob ID: 32ae7118-1823-41de-b7f5-796515f62b87\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: le at [10:5]; reason: invalidQuery, location: query, message: Unrecognized name: le at [10:5]\n\nLocation: US\nJob ID: 46abff06-4e3a-409a-986d-03db80f57236\n"
+    }
+  ]
+}

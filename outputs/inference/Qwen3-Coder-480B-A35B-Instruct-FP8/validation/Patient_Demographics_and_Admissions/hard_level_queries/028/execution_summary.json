@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 60\u2011year\u2011old woman. In female Medicare patients aged 55\u201365 admitted from the ED with principal cellulitis, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >7 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.admission_location,\n    a.insurance,\n    p.anchor_age,\n    p.gender,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n  ON\n    d.icd_code = did.icd_code\n    AND d.icd_version = did.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 55 AND 65\n    AND a.insurance = 'Medicare'\n    AND LOWER(a.admission_location) LIKE '%emergency%'\n    AND d.seq_num = 1\n    AND LOWER(did.long_title) LIKE '%cellulitis%'\n    AND a.deathtime IS NULL\n    AND a.hospital_expire_flag = 0\n),\n\nfirst_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n    FROM\n      cohort\n  )\n  WHERE\n    rn = 1\n),\n\nreadmissions AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id AS index_hadm_id,\n    f.los_days AS index_los,\n    f.dischtime AS index_dischtime,\n    a2.hadm_id AS readmit_hadm_id,\n    a2.admittime AS readmit_admittime,\n    CASE\n      WHEN a2.hadm_id IS NOT NULL\n        AND DATETIME_DIFF(a2.admittime, f.dischtime, DAY) <= 30\n      THEN 1\n      ELSE 0\n    END AS is_30day_readmit\n  FROM\n    first_admissions f\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a2\n  ON\n    f.subject_id = a2.subject_id\n    AND a2.admittime > f.dischtime\n    AND DATETIME_DIFF(a2.admittime, f.dischtime, DAY) <= 30\n  QUALIFY\n    ROW_NUMBER() OVER (PARTITION BY f.subject_id ORDER BY a2.admittime) = 1\n),\n\nsummary_stats AS (\n  SELECT\n    is_30day_readmit,\n    index_los,\n    CASE WHEN index_los > 7 THEN 1 ELSE 0 END AS los_gt_7\n  FROM\n    readmissions\n)\n\nSELECT\n  ROUND(AVG(is_30day_readmit), 4) AS readmission_rate,\n  APPROX_QUANTILES(\n    CASE WHEN is_30day_readmit = 1 THEN index_los ELSE NULL END, 2\n  )[OFFSET(1)] AS median_los_readmit,\n  APPROX_QUANTILES(\n    CASE WHEN is_30day_readmit = 0 THEN index_los ELSE NULL END, 2\n  )[OFFSET(1)] AS median_los_no_readmit,\n  ROUND(\n    AVG(los_gt_7) * 100, 2\n  ) AS percent_index_stays_gt_7_days\nFROM\n  summary_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

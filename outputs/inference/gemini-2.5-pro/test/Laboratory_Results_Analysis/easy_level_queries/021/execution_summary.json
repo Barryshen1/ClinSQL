@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating a male patient. Among male pneumonia admissions, what is the 75th\u2011percentile serum glucose at discharge?",
+  "final_sql": "WITH\n  -- Step 1: Identify all hospital admissions with a diagnosis of pneumonia.\n  PneumoniaAdmissions AS (\n    SELECT DISTINCT\n      diag.hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_diag\n      ON diag.icd_code = d_diag.icd_code\n      AND diag.icd_version = d_diag.icd_version\n    WHERE\n      LOWER(d_diag.long_title) LIKE '%pneumonia%'\n  ),\n  -- Step 2: Correlate pneumonia admissions with male patients and get their discharge times.\n  MalePneumoniaAdmissions AS (\n    SELECT\n      adm.hadm_id,\n      adm.dischtime\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n      INNER JOIN PneumoniaAdmissions AS pa\n      ON adm.hadm_id = pa.hadm_id\n    WHERE\n      pat.gender = 'M'\n  ),\n  -- Step 3: Find the last glucose measurement within 24 hours of discharge for each admission.\n  LastGlucoseAtDischarge AS (\n    SELECT\n      le.valuenum,\n      -- Rank measurements by time to find the last one for each admission\n      ROW_NUMBER() OVER (\n        PARTITION BY le.hadm_id\n        ORDER BY\n          le.charttime DESC\n      ) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n      INNER JOIN MalePneumoniaAdmissions AS mpa\n      ON le.hadm_id = mpa.hadm_id\n    WHERE\n      -- ItemIDs for Glucose in Serum/Plasma (50931) and Blood (50809)\n      le.itemid IN (50931, 50809)\n      AND le.valuenum IS NOT NULL\n      -- Filter for measurements taken in the 24 hours leading up to discharge\n      AND le.charttime BETWEEN DATETIME_SUB(mpa.dischtime, INTERVAL 24 HOUR) AND mpa.dischtime\n  )\n-- Step 4: Calculate the 75th percentile of the final glucose values.\nSELECT\n  APPROX_QUANTILES(valuenum, 100) [\nOFFSET\n  (75)] AS glucose_75th_percentile_at_discharge\nFROM\n  LastGlucoseAtDischarge\nWHERE\n  -- Only consider the last measurement for each admission\n  rn = 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

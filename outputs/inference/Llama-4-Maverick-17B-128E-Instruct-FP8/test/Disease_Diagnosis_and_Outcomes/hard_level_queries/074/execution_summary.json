@@ -1,0 +1,28 @@
+{
+  "query": "I have an 84-year-old male inpatient with pulmonary embolism. Among male inpatients aged 79\u201389 with PE and top\u2011quartile comorbidity burden, what is his composite risk score percentile? Also report 30\u2011day mortality, cardiac and neurologic complication rates, and median survival days.",
+  "final_sql": "WITH \n-- Filter admissions for male patients aged 79-89 with Pulmonary Embolism (PE)\npe_admissions AS (\n  SELECT a.hadm_id, a.subject_id, a.admittime, a.deathtime, p.dod, \n         EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M' \n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 79 AND 89\n    AND a.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n      WHERE dicd.long_title LIKE '%Pulmonary embolism%'\n    )\n),\n\n-- Calculate comorbidity score (example using count of distinct diagnoses)\ncomorbidity_scores AS (\n  SELECT hadm_id, COUNT(DISTINCT icd_code) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\n\n-- Calculate percentile of comorbidity score for PE admissions\ncomorbidity_percentiles AS (\n  SELECT hadm_id, \n         PERCENT_RANK() OVER (ORDER BY comorbidity_count) AS comorbidity_percentile\n  FROM comorbidity_scores\n  WHERE hadm_id IN (SELECT hadm_id FROM pe_admissions)\n),\n\n-- Identify 30-day mortality, cardiac, and neurologic complications\noutcomes AS (\n  SELECT \n    pa.hadm_id,\n    pa.subject_id,\n    -- 30-day mortality\n    CASE \n      WHEN pa.deathtime IS NOT NULL AND DATETIME_DIFF(pa.deathtime, pa.admittime, DAY) <= 30 THEN 1\n      WHEN pa.dod IS NOT NULL AND DATETIME_DIFF(pa.dod, pa.admittime, DAY) <= 30 THEN 1\n      ELSE 0\n    END AS mortality_30d,\n    -- Cardiac complication (example: using ICD codes starting with 'I')\n    EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = pa.hadm_id AND d.icd_code LIKE 'I%'\n    ) AS cardiac_complication,\n    -- Neurologic complication (example: using ICD codes starting with 'G')\n    EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = pa.hadm_id AND d.icd_code LIKE 'G%'\n    ) AS neurologic_complication,\n    -- Survival days\n    COALESCE(DATETIME_DIFF(pa.deathtime, pa.admittime, DAY), DATETIME_DIFF(pa.dod, pa.admittime, DAY), 1000) AS survival_days,\n    cp.comorbidity_percentile\n  FROM pe_admissions pa\n  JOIN comorbidity_percentiles cp ON pa.hadm_id = cp.hadm_id\n)\n\nSELECT \n  PERCENTILE_CONT(mortality_30d, 0.5) AS median_30d_mortality,\n  AVG(CAST(cardiac_complication AS INT64)) AS cardiac_complication_rate,\n  AVG(CAST(neurologic_complication AS INT64)) AS neurologic_complication_rate,\n  PERCENTILE_CONT(survival_days, 0.5) AS median_survival_days,\n  PERCENTILE_CONT(comorbidity_percentile, 0.5) AS median_comorbidity_percentile\nFROM outcomes\nWHERE comorbidity_percentile >= 0.75;  -- Top quartile comorbidity burden;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 13b11500-ae20-495e-a63a-63b469921408\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function AVG\n  Argument types: BOOL\n  Signature: AVG(INT64)\n    Argument 1: Unable to coerce type BOOL to expected type INT64\n  Signature: AVG(FLOAT64)\n    Argument 1: Unable to coerce type BOOL to expected type FLOAT64\n  Signature: AVG(NUMERIC)\n    Argument 1: Unable to coerce type BOOL to expected type NUMERIC\n  Signature: AVG(BIGNUMERIC)\n    Argument 1: Unable to coerce type BOOL to expected type BIGNUMERIC\n  Signature: AVG(INTERVAL)\n    Argument 1: Unable to coerce type BOOL to expected type INTERVAL at [53:3]; reason: invalidQuery, location: query, message: No matching signature for aggregate function AVG\n  Argument types: BOOL\n  Signature: AVG(INT64)\n    Argument 1: Unable to coerce type BOOL to expected type INT64\n  Signature: AVG(FLOAT64)\n    Argument 1: Unable to coerce type BOOL to expected type FLOAT64\n  Signature: AVG(NUMERIC)\n    Argument 1: Unable to coerce type BOOL to expected type NUMERIC\n  Signature: AVG(BIGNUMERIC)\n    Argument 1: Unable to coerce type BOOL to expected type BIGNUMERIC\n  Signature: AVG(INTERVAL)\n    Argument 1: Unable to coerce type BOOL to expected type INTERVAL at [53:3]\n\nLocation: US\nJob ID: ad667f0b-9010-480d-b844-2a8d70f0d93a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"outcomes\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: outcomes, message: Table \"outcomes\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: ee3da08e-2797-4f62-baf1-6390b7952357\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 13b11500-ae20-495e-a63a-63b469921408\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH PatientDemographics AS (\n    SELECT\n        p.subject_id,\n        p.gender,\n        p.anchor_age,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 66 AND 76\n),\nFirstICUStay AS (\n    SELECT\n        pd.subject_id,\n        pd.hadm_id,\n        pd.admittime,\n        pd.dischtime,\n        pd.hospital_expire_flag,\n        ic.stay_id,\n        ic.intime\n    FROM PatientDemographics pd\n    JOIN `physionet-data.mimiciv_3_1_icu.icustays` ic\n        ON pd.hadm_id = ic.hadm_id AND pd.subject_id = ic.subject_id\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY pd.subject_id ORDER BY ic.intime) = 1\n),\nSepsisStatus AS (\n    SELECT\n        fis.*,\n        -- COALESCE handles cases where a subject/hadm_id combination might not be in sepsis3\n        -- It defaults to 0 (not sepsis) if no match is found\n        COALESCE(s3.sepsis3, 0) AS is_sepsis\n    FROM FirstICUStay fis\n    LEFT JOIN `physionet-data.mimiciv_derived.sepsis3` s3\n        ON fis.subject_id = s3.subject_id AND fis.hadm_id = s3.hadm_id\n),\n-- CTE to calculate distinct procedure counts for sepsis patients within the first 48 hours\nSepsisProcedureCounts AS (\n    SELECT\n        ss.stay_id,\n        COUNT(DISTINCT pic.icd_code) AS distinct_procedure_count\n    FROM SepsisStatus ss\n    JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pic\n        ON ss.subject_id = pic.subject_id AND ss.hadm_id = pic.hadm_id\n    WHERE\n        ss.is_sepsis = 1\n        -- Procedures within the first 48 hours of an ICU stay.\n        -- Since procedures_icd.chartdate is a DATE, this covers the day of intime and the next day.\n        AND pic.chartdate >= DATE(ss.intime)\n        AND pic.chartdate < DATE_ADD(DATE(ss.intime), INTERVAL 2 DAY)\n    GROUP BY ss.stay_id\n)\n-- Main query - Part 1: Calculate the 90th percentile of distinct procedures for the sepsis cohort\nSELECT\n    '90th Percentile of Distinct Procedures (Sepsis Cohort)' AS metric,\n    -- Using BigQuery's APPROX_QUANTILES for a more robust and idiomatic percentile calculation\n    APPROX_QUANTILES(distinct_procedure_count, 100)[OFFSET(90)] AS value\nFROM SepsisProcedureCounts\n-- APPROX_QUANTILES without GROUP BY naturally returns a single aggregated row.\nUNION ALL\n-- Main query - Part 2: Compare Average Hospital LOS (Days) between Sepsis and Control Cohorts\nSELECT\n    CASE\n        WHEN s.is_sepsis = 1 THEN 'Average Hospital LOS (Days) - Sepsis Cohort'\n        ELSE 'Average Hospital LOS (Days) - Control Cohort'\n    END AS metric,\n    AVG(DATETIME_DIFF(s.dischtime, s.admittime, HOUR) / 24.0) AS value\nFROM SepsisStatus s\nGROUP BY s.is_sepsis\nUNION ALL\n-- Main query - Part 3: Compare In-hospital Mortality Rate (%) between Sepsis and Control Cohorts\nSELECT\n    CASE\n        WHEN s.is_sepsis = 1 THEN 'In-hospital Mortality Rate (%) - Sepsis Cohort'\n        ELSE 'In-hospital Mortality Rate (%) - Control Cohort'\n    END AS metric,\n    SUM(s.hospital_expire_flag) * 100.0 / COUNT(s.subject_id) AS value\nFROM SepsisStatus s\nGROUP BY s.is_sepsis\nORDER BY metric;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "403 Access Denied: Table physionet-data:mimiciv_derived.sepsis3: User does not have permission to query table physionet-data:mimiciv_derived.sepsis3, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_derived.sepsis3: User does not have permission to query table physionet-data:mimiciv_derived.sepsis3, or perhaps it does not exist.\n\nLocation: US\nJob ID: 95ecf4bc-04aa-427c-bc1c-c9cb18a20580\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [52:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [52:1]\n\nLocation: US\nJob ID: e8c5a75d-6944-4391-920f-a642977a71ea\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword UNION at [63:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword UNION at [63:1]\n\nLocation: US\nJob ID: b35c51b1-d046-400e-8d1d-e05c36cf4dbf\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "403 Access Denied: Table physionet-data:mimiciv_derived.sepsis3: User does not have permission to query table physionet-data:mimiciv_derived.sepsis3, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_derived.sepsis3: User does not have permission to query table physionet-data:mimiciv_derived.sepsis3, or perhaps it does not exist.\n\nLocation: US\nJob ID: 95ecf4bc-04aa-427c-bc1c-c9cb18a20580\n"
+    }
+  ]
+}

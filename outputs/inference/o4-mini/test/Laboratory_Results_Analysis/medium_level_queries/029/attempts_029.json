@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH troponin_t_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\nfirst_troponin AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum AS troponin_value\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      charttime,\n      valuenum,\n      ROW_NUMBER() OVER(PARTITION BY hadm_id ORDER BY charttime) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    JOIN troponin_t_itemids ti\n      ON le.itemid = ti.itemid\n    WHERE le.valuenum IS NOT NULL\n  ) le\n  WHERE rn = 1\n),\nami_cp_admissions AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%myocardial infarction%'\n     OR LOWER(dd.long_title) LIKE '%chest pain%'\n),\neligible_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND EXISTS (\n      SELECT 1\n      FROM ami_cp_admissions aca\n      WHERE aca.hadm_id = a.hadm_id\n    )\n)\nSELECT\n  COUNT(*) AS total_admissions,\n  SUM(CASE WHEN ea.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS deaths,\n  ROUND(\n    SAFE_DIVIDE(\n      SUM(CASE WHEN ea.hospital_expire_flag = 1 THEN 1 ELSE 0 END),\n      COUNT(*)\n    ) * 100,\n    2\n  ) AS mortality_rate_percent\nFROM eligible_admissions ea\nJOIN first_troponin ft\n  ON ea.hadm_id = ft.hadm_id\nWHERE ft.troponin_value > 0.04;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

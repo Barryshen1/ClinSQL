@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72\u2011yo man. Among men 67\u201377 with heart failure, what are p25/p50/p75 numbers of imaging studies per admission, by LOS 1\u20134 vs 5\u20137 days and primary vs secondary HF?",
+  "final_sql": "WITH hf_admissions AS (\n  -- Identify admissions for men age 67-77 with heart failure\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.deathtime,\n    adm.hospital_expire_flag,\n    pat.anchor_age,\n    pat.gender,\n    MIN(diag.seq_num) AS min_seq_num, -- lowest seq_num for HF diagnosis\n    CASE\n      WHEN MIN(diag.seq_num) = 1 THEN 'primary'\n      ELSE 'secondary'\n    END AS hf_type,\n    TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    JOIN physionet-data.mimiciv_3_1_hosp.patients pat\n      ON adm.subject_id = pat.subject_id\n    JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd diag\n      ON adm.hadm_id = diag.hadm_id\n    -- Heart failure ICD codes: 428.x (ICD-9), I50.x (ICD-10)\n    WHERE\n      pat.gender = 'M'\n      AND pat.anchor_age BETWEEN 67 AND 77\n      AND (\n        (diag.icd_version = 9 AND diag.icd_code LIKE '428%')\n        OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I50%')\n      )\n  GROUP BY\n    adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.deathtime,\n    adm.hospital_expire_flag, pat.anchor_age, pat.gender\n),\nimaging_orders AS (\n  -- Imaging studies per admission\n  SELECT\n    poe.subject_id,\n    poe.hadm_id,\n    COUNT(DISTINCT poe.poe_id) AS imaging_count\n  FROM\n    physionet-data.mimiciv_3_1_hosp.poe poe\n    -- Imaging orders: order_type contains 'Radiology' or 'Imaging'\n  WHERE\n    LOWER(poe.order_type) LIKE '%radiology%'\n    OR LOWER(poe.order_type) LIKE '%imaging%'\n  GROUP BY\n    poe.subject_id, poe.hadm_id\n),\nadmission_imaging AS (\n  -- Merge imaging counts with HF admissions\n  SELECT\n    hfa.subject_id,\n    hfa.hadm_id,\n    hfa.los_days,\n    CASE\n      WHEN hfa.los_days BETWEEN 1 AND 4 THEN '1-4'\n      WHEN hfa.los_days BETWEEN 5 AND 7 THEN '5-7'\n      ELSE NULL\n    END AS los_bin,\n    hfa.hf_type,\n    COALESCE(io.imaging_count, 0) AS imaging_count\n  FROM\n    hf_admissions hfa\n    LEFT JOIN imaging_orders io\n      ON hfa.subject_id = io.subject_id AND hfa.hadm_id = io.hadm_id\n  WHERE\n    hfa.los_days BETWEEN 1 AND 7\n)\nSELECT\n  los_bin,\n  hf_type,\n  APPROX_QUANTILES(imaging_count, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(imaging_count, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(imaging_count, 4)[OFFSET(3)] AS p75,\n  COUNT(*) AS n_admissions\nFROM\n  admission_imaging\nWHERE\n  los_bin IS NOT NULL\nGROUP BY\n  los_bin, hf_type\nORDER BY\n  los_bin, hf_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_bin at [70:9]; reason: invalidQuery, location: query, message: Unrecognized name: los_bin at [70:9]\n\nLocation: US\nJob ID: f3a248e6-b5ed-4a06-adce-206facb15de1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

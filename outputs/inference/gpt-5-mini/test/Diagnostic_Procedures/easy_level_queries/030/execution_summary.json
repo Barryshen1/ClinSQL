@@ -1,0 +1,16 @@
+{
+  "query": "I have an 89-year-old female. Among females 84\u201394, what is the 25th percentile of distinct echocardiography procedures per hospitalization?",
+  "final_sql": "WITH female_adms AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 84 AND 94\n),\n\n-- Echocardiography-like entries from hospital HCPCS/CPT events\necho_procs_hcpcs AS (\n  SELECT\n    hadm_id,\n    CONCAT('hcpcs:', COALESCE(hcpcs_cd, '')) AS proc_code\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n  WHERE LOWER(COALESCE(short_description, '')) LIKE '%echo%'\n     OR LOWER(COALESCE(short_description, '')) LIKE '%echocardi%'\n     OR LOWER(COALESCE(short_description, '')) LIKE '%echocardiogram%'\n     OR LOWER(COALESCE(short_description, '')) LIKE '%transesophageal%'\n     OR LOWER(COALESCE(short_description, '')) LIKE '%cardiac ultrasound%'\n),\n\n-- Echocardiography-like entries from ICU procedureevents (via d_items labels)\necho_procs_icu AS (\n  SELECT\n    pe.hadm_id,\n    CONCAT('item:', CAST(pe.itemid AS STRING)) AS proc_code\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON pe.itemid = di.itemid\n  WHERE LOWER(COALESCE(di.label, '')) LIKE '%echo%'\n     OR LOWER(COALESCE(di.label, '')) LIKE '%echocardi%'\n     OR LOWER(COALESCE(di.label, '')) LIKE '%echocardiogram%'\n     OR LOWER(COALESCE(di.label, '')) LIKE '%transesophageal%'\n     OR LOWER(COALESCE(di.label, '')) LIKE '%cardiac ultrasound%'\n),\n\n-- Union the procedure identifiers from both sources (distinct)\necho_procs AS (\n  SELECT * FROM echo_procs_hcpcs\n  UNION DISTINCT\n  SELECT * FROM echo_procs_icu\n),\n\n-- For each eligible hospitalization, count distinct echocardiography procedure codes\nhadm_echo_counts AS (\n  SELECT\n    fa.hadm_id,\n    COUNT(DISTINCT ep.proc_code) AS echo_distinct_count\n  FROM female_adms fa\n  LEFT JOIN echo_procs ep\n    ON fa.hadm_id = ep.hadm_id\n  GROUP BY fa.hadm_id\n),\n\n-- Metadata: number of hospitalizations considered\nmeta AS (\n  SELECT COUNT(*) AS n\n  FROM hadm_echo_counts\n),\n\n-- Ordered array of counts (ascending)\nagg_arr AS (\n  SELECT ARRAY_AGG(echo_distinct_count ORDER BY echo_distinct_count) AS arr\n  FROM hadm_echo_counts\n)\n\n-- Select the discrete 25th percentile: element at position ceil(0.25 * n)\nSELECT\n  CASE\n    WHEN meta.n = 0 THEN NULL\n    ELSE arr[OFFSET(GREATEST(0, CAST(CEIL(0.25 * meta.n) AS INT64) - 1))]\n  END AS pct25_distinct_echo_per_hadm,\n  meta.n AS n_hospitalizations_considered\nFROM agg_arr\nCROSS JOIN meta;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

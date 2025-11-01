@@ -1,0 +1,22 @@
+{
+  "query": "For a 55-year-old man, among male patients 50\u201360 with sepsis (no septic shock), report in\u2011hospital mortality (%) and median LOS by LOS \u22647 vs >7 days and day\u20111 ICU status.",
+  "final_sql": "WITH sepsis_admissions AS (\n  -- Identify admissions with sepsis but no septic shock\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%sepsis%'\n    AND LOWER(dd.long_title) NOT LIKE '%shock%'\n),\n\neligible_patients AS (\n  -- Filter patients by age and gender\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    sa.hadm_id,\n    sa.admittime,\n    sa.dischtime,\n    sa.deathtime,\n    sa.hospital_expire_flag,\n    sa.los\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    sepsis_admissions sa\n    ON p.subject_id = sa.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n),\n\nicu_day1 AS (\n  -- Determine ICU status on day 1 of admission\n  SELECT DISTINCT\n    ep.hadm_id,\n    CASE\n      WHEN i.stay_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS day1_icu\n  FROM\n    eligible_patients ep\n  LEFT JOIN\n    physionet-data.mimiciv_3_1_icu.icustays i\n    ON ep.hadm_id = i.hadm_id\n    AND i.intime BETWEEN ep.admittime AND DATETIME_ADD(ep.admittime, INTERVAL 1 DAY)\n),\n\nfinal_cohort AS (\n  SELECT\n    ep.*,\n    id.day1_icu\n  FROM\n    eligible_patients ep\n  JOIN\n    icu_day1 id\n    ON ep.hadm_id = id.hadm_id\n)\n\nSELECT\n  day1_icu,\n  CASE\n    WHEN los <= 7 THEN 'LOS \u22647'\n    ELSE 'LOS >7'\n  END AS los_group,\n  COUNT(*) AS n_patients,\n  AVG(hospital_expire_flag) * 100 AS mortality_percent,\n  APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_los\nFROM\n  final_cohort\nGROUP BY\n  day1_icu,\n  los_group\nORDER BY\n  day1_icu,\n  los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [10:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [10:7]\n\nLocation: US\nJob ID: 463a62be-fb5b-48cf-9626-47e370bd90cc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

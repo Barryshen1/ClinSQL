@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating an 80\u2011year\u2011old man. For male inpatients aged 75\u201385 with hepatic failure, during the first 48 hours what was the cohort\u2019s maximum instability score, mortality, average LOS, and how did critical lab frequencies compare to general inpatients?",
+  "final_sql": "WITH\n  critical_lab_items AS (\n    SELECT DISTINCT itemid\n    FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n    WHERE LOWER(label) LIKE '%lactate%'\n       OR LOWER(label) LIKE '%ammonia%'\n       OR LOWER(label) LIKE '%inr%'\n       OR LOWER(label) LIKE '%bilirubin%'\n       OR LOWER(label) LIKE '%creatinine%'\n       OR LOWER(label) LIKE '%alt%'\n       OR LOWER(label) LIKE '%ast%'\n       OR LOWER(label) LIKE '%alp%'\n       OR LOWER(label) LIKE '%pt%'\n       OR LOWER(label) LIKE '%ptt%'\n  ),\n  patients_cohort AS (\n    SELECT\n      p.subject_id,\n      p.gender,\n      p.anchor_age,\n      CASE\n        WHEN di.icd_code IS NOT NULL THEN 1\n        ELSE 0\n      END AS has_hepatic_failure\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON p.subject_id = di.subject_id\n     AND di.icd_version = 10\n     AND di.icd_code LIKE 'K72%'\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 75 AND 85\n  ),\n  admissions_cohort AS (\n    SELECT\n      a.hadm_id,\n      a.subject_id,\n      a.admittime,\n      a.dischtime,\n      a.hospital_expire_flag,\n      DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / (24 * 3600) AS los_days,\n      pc.has_hepatic_failure\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN patients_cohort pc\n      ON a.subject_id = pc.subject_id\n  ),\n  critical_labs_48h AS (\n    SELECT\n      le.hadm_id,\n      COUNT(*) AS critical_lab_count\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    INNER JOIN critical_lab_items cli\n      ON le.itemid = cli.itemid\n    INNER JOIN admissions_cohort ac\n      ON le.hadm_id = ac.hadm_id\n    WHERE le.charttime >= ac.admittime\n      AND le.charttime <= DATETIME_ADD(ac.admittime, INTERVAL 48 HOUR)\n    GROUP BY le.hadm_id\n  ),\n  cohort_stats AS (\n    SELECT\n      ac.has_hepatic_failure,\n      COUNT(*) AS admission_count,\n      AVG(CAST(ac.hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n      AVG(ac.los_days) AS avg_los,\n      AVG(COALESCE(cl.critical_lab_count, 0)) AS avg_critical_labs_48h\n    FROM admissions_cohort ac\n    LEFT JOIN critical_labs_48h cl\n      ON ac.hadm_id = cl.hadm_id\n    GROUP BY ac.has_hepatic_failure\n  )\nSELECT\n  CASE\n    WHEN has_hepatic_failure = 1 THEN 'Hepatic Failure Cohort'\n    ELSE 'General Inpatient Cohort (Same Age/Gender)'\n  END AS patient_group,\n  mortality_rate,\n  avg_los,\n  avg_critical_labs_48h\nFROM cohort_stats\nORDER BY has_hepatic_failure DESC;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:14]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:14]\n\nLocation: US\nJob ID: 49c9362a-46f2-4381-a1ec-bfbcb4444b78\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

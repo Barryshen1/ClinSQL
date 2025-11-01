@@ -1,0 +1,1 @@
+SELECT AVG(icustays.los) AS average_length_of_stay FROM patients JOIN admissions ON patients.subject_id = admissions.subject_id JOIN icustays ON admissions.stay_id = icustays.stay_id WHERE patients.gender = 'F' AND patients.anchor_year = 66 AND admissions.admission_type = 'primary heart failure' AND patients.anchor_year_group BETWEEN 61 AND 71;

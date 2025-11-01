@@ -1,0 +1,29 @@
+{
+  "query": "For my 67\u2011year\u2011old female with lower GI bleed, among females 62\u201372 what is mean number of non\u2011invasive diagnostics (imaging, ECG/EEG/PFT) per admission by LOS (1\u20133 vs 4\u20137 days) and ICU status?",
+  "final_sql": "WITH \n-- Define lower GI bleed diagnosis codes (fixed ICD-10 logic for K57 codes)\nlower_gi_bleed_codes AS (\n  SELECT icd_version, icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    (icd_version = 9 AND icd_code IN ('56203', '56213', '56984'))\n    OR (icd_version = 10 AND (\n      icd_code IN ('K5521', 'K625', 'K635')\n      OR icd_code LIKE 'K572%'\n      OR icd_code LIKE 'K573%'\n    ))\n),\n-- Define non-invasive diagnostic procedure codes (fixed ILIKE and column name)\nnon_invasive_diagnostics AS (\n  SELECT code AS hcpcs_cd\n  FROM `physionet-data.mimiciv_3_1_hosp.d_hcpcs`\n  WHERE \n    LOWER(short_description) LIKE '%x-ray%' OR\n    LOWER(short_description) LIKE '%ct%' OR\n    LOWER(short_description) LIKE '%mri%' OR\n    LOWER(short_description) LIKE '%ultrasound%' OR\n    LOWER(short_description) LIKE '%ecg%' OR\n    LOWER(short_description) LIKE '%electrocardiogram%' OR\n    LOWER(short_description) LIKE '%eeg%' OR\n    LOWER(short_description) LIKE '%electroencephalogram%' OR\n    LOWER(short_description) LIKE '%pulmonary function test%' OR\n    LOWER(short_description) LIKE '%pft%'\n),\n-- Get admissions meeting criteria (female, age 62-72, lower GI bleed)\neligible_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    -- Calculate LOS in days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24 * 60 * 60) AS los_days,\n    -- Determine ICU status\n    CASE WHEN i.stay_id IS NOT NULL THEN 'ICU' ELSE 'Non-ICU' END AS icu_status\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  -- Join to get diagnosis of lower GI bleed\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN lower_gi_bleed_codes lgb\n    ON d.icd_version = lgb.icd_version AND d.icd_code = lgb.icd_code\n  -- Left join to check for ICU stay\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  WHERE p.gender = 'F'\n    -- Calculate age at admission\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 62 AND 72\n),\n-- Count non-invasive diagnostics per admission\ndiagnostics_count AS (\n  SELECT \n    h.hadm_id,\n    COUNT(*) AS diagnostic_count\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  INNER JOIN non_invasive_diagnostics d\n    ON h.hcpcs_cd = d.hcpcs_cd\n  GROUP BY h.hadm_id\n)\n-- Final query: calculate mean diagnostics by LOS group and ICU status\nSELECT\n  CASE \n    WHEN los_days BETWEEN 1 AND 3 THEN '1-3 days'\n    WHEN los_days BETWEEN 4 AND 7 THEN '4-7 days'\n    ELSE NULL\n  END AS los_group,\n  icu_status,\n  AVG(COALESCE(dc.diagnostic_count, 0)) AS mean_diagnostics\nFROM eligible_admissions ea\nLEFT JOIN diagnostics_count dc\n  ON ea.hadm_id = dc.hadm_id\nWHERE los_days BETWEEN 1 AND 7  -- Only include admissions with LOS 1-7 days\nGROUP BY los_group, icu_status\nORDER BY los_group, icu_status;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]\n\nLocation: US\nJob ID: 938f38a6-8d06-47fa-a478-83d45c4b0bfd\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [18:23]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [18:23]\n\nLocation: US\nJob ID: 1395053f-061b-4dab-a691-94490a41fd59\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46-year-old female in ICU. Among female ICU patients aged 41\u201351, what are patient counts and stroke rates for each per-measurement MAP category: <65, 65\u201374, 75\u201384, \u226585 mmHg?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age, \n    p.anchor_year, \n    icu.hadm_id, \n    icu.stay_id,\n    icu.intime,\n    -- Calculate age at ICU admission\n    p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year) AS age_at_icu_admission\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n),\nfiltered_cohort AS (\n  SELECT *\n  FROM cohort\n  WHERE age_at_icu_admission BETWEEN 41 AND 51\n),\nmap_events AS (\n  SELECT \n    ce.subject_id, \n    ce.stay_id, \n    ce.valuenum AS map_value,\n    CASE \n      WHEN ce.valuenum < 65 THEN '<65'\n      WHEN ce.valuenum BETWEEN 65 AND 74 THEN '65-74'\n      WHEN ce.valuenum BETWEEN 75 AND 84 THEN '75-84'\n      ELSE '>=85'\n    END AS map_category\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN filtered_cohort fc\n    ON ce.stay_id = fc.stay_id\n  WHERE \n    ce.itemid IN (220052, 220181)  -- MAP item IDs\n    AND ce.valuenum IS NOT NULL    -- Only numeric values\n),\nstroke_patients AS (\n  SELECT DISTINCT \n    diag.subject_id, \n    diag.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  INNER JOIN filtered_cohort fc\n    ON diag.hadm_id = fc.hadm_id\n  WHERE \n    (diag.icd_version = 9 AND diag.icd_code BETWEEN '430' AND '438') OR  -- ICD-9 stroke codes\n    (diag.icd_version = 10 AND diag.icd_code LIKE 'I6%')                 -- ICD-10 stroke codes\n),\nper_category AS (\n  SELECT \n    me.map_category,\n    fc.subject_id,\n    fc.hadm_id\n  FROM map_events me\n  INNER JOIN filtered_cohort fc\n    ON me.subject_id = fc.subject_id AND me.stay_id = fc.stay_id\n  GROUP BY me.map_category, fc.subject_id, fc.hadm_id  -- Unique admissions per category\n)\nSELECT \n  map_category,\n  COUNT(*) AS patient_admission_count,\n  COUNTIF(sp.subject_id IS NOT NULL) AS stroke_patient_admission_count,\n  ROUND(COUNTIF(sp.subject_id IS NOT NULL) / COUNT(*), 4) AS stroke_rate\nFROM per_category pc\nLEFT JOIN stroke_patients sp \n  ON pc.subject_id = sp.subject_id AND pc.hadm_id = sp.hadm_id\nGROUP BY map_category\nORDER BY \n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65-74' THEN 2\n    WHEN '75-84' THEN 3\n    WHEN '>=85' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 70 AND 80\n  AND dicd.long_title LIKE '%Hemorrhagic stroke%'\n),\n\n-- Step 2: Calculate first-48-hour laboratory instability score\nlab_instability AS (\n  SELECT c.hadm_id, \n         COUNT(CASE WHEN l.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` WHERE label IN ('Example Lab 1', 'Example Lab 2')) AND l.valuenum > 10 THEN 1 END) AS score\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON c.hadm_id = icu.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l ON icu.hadm_id = l.hadm_id\n  WHERE TIMESTAMP_DIFF(l.charttime, icu.intime, HOUR) <= 48\n  GROUP BY c.hadm_id\n),\n\n-- Step 3 & 4: Calculate mean LOS and in-hospital mortality\nlos_mortality AS (\n  SELECT \n    AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR)) AS mean_los,\n    SAFE_DIVIDE(SUM(CASE WHEN a.deathtime IS NOT NULL THEN 1 ELSE 0 END), COUNT(DISTINCT a.hadm_id)) AS in_hospital_mortality\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN cohort c ON a.hadm_id = c.hadm_id\n),\n\n-- Additional CTE to calculate cohort critical lab rate\ncohort_critical_lab_rate AS (\n  SELECT \n    SAFE_DIVIDE(COUNT(CASE WHEN l.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` WHERE label IN ('Example Lab 1', 'Example Lab 2')) AND l.valuenum > 10 THEN 1 END), COUNT(DISTINCT c.hadm_id)) AS rate\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON c.hadm_id = icu.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l ON icu.hadm_id = l.hadm_id\n  WHERE TIMESTAMP_DIFF(l.charttime, icu.intime, HOUR) <= 48\n)\n\n-- Final query\nSELECT \n  PERCENTILE_CONT(lab.score, 0.25) OVER () AS percentile_25_lab_instability,\n  cclr.rate AS cohort_critical_lab_rate,\n  lm.mean_los,\n  lm.in_hospital_mortality\nFROM lab_instability lab\nJOIN cohort c ON lab.hadm_id = c.hadm_id\nCROSS JOIN los_mortality lm\nCROSS JOIN cohort_critical_lab_rate cclr\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: l at [38:19]; reason: invalidQuery, location: query, message: Unrecognized name: l at [38:19]\n\nLocation: US\nJob ID: d7a4190a-c6b6-4574-b4d1-94a12b99bdb2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/33041771-8721-47ba-a9bc-792b53f40210?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: 33041771-8721-47ba-a9bc-792b53f40210\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

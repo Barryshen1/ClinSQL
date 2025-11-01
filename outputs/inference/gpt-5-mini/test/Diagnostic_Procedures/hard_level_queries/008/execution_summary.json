@@ -1,0 +1,22 @@
+{
+  "query": "I have a 53-year-old man with upper GI bleeding. Among male ICU patients aged 48\u201358 with UGIB, stratify first 24\u2011hour diagnostic procedure counts into quintiles and report average procedures, hospital LOS (days), and in\u2011hospital mortality (%) per quintile.",
+  "final_sql": "WITH ugib_admissions AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE REGEXP_CONTAINS(LOWER(dd.long_title),\n    r'(gastrointestinal hemorrhage|gastrointestinal haemorrhage|upper gastrointestinal|upper gi|hematemesis|haematemesis|melena|peptic ulcer with hemorrhage|hemorrhage of stomach|hemorrhage of duodenum|esophageal varices with bleeding|varices with bleeding)')\n),\n\n-- Take the first ICU stay for each admission (if multiple ICU stays per hadm exist)\nfirst_icustays AS (\n  SELECT *\n  FROM (\n    SELECT i.*,\n           ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON i.subject_id = p.subject_id\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 48 AND 58\n      AND i.hadm_id IN (SELECT hadm_id FROM ugib_admissions)\n  )\n  WHERE rn = 1\n),\n\n-- Count qualifying diagnostic procedures in the (calendar) first 24-hour window (DATE(intime) and next day)\nproc_count_per_stay AS (\n  SELECT s.stay_id,\n         s.hadm_id,\n         COUNT(DISTINCT pc.seq_num) AS proc_count\n  FROM first_icustays s\n  JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pc\n    ON pc.hadm_id = s.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n    ON pc.icd_code = dp.icd_code\n   AND pc.icd_version = dp.icd_version\n  WHERE REGEXP_CONTAINS(LOWER(dp.long_title),\n        r'(endoscop|esophag|gastroscop|colonoscopy|angiograph)')\n    -- approximate \"first 24 hours\" using chartdate on the day of ICU intime and the next calendar day\n    AND pc.chartdate BETWEEN DATE(s.intime) AND DATE_ADD(DATE(s.intime), INTERVAL 1 DAY)\n  GROUP BY s.stay_id, s.hadm_id\n),\n\n-- Build cohort with proc counts, LOS, and mortality flag\ncohort AS (\n  SELECT s.subject_id,\n         s.hadm_id,\n         s.stay_id,\n         s.intime,\n         a.admittime,\n         a.dischtime,\n         a.hospital_expire_flag,\n         COALESCE(pc.proc_count, 0) AS proc_count,\n         -- LOS in days (fractional)\n         SAFE_DIVIDE(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR), 24.0) AS los_days\n  FROM first_icustays s\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON s.hadm_id = a.hadm_id\n  LEFT JOIN proc_count_per_stay pc\n    ON s.stay_id = pc.stay_id\n  WHERE a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\n\n-- Assign quintiles by procedure count (roughly equal-sized groups)\nranked AS (\n  SELECT *,\n         NTILE(5) OVER (ORDER BY proc_count) AS quintile\n  FROM cohort\n)\n\n-- Final aggregation: per quintile report average procedures, avg LOS (days), and in-hospital mortality (%)\nSELECT\n  quintile,\n  COUNT(*) AS n,\n  ROUND(AVG(proc_count), 3) AS avg_procedures_first_24h,\n  ROUND(AVG(los_days), 3) AS avg_hospital_los_days,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS inhospital_mortality_percent\nFROM ranked\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"admission\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"admission\" at [1:9]\n\nLocation: US\nJob ID: 4e4314f1-e62a-4237-b513-f9572781e567\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

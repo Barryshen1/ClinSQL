@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 94\u2011year\u2011old man admitted with hemorrhagic stroke. Among male inpatients aged 89\u201399 with hemorrhagic stroke, stratified into quintiles by medication complexity (unique drugs in first 7 hospital days), report LOS, inpatient mortality, and 30\u2011day readmission per quintile.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    -- Filter age 89-99 at admission\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 89 AND 99\n    -- Hemorrhagic stroke diagnosis (any position)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE adm.hadm_id = diag.hadm_id\n        AND (\n          (diag.icd_version = 9 AND (diag.icd_code IN ('430', '431') OR diag.icd_code LIKE '432%'))\n          OR \n          (diag.icd_version = 10 AND (diag.icd_code LIKE 'I60%' OR diag.icd_code LIKE 'I61%' OR diag.icd_code LIKE 'I62%'))\n        )\n    )\n),\n\n-- Count distinct drugs in first 7 days\nmed_counts AS (\n  SELECT \n    bc.hadm_id,\n    COUNT(DISTINCT pr.drug) AS drug_count\n  FROM base_cohort bc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON bc.hadm_id = pr.hadm_id\n    AND pr.starttime >= bc.admittime\n    AND pr.starttime <= TIMESTAMP_ADD(bc.admittime, INTERVAL 7 DAY)\n  GROUP BY bc.hadm_id\n),\n\n-- Combine cohort with drug counts\ncohort_with_meds AS (\n  SELECT \n    bc.*,\n    COALESCE(mc.drug_count, 0) AS drug_count\n  FROM base_cohort bc\n  LEFT JOIN med_counts mc\n    ON bc.hadm_id = mc.hadm_id\n),\n\n-- Assign medication complexity quintiles\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY drug_count) AS med_quintile\n  FROM cohort_with_meds\n),\n\n-- Calculate readmission flag (for survivors only)\ncohort_with_readmission AS (\n  SELECT \n    q.*,\n    -- Set readmission_flag to NULL for in-hospital deaths\n    CASE \n      WHEN q.hospital_expire_flag = 1 THEN NULL \n      -- Check for readmission within 30 days of discharge\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` readm\n        WHERE q.subject_id = readm.subject_id\n          AND readm.hadm_id != q.hadm_id  -- Exclude index admission\n          AND readm.admittime > q.dischtime\n          AND readm.admittime <= TIMESTAMP_ADD(q.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0 \n    END AS readmission_flag\n  FROM quintiles q\n)\n\n-- Final aggregation by quintile\nSELECT \n  med_quintile,\n  COUNT(*) AS num_admissions,\n  AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS avg_los,\n  AVG(hospital_expire_flag) * 100 AS mortality_rate_percent,\n  AVG(readmission_flag) * 100 AS readmission_rate_percent  -- Among survivors\nFROM cohort_with_readmission\nGROUP BY med_quintile\nORDER BY med_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \":\" at [32:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \":\" at [32:11]\n\nLocation: US\nJob ID: 1a2153db-0c42-4230-b001-4477c2f88fdc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

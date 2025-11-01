@@ -1,0 +1,22 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH\n-- Get male patients aged 90-100\nelderly_males AS (\n  SELECT\n    subject_id,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 90 AND 100\n),\n\n-- Get hepatic failure patients (first ICU stay)\nhepatic_failure_patients AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.intime AS icu_intime,\n    i.outtime AS icu_outtime,\n    TIMESTAMP_DIFF(i.outtime, i.intime, SECOND)/86400 AS los_days,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    elderly_males e\n    ON a.subject_id = e.subject_id\n  WHERE\n    -- Hepatic failure ICD codes\n    (d.icd_code IN ('572.2', '572.4', 'K72.0', 'K72.1', 'K72.9') OR\n     d.icd_code LIKE '572.2%' OR d.icd_code LIKE '572.4%' OR\n     d.icd_code LIKE 'K72.0%' OR d.icd_code LIKE 'K72.1%' OR d.icd_code LIKE 'K72.9%')\n    -- First ICU stay per patient\n    AND i.stay_id = (\n      SELECT MIN(stay_id)\n      FROM `physionet-data.mimiciv_3_1_icu.icustays`\n      WHERE subject_id = i.subject_id\n    )\n),\n\n-- Get diagnostic procedures in first 72 hours of ICU stay\ndiagnostic_procedures AS (\n  SELECT\n    h.subject_id,\n    h.stay_id,\n    COUNT(DISTINCT p.icd_code) AS procedure_count\n  FROM\n    hepatic_failure_patients h\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    ON h.subject_id = p.subject_id AND h.hadm_id = p.hadm_id\n  WHERE\n    -- Diagnostic procedure codes (ICD-9: 87.xx-89.xx; ICD-10: 0Bxx, 0Cxx, 0Dxx)\n    (p.icd_code BETWEEN '8700' AND '8999' OR\n     p.icd_code LIKE '0B%' OR p.icd_code LIKE '0C%' OR p.icd_code LIKE '0D%')\n    -- Within 72 hours of ICU admission\n    AND TIMESTAMP_DIFF(p.chartdate, h.icu_intime, HOUR) <= 72\n  GROUP BY\n    h.subject_id, h.stay_id\n),\n\n-- Create quartiles based on procedure counts\nquartiles AS (\n  SELECT\n    subject_id,\n    stay_id,\n    procedure_count,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM\n    diagnostic_procedures\n)\n\n-- Final aggregation\nSELECT\n  quartile,\n  COUNT(DISTINCT q.subject_id) AS patient_count,\n  MIN(q.procedure_count) AS min_procedures,\n  MAX(q.procedure_count) AS max_procedures,\n  ROUND(AVG(q.procedure_count), 2) AS mean_procedures,\n  ROUND(AVG(h.los_days), 2) AS mean_los_days,\n  ROUND(100 * SUM(CASE WHEN h.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(DISTINCT q.subject_id), 2) AS mortality_percentage\nFROM\n  quartiles q\nJOIN\n  hepatic_failure_patients h\n  ON q.subject_id = h.subject_id AND q.stay_id = h.stay_id\nGROUP BY\n  quartile\nORDER BY\n  quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [82:18]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [82:18]\n\nLocation: US\nJob ID: bfa49859-bfc7-4d26-9f88-52816e426e86\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

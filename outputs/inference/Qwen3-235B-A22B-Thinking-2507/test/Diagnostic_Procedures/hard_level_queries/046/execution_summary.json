@@ -1,0 +1,29 @@
+{
+  "query": "My 42\u2011year\u2011old female: among female ICU patients aged 37\u201347 with ARDS (first ICU stay), what is the minimum diagnostic utilization (distinct procedures during first 72 hours)? Compare to all ICU patients and report P75/P90, mean hospital LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH first_icu AS (\n  SELECT *,\n         ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\ntarget_population AS (\n  SELECT i.stay_id\n  FROM first_icu i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON i.subject_id = p.subject_id\n  WHERE i.rn = 1\n    AND p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year) BETWEEN 37 AND 47\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = i.hadm_id\n        AND d.icd_code = 'J80'\n        AND d.icd_version = 10\n    )\n),\nicu_procedures AS (\n  SELECT i.stay_id, \n         COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON i.stay_id = pe.stay_id\n    AND pe.starttime >= i.intime\n    AND pe.starttime <= i.intime + INTERVAL '72' HOUR\n  GROUP BY i.stay_id\n),\ntarget_procedure_stats AS (\n  SELECT MIN(proc_count) AS target_min_procedures\n  FROM icu_procedures\n  WHERE stay_id IN (SELECT stay_id FROM target_population)\n),\nentire_population_procedure_stats AS (\n  SELECT \n    APPROX_QUANTILES(proc_count, 1000)[OFFSET(749)] AS p75,\n    APPROX_QUANTILES(proc_count, 1000)[OFFSET(899)] AS p90\n  FROM icu_procedures\n),\nhospital_outcomes AS (\n  SELECT \n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE hadm_id IN (\n    SELECT DISTINCT hadm_id \n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  )\n)\nSELECT \n  (SELECT target_min_procedures FROM target_procedure_stats) AS target_min_procedures,\n  (SELECT p75 FROM entire_population_procedure_stats) AS entire_pop_p75,\n  (SELECT p90 FROM entire_population_procedure_stats) AS entire_pop_p90,\n  (SELECT mean_los_days FROM hospital_outcomes) AS entire_pop_mean_los,\n  (SELECT mortality_rate FROM hospital_outcomes) AS entire_pop_mortality;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:11]\n\nLocation: US\nJob ID: 522fcb9c-7bed-4f4d-8f49-84470727940f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [28:12]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [28:12]\n\nLocation: US\nJob ID: 9a2625b9-ff12-4853-a23c-ee7cfeec1dbc\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

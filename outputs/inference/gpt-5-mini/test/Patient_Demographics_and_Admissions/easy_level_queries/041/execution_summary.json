@@ -1,0 +1,16 @@
+{
+  "query": "For a 55-year-old female, among females 50\u201360 on anticoagulants, median ICU LOS (days) for first ICU stay during first admission?",
+  "final_sql": "WITH first_admissions AS (\n  -- first hospital admission per patient\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS adm_rank\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING(subject_id)\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n),\nanticoag_hadm AS (\n  -- hadm_ids (from first admission cohort) with at least one anticoagulant prescription overlapping the admission\n  SELECT DISTINCT\n    fa.subject_id,\n    fa.hadm_id\n  FROM\n    first_admissions fa\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON pr.hadm_id = fa.hadm_id\n  WHERE\n    fa.adm_rank = 1\n    -- prescription overlaps admission window\n    AND pr.starttime < fa.dischtime\n    AND (pr.stoptime IS NULL OR pr.stoptime > fa.admittime)\n    -- crude text match for common anticoagulants in prescriptions.drug\n    AND (\n      LOWER(COALESCE(pr.drug, '')) LIKE '%warfarin%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%coumadin%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%heparin%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%enoxaparin%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%lovenox%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%apixaban%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%eliquis%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%rivaroxaban%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%xarelto%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%dabigatran%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%pradaxa%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%fondaparinux%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%edoxaban%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%savaysa%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%bivalirudin%'\n      OR LOWER(COALESCE(pr.drug, '')) LIKE '%argatroban%'\n    )\n),\nfirst_icustays AS (\n  -- first ICU stay per subject within each hadm (we'll later restrict to first admission hadm)\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id, i.hadm_id ORDER BY i.intime) AS icu_rank\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n)\nSELECT\n  -- approximate median (50th percentile) LOS in days among females age 50-60 on anticoagulants\n  APPROX_QUANTILES(fis.los, 100)[OFFSET(50)] AS median_icu_los_days,\n  COUNT(1) AS n_patients\nFROM\n  first_admissions fa\nJOIN\n  anticoag_hadm ah\n  ON fa.subject_id = ah.subject_id AND fa.hadm_id = ah.hadm_id\nJOIN\n  first_icustays fis\n  ON fis.subject_id = fa.subject_id AND fis.hadm_id = fa.hadm_id\nWHERE\n  fa.adm_rank = 1\n  AND fis.icu_rank = 1\n  -- ensure LOS is non-null and non-negative\n  AND fis.los IS NOT NULL\n  AND fis.los >= 0;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

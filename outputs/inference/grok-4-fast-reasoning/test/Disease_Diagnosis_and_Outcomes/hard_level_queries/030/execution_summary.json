@@ -1,0 +1,28 @@
+{
+  "query": "For a 69-year-old male inpatient, among male inpatients aged 64\u201374 with upper GI bleeding stratified into quintiles by composite risk score (diagnosis count +20\u00d7major complication), give n, mean score, 30\u2011day mortality %, major complication %, and median LOS among survivors.",
+  "final_sql": "WITH ugib_hadms AS (\n  SELECT DISTINCT\n    di.subject_id,\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%hemorrhage%'\n    AND (\n      LOWER(dd.long_title) LIKE '%upper%'\n      OR LOWER(dd.long_title) LIKE '%gastr%'\n      OR LOWER(dd.long_title) LIKE '%duoden%'\n      OR LOWER(dd.long_title) LIKE '%esophag%'\n      OR LOWER(dd.long_title) LIKE '%peptic%'\n      OR LOWER(dd.long_title) LIKE '%stomach%'\n    )\n),\ndiag_counts AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    COUNT(*) AS num_diagnoses\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY subject_id, hadm_id\n),\nmajor_comps AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    MAX(CAST(drg_severity AS INT64)) >= 3 AS major_comp_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.drgcodes`\n  WHERE drg_type = 'APRDRG'\n  GROUP BY subject_id, hadm_id\n),\nbase AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    COALESCE(dc.num_diagnoses, 0) AS num_diagnoses,\n    COALESCE(mc.major_comp_flag, FALSE) AS major_comp_flag,\n    COALESCE(dc.num_diagnoses, 0) + 20 * CAST(COALESCE(mc.major_comp_flag, FALSE) AS INT64) AS score,\n    DATE(a.admittime) AS admit_date,\n    IF(a.deathtime IS NOT NULL, DATE(a.deathtime), p.dod) AS death_date,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  LEFT JOIN diag_counts dc\n    ON a.subject_id = dc.subject_id AND a.hadm_id = dc.hadm_id\n  LEFT JOIN major_comps mc\n    ON a.subject_id = mc.subject_id AND a.hadm_id = mc.hadm_id\n  INNER JOIN ugib_hadms u\n    ON a.subject_id = u.subject_id AND a.hadm_id = u.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND a.dischtime IS NOT NULL\n),\ncohort AS (\n  SELECT\n    *,\n    CASE\n      WHEN death_date IS NOT NULL AND death_date <= DATE_ADD(admit_date, INTERVAL 30 DAY)\n      THEN 1\n      ELSE 0\n    END AS mortality_30d,\n    NTILE(5) OVER (ORDER BY score ASC) AS quintile\n  FROM base\n),\nstats AS (\n  SELECT\n    quintile,\n    COUNT(*) AS n,\n    ROUND(AVG(score), 2) AS mean_score,\n    ROUND(AVG(CAST(mortality_30d AS FLOAT64)) * 100, 2) AS mortality_pct,\n    ROUND(AVG(CAST(major_comp_flag AS FLOAT64)) * 100, 2) AS major_comp_pct\n  FROM cohort\n  GROUP BY quintile\n),\nmedian_los AS (\n  SELECT\n    quintile,\n    PERCENTILE_CONT(los_days, 0.5) AS median_los_survivors\n  FROM cohort\n  WHERE mortality_30d = 0\n  GROUP BY quintile\n)\nSELECT\n  s.quintile,\n  s.n,\n  s.mean_score,\n  s.mortality_pct,\n  s.major_comp_pct,\n  m.median_los_survivors\nFROM stats s\nLEFT JOIN median_los m\n  ON s.quintile = m.quintile\nORDER BY s.quintile ASC;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Invalid cast from BOOL to FLOAT64 at [81:20]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [81:20]\n\nLocation: US\nJob ID: 74e25a31-e97e-4061-bffb-380a21c7c340\n",
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [88:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [88:26]\n\nLocation: US\nJob ID: b37b9673-4d0e-458b-be3d-6acf84013e83\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [50:5]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [50:5]\n\nLocation: US\nJob ID: a40c243e-a64e-4718-bc5a-29db7db4a0ba\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [81:20]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [81:20]\n\nLocation: US\nJob ID: 74e25a31-e97e-4061-bffb-380a21c7c340\n"
+    }
+  ]
+}

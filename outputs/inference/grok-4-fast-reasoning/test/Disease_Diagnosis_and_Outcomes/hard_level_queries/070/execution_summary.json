@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 64\u2011year\u2011old female inpatient with DVT and high comorbidity burden. Among females 59\u201369 with DVT above the 75th comorbidity percentile, report cohort size, 30\u2011day mortality, major complication rate, median survival for decedents, and composite risk score quartiles.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    p.dod,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  WHERE p.gender = 'F'\n    AND (\n      (di.icd_version = 9 AND di.icd_code LIKE '453.4%') OR\n      (di.icd_version = 10 AND di.icd_code LIKE 'I82%')\n    )\n    AND a.admittime IS NOT NULL\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 59 AND 69\n),\ncomorb_score AS (\n  SELECT\n    bc.*,\n    COUNT(DISTINCT di.icd_code) AS score\n  FROM base_cohort bc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON bc.hadm_id = di.hadm_id\n  GROUP BY\n    bc.hadm_id,\n    bc.subject_id,\n    bc.admittime,\n    bc.dod,\n    bc.anchor_age\n),\nwith_percentile AS (\n  SELECT\n    *,\n    PERCENTILE_CONT(score, 0.75) OVER() AS p75\n  FROM comorb_score\n),\nhigh_comorb AS (\n  SELECT *\n  FROM with_percentile\n  WHERE score > p75\n),\npe_cohort AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n      (icd_version = 9 AND icd_code LIKE '415.1%') OR\n      (icd_version = 10 AND icd_code LIKE 'I26%')\n    )\n)\nSELECT\n  COUNT(*) AS cohort_size,\n  SAFE_DIVIDE(\n    SUM(CASE WHEN dod IS NOT NULL AND dod <= DATE_ADD(DATE(admittime), INTERVAL 30 DAY) THEN 1 ELSE 0 END),\n    COUNT(*)\n  ) AS `30-day_mortality_rate`,\n  SAFE_DIVIDE(\n    SUM(CASE WHEN hc.hadm_id IN (SELECT hadm_id FROM pe_cohort) THEN 1 ELSE 0 END),\n    COUNT(*)\n  ) AS `major_complication_rate`,\n  (SELECT APPROX_QUANTILES(DATE_DIFF(dod, DATE(admittime), DAY), 3)[OFFSET(1)]\n   FROM high_comorb\n   WHERE dod IS NOT NULL\n  ) AS median_survival_days,\n  (SELECT APPROX_QUANTILES(score, 5)[OFFSET(1)] FROM high_comorb) AS score_q1,\n  (SELECT APPROX_QUANTILES(score, 5)[OFFSET(2)] FROM high_comorb) AS score_q2,\n  (SELECT APPROX_QUANTILES(score, 5)[OFFSET(3)] FROM high_comorb) AS score_q3\nFROM high_comorb hc;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [15:8]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [15:8]\n\nLocation: US\nJob ID: 51b73eae-6361-4d82-974c-2771ee685586\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [47:19]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [47:19]\n\nLocation: US\nJob ID: 7210f6be-cef4-4d06-aaca-4e2885aaf1c4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

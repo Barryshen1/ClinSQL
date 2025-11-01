@@ -1,0 +1,23 @@
+{
+  "query": "I'm evaluating a 58\u2011year\u2011old woman. Among female inpatients aged 53\u201363 with pulmonary embolism, what is the 75th percentile of the 72\u2011hour lab instability score? For patients \u2265that threshold, report mortality (%), mean LOS (days), and compare critical\u2011lab rates to inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND a.dischtime IS NOT NULL\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 53 AND 63\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code IN ('41511', '41512', '41513', '41519'))\n          OR\n          (d.icd_version = 10 AND d.icd_code IN ('I260', 'I2601', 'I2602', 'I2609', 'I269', 'I2690', 'I2691', 'I2692', 'I2699'))\n        )\n    )\n),\n\nlab_score AS (\n  SELECT \n    c.hadm_id,\n    COUNT(l.labevent_id) AS lab_instability_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n    AND l.charttime >= c.admittime\n    AND l.charttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n    AND l.flag = 'abnormal'\n  GROUP BY c.hadm_id\n),\n\nthreshold AS (\n  SELECT \n    APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(75)] AS threshold\n  FROM lab_score\n),\n\ncombined AS (\n  SELECT \n    c.*,\n    ls.lab_instability_score\n  FROM cohort c\n  INNER JOIN lab_score ls \n    ON c.hadm_id = ls.hadm_id\n)\n\nSELECT \n  AVG(CASE WHEN lab_instability_score >= t.threshold THEN hospital_expire_flag ELSE NULL END) * 100 AS mortality_pct,\n  AVG(CASE WHEN lab_instability_score >= t.threshold THEN DATETIME_DIFF(dischtime, admittime, SECOND) / (60*60*24) ELSE NULL END) AS mean_los_days,\n  AVG(CASE WHEN lab_instability_score >= t.threshold THEN lab_instability_score ELSE NULL END) AS critical_lab_rate_high,\n  AVG(CASE WHEN lab_instability_score < t.threshold THEN lab_instability_score ELSE NULL END) AS critical_lab_rate_low\nFROM combined, threshold t;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]\n\nLocation: US\nJob ID: 543e2fc6-9807-4c10-a402-10738220dec7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

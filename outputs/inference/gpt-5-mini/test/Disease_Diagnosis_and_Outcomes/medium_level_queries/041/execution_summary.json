@@ -1,0 +1,28 @@
+{
+  "query": "I have a 55-year-old female. For women aged 50\u201360 with sepsis excluding septic shock, give in-hospital mortality (%) for LOS \u22647 vs >7 days, absolute/relative difference, and median time-to-death.",
+  "final_sql": "WITH\n-- Admissions with any diagnosis whose description contains \"sepsis\"\nsepsis_hadm AS (\n  SELECT DISTINCT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%sepsis%'\n),\n\n-- Admissions that have any diagnosis whose description contains \"septic shock\" (to be excluded)\nseptic_shock_hadm AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code\n   AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%septic shock%'\n),\n\n-- Cohort: female patients age 50-60 (anchor_age), admissions with sepsis and without septic shock\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    a.admission_type,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN sepsis_hadm s\n    ON a.hadm_id = s.hadm_id\n  LEFT JOIN septic_shock_hadm ss\n    ON a.hadm_id = ss.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND ss.hadm_id IS NULL  -- exclude admissions with septic shock\n),\n\n-- Aggregated stats by LOS group\ngroup_stats AS (\n  SELECT\n    CASE WHEN los_days <= 7 THEN 'LOS_<=7' ELSE 'LOS_>7' END AS los_group,\n    COUNT(*) AS n_admissions,\n    SUM(IF(hospital_expire_flag = 1, 1, 0)) AS n_deaths,\n    100.0 * SAFE_DIVIDE(SUM(IF(hospital_expire_flag = 1, 1, 0)), COUNT(*)) AS mortality_pct,\n    -- median time-to-death in days among in-hospital deaths (approximate median)\n    APPROX_QUANTILES(\n      CASE\n        WHEN hospital_expire_flag = 1\n         AND deathtime IS NOT NULL\n         AND deathtime >= admittime\n        THEN TIMESTAMP_DIFF(deathtime, admittime, SECOND) / 86400.0\n        ELSE NULL\n      END\n      , 100\n    )[OFFSET(50)] AS median_time_to_death_days\n  FROM cohort\n  GROUP BY los_group\n)\n\n-- Final output: two group rows plus a differences row\nSELECT\n  los_group,\n  n_admissions,\n  n_deaths,\n  ROUND(mortality_pct, 2) AS mortality_pct,\n  ROUND(median_time_to_death_days, 2) AS median_time_to_death_days\nFROM group_stats\n\nUNION ALL\n\nSELECT\n  'Absolute_and_Relative_Differences' AS los_group,\n  CAST(NULL AS INT64) AS n_admissions,\n  CAST(NULL AS INT64) AS n_deaths,\n  -- absolute difference: mortality(>7) - mortality(<=7) in percentage points\n  ROUND(\n    (\n      MAX(CASE WHEN los_group = 'LOS_>7' THEN mortality_pct END)\n      - MAX(CASE WHEN los_group = 'LOS_<=7' THEN mortality_pct END)\n    )\n  , 2) AS mortality_pct,\n  -- relative difference in percent: (absolute / mortality(<=7)) * 100\n  ROUND(\n    100.0 * SAFE_DIVIDE(\n      (MAX(CASE WHEN los_group = 'LOS_>7' THEN mortality_pct END)\n       - MAX(CASE WHEN los_group = 'LOS_<=7' THEN mortality_pct END)\n      ),\n      MAX(CASE WHEN los_group = 'LOS_<=7' THEN mortality_pct END)\n    )\n  , 2) AS median_time_to_death_days\n\nORDER BY los_group DESC;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: los_group at [85:21]; reason: invalidQuery, location: query, message: Unrecognized name: los_group at [85:21]\n\nLocation: US\nJob ID: b52854e5-4662-48e0-9693-bcc41a2b33dd\n",
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [58:15]; reason: invalidQuery, location: query, message: No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [58:15]\n\nLocation: US\nJob ID: 2643dbd8-27ea-4e96-af1b-6fc3dc4ba445\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column 5 in UNION ALL has incompatible types: DOUBLE, STRING at [76:1]; reason: invalidQuery, location: query, message: Column 5 in UNION ALL has incompatible types: DOUBLE, STRING at [76:1]\n\nLocation: US\nJob ID: 23bc4e21-7c2b-4fa0-aa42-a3834bd03d43\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los_group at [85:21]; reason: invalidQuery, location: query, message: Unrecognized name: los_group at [85:21]\n\nLocation: US\nJob ID: b52854e5-4662-48e0-9693-bcc41a2b33dd\n"
+    }
+  ]
+}

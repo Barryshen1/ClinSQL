@@ -1,0 +1,1 @@
+SELECT AVG(p.value) AS average_map FROM patients p JOIN icustays i ON p.subject_id = i.subject_id JOIN chartevents c ON i.stay_id = c.stay_id WHERE p.gender = 'F' AND p.anchor_age = 94 AND i.first_careunit = 'ICU' AND i.last_careunit = 'ICU' AND c.itemid = 87164 AND c.charttime BETWEEN i.intime AND i.intime + interval '24 hours' AND p.anchor_year BETWEEN 89 AND 99;

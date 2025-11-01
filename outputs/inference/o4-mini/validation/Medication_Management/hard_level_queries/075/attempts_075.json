@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  -- 1. Identify male patients age 58-68 with COPD exacerbation admission\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.hadm_id = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n     AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND LOWER(dd.long_title) LIKE '%copd exacerbation%'\n),\nmed_complexity AS (\n  -- 2. Compute medication complexity score in first 72 hours\n  SELECT\n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM\n    cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n      ON c.hadm_id = pr.hadm_id\n      AND pr.starttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY\n    c.hadm_id\n),\nreadmit_flags AS (\n  -- 3. Flag 30-day readmissions\n  SELECT\n    c.hadm_id,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = c.subject_id\n        AND a2.admittime > c.dischtime\n        AND a2.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmit_30d_flag\n  FROM\n    cohort c\n),\ncohort_metrics AS (\n  -- 4. Assemble all metrics per admission\n  SELECT\n    c.hadm_id,\n    mc.complexity_score,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY) AS los,\n    c.hospital_expire_flag AS mortality_flag,\n    rf.readmit_30d_flag\n  FROM\n    cohort c\n    LEFT JOIN med_complexity mc USING (hadm_id)\n    LEFT JOIN readmit_flags rf USING (hadm_id)\n),\ntertiles AS (\n  -- 5. Assign complexity tertiles\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM\n    cohort_metrics\n)\n-- 6. Aggregate by tertile\nSELECT\n  tertile,\n  COUNT(*) AS n_patients,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  ROUND(AVG(complexity_score), 2) AS mean_complexity,\n  ROUND(AVG(los), 2) AS mean_los_days,\n  ROUND(100.0 * SUM(mortality_flag) / COUNT(*), 2) AS mortality_pct,\n  ROUND(100.0 * SUM(readmit_30d_flag) / COUNT(*), 2) AS readmit_30d_pct\nFROM\n  tertiles\nGROUP BY\n  tertile\nORDER BY\n  tertile;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

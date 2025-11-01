@@ -1,0 +1,29 @@
+{
+  "query": "I have a 45-year-old man. Among male inpatients 40\u201350 with hemorrhagic stroke, compute a 72\u2011hour lab instability score (count of unique abnormal labs), stratify into quartiles, and report LOS, mortality, and per\u2011lab abnormal rates versus general inpatients.",
+  "final_sql": "WITH PatientCohort AS (\n  -- Select patients meeting the criteria: male, age 40-50, hemorrhagic stroke\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND a.admittime BETWEEN '2150-01-01' AND '2150-12-31' -- Filter for relevant time range if needed\n    AND EXISTS (\n      SELECT\n        1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      WHERE\n        d.subject_id = p.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND d.icd_code LIKE 'I60%' -- ICD-10 codes for intracerebral hemorrhage\n    )\n), LabInstability AS (\n  -- Calculate the 72-hour lab instability score for each patient\n  SELECT\n    pc.subject_id,\n    pc.hadm_id,\n    COUNT(DISTINCT le.itemid) AS lab_instability_score\n  FROM PatientCohort AS pc\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON pc.subject_id = le.subject_id AND pc.hadm_id = le.hadm_id\n  WHERE\n    le.charttime BETWEEN pc.admittime AND TIMESTAMP_ADD(pc.admittime, INTERVAL 72 HOUR)\n    AND le.valuenum IS NOT NULL -- Consider only numeric lab values\n    AND le.valueuom IS NOT NULL\n    AND le.flag IS NULL -- Exclude flagged labs\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n    AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper) -- Check if the value is outside the reference range\n  GROUP BY\n    pc.subject_id,\n    pc.hadm_id\n), QuartileAnalysis AS (\n  -- Stratify patients into quartiles based on their lab instability score\n  SELECT\n    li.subject_id,\n    li.hadm_id,\n    li.lab_instability_score,\n    NTILE(4) OVER (ORDER BY li.lab_instability_score) AS quartile\n  FROM LabInstability AS li\n), CohortStats AS (\n  -- Calculate LOS and mortality for the cohort\n  SELECT\n    qa.subject_id,\n    qa.hadm_id,\n    qa.quartile,\n    qa.lab_instability_score,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los,\n    a.hospital_expire_flag AS mortality\n  FROM QuartileAnalysis AS qa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON qa.hadm_id = a.hadm_id\n)\n-- Final selection and aggregation\nSELECT\n  qa.quartile,\n  AVG(cs.los) AS avg_los,\n  AVG(CASE WHEN cs.mortality = TRUE THEN 1 ELSE 0 END) AS mortality_rate,\n  AVG(cs.lab_instability_score) AS avg_lab_instability_score,\n  COUNT(DISTINCT cs.subject_id) AS patient_count\nFROM CohortStats AS cs\nINNER JOIN QuartileAnalysis AS qa\n  ON cs.subject_id = qa.subject_id AND cs.hadm_id = qa.hadm_id\nGROUP BY\n  qa.quartile\nORDER BY\n  qa.quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for operator = for argument types: INT64, BOOL\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, BOOL} at [73:17]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, BOOL\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, BOOL} at [73:17]\n\nLocation: US\nJob ID: e7d8666b-c5e7-43ad-b252-11e2c3aa717e\n",
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: qa at [79:3]; reason: invalidQuery, location: query, message: Unrecognized name: qa at [79:3]\n\nLocation: US\nJob ID: 8de0a327-03f1-4074-9029-6d4e58fce534\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \";\" at [64:40]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \";\" at [64:40]\n\nLocation: US\nJob ID: 1f3f85ff-e4c6-40b8-8df1-9d767a666f10\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, BOOL\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, BOOL} at [73:17]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, BOOL\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, BOOL} at [73:17]\n\nLocation: US\nJob ID: e7d8666b-c5e7-43ad-b252-11e2c3aa717e\n"
+    }
+  ]
+}

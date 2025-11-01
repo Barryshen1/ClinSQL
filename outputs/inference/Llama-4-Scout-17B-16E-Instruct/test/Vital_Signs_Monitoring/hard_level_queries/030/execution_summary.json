@@ -1,0 +1,22 @@
+{
+  "query": "48\u2011year\u2011old female: among ICU patients aged 43\u201353 with acute respiratory failure, report the 95th\u2011percentile vital instability index in first 48 hours. For the cohort top quartile, compare MAP<65 hypotension and tachycardia episodes, ICU LOS, and mortality versus general ICU population.",
+  "final_sql": "WITH \n-- Step 1: Identify cohort\ncohort AS (\n  SELECT \n    ic.subject_id,\n    ic.hadm_id,\n    ic.stay_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` ic\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON ic.hadm_id = a.hadm_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.anchor_age BETWEEN 43 AND 53\n    AND ic.first_careunit LIKE '%ICU%'\n    AND a.discharge_location LIKE '%ICU%'  \n),\n\n-- Step 2: Calculate vital instability index (for simplicity, let's assume it's based on heart rate and blood pressure)\nvital_events AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    charttime,\n    itemid,\n    valuenum,\n    valueuom\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents`\n  WHERE \n    itemid IN (220050, 220179, 220052)  \n),\n\n-- Step 3: Calculate vital instability index (95th percentile for the cohort)\nvital_index AS (\n  SELECT \n    stay_id,\n    APPROX_QUANTILES(valuenum, 100)[OFFSET(95)] AS vii_95th\n  FROM \n    vital_events\n  WHERE \n    itemid IN (220050, 220179, 220052)\n  GROUP BY \n    stay_id\n),\n\n-- Step 4: Determine MAP < 65 hypotension and tachycardia episodes\nmap_tachycardia AS (\n  SELECT \n    stay_id,\n    COUNT(*) AS episodes\n  FROM \n    vital_events\n  WHERE \n    (itemid = 220179 AND valuenum < 65)  \n    OR (itemid = 220050 AND valuenum > 100)  \n  GROUP BY \n    stay_id\n),\n\n-- Step 5: ICU LOS and mortality\nicu_outcomes AS (\n  SELECT \n    ic.stay_id,\n    TIMESTAMP_DIFF(ic.outtime, ic.intime, HOUR) / 24 AS icu_los,\n    CASE \n      WHEN a.hospital_expire_flag = 1 THEN 1\n      ELSE 0\n    END AS mortality\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` ic\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n      ON ic.hadm_id = a.hadm_id\n)\n\n-- Final query\nSELECT \n  -- Cohort characteristics\n  COUNT(DISTINCT c.stay_id) AS cohort_size,\n  APPROX_QUANTILES(io.icu_los, 100)[OFFSET(25)] AS los_25th,\n  APPROX_QUANTILES(io.icu_los, 100)[OFFSET(50)] AS los_median,\n  APPROX_QUANTILES(io.icu_los, 100)[OFFSET(75)] AS los_75th,\n  SUM(io.mortality) AS mortality_count,\n  \n  -- Compare to general ICU population\n  (SELECT COUNT(DISTINCT stay_id) FROM `physionet-data.mimiciv_3_1_icu.icustays`) AS general_icu_population,\n  (SELECT COUNT(DISTINCT i.stay_id) FROM `physionet-data.mimiciv_3_1_icu.icustays` i JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id WHERE a.hospital_expire_flag = 1) AS general_icu_mortality_count\nFROM \n  cohort c\n  JOIN vital_index vi ON c.stay_id = vi.stay_id\n  JOIN map_tachycardia mt ON c.stay_id = mt.stay_id\n  JOIN icu_outcomes io ON c.stay_id = io.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [48:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [48:27]\n\nLocation: US\nJob ID: 88d77536-5a33-469f-b9ed-c9adfebf98ed\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

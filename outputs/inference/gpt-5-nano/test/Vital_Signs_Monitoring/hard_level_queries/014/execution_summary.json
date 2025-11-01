@@ -1,0 +1,28 @@
+{
+  "query": "For a 93\u2011year\u2011old male ICU patient on RRT: among male ICU patients aged 88\u201398, what percentile is an instability score of 85 in the first 72 hours, and what are ICU LOS and hospital mortality for the most unstable quartile?",
+  "final_sql": "WITH eligible_stays AS (\n  -- Identify ICU stays: male, age 88-98 at ICU time, with dialysis within first 72 hours\n  SELECT\n    i.stay_id,\n    i.hadm_id,\n    i.subject_id,\n    i.intime,\n    i.outtime,\n    i.los AS icu_los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON i.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON i.subject_id = p.subject_id\n  WHERE LOWER(p.gender) = 'male'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year)) BETWEEN 88 AND 98\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.inputevents` ie\n      JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n        ON ie.itemid = di.itemid\n      WHERE ie.stay_id = i.stay_id\n        AND ie.starttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 72 HOUR)\n        AND LOWER(di.label) LIKE '%dialysis%'\n    )\n),\n\ninstability_scores AS (\n  -- Derive an instability score per ICU stay from vitals in the first 72 hours\n  SELECT\n    i.stay_id,\n    SUM(\n      CASE\n        WHEN LOWER(di.label) LIKE '%heart rate%' OR LOWER(di.label) LIKE '%heartrate%' THEN\n          CASE WHEN ce.valuenum < 60 OR ce.valuenum > 100 THEN 10 ELSE 0 END\n        WHEN LOWER(di.label) LIKE '%systolic%' OR LOWER(di.label) LIKE '%mean arterial pressure%' THEN\n          CASE WHEN ce.valuenum < 90 OR ce.valuenum > 180 THEN 6 ELSE 0 END\n        WHEN LOWER(di.label) LIKE '%mean arterial pressure%' THEN\n          CASE WHEN ce.valuenum < 65 OR ce.valuenum > 110 THEN 4 ELSE 0 END\n        WHEN LOWER(di.label) LIKE '%respiratory rate%' THEN\n          CASE WHEN ce.valuenum > 22 THEN 8 ELSE 0 END\n        WHEN LOWER(di.label) LIKE '%temperature%' THEN\n          CASE WHEN ce.valuenum < 36 OR ce.valuenum > 38.5 THEN 5 ELSE 0 END\n        ELSE 0\n      END\n    ) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = i.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 72 HOUR)\n    AND (\n      LOWER(di.label) LIKE '%heart rate%' OR LOWER(di.label) LIKE '%heartrate%' OR\n      LOWER(di.label) LIKE '%systolic%' OR LOWER(di.label) LIKE '%mean arterial pressure%' OR\n      LOWER(di.label) LIKE '%blood pressure%' OR\n      LOWER(di.label) LIKE '%respiratory rate%' OR LOWER(di.label) LIKE '%temperature%'\n    )\n  GROUP BY i.stay_id\n),\n\nbase AS (\n  -- Assemble per-stay records with instability_score, icu_los, and mortality flag\n  SELECT\n    i.stay_id,\n    i.hadm_id,\n    i.subject_id,\n    i.intime,\n    i.outtime,\n    i.icu_los,\n    CASE WHEN a.hospital_expire_flag = 1 OR a.deathtime IS NOT NULL THEN 1 ELSE 0 END AS mort_hosp,\n    iscore.instability_score\n  FROM eligible_stays AS i\n  JOIN instability_scores AS iscore ON i.stay_id = iscore.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON i.hadm_id = a.hadm_id\n  WHERE iscore.instability_score IS NOT NULL\n),\n\nquartiled AS (\n  -- Assign quartiles by instability score; quartile 1 = most unstable\n  SELECT b.*,\n         NTILE(4) OVER (ORDER BY b.instability_score DESC) AS quartile\n  FROM base AS b\n  WHERE b.instability_score IS NOT NULL\n),\n\ntopquart_stats AS (\n  -- Metrics for the most unstable quartile (quartile = 1)\n  SELECT\n    AVG(icu_los) AS avg_icu_los_topquart,\n    AVG(mort_hosp) AS hospital_mortality_topquart,\n    COUNT(*) AS topquart_n_stays\n  FROM quartiled\n  WHERE quartile = 1\n),\n\npercentile_of_85 AS (\n  -- Percentile of 85 within the distribution of instability_score\n  SELECT 100.0 * SAFE_DIVIDE(COUNTIF(instability_score <= 85), COUNT(*)) AS percentile_of_85\n  FROM base\n  WHERE instability_score IS NOT NULL\n)\n\nSELECT\n  p.percentile_of_85,\n  t.avg_icu_los_topquart,\n  t.hospital_mortality_topquart,\n  t.topquart_n_stays\nFROM percentile_of_85 p\nCROSS JOIN topquart_stats t;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references p.percentile_of_85 which is neither grouped nor aggregated at [113:3]; reason: invalidQuery, location: query, message: SELECT list expression references p.percentile_of_85 which is neither grouped nor aggregated at [113:3]\n\nLocation: US\nJob ID: dbedc5ee-a446-41e3-a2ad-9134a84c90d7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/73eab465-e446-4159-9d94-15ff7802a0f8?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: 73eab465-e446-4159-9d94-15ff7802a0f8\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

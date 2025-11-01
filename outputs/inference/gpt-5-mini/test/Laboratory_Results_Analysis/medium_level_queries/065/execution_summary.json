@@ -1,0 +1,22 @@
+{
+  "query": "I have a 54-year-old man with AMI. Among male patients 49\u201359 admitted for AMI with first troponin T >0.04 ng/mL, what are the median and IQR of initial values?",
+  "final_sql": "WITH ami_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id\n    AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n    AND di.icd_version = dd.icd_version\n  WHERE di.seq_num = 1\n    AND LOWER(dd.long_title) LIKE '%myocardial infarction%'\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n),\n\ntroponin_t_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n     OR LOWER(label) LIKE '%troponin-t%'\n     OR LOWER(label) LIKE '%troponin, t%'\n),\n\nfirst_troponin_per_admission AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.valueuom,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_t_items li\n    ON le.itemid = li.itemid\n  JOIN ami_admissions aa\n    ON le.hadm_id = aa.hadm_id\n    -- ensure the lab occurred during the hospital admission\n    AND le.charttime BETWEEN aa.admittime AND aa.dischtime\n  WHERE le.valuenum IS NOT NULL\n)\n\nSELECT\n  agg.n_admissions_with_initial_tn_gt_0_04,\n  agg.q[OFFSET(25)] AS q1_25th,\n  agg.q[OFFSET(50)] AS median_50th,\n  agg.q[OFFSET(75)] AS q3_75th,\n  'units as recorded in labevents.valueuom (assumed ng/mL)' AS units_note\nFROM (\n  SELECT\n    APPROX_QUANTILES(valuenum, 100) AS q,\n    COUNT(*) AS n_admissions_with_initial_tn_gt_0_04\n  FROM first_troponin_per_admission\n  WHERE rn = 1\n    AND valuenum > 0.04\n) AS agg;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:16]\n\nLocation: US\nJob ID: 2136858c-c8b2-485c-8905-89c2a2790136\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

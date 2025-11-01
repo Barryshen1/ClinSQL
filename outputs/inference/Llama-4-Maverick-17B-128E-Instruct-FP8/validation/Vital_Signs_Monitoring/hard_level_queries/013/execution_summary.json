@@ -1,0 +1,28 @@
+{
+  "query": "For my 73\u2011year\u2011old male: among male first\u2011ICU stays aged 68\u201378 with multi\u2011trauma, stratify 24\u2011h vital\u2011sign instability scores into quartiles and report count, mean score, mean ICU LOS, mortality by quartile; for top decile report mean tachycardia, hypotension, tachypnea episodes.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT p.subject_id, ie.hadm_id, ie.stay_id, ie.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie ON p.subject_id = ie.subject_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age BETWEEN 68 AND 78\n    AND ie.intime = (SELECT MIN(intime) FROM `physionet-data.mimiciv_3_1_icu.icustays` ie2 WHERE ie2.subject_id = ie.subject_id)\n    AND ie.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON di.icd_code = dicd.icd_code AND di.icd_version = dicd.icd_version\n      WHERE dicd.long_title LIKE '%trauma%' \n        AND di.icd_version = 10  -- Assuming ICD-10; adjust as needed\n    )\n),\n\n-- Step 2: Calculate vital-sign instability scores within the first 24 hours\nvital_signs AS (\n  SELECT ce.stay_id, \n         MAX(CASE WHEN di.label = 'Heart Rate' THEN ce.valuenum ELSE NULL END) AS max_hr,\n         MIN(CASE WHEN di.label = 'Heart Rate' THEN ce.valuenum ELSE NULL END) AS min_hr,\n         MAX(CASE WHEN di.label = 'Systolic Blood Pressure' THEN ce.valuenum ELSE NULL END) AS max_sbp,\n         MIN(CASE WHEN di.label = 'Systolic Blood Pressure' THEN ce.valuenum ELSE NULL END) AS min_sbp,\n         MAX(CASE WHEN di.label = 'Respiratory Rate' THEN ce.valuenum ELSE NULL END) AS max_rr,\n         MIN(CASE WHEN di.label = 'Respiratory Rate' THEN ce.valuenum ELSE NULL END) AS min_rr\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  JOIN cohort c ON ce.stay_id = c.stay_id\n  WHERE ce.charttime BETWEEN c.intime AND TIMESTAMP_ADD(c.intime, INTERVAL 24 HOUR)\n    AND di.label IN ('Heart Rate', 'Systolic Blood Pressure', 'Respiratory Rate')\n  GROUP BY ce.stay_id\n),\n\n-- Calculate instability score (example, actual calculation may vary based on definition)\ninstability_scores AS (\n  SELECT stay_id,\n         -- Example score calculation; adjust according to actual definition\n         (max_hr - min_hr) + (max_sbp - min_sbp) + (max_rr - min_rr) AS score\n  FROM vital_signs\n),\n\n-- Step 3: Stratify scores into quartiles and top decile\nquartiles AS (\n  SELECT stay_id, score,\n         NTILE(4) OVER (ORDER BY score) AS quartile,\n         PERCENT_RANK() OVER (ORDER BY score) AS percent_rank\n  FROM instability_scores\n),\n\n-- Calculate episode counts for top decile\nepisode_counts AS (\n  SELECT q.stay_id,\n         COUNT(CASE WHEN di.label = 'Heart Rate' AND ce.valuenum > 100 THEN 1 END) AS tachycardia_episodes,\n         COUNT(CASE WHEN di.label = 'Systolic Blood Pressure' AND ce.valuenum < 90 THEN 1 END) AS hypotension_episodes,\n         COUNT(CASE WHEN di.label = 'Respiratory Rate' AND ce.valuenum > 24 THEN 1 END) AS tachypnea_episodes\n  FROM quartiles q\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON q.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  WHERE ce.charttime BETWEEN (SELECT intime FROM cohort WHERE stay_id = q.stay_id) AND TIMESTAMP_ADD((SELECT intime FROM cohort WHERE stay_id = q.stay_id), INTERVAL 24 HOUR)\n    AND di.label IN ('Heart Rate', 'Systolic Blood Pressure', 'Respiratory Rate')\n  GROUP BY q.stay_id\n),\n\n-- Final aggregation\nfinal AS (\n  SELECT \n    q.quartile,\n    COUNT(*) AS count,\n    AVG(q.score) AS mean_score,\n    AVG(ie.los) AS mean_icu_los,\n    SUM(CASE WHEN p.dod IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*) AS mortality,\n    -- For top decile\n    AVG(CASE WHEN q.percent_rank >= 0.9 THEN ec.tachycardia_episodes ELSE NULL END) AS mean_tachycardia_episodes,\n    AVG(CASE WHEN q.percent_rank >= 0.9 THEN ec.hypotension_episodes ELSE NULL END) AS mean_hypotension_episodes,\n    AVG(CASE WHEN q.percent_rank >= 0.9 THEN ec.tachypnea_episodes ELSE NULL END) AS mean_tachypnea_episodes\n  FROM quartiles q\n  JOIN cohort c ON q.stay_id = c.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie ON c.stay_id = ie.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON c.subject_id = p.subject_id\n  JOIN episode_counts ec ON q.stay_id = ec.stay_id\n  GROUP BY q.quartile\n)\n\nSELECT * FROM final\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside cohort at [30:37]; reason: invalidQuery, location: query, message: Name intime not found inside cohort at [30:37]\n\nLocation: US\nJob ID: b76a06ad-2dbd-402a-8dc5-75ae425cc26b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [20:10]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [20:10]\n\nLocation: US\nJob ID: e307b61e-4ad9-407b-b42a-27b9cfb8907a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

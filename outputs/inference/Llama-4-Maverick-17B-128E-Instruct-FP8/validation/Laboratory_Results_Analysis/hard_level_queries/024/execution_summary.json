@@ -1,0 +1,28 @@
+{
+  "query": "I have a 58-year-old woman after cardiac arrest. Among female inpatients 53\u201363 with post\u2011arrest, what is the 90th percentile 48\u2011hour lab instability score? For those \u2265 that value, report count, mortality, mean LOS, and compare critical lab frequency to all inpatients.",
+  "final_sql": "WITH \n-- Step 1 & 2: Filter patients based on age, gender, and condition (post-cardiac arrest)\neligible_patients AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, a.dischtime, a.admittime, a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F' \n    AND p.anchor_age BETWEEN 53 AND 63\n    AND a.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE icd_code IN ('I46.0', 'I46.2', 'I46.8', 'I46.9')  -- ICD codes for cardiac arrest\n    )\n),\n\n-- Step 3: Calculate 48-hour lab instability score\nlab_instability_score AS (\n  SELECT ep.hadm_id, \n         PERCENTILE_CONT(ABS(LE.valuenum - DLI.ref_range_lower) / (DLI.ref_range_upper - DLI.ref_range_lower)) OVER (PARTITION BY ep.hadm_id) AS instability_score\n  FROM eligible_patients ep\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` LE ON ep.hadm_id = LE.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` DLI ON LE.itemid = DLI.itemid\n  WHERE LE.charttime BETWEEN TIMESTAMP_SUB(ep.dischtime, INTERVAL 48 HOUR) AND ep.dischtime\n    AND DLI.ref_range_lower IS NOT NULL AND DLI.ref_range_upper IS NOT NULL\n),\n\n-- Calculate 90th percentile of the instability score\npercentile_90 AS (\n  SELECT PERCENTILE_CONT(instability_score, 0.9) AS threshold\n  FROM lab_instability_score\n),\n\n-- Step 4: Patients with score >= 90th percentile\nhigh_risk_patients AS (\n  SELECT hadm_id\n  FROM lab_instability_score\n  WHERE instability_score >= (SELECT threshold FROM percentile_90)\n),\n\n-- Calculate required statistics for high-risk patients\nstats_high_risk AS (\n  SELECT \n    COUNT(DISTINCT hrp.hadm_id) AS count_high_risk,\n    SUM(CASE WHEN ep.deathtime IS NOT NULL THEN 1 ELSE 0 END) / COUNT(DISTINCT hrp.hadm_id) AS mortality,\n    AVG(TIMESTAMP_DIFF(ep.dischtime, ep.admittime, HOUR)) AS mean_los\n  FROM high_risk_patients hrp\n  INNER JOIN eligible_patients ep ON hrp.hadm_id = ep.hadm_id\n),\n\n-- Compare critical lab frequency\ncritical_lab_frequency AS (\n  SELECT \n    COUNT(CASE WHEN LE.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` WHERE category = 'Critical') THEN 1 END) / COUNT(LE.labevent_id) AS freq_critical_labs_high_risk,\n    (SELECT COUNT(CASE WHEN LE2.itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` WHERE category = 'Critical') THEN 1 END) / COUNT(LE2.labevent_id) FROM `physionet-data.mimiciv_3_1_hosp.labevents` LE2) AS freq_critical_labs_all\n  FROM high_risk_patients hrp\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` LE ON hrp.hadm_id = LE.hadm_id\n)\n\n-- Final output\nSELECT \n  (SELECT threshold FROM percentile_90) AS percentile_90_threshold,\n  (SELECT count_high_risk FROM stats_high_risk) AS count_high_risk,\n  (SELECT mortality FROM stats_high_risk) AS mortality_high_risk,\n  (SELECT mean_los FROM stats_high_risk) AS mean_los_high_risk,\n  (SELECT freq_critical_labs_high_risk FROM critical_lab_frequency) AS freq_critical_labs_high_risk,\n  (SELECT freq_critical_labs_all FROM critical_lab_frequency) AS freq_critical_labs_all;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name ref_range_lower not found inside DLI at [24:13]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside DLI at [24:13]\n\nLocation: US\nJob ID: dba6b6ea-1849-47ff-9e8e-9a387936f2f7\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected end of statement at [1:134]; reason: invalidQuery, location: query, message: Syntax error: Unexpected end of statement at [1:134]\n\nLocation: US\nJob ID: 866b7c9c-b74e-46ed-ae93-31d670d4ce1e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: a at [23:44]; reason: invalidQuery, location: query, message: Unrecognized name: a at [23:44]\n\nLocation: US\nJob ID: 568fdf6d-d7ec-4bfb-9004-dd46ee29fa70\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside DLI at [24:13]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside DLI at [24:13]\n\nLocation: US\nJob ID: dba6b6ea-1849-47ff-9e8e-9a387936f2f7\n"
+    }
+  ]
+}

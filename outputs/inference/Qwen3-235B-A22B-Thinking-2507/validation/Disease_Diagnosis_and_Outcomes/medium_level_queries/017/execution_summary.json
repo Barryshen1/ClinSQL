@@ -1,0 +1,17 @@
+{
+  "query": "For a 55-year-old man: among males 50\u201360 with sepsis (excluding septic shock), report in-hospital mortality (%) with 95% CIs and median time-to-death among non-survivors (days) by LOS (<8 vs \u22658 days).",
+  "final_sql": "WITH sepsis_admissions AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_version = 10\n    AND (icd_code LIKE 'A40%' OR icd_code LIKE 'A41%')\n  GROUP BY hadm_id\n),\nshock_admissions AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_version = 10\n    AND icd_code = 'R6521'\n  GROUP BY hadm_id\n),\nsepsis_no_shock AS (\n  SELECT sa.hadm_id\n  FROM sepsis_admissions sa\n  LEFT JOIN shock_admissions sh ON sa.hadm_id = sh.hadm_id\n  WHERE sh.hadm_id IS NULL\n),\ncohort AS (\n  SELECT\n    a.hadm_id,\n    a.hospital_expire_flag,\n    a.admittime,\n    a.deathtime,\n    a.dischtime,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age,\n    -- Hospital LOS in days\n    DATETIME_DIFF(CAST(a.dischtime AS DATETIME), CAST(a.admittime AS DATETIME), DAY) AS hospital_los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN sepsis_no_shock sns\n    ON a.hadm_id = sns.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 50 AND 60\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\ncohort_with_los_group AS (\n  SELECT\n    *,\n    CASE \n      WHEN hospital_los_days < 8 THEN '<8'\n      ELSE '>=8'\n    END AS los_group,\n    -- Time-to-death in days (for non-survivors only)\n    IF(hospital_expire_flag = 1, \n       DATETIME_DIFF(CAST(deathtime AS DATETIME), CAST(admittime AS DATETIME), DAY), \n       NULL) AS time_to_death\n  FROM cohort\n)\nSELECT\n  los_group,\n  -- Mortality rate (%)\n  ROUND(SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)) * 100, 2) AS mortality_rate,\n  -- 95% CI lower bound (%)\n  ROUND(GREATEST(0, \n    (p - 1.96 * SQRT(SAFE_DIVIDE(p * (1 - p), COUNT(*)))) * 100\n  ), 2) AS lower_ci,\n  -- 95% CI upper bound (%)\n  ROUND(LEAST(100, \n    (p + 1.96 * SQRT(SAFE_DIVIDE(p * (1 - p), COUNT(*)))) * 100\n  ), 2) AS upper_ci,\n  -- Median time-to-death (days) for non-survivors\n  APPROX_QUANTILES(time_to_death, 100)[OFFSET(50)] AS median_time_to_death\nFROM (\n  SELECT\n    *,\n    SAFE_DIVIDE(SUM(hospital_expire_flag) OVER (PARTITION BY los_group), COUNT(*) OVER (PARTITION BY los_group)) AS p\n  FROM cohort_with_los_group\n)\nGROUP BY los_group, p\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

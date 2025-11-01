@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH lower_gi_hadms AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%lower gastrointestinal%' \n    AND LOWER(dd.long_title) LIKE '%hemorrhage%'\n),\nfirst_icu_stays AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) = 1\n),\ncohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN first_icu_stays s\n    ON p.subject_id = s.subject_id\n   AND a.hadm_id = s.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 87 AND 97\n    AND a.hadm_id IN (SELECT hadm_id FROM lower_gi_hadms)\n),\nproc_counts AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.intime,\n    c.los,\n    c.hospital_expire_flag,\n    COUNT(DISTINCT pr.icd_code) AS proc_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n    ON c.subject_id = pr.subject_id\n   AND c.hadm_id = pr.hadm_id\n   AND pr.chartdate >= DATE(c.intime)\n   AND pr.chartdate < DATE_ADD(DATE(c.intime), INTERVAL 2 DAY)\n  GROUP BY\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.intime,\n    c.los,\n    c.hospital_expire_flag\n),\nwith_quintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY proc_count) AS quintile\n  FROM proc_counts\n)\nSELECT\n  quintile,\n  ROUND(AVG(proc_count), 2)        AS mean_proc_count,\n  ROUND(AVG(los), 2)               AS mean_icu_los_days,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 2)\n                                    AS in_hospital_mortality_pct\nFROM with_quintiles\nGROUP BY quintile\nORDER BY quintile;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

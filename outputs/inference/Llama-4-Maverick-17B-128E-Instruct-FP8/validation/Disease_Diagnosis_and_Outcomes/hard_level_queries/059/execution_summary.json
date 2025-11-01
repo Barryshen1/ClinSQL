@@ -1,0 +1,28 @@
+{
+  "query": "Male patient, 64, admitted with DKA. Among male inpatients aged 59\u201369 with DKA, what is the mean calculated risk score and 30\u2011day mortality? Compare AKI and ARDS rates and survivor LOS versus age\u2011matched general inpatients; give percentile for matched risk.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort (male inpatients aged 59-69 with DKA)\ndka_patients AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 59 AND 69\n  AND dicd.long_title LIKE '%Diabetic ketoacidosis%'\n),\n\n-- Step 2: Calculate 30-day mortality\nmortality AS (\n  SELECT a.hadm_id, \n         CASE WHEN a.deathtime <= DATETIME_ADD(a.admittime, INTERVAL 30 DAY) THEN 1 ELSE 0 END AS died_within_30_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN dka_patients ON a.hadm_id = dka_patients.hadm_id\n),\n\n-- Step 3: Calculate mean risk score (using SAPS-II as an example)\n-- This part is simplified and assumes relevant data is available in chartevents\n-- Detailed SAPS-II calculation is complex and not fully implemented here\nsapsii_components AS (\n  SELECT ce.stay_id, \n         -- Example components; actual calculation is more complex\n         MAX(CASE WHEN di.label = 'Heart Rate' THEN ce.valuenum END) AS hr,\n         MAX(CASE WHEN di.label = 'Systolic Blood Pressure' THEN ce.valuenum END) AS sbp\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON ce.stay_id = icu.stay_id\n  INNER JOIN dka_patients ON icu.hadm_id = dka_patients.hadm_id\n  GROUP BY ce.stay_id\n),\nsapsii AS (\n  SELECT icu.hadm_id,\n         -- Simplified example; actual SAPS-II calculation involves more variables and logic\n         AVG((ce.hr + ce.sbp)) AS sapsii_score\n  FROM sapsii_components ce\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON ce.stay_id = icu.stay_id\n  GROUP BY icu.hadm_id\n),\n\n-- Step 4 & 5: AKI and ARDS rates, Survivor LOS\naki_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl ON l.itemid = dl.itemid\n  WHERE dl.label = 'Creatinine' AND l.valuenum > 1.2  -- Simplified AKI definition\n  AND hadm_id IN (SELECT hadm_id FROM dka_patients)\n),\nards_patients AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Acute respiratory distress syndrome%'\n  AND d.hadm_id IN (SELECT hadm_id FROM dka_patients)\n),\nlos AS (\n  SELECT a.hadm_id, DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS length_of_stay\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN dka_patients ON a.hadm_id = dka_patients.hadm_id\n  WHERE a.dischtime IS NOT NULL\n)\n\n-- Final aggregation\nSELECT \n  AVG(s.sapsii_score) AS mean_sapsii,\n  AVG(m.died_within_30_days) AS thirty_day_mortality,\n  COUNT(DISTINCT a.hadm_id) / COUNT(DISTINCT dka_patients.hadm_id) AS aki_rate,\n  COUNT(DISTINCT ards.hadm_id) / COUNT(DISTINCT dka_patients.hadm_id) AS ards_rate,\n  PERCENTILE_CONT(l.length_of_stay, 0.5) AS median_los\nFROM dka_patients\nLEFT JOIN sapsii s ON dka_patients.hadm_id = s.hadm_id\nLEFT JOIN mortality m ON dka_patients.hadm_id = m.hadm_id\nLEFT JOIN aki_patients a ON dka_patients.hadm_id = a.hadm_id\nLEFT JOIN ards_patients ards ON dka_patients.hadm_id = ards.hadm_id\nLEFT JOIN los l ON dka_patients.hadm_id = l.hadm_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: cd4e6c54-1a7a-4b2c-9428-fc08501afa1a\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name stay_id is ambiguous at [25:10]; reason: invalidQuery, location: query, message: Column name stay_id is ambiguous at [25:10]\n\nLocation: US\nJob ID: 7d7fdfb5-ec0a-40e3-888c-7f35335db15c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references l.length_of_stay which is neither grouped nor aggregated at [70:19]; reason: invalidQuery, location: query, message: SELECT list expression references l.length_of_stay which is neither grouped nor aggregated at [70:19]\n\nLocation: US\nJob ID: 262c2ebb-9679-4f6c-9894-19ea869dc267\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: cd4e6c54-1a7a-4b2c-9428-fc08501afa1a\n"
+    }
+  ]
+}

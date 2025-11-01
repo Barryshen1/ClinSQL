@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY mortality_duration) - percentile_cont(0.25) within GROUP (ORDER BY mortality_duration) AS interquartile_range FROM mortality_data;

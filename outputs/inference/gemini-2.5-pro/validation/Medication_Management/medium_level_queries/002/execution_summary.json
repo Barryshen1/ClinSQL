@@ -1,0 +1,16 @@
+{
+  "query": "My 64-year-old female inpatient has T2DM and heart failure. Among female inpatients 59\u201369 (\u226548h), report prevalence of injectable GLP\u20111 use in first 48h vs final 12h and absolute pp difference.",
+  "final_sql": "WITH\n  -- Step 1: Identify injectable GLP-1 prescriptions\n  glp1_prescriptions AS (\n    SELECT\n      hadm_id,\n      starttime,\n      stoptime\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n    WHERE\n      (\n        LOWER(drug) LIKE '%exenatide%'\n        OR LOWER(drug) LIKE '%liraglutide%'\n        OR LOWER(drug) LIKE '%dulaglutide%'\n        OR LOWER(drug) LIKE '%semaglutide%'\n        OR LOWER(drug) LIKE '%lixisenatide%'\n        OR LOWER(drug) LIKE '%tirzepatide%'\n      )\n      AND LOWER(route) = 'sc' -- SC = Subcutaneous, the standard injectable route\n  ),\n  -- Step 2: Define the patient cohort\n  cohort AS (\n    SELECT\n      adm.hadm_id,\n      adm.admittime,\n      adm.dischtime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n    WHERE\n      pat.gender = 'F'\n      -- Calculate age at admission and filter\n      AND (\n        pat.anchor_age + EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year\n      ) BETWEEN 59 AND 69\n      -- Filter for hospital stays >= 48 hours\n      AND DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) >= 48\n  ),\n  -- Step 3: Flag GLP-1 use within the specified time windows for each admission\n  cohort_drug_use AS (\n    SELECT\n      co.hadm_id,\n      -- Flag for use in the first 48 hours: prescription started within the window\n      MAX(\n        CASE\n          WHEN glp1.starttime BETWEEN co.admittime AND DATETIME_ADD(co.admittime, INTERVAL 48 HOUR)\n            THEN 1\n          ELSE 0\n        END\n      ) AS used_in_first_48h,\n      -- Flag for use in the final 12 hours: prescription active period overlaps with the window\n      MAX(\n        CASE\n          WHEN\n            glp1.starttime < co.dischtime\n            AND glp1.stoptime > DATETIME_SUB(co.dischtime, INTERVAL 12 HOUR)\n            THEN 1\n          ELSE 0\n        END\n      ) AS used_in_final_12h\n    FROM cohort AS co\n    LEFT JOIN glp1_prescriptions AS glp1\n      ON co.hadm_id = glp1.hadm_id\n    GROUP BY\n      co.hadm_id\n  )\n-- Step 4: Calculate final prevalence statistics\nSELECT\n  COUNT(hadm_id) AS total_patients_in_cohort,\n  SUM(used_in_first_48h) AS patients_on_glp1_first_48h,\n  SUM(used_in_final_12h) AS patients_on_glp1_final_12h,\n  -- Prevalence in first 48h (%)\n  SAFE_DIVIDE(SUM(used_in_first_48h), COUNT(hadm_id)) * 100 AS prevalence_first_48h_percent,\n  -- Prevalence in final 12h (%)\n  SAFE_DIVIDE(SUM(used_in_final_12h), COUNT(hadm_id)) * 100 AS prevalence_final_12h_percent,\n  -- Absolute percentage point (pp) difference\n  ABS(\n    (SAFE_DIVIDE(SUM(used_in_first_48h), COUNT(hadm_id)) * 100) - (SAFE_DIVIDE(SUM(used_in_final_12h), COUNT(hadm_id)) * 100)\n  ) AS absolute_pp_difference\nFROM cohort_drug_use;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

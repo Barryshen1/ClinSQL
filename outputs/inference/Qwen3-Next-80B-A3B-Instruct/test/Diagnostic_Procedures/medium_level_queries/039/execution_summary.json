@@ -1,0 +1,22 @@
+{
+  "query": "For an 82\u2011year\u2011old man with asthma exacerbation, among males 77\u201387 admitted 1\u20134 vs 5\u20138 days and stratified by ICU vs non\u2011ICU, what are mean, min, max CT/MRI per admission?",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT \n    subject_id\n  FROM \n    physionet-data.mimiciv_3_1_hosp.patients\n  WHERE \n    gender = 'M' \n    AND anchor_age BETWEEN 77 AND 87\n),\nadmissions_filtered AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) AS los_days\n  FROM \n    physionet-data.mimiciv_3_1_hosp.admissions a\n  INNER JOIN \n    patients_filtered p ON a.subject_id = p.subject_id\n  WHERE \n    DATE_DIFF(CAST(a.dischtime AS DATE), CAST(a.admittime AS DATE), DAY) BETWEEN 1 AND 8\n),\nicu_status AS (\n  SELECT \n    a.hadm_id,  -- Fixed: qualified with alias to resolve ambiguity\n    CASE WHEN COUNT(i.stay_id) > 0 THEN 'ICU' ELSE 'Non-ICU' END AS icu_status\n  FROM \n    admissions_filtered a\n  LEFT JOIN \n    physionet-data.mimiciv_3_1_icu.icustays i ON a.hadm_id = i.hadm_id\n  GROUP BY \n    a.hadm_id\n),\nimaging_procedures AS (\n  -- ICU imaging: procedureevents with CT/MRI\n  SELECT \n    p.hadm_id,\n    COUNT(*) AS imaging_count\n  FROM \n    physionet-data.mimiciv_3_1_icu.procedureevents p\n  INNER JOIN \n    physionet-data.mimiciv_3_1_icu.d_items d ON p.itemid = d.itemid\n  WHERE \n    LOWER(d.label) LIKE '%ct%' \n    OR LOWER(d.label) LIKE '%mri%'\n  GROUP BY \n    p.hadm_id\n\n  UNION ALL\n\n  -- Non-ICU imaging: hcpcsevents with CT/MRI\n  SELECT \n    h.hadm_id,\n    COUNT(*) AS imaging_count\n  FROM \n    physionet-data.mimiciv_3_1_hosp.hcpcsevents h\n  INNER JOIN \n    physionet-data.mimiciv_3_1_hosp.d_hcpcs d ON h.hcpcs_cd = d.code\n  WHERE \n    LOWER(d.short_description) LIKE '%ct%' \n    OR LOWER(d.short_description) LIKE '%mri%'\n  GROUP BY \n    h.hadm_id\n),\nimaging_per_admission AS (\n  SELECT \n    hadm_id,\n    SUM(imaging_count) AS total_imaging_procedures\n  FROM \n    imaging_procedures\n  GROUP BY \n    hadm_id\n),\nfinal_admissions AS (\n  SELECT \n    af.hadm_id,\n    af.los_days,\n    ic.icu_status,\n    COALESCE(ip.total_imaging_procedures, 0) AS imaging_count\n  FROM \n    admissions_filtered af\n  INNER JOIN \n    icu_status ic ON af.hadm_id = ic.hadm_id\n  LEFT JOIN \n    imaging_per_admission ip ON af.hadm_id = ip.hadm_id\n),\nlos_groups AS (\n  SELECT \n    icu_status,\n    CASE \n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 8 THEN '5-8 days'\n    END AS los_group,\n    imaging_count\n  FROM \n    final_admissions\n  WHERE \n    los_days BETWEEN 1 AND 8\n)\nSELECT \n  icu_status,\n  los_group,\n  AVG(imaging_count) AS mean_procedures,\n  MIN(imaging_count) AS min_procedures,\n  MAX(imaging_count) AS max_procedures\nFROM \n  los_groups\nWHERE \n  los_group IS NOT NULL\nGROUP BY \n  icu_status, los_group\nORDER BY \n  icu_status, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [24:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [24:5]\n\nLocation: US\nJob ID: b64f7e40-76f5-4c87-8a03-89d98f4547ff\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

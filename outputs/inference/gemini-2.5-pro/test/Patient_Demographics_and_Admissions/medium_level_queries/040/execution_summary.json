@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 75-year-old woman. For female surgical inpatients aged 70\u201380, what proportions had LOS \u22657 and \u226514 days, stratified by discharge: home, facility (SNF/rehab/LTACH), or in\u2011hospital death?",
+  "final_sql": "WITH\n  -- CTE to identify all hospital admissions that are considered surgical by service type\n  surgical_admissions AS (\n    SELECT DISTINCT\n      hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.services`\n    WHERE\n      curr_service IN (\n        'CSURG', -- Cardiac Surgery\n        'NSURG', -- Neurosurgery\n        'PSURG', -- Plastic Surgery\n        'SURG', -- General Surgery\n        'TSURG', -- Thoracic Surgery\n        'VSURG', -- Vascular Surgery\n        'ORTHO', -- Orthopedics\n        'TRAUM', -- Trauma\n        'GU', -- Urology\n        'GYN', -- Gynecology\n        'ENT', -- Ear, Nose, Throat\n        'DENT' -- Dentistry\n      )\n  ),\n  -- CTE to define the patient cohort and calculate LOS and discharge category\n  cohort AS (\n    SELECT\n      adm.hadm_id,\n      -- Calculate LOS in integer days\n      DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n      -- Categorize discharge location into the groups of interest\n      CASE\n        WHEN adm.hospital_expire_flag = 1\n        THEN 'In-Hospital Death'\n        WHEN adm.discharge_location IN ('HOME', 'HOME HEALTH CARE')\n        THEN 'Home'\n        WHEN adm.discharge_location IN (\n          'SKILLED NURSING FACILITY', 'REHAB/DISTINCT PART HOSP', 'LONG TERM CARE HOSPITAL'\n        )\n        THEN 'Facility'\n        ELSE 'Other'\n      END AS discharge_category\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    -- Join to patients to get demographics (gender, age)\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat ON adm.subject_id = pat.subject_id\n    -- Use an INNER JOIN to include only surgical admissions\n    INNER JOIN\n      surgical_admissions AS sa ON adm.hadm_id = sa.hadm_id\n    WHERE\n      -- 1. Filter for female patients\n      pat.gender = 'F'\n      -- 2. Filter for age at admission between 70 and 80 (inclusive)\n      AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) BETWEEN 70 AND 80\n      -- 3. Ensure dischtime is available to calculate LOS\n      AND adm.dischtime IS NOT NULL\n  )\n-- Final aggregation to calculate counts and proportions\nSELECT\n  discharge_category,\n  COUNT(hadm_id) AS total_admissions,\n  COUNTIF(los_days >= 7) AS admissions_los_ge_7,\n  SAFE_DIVIDE(COUNTIF(los_days >= 7), COUNT(hadm_id)) AS proportion_los_ge_7,\n  COUNTIF(los_days >= 14) AS admissions_los_ge_14,\n  SAFE_DIVIDE(COUNTIF(los_days >= 14), COUNT(hadm_id)) AS proportion_los_ge_14\nFROM cohort\n-- Filter out admissions that do not fall into our categories of interest\nWHERE\n  discharge_category IN ('Home', 'Facility', 'In-Hospital Death')\nGROUP BY\n  discharge_category\nORDER BY\n  discharge_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

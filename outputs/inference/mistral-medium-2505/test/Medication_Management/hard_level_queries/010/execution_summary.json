@@ -1,0 +1,16 @@
+{
+  "query": "I'm managing a 66\u2011year\u2011old man hospitalized with hemorrhagic stroke. For male inpatients aged 61\u201371, stratified into quintiles by first\u201124\u2011hour medication complexity score, report per quintile: number of patients, mean complexity score, average LOS, in\u2011hospital mortality, and 30\u2011day readmission rate.",
+  "final_sql": "WITH\n-- Get male patients aged 61-71\npatient_demo AS (\n  SELECT\n    subject_id,\n    gender,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 61 AND 71\n),\n\n-- Get admissions with hemorrhagic stroke (ICD-10 I61.*)\nstroke_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE\n    d.icd_code LIKE 'I61.%'\n    AND d.icd_version = 10\n),\n\n-- Calculate medication complexity score (number of unique medications in first 24 hours)\nmed_complexity AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    COUNT(DISTINCT p.drug) AS complexity_score\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN\n    stroke_admissions a\n  ON\n    p.subject_id = a.subject_id AND p.hadm_id = a.hadm_id\n  WHERE\n    TIMESTAMP_DIFF(p.starttime, a.admittime, HOUR) <= 24\n  GROUP BY\n    p.subject_id, p.hadm_id\n),\n\n-- Combine all data\ncombined_data AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.los_days,\n    a.hospital_expire_flag,\n    m.complexity_score,\n    -- Calculate 30-day readmission flag\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = a.subject_id\n      AND a2.admittime > a.dischtime\n      AND TIMESTAMP_DIFF(a2.admittime, a.dischtime, DAY) <= 30\n    ) AS readmitted_30d\n  FROM\n    patient_demo p\n  JOIN\n    stroke_admissions a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    med_complexity m\n  ON\n    a.subject_id = m.subject_id AND a.hadm_id = m.hadm_id\n),\n\n-- Create quintiles based on complexity score\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY complexity_score) AS quintile\n  FROM\n    combined_data\n)\n\n-- Final aggregation by quintile\nSELECT\n  quintile,\n  COUNT(DISTINCT subject_id) AS num_patients,\n  ROUND(AVG(complexity_score), 2) AS mean_complexity_score,\n  ROUND(AVG(los_days), 2) AS avg_los_days,\n  ROUND(100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS in_hospital_mortality_pct,\n  ROUND(100 * SUM(CASE WHEN readmitted_30d THEN 1 ELSE 0 END) / COUNT(*), 2) AS readmission_30d_pct\nFROM\n  quintiles\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

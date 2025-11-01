@@ -1,0 +1,23 @@
+{
+  "query": "For my 57-year-old female patient: among women 52\u201362 admitted with AMI whose first Troponin T >0.01 ng/mL, report patient/admission counts, mean age, LOS, first troponin stats, and in-hospital mortality.",
+  "final_sql": "WITH ami_admissions AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'))\n    )\n),\nami_admissions_with_age AS (\n  SELECT \n    *,\n    anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) AS age_at_admission\n  FROM ami_admissions\n),\nfiltered_ami_admissions AS (\n  SELECT *\n  FROM ami_admissions_with_age\n  WHERE age_at_admission BETWEEN 52 AND 62\n),\nfirst_troponin_in_cohort AS (\n  SELECT \n    ft.hadm_id,\n    ft.valuenum\n  FROM (\n    SELECT \n      le.hadm_id,\n      le.charttime,\n      le.valuenum,\n      ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n      ON le.itemid = dli.itemid\n    WHERE dli.label LIKE '%TROPONIN T%'\n      AND le.valuenum IS NOT NULL\n  ) ft\n  INNER JOIN filtered_ami_admissions fa\n    ON ft.hadm_id = fa.hadm_id\n  WHERE ft.charttime >= fa.admittime\n    AND ft.charttime <= fa.dischtime\n    AND ft.rn = 1\n),\ncohort AS (\n  SELECT \n    fa.*,\n    ft.valuenum AS first_troponin_value\n  FROM filtered_ami_admissions fa\n  INNER JOIN first_troponin_in_cohort ft\n    ON fa.hadm_id = ft.hadm_id\n  WHERE ft.valuenum > 0.01\n)\nSELECT\n  COUNT(DISTINCT subject_id) AS num_patients,\n  COUNT(*) AS num_admissions,\n  AVG(age_at_admission) AS mean_age,\n  AVG(DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0) AS mean_los_days,\n  COUNT(first_troponin_value) AS num_first_troponin,\n  MIN(first_troponin_value) AS min_first_troponin,\n  MAX(first_troponin_value) AS max_first_troponin,\n  AVG(first_troponin_value) AS avg_first_troponin,\n  STDDEV(first_troponin_value) AS std_first_troponin,\n  SUM(hospital_expire_flag) AS deaths,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"whose\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"whose\" at [1:10]\n\nLocation: US\nJob ID: d9bb34ff-a883-4cd4-aaae-5ab71dcf3c66\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

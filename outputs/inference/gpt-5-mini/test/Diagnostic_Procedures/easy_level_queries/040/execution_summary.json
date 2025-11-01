@@ -1,0 +1,22 @@
+{
+  "query": "For my 56-year-old male patient, what is the 25th percentile of distinct ECG/telemetry procedures per patient among males 51\u201361?",
+  "final_sql": "WITH male_cohort AS (\n  -- males aged 51-61 inclusive\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 51 AND 61\n),\nhcpcs_ecg AS (\n  -- HCPCS billed procedures that look like ECG/telemetry\n  SELECT\n    he.subject_id,\n    CONCAT('hcpcs_', COALESCE(SAFE_CAST(he.hcpcs_cd AS STRING), '')) AS proc_code\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` he\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n    ON he.hcpcs_cd = d.code\n  WHERE (\n      LOWER(COALESCE(he.short_description, '')) LIKE '%ecg%'\n      OR LOWER(COALESCE(he.short_description, '')) LIKE '%ekg%'\n      OR LOWER(COALESCE(he.short_description, '')) LIKE '%telemet%'\n      OR LOWER(COALESCE(he.short_description, '')) LIKE '%telemetry%'\n      OR LOWER(COALESCE(d.long_description, '')) LIKE '%ecg%'\n      OR LOWER(COALESCE(d.long_description, '')) LIKE '%ekg%'\n      OR LOWER(COALESCE(d.long_description, '')) LIKE '%telemet%'\n      OR LOWER(COALESCE(d.long_description, '')) LIKE '%telemetry%'\n      OR LOWER(COALESCE(he.short_description, '')) LIKE '%cardiac monitor%'\n      OR LOWER(COALESCE(d.long_description, '')) LIKE '%cardiac monitor%'\n    )\n    -- only interested in subjects in our cohort (optional pre-filter to reduce work)\n    AND he.subject_id IN (SELECT subject_id FROM male_cohort)\n),\nicu_procedure_ecg AS (\n  -- ICU procedureevents whose d_items.label indicates ECG/telemetry\n  SELECT\n    pe.subject_id,\n    CONCAT('item_', CAST(pe.itemid AS STRING)) AS proc_code\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON pe.itemid = di.itemid\n  WHERE (\n      LOWER(COALESCE(di.label, '')) LIKE '%ecg%'\n      OR LOWER(COALESCE(di.label, '')) LIKE '%ekg%'\n      OR LOWER(COALESCE(di.label, '')) LIKE '%telemet%'\n      OR LOWER(COALESCE(di.label, '')) LIKE '%telemetry%'\n      OR LOWER(COALESCE(di.label, '')) LIKE '%cardiac monitor%'\n      OR LOWER(COALESCE(SAFE_CAST(pe.value AS STRING), '')) LIKE '%telemetry%'\n    )\n    AND pe.subject_id IN (SELECT subject_id FROM male_cohort)\n),\n-- union distinct procedure codes per subject across both sources\nsubject_proc_distinct AS (\n  SELECT DISTINCT subject_id, proc_code\n  FROM (\n    SELECT * FROM hcpcs_ecg\n    UNION ALL\n    SELECT * FROM icu_procedure_ecg\n  )\n),\n-- per-subject distinct-procedure counts, include zeros for patients with no matches\nsubject_counts AS (\n  SELECT\n    m.subject_id,\n    COALESCE(cnt.num_procs, 0) AS distinct_ecg_telemetry_proc_count\n  FROM male_cohort m\n  LEFT JOIN (\n    SELECT subject_id, COUNT(*) AS num_procs\n    FROM subject_proc_distinct\n    GROUP BY subject_id\n  ) cnt\n  ON m.subject_id = cnt.subject_id\n)\n-- final: compute 25th percentile (approximate)\nSELECT\n  APPROX_QUANTILES(distinct_ecg_telemetry_proc_count, 100)[OFFSET(25)] AS pct_25_distinct_ecg_telemetry_procs_per_patient,\n  COUNT(*) AS cohort_size\nFROM subject_counts;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function COALESCE\n  Argument types: FLOAT64, STRING\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRING} at [45:16]; reason: invalidQuery, location: query, message: No matching signature for function COALESCE\n  Argument types: FLOAT64, STRING\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRING} at [45:16]\n\nLocation: US\nJob ID: 7fa93904-1132-4f8f-832a-442afb2e77b4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

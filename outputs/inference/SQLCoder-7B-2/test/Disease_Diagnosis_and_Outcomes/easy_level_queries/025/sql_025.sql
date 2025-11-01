@@ -1,0 +1,1 @@
+SELECT stddev(icustays.los) AS standard_deviation FROM patients JOIN admissions ON patients.subject_id = admissions.subject_id JOIN icustays ON admissions.stay_id = icustays.stay_id WHERE patients.gender = 'M' AND patients.anchor_year = 82 AND admissions.admission_type = 'primary upper GI bleeding' AND (patients.anchor_year_group::integer BETWEEN 77 AND 87);

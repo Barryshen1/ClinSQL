@@ -1,0 +1,22 @@
+{
+  "query": "I have a 65-year-old male. Among male Medicare patients 60\u201370 admitted via the ED with a principal UTI, what is the 30-day readmission rate? Report median index LOS for readmitted vs non\u2011readmitted and percent with LOS>9 days.",
+  "final_sql": "WITH index_candidates AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS index_los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON dd.icd_code = di.icd_code AND dd.icd_version = di.icd_version\n  WHERE UPPER(p.gender) = 'M'\n    AND p.anchor_age BETWEEN 60 AND 70\n    AND UPPER(a.admission_type) = 'EMERGENCY'\n    AND a.insurance LIKE '%Medicare%'\n    AND di.seq_num = 1\n    AND LOWER(dd.long_title) LIKE '%urinary tract infection%'\n),\nindex_admissions AS (\n  SELECT\n    ic.subject_id,\n    ic.hadm_id,\n    ic.admittime,\n    ic.dischtime,\n    ic.index_los_days,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` r\n      WHERE r.subject_id = ic.subject_id\n        AND r.hadm_id <> ic.hadm_id\n        AND r.admittime > ic.dischtime\n        AND TIMESTAMP_DIFF(r.admittime, ic.dischtime, DAY) <= 30\n    ) THEN 1 ELSE 0 END AS readmit_30\n  FROM index_candidates ic\n),\nper_group AS (\n  SELECT\n    CAST(readmit_30 AS INT64) AS readmit_flag,\n    COUNT(*) AS n_index_admissions,\n    APPROX_QUANTILES(index_los_days, 2)[OFFSET(1)] AS median_index_los_days,\n    100.0 * SUM(CASE WHEN index_los_days > 9.0 THEN 1 ELSE 0 END) / COUNT(*) AS pct_los_gt_9_days\n  FROM index_admissions\n  GROUP BY readmit_30\n  ORDER BY readmit_30\n),\noverall_rate AS (\n  SELECT 100.0 * SUM(readmit_30) / COUNT(*) AS readmission_rate_30d\n  FROM index_admissions\n)\nSELECT\n  g.readmit_flag AS readmit_flag,\n  g.n_index_admissions,\n  g.median_index_los_days,\n  g.pct_los_gt_9_days,\n  o.readmission_rate_30d\nFROM per_group AS g\nCROSS JOIN overall_rate AS o\nORDER BY g.readmit_flag;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [43:5]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [43:5]\n\nLocation: US\nJob ID: c59dd3c8-aaf7-49e3-8ae7-800067068903\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

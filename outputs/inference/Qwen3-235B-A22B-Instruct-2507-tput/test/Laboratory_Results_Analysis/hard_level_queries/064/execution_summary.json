@@ -1,0 +1,28 @@
+{
+  "query": "I have a 70\u2011year\u2011old female with acute pancreatitis. Among female inpatients 65\u201375 with acute pancreatitis, stratify first\u201148\u2011hour lab instability scores into quintiles and report count, mean instability, mean LOS, mortality per quintile, and % with critical labs versus age\u2011matched inpatients.",
+  "final_sql": "WITH patients_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admit,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 65 AND 75\n    AND a.admission_type IN ('ELECTIVE', 'URGENT', 'EMERGENCY')\n),\npancreatitis_diagnoses AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE di.icd_version = 10\n    AND di.icd_code LIKE 'K85%'\n),\ncohort AS (\n  SELECT\n    pa.*,\n    CASE WHEN pd.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_pancreatitis\n  FROM patients_age pa\n  LEFT JOIN pancreatitis_diagnoses pd\n    ON pa.hadm_id = pd.hadm_id\n),\nlab_abnormalities AS (\n  SELECT\n    le.hadm_id,\n    COUNT(*) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  INNER JOIN patients_age pa\n    ON le.hadm_id = pa.hadm_id\n  WHERE le.charttime >= pa.admittime\n    AND le.charttime <= DATETIME_ADD(pa.admittime, INTERVAL 48 HOUR)\n    AND (\n      le.flag = 'abnormal'\n      OR (\n        le.valuenum IS NOT NULL\n        AND (\n          (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower)\n          OR (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper)\n        )\n      )\n    )\n  GROUP BY le.hadm_id\n),\ncohort_with_instability AS (\n  SELECT\n    c.*,\n    COALESCE(lab.instability_score, 0) AS instability_score,\n    CASE WHEN COALESCE(lab.instability_score, 0) > 0 THEN 1 ELSE 0 END AS has_critical_lab,\n    NTILE(5) OVER (ORDER BY COALESCE(lab.instability_score, 0)) AS quintile\n  FROM cohort c\n  LEFT JOIN lab_abnormalities lab\n    ON c.hadm_id = lab.hadm_id\n),\npancreatitis_stratified AS (\n  SELECT\n    'Pancreatitis' AS group_label,\n    quintile,\n    COUNT(*) AS count_patients,\n    AVG(instability_score) AS mean_instability,\n    AVG(los) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(has_critical_lab) AS pct_critical_labs\n  FROM cohort_with_instability\n  WHERE has_pancreatitis = 1\n  GROUP BY quintile\n),\ncontrol_group AS (\n  SELECT\n    'Control' AS group_label,\n    NULL AS quintile,\n    COUNT(*) AS count_patients,\n    AVG(instability_score) AS mean_instability,\n    AVG(los) AS mean_los,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(has_critical_lab) AS pct_critical_labs\n  FROM cohort_with_instability\n  WHERE has_pancreatitis = 0\n)\nSELECT\n  group_label,\n  quintile,\n  count_patients,\n  mean_instability,\n  mean_los,\n  mortality_rate,\n  pct_critical_labs\nFROM pancreatitis_stratified\nUNION ALL\nSELECT\n  group_label,\n  quintile,\n  count_patients,\n  mean_instability,\n  mean_los,\n  mortality_rate,\n  pct_critical_labs\nFROM control_group\nORDER BY group_label DESC, quintile;",
+  "execution_success": true,
+  "row_count": 6,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword ON at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword ON at [1:19]\n\nLocation: US\nJob ID: dbb3c55e-1d3b-4564-810e-f41838b03402\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column quintile contains an analytic function, which is not allowed in GROUP BY at [76:12]; reason: invalidQuery, location: query, message: Column quintile contains an analytic function, which is not allowed in GROUP BY at [76:12]\n\nLocation: US\nJob ID: bf8b5c6c-2e13-4b01-9246-a6387bb78ef8\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 6,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH pe_patients AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND LOWER(d_icd.long_title) LIKE '%pulmonary embolism%'\n),\n\nmeds_first_24h AS (\n  SELECT\n    p.hadm_id,\n    COUNT(DISTINCT rx.drug) AS med_count\n  FROM pe_patients p\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` rx\n    ON p.hadm_id = rx.hadm_id\n    AND rx.starttime >= p.admittime\n    AND rx.starttime <= p.admittime + INTERVAL '24' HOUR\n  GROUP BY p.hadm_id\n),\n\nmed_tertiles AS (\n  SELECT\n    p.*,\n    COALESCE(m.med_count, 0) AS med_count,\n    NTILE(3) OVER (ORDER BY COALESCE(m.med_count, 0)) AS med_tertile\n  FROM pe_patients p\n  LEFT JOIN meds_first_24h m ON p.hadm_id = m.hadm_id\n),\n\nreadmissions AS (\n  SELECT\n    a1.hadm_id,\n    CASE\n      WHEN a2.hadm_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS readmit_30d\n  FROM pe_patients a1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND a2.admittime <= a1.dischtime + INTERVAL '30' DAY\n),\n\nfinal_agg AS (\n  SELECT\n    mt.med_tertile,\n    COUNT(*) AS admissions,\n    MIN(mt.med_count) AS med_score_min,\n    MAX(mt.med_count) AS med_score_max,\n    AVG(TIMESTAMP_DIFF(mt.dischtime, mt.admittime, HOUR) / 24.0) AS los_days,\n    AVG(CAST(mt.hospital_expire_flag AS FLOAT64)) * 100 AS mortality_pct,\n    AVG(CAST(r.readmit_30d AS FLOAT64)) * 100 AS readmit_30d_pct\n  FROM med_tertiles mt\n  JOIN readmissions r ON mt.hadm_id = r.hadm_id\n  GROUP BY mt.med_tertile\n  ORDER BY mt.med_tertile\n)\n\nSELECT\n  med_tertile,\n  admissions,\n  med_score_min,\n  med_score_max,\n  ROUND(los_days, 2) AS los_days,\n  ROUND(mortality_pct, 2) AS mortality_pct,\n  ROUND(readmit_30d_pct, 2) AS readmit_30d_pct\nFROM final_agg;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [19:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [19:26]\n\nLocation: US\nJob ID: e827f137-7535-42d8-8315-264cc1affc38\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name drug not found inside p at [25:22]; reason: invalidQuery, location: query, message: Name drug not found inside p at [25:22]\n\nLocation: US\nJob ID: 36a4bf1e-e298-4692-b6cb-38eb2548194b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I'm caring for a 92\u2011year\u2011old woman with intracranial hemorrhage. In female inpatients aged 87\u201397 with ICH, stratify by medication complexity (unique drugs + routes in first 48 hours) into quartiles and report admissions, score ranges, LOS, mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    a.discharge_location,\n    a.admission_type,\n    a.admission_location,\n    a.insurance,\n    a.language,\n    a.marital_status,\n    a.race,\n    a.edregtime,\n    a.edouttime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 87 AND 97\n),\n\n-- ICH diagnosis filter\nich_admissions AS (\n  SELECT DISTINCT c.*\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON c.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    di.icd_version = 10\n    AND (\n      (d.icd_code LIKE 'I61%' OR d.icd_code LIKE 'I62%')\n      AND d.icd_code NOT LIKE 'I60%'\n    )\n),\n\n-- ICU stays\nicu AS (\n  SELECT\n    stay_id,\n    hadm_id,\n    intime AS icu_intime,\n    outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\n\n-- Medication complexity in first 48 hours of ICU stay\nmeds_first48 AS (\n  SELECT\n    e.hadm_id,\n    COUNT(DISTINCT CONCAT(e.medication, '|', ed.route)) AS med_complexity\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` e\n  JOIN `physionet-data.mimiciv_3_1_hosp.emar_detail` ed\n    ON e.emar_id = ed.emar_id\n  JOIN icu i\n    ON e.hadm_id = i.hadm_id\n  WHERE\n    e.charttime >= i.icu_intime\n    AND e.charttime <= DATETIME_ADD(i.icu_intime, INTERVAL 48 HOUR)\n    AND e.medication IS NOT NULL\n    AND ed.route IS NOT NULL\n  GROUP BY e.hadm_id\n),\n\n-- Add complexity score and quartiles\nquartiles AS (\n  SELECT\n    i.*,\n    m.med_complexity,\n    NTILE(4) OVER (ORDER BY m.med_complexity) AS complexity_quartile\n  FROM ich_admissions i\n  JOIN meds_first48 m\n    ON i.hadm_id = m.hadm_id\n),\n\n-- 30-day readmission flag\nreadmissions AS (\n  SELECT\n    q.*,\n    CASE\n      WHEN LEAD(q.admittime) OVER (PARTITION BY q.subject_id ORDER BY q.admittime) IS NOT NULL\n        AND DATETIME_DIFF(\n          LEAD(q.admittime) OVER (PARTITION BY q.subject_id ORDER BY q.admittime),\n          q.dischtime,\n          DAY\n        ) <= 30 THEN 1\n      ELSE 0\n    END AS readmit_30_days\n  FROM quartiles q\n)\n\n-- Final aggregation by quartile\nSELECT\n  complexity_quartile,\n  COUNT(*) AS admissions,\n  MIN(med_complexity) AS min_score,\n  MAX(med_complexity) AS max_score,\n  AVG(los) AS avg_los,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_percent,\n  ROUND(AVG(readmit_30_days) * 100, 2) AS readmit_30d_percent\nFROM readmissions\nGROUP BY complexity_quartile\nORDER BY complexity_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [18:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [18:7]\n\nLocation: US\nJob ID: 1368b4e0-835d-47fd-8d2a-a7b1210d1d2b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

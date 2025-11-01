@@ -1,0 +1,22 @@
+{
+  "query": "I have a 73-year-old female Medicare patient. Among female Medicare patients aged 68\u201378 admitted from the ED with a principal hemorrhagic stroke, what are the 30-day readmission rate, median index LOS for readmitted vs non-readmitted, and % with LOS >4 days?",
+  "final_sql": "WITH\n-- 1. Get principal hemorrhagic stroke ICD codes\nhemorrhagic_stroke_icds AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE\n    -- ICD-10: I60, I61, I62\n    (icd_version = 10 AND (\n      REGEXP_CONTAINS(icd_code, r'^I60') OR\n      REGEXP_CONTAINS(icd_code, r'^I61') OR\n      REGEXP_CONTAINS(icd_code, r'^I62')\n    ))\n    -- ICD-9: 430, 431, 432\n    OR (icd_version = 9 AND (\n      icd_code IN ('430', '431', '432')\n    ))\n),\n\n-- 2. Get index admissions (cohort)\nindex_admissions AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.deathtime,\n    adm.admission_location,\n    adm.insurance,\n    adm.hospital_expire_flag,\n    pat.gender,\n    pat.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  JOIN hemorrhagic_stroke_icds icd\n    ON diag.icd_code = icd.icd_code AND diag.icd_version = icd.icd_version\n  WHERE\n    diag.seq_num = 1 -- principal diagnosis\n    AND pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 68 AND 78\n    AND LOWER(adm.insurance) LIKE '%medicare%'\n    AND (\n      LOWER(adm.admission_location) LIKE '%emergency%' OR\n      LOWER(adm.admission_location) LIKE '%ed%'\n    )\n    AND adm.dischtime IS NOT NULL\n    AND adm.hospital_expire_flag = 0 -- exclude in-hospital deaths\n),\n\n-- 3. For each index admission, find 30-day readmission\nreadmissions AS (\n  SELECT\n    idx.subject_id,\n    idx.hadm_id AS index_hadm_id,\n    idx.admittime AS index_admittime,\n    idx.dischtime AS index_dischtime,\n    MIN(next.admittime) AS readmit_admittime,\n    MIN(next.hadm_id) AS readmit_hadm_id\n  FROM index_admissions idx\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` next\n    ON idx.subject_id = next.subject_id\n    AND next.admittime > idx.dischtime\n    AND DATETIME_DIFF(next.admittime, idx.dischtime, DAY) <= 30\n  GROUP BY idx.subject_id, idx.hadm_id, idx.admittime, idx.dischtime\n),\n\n-- 4. Combine index admissions with readmission status\nindex_with_readmit_flag AS (\n  SELECT\n    idx.*,\n    CASE WHEN r.readmit_hadm_id IS NOT NULL THEN 1 ELSE 0 END AS was_readmitted,\n    DATETIME_DIFF(idx.dischtime, idx.admittime, DAY) AS los\n  FROM index_admissions idx\n  LEFT JOIN readmissions r\n    ON idx.subject_id = r.subject_id AND idx.hadm_id = r.index_hadm_id\n)\n\n-- 5. Aggregate results\nSELECT\n  COUNT(*) AS n_index_admissions,\n  SUM(was_readmitted) AS n_readmitted,\n  ROUND(SUM(was_readmitted) / COUNT(*) * 100, 2) AS readmission_rate_percent,\n  -- Median LOS for readmitted\n  APPROX_QUANTILES(IF(was_readmitted = 1, los, NULL), 2)[OFFSET(1)] AS median_los_readmitted,\n  -- Median LOS for non-readmitted\n  APPROX_QUANTILES(IF(was_readmitted = 0, los, NULL), 2)[OFFSET(1)] AS median_los_nonreadmitted,\n  -- % with LOS > 4 days (readmitted)\n  ROUND(SUM(CASE WHEN was_readmitted = 1 AND los > 4 THEN 1 ELSE 0 END) / NULLIF(SUM(was_readmitted),0) * 100, 2) AS percent_los_gt4_readmitted,\n  -- % with LOS > 4 days (non-readmitted)\n  ROUND(SUM(CASE WHEN was_readmitted = 0 AND los > 4 THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN was_readmitted = 0 THEN 1 ELSE 0 END),0) * 100, 2) AS percent_los_gt4_nonreadmitted\nFROM index_with_readmit_flag;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [86:46]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [86:46]\n\nLocation: US\nJob ID: 99055f23-8f37-4a87-9a3d-ae12165b68ab\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For a 48\u2011year\u2011old man: among males 43\u201353 hospitalized with AMI, what's the median (IQR) number of radiography/CTs per admission for 1\u20133 vs 4\u20137\u2011day stays, stratified by primary vs secondary AMI?",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age BETWEEN 43 AND 53\n),\n\nami_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE (\n    (icd_version = 10 AND SUBSTR(icd_code, 1, 3) IN ('I21', 'I22'))\n  )\n),\n\nadmissions_with_ami AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- Flag if AMI is primary diagnosis\n    MAX(CASE WHEN di.seq_num = 1 AND ac.icd_code IS NOT NULL THEN 1 ELSE 0 END) AS is_primary_ami,\n    -- Flag if AMI appears anywhere\n    MAX(CASE WHEN ac.icd_code IS NOT NULL THEN 1 ELSE 0 END) AS has_ami\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN patients_filtered p ON a.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON a.hadm_id = di.hadm_id\n  LEFT JOIN ami_codes ac\n    ON di.icd_code = ac.icd_code\n  GROUP BY a.hadm_id, a.subject_id, a.admittime, a.dischtime\n),\n\nadmissions_stratified AS (\n  SELECT \n    hadm_id,\n    los_days,\n    CASE \n      WHEN is_primary_ami = 1 THEN 'primary'\n      WHEN is_primary_ami = 0 AND has_ami = 1 THEN 'secondary'\n      ELSE NULL \n    END AS ami_type\n  FROM admissions_with_ami\n  WHERE has_ami = 1\n    AND los_days > 0 AND los_days <= 7\n),\n\nimaging_procs AS (\n  SELECT \n    h.hadm_id,\n    COUNT(*) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_hosp`.hcpcsevents h\n  INNER JOIN admissions_stratified a ON h.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_hcpcs d ON h.hcpcs_cd = d.code\n  WHERE LOWER(d.short_description) LIKE '%xray%'\n     OR LOWER(d.short_description) LIKE '%radiography%'\n     OR LOWER(d.short_description) LIKE '%ct%'\n     OR LOWER(d.short_description) LIKE '%computed tomography%'\n     OR LOWER(d.long_description) LIKE '%xray%'\n     OR LOWER(d.long_description) LIKE '%radiography%'\n     OR LOWER(d.long_description) LIKE '%ct%'\n     OR LOWER(d.long_description) LIKE '%computed tomography%'\n  GROUP BY h.hadm_id\n),\n\nfinal_counts AS (\n  SELECT \n    a.ami_type,\n    CASE \n      WHEN a.los_days <= 3 THEN '1-3 days'\n      WHEN a.los_days <= 7 THEN '4-7 days'\n    END AS los_group,\n    COALESCE(i.imaging_count, 0) AS imaging_count\n  FROM admissions_stratified a\n  LEFT JOIN imaging_procs i ON a.hadm_id = i.hadm_id\n)\n\nSELECT\n  ami_type,\n  los_group,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(500)] AS median,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(250)] AS iqr_lower,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(750)] AS iqr_upper\nFROM final_counts\nWHERE ami_type IS NOT NULL\nGROUP BY ami_type, los_group\nORDER BY ami_type, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function LOWER\n  Argument types: INT64\n  Signature: LOWER(STRING)\n    Argument 1: Unable to coerce type INT64 to expected type STRING\n  Signature: LOWER(BYTES)\n    Argument 1: Unable to coerce type INT64 to expected type BYTES at [66:9]; reason: invalidQuery, location: query, message: No matching signature for function LOWER\n  Argument types: INT64\n  Signature: LOWER(STRING)\n    Argument 1: Unable to coerce type INT64 to expected type STRING\n  Signature: LOWER(BYTES)\n    Argument 1: Unable to coerce type INT64 to expected type BYTES at [66:9]\n\nLocation: US\nJob ID: 7109b308-4b5b-4835-9c09-cd5b327f0fd5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

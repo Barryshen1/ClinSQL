@@ -1,0 +1,1 @@
+SELECT stddev(l.value) AS standard_deviation FROM labevents l JOIN patients p ON l.subject_id = p.subject_id JOIN admissions a ON l.subject_id = a.subject_id WHERE p.gender = 'M' AND p.anchor_age >= 90 AND l.itemid = 1010 AND l.charttime BETWEEN a.admittime AND a.admittime + interval '24 hours' AND l.value IS NOT NULL;

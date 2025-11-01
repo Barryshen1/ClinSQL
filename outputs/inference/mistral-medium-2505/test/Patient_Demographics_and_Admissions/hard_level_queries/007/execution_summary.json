@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 88-year-old man. Among male Medicare patients aged 83\u201393 admitted via the ED with a principal diagnosis of TIA, what are the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >10 days?",
+  "final_sql": "WITH\n-- Get male patients aged 83-93\neligible_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 83 AND 93\n),\n\n-- Get Medicare admissions via ED with principal diagnosis of TIA\ntia_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.insurance,\n    a.admission_location,\n    d.icd_code,\n    d.icd_version,\n    d.long_title,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS admission_rank\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM eligible_patients)\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'EMERGENCY ROOM ADMIT'\n    AND di.seq_num = 1  -- Principal diagnosis\n    AND (d.long_title LIKE '%transient ischemic attack%' OR d.icd_code LIKE 'G45.%')\n),\n\n-- Get only the first admission for each patient (index admission)\nindex_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    insurance,\n    admission_location,\n    icd_code,\n    icd_version,\n    long_title\n  FROM\n    tia_admissions\n  WHERE\n    admission_rank = 1\n),\n\n-- Calculate LOS for index admissions\nindex_admissions_with_los AS (\n  SELECT\n    *,\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM\n    index_admissions\n),\n\n-- Find readmissions within 30 days of index discharge\nreadmissions AS (\n  SELECT\n    ia.subject_id,\n    ia.hadm_id AS index_hadm_id,\n    a.hadm_id AS readmission_hadm_id,\n    a.admittime AS readmission_admittime,\n    TIMESTAMP_DIFF(a.admittime, ia.dischtime, DAY) AS days_to_readmission\n  FROM\n    index_admissions ia\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ia.subject_id = a.subject_id\n    AND a.admittime > ia.dischtime\n    AND TIMESTAMP_DIFF(a.admittime, ia.dischtime, DAY) <= 30\n),\n\n-- Flag patients with readmissions\nreadmission_flags AS (\n  SELECT\n    ia.subject_id,\n    ia.hadm_id,\n    ia.los_days,\n    CASE WHEN r.subject_id IS NOT NULL THEN 1 ELSE 0 END AS has_readmission\n  FROM\n    index_admissions_with_los ia\n  LEFT JOIN\n    readmissions r\n    ON ia.subject_id = r.subject_id\n),\n\n-- Calculate statistics\nreadmission_stats AS (\n  SELECT\n    COUNT(DISTINCT hadm_id) AS total_index_admissions,\n    SUM(has_readmission) AS total_readmissions,\n    ROUND(SUM(has_readmission) * 100.0 / COUNT(DISTINCT hadm_id), 2) AS readmission_rate,\n    PERCENTILE_CONT(CASE WHEN has_readmission = 1 THEN los_days ELSE NULL END, 0.5) AS median_los_readmitted,\n    PERCENTILE_CONT(CASE WHEN has_readmission = 0 THEN los_days ELSE NULL END, 0.5) AS median_los_non_readmitted,\n    ROUND(SUM(CASE WHEN los_days > 10 THEN 1 ELSE 0 END) * 100.0 / COUNT(DISTINCT hadm_id), 2) AS percent_stays_over_10_days\n  FROM\n    readmission_flags\n)\n\nSELECT * FROM readmission_stats;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e5fed08f-52b3-4a06-b32f-59f16fa41981\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \"(\" at [106:43]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \"(\" at [106:43]\n\nLocation: US\nJob ID: 58ebb078-0c23-4854-a006-610941ffcc4b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name long_title not found inside di at [24:8]; reason: invalidQuery, location: query, message: Name long_title not found inside di at [24:8]\n\nLocation: US\nJob ID: 6f7431f4-b3ce-41dd-9978-4db1045a9ef5\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: e5fed08f-52b3-4a06-b32f-59f16fa41981\n"
+    }
+  ]
+}

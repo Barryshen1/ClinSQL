@@ -1,0 +1,28 @@
+{
+  "query": "49-year-old man: among men 44\u201354 with ischemic vs hemorrhagic stroke, report mortality (%) and median LOS, stratified by LOS (\u22645/>5) and comorbidity (low/med/high), with % mech vent, vasopressors, RRT.",
+  "final_sql": "WITH \n-- Step 1: Patient selection and stroke type\nstroke_patients AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    di.long_title AS diagnosis,\n    CASE \n      WHEN di.icd_code LIKE 'I63%' THEN 'Ischemic'\n      WHEN di.icd_code LIKE 'I60%' OR di.icd_code LIKE 'I61%' OR di.icd_code LIKE 'I62%' THEN 'Hemorrhagic'\n    END AS stroke_type\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE \n    p.gender = 'M' AND p.anchor_age BETWEEN 44 AND 54\n    AND di.icd_version = 10  -- Assuming ICD-10 is used; adjust as necessary\n),\n\n-- Step 2: Calculate Elixhauser comorbidity score\nelixhauser_score AS (\n  WITH comorbidities AS (\n    SELECT DISTINCT\n      hadm_id,\n      CASE\n        WHEN icd_code IN ('E10.9', 'E11.9', 'E13.9', 'E14.9') THEN 1  -- Diabetes\n        WHEN icd_code LIKE 'I25%' THEN 1  -- Coronary artery disease\n        WHEN icd_code LIKE 'I50%' THEN 1  -- Heart failure\n        -- Add more conditions as per Elixhauser comorbidity index definition\n        ELSE 0\n      END AS comorbidity\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE \n      icd_version = 10\n  ),\n  score AS (\n    SELECT \n      hadm_id,\n      SUM(comorbidity) AS score\n    FROM \n      comorbidities\n    GROUP BY \n      hadm_id\n  )\n  SELECT \n    hadm_id,\n    CASE \n      WHEN score IS NULL THEN 'Unknown'\n      WHEN score <= 0 THEN 'Low'\n      WHEN score BETWEEN 1 AND 4 THEN 'Med'\n      ELSE 'High'\n    END AS comorbidity_level\n  FROM \n    score\n),\n\n-- Step 3: Calculate LOS, mortality, and stratify\npatient_outcomes AS (\n  SELECT \n    sp.subject_id,\n    sp.hadm_id,\n    sp.stroke_type,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    CASE WHEN a.deathtime IS NOT NULL THEN 1 ELSE 0 END AS mortality,\n    CASE WHEN DATETIME_DIFF(a.dischtime, a.admittime, DAY) <= 5 THEN '\u22645'\n         ELSE '>5'\n    END AS los_stratum\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    stroke_patients sp ON a.hadm_id = sp.hadm_id\n),\n\n-- Step 4: Identify treatments (mechanical ventilation, vasopressors, RRT)\ntreatments AS (\n  SELECT \n    hadm_id,\n    MAX(CASE WHEN itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%Vent%') THEN 1 ELSE 0 END) AS mech_vent,\n    MAX(CASE WHEN itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%Vasopressor%') THEN 1 ELSE 0 END) AS vasopressors,\n    MAX(CASE WHEN itemid IN (SELECT itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%RRT%' OR label LIKE '%Dialysis%') THEN 1 ELSE 0 END) AS rrt\n  FROM \n    `physionet-data.mimiciv_3_1_icu.procedureevents`\n  GROUP BY \n    hadm_id\n),\n\n-- Step 5: Combine data and calculate required statistics\ncombined AS (\n  SELECT \n    po.stroke_type,\n    po.los_stratum,\n    es.comorbidity_level,\n    po.mortality,\n    po.los,\n    t.mech_vent,\n    t.vasopressors,\n    t.rrt\n  FROM \n    patient_outcomes po\n  LEFT JOIN \n    treatments t ON po.hadm_id = t.hadm_id\n  LEFT JOIN \n    elixhauser_score es ON po.hadm_id = es.hadm_id\n)\n\nSELECT \n  stroke_type,\n  los_stratum,\n  comorbidity_level,\n  COUNT(*) AS num_patients,\n  AVG(mortality) * 100 AS mortality_percent,\n  APPROX_QUANTILES(los, 100)[OFFSET(50)] AS median_los,\n  AVG(mech_vent) * 100 AS mech_vent_percent,\n  AVG(vasopressors) * 100 AS vasopressors_percent,\n  AVG(rrt) * 100 AS rrt_percent\nFROM \n  combined\nGROUP BY \n  stroke_type, los_stratum, comorbidity_level\nORDER BY \n  stroke_type, los_stratum, comorbidity_level;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name long_title not found inside di at [9:8]; reason: invalidQuery, location: query, message: Name long_title not found inside di at [9:8]\n\nLocation: US\nJob ID: 416807f2-d622-478e-9764-330be0684852\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_hosp.elixhauser_ahrq was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_hosp.elixhauser_ahrq was not found in location US\n\nLocation: US\nJob ID: 06788fd5-0047-4ac7-820f-4cc1fbe6eedf\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "404 Not found: Table physionet-data:mimiciv_3_1_hosp.elixhauser_quan was not found in location US; reason: notFound, message: Not found: Table physionet-data:mimiciv_3_1_hosp.elixhauser_quan was not found in location US\n\nLocation: US\nJob ID: bac76dca-b5e8-4ec8-8f47-52bf92317eee\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name long_title not found inside di at [9:8]; reason: invalidQuery, location: query, message: Name long_title not found inside di at [9:8]\n\nLocation: US\nJob ID: 416807f2-d622-478e-9764-330be0684852\n"
+    }
+  ]
+}

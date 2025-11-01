@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.95) within GROUP (ORDER BY (outtime - intime)) AS cohort_95th_percentile, percentile_cont(0.1) within GROUP (ORDER BY (outtime - intime)) AS top_decile FROM patient_stay;

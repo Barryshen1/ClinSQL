@@ -1,0 +1,28 @@
+{
+  "query": "I have an 89\u2011year\u2011old female. Among female ICU patients 84\u201394 with ARDS, give the 25th, 75th, and 95th percentiles of diagnostic intensity (distinct procedures in first 24\u2009h), plus average hospital LOS and hospital mortality; compare to general ICU population.",
+  "final_sql": "WITH icu_base AS (\n    -- Base CTE to gather essential ICU stay, admission, and patient demographic data\n    SELECT\n        ie.subject_id,\n        ie.hadm_id,\n        ie.stay_id,\n        p.gender,\n        p.anchor_age,\n        ie.intime AS icu_intime,\n        ad.admittime AS hosp_admittime,\n        ad.dischtime AS hosp_dischtime,\n        ad.hospital_expire_flag,\n        TIMESTAMP_DIFF(ad.dischtime, ad.admittime, HOUR) / 24.0 AS hospital_los_days -- Hospital LOS in days\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON ie.hadm_id = ad.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ie.subject_id = p.subject_id\n),\nards_diagnoses AS (\n    -- CTE to identify admissions with an ARDS diagnosis\n    SELECT DISTINCT\n        d.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n        ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n    WHERE\n        (d.icd_version = 9 AND d.icd_code = '51882') -- ICD-9 code for Acute Respiratory Distress Syndrome\n        OR (d.icd_version = 10 AND d.icd_code = 'J80') -- ICD-10 code for Acute Respiratory Distress Syndrome\n),\nprocedures_first_24h AS (\n    -- CTE to calculate the number of distinct procedures in the first 24 hours for each ICU stay\n    SELECT\n        pe.stay_id,\n        COUNT(DISTINCT pe.itemid) AS distinct_procedures_24h -- Count distinct itemids for diagnostic intensity\n    FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    INNER JOIN icu_base ib\n        ON pe.stay_id = ib.stay_id\n    WHERE\n        pe.starttime IS NOT NULL\n        AND pe.starttime >= ib.icu_intime\n        AND pe.starttime <= TIMESTAMP_ADD(ib.icu_intime, INTERVAL 24 HOUR) -- Procedures within first 24 hours\n    GROUP BY pe.stay_id\n),\ncohort_data AS (\n    -- Combine base ICU data with procedure counts and ARDS flags\n    SELECT\n        ib.*,\n        COALESCE(pf.distinct_procedures_24h, 0) AS distinct_procedures_24h, -- Default to 0 if no procedures in first 24h\n        CASE WHEN ard.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_ards\n    FROM icu_base ib\n    LEFT JOIN procedures_first_24h pf\n        ON ib.stay_id = pf.stay_id\n    LEFT JOIN ards_diagnoses ard\n        ON ib.hadm_id = ard.hadm_id\n),\nards_female_84_94_cohort AS (\n    -- Filter for the specific ARDS cohort\n    SELECT\n        cd.distinct_procedures_24h,\n        cd.hospital_los_days,\n        cd.hospital_expire_flag\n    FROM cohort_data cd\n    WHERE\n        cd.has_ards = 1\n        AND cd.gender = 'F'\n        AND cd.anchor_age BETWEEN 84 AND 94\n),\ngeneral_icu_cohort AS (\n    -- Represents the general ICU population\n    SELECT\n        cd.distinct_procedures_24h,\n        cd.hospital_los_days,\n        cd.hospital_expire_flag\n    FROM cohort_data cd\n)\n-- Final aggregation and comparison of metrics for both cohorts\nSELECT\n    'ARDS Female 84-94 ICU Patients' AS cohort_name,\n    PERCENTILE_CONT(distinct_procedures_24h, 0.25) AS q25_distinct_procedures_24h,\n    PERCENTILE_CONT(distinct_procedures_24h, 0.75) AS q75_distinct_procedures_24h,\n    PERCENTILE_CONT(distinct_procedures_24h, 0.95) AS q95_distinct_procedures_24h,\n    AVG(hospital_los_days) AS avg_hospital_los_days,\n    AVG(hospital_expire_flag) AS hospital_mortality_rate\nFROM ards_female_84_94_cohort\n\nUNION ALL\n\nSELECT\n    'General ICU Patients' AS cohort_name,\n    PERCENTILE_CONT(distinct_procedures_24h, 0.25) AS q25_distinct_procedures_24h,\n    PERCENTILE_CONT(distinct_procedures_24h, 0.75) AS q75_distinct_procedures_24h,\n    PERCENTILE_CONT(distinct_procedures_24h, 0.95) AS q95_distinct_procedures_24h,\n    AVG(hospital_los_days) AS avg_hospital_los_days,\n    AVG(hospital_expire_flag) AS hospital_mortality_rate\nFROM general_icu_cohort;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 293f3476-ef46-4cfa-9f98-6f3071b3ece8\n",
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column distinct_procedures_24h which is neither grouped nor aggregated at [80:21]; reason: invalidQuery, location: query, message: SELECT list expression references column distinct_procedures_24h which is neither grouped nor aggregated at [80:21]\n\nLocation: US\nJob ID: 945d0944-eb36-40f4-a9b3-b1e7046697c6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword UNION at [88:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword UNION at [88:1]\n\nLocation: US\nJob ID: 0336f941-e3e8-40d2-9eea-2bd93b314f82\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 293f3476-ef46-4cfa-9f98-6f3071b3ece8\n"
+    }
+  ]
+}

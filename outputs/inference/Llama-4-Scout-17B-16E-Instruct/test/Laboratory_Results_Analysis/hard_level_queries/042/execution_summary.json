@@ -1,0 +1,22 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH \n-- Identify patients of interest\npatients_of_interest AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    p.anchor_age, \n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.deathtime\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  WHERE \n    p.anchor_age BETWEEN 73 AND 83 \n    AND p.gender = 'M'\n    AND a.hadm_id IN (\n      SELECT \n        hadm_id \n      FROM \n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE \n        icd_code IN ('431', 'I61')\n    )\n),\n\n-- Identify abnormal lab events within 48 hours\nabnormal_labs AS (\n  SELECT \n    a.hadm_id, \n    le.itemid, \n    le.valuenum,\n    le.ref_range_lower,\n    le.ref_range_upper,\n    a.admittime\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN \n    patients_of_interest a \n      ON le.hadm_id = a.hadm_id\n  WHERE \n    le.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n  AND \n    le.valuenum IS NOT NULL \n  AND \n    (le.ref_range_lower IS NOT NULL OR le.ref_range_upper IS NOT NULL)\n  AND \n    (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n),\n\n-- Calculate 48-hour instability score\ninstability_score AS (\n  SELECT \n    hadm_id, \n    COUNT(DISTINCT itemid) as score\n  FROM \n    abnormal_labs\n  GROUP BY \n    hadm_id\n),\n\n-- Merge with patient data and calculate outcomes\noutcomes AS (\n  SELECT \n    io.hadm_id, \n    io.score,\n    a.dischtime, \n    a.deathtime,\n    a.admittime\n  FROM \n    instability_score io\n  JOIN \n    patients_of_interest a \n      ON io.hadm_id = a.hadm_id\n),\n\n-- Calculate quartiles of instability score\nquartiles AS (\n  SELECT \n    hadm_id,\n    score,\n    NTILE(4) OVER (ORDER BY score) as quartile\n  FROM \n    instability_score\n)\n\n-- Final aggregation\nSELECT \n  q.quartile,\n  COUNT(DISTINCT o.hadm_id) as count,\n  AVG(TIMESTAMP_DIFF(o.dischtime, o.admittime, DAY)) as mean_los,\n  SUM(CASE WHEN o.deathtime IS NOT NULL THEN 1 ELSE 0 END) / COUNT(DISTINCT o.hadm_id) as mortality\nFROM \n  outcomes o\nJOIN \n  quartiles q ON o.hadm_id = q.hadm_id\nGROUP BY \n  q.quartile\nORDER BY \n  q.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: admittime at [36:23]; reason: invalidQuery, location: query, message: Unrecognized name: admittime at [36:23]\n\nLocation: US\nJob ID: cb27d1e9-707b-48af-894d-8033a6eb6a83\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 63\u2011year\u2011old female patient: among females 58\u201368 with hemorrhagic stroke and COPD exacerbation, what's the hospital LOS IQR?",
+  "final_sql": "WITH hadm_dx_flags AS (\n  SELECT\n    d.hadm_id,\n    MAX(\n      CASE\n        WHEN (\n          LOWER(dd.long_title) LIKE '%hemorrhag%' OR\n          LOWER(dd.long_title) LIKE '%haemorrhag%' OR\n          LOWER(dd.long_title) LIKE '%subarachnoid%' OR\n          LOWER(dd.long_title) LIKE '%intracerebral%'\n        ) THEN 1 ELSE 0\n      END\n    ) AS has_hemorrhagic,\n    MAX(\n      CASE\n        WHEN (\n          (LOWER(dd.long_title) LIKE '%chronic obstructive%' AND LOWER(dd.long_title) LIKE '%exacerb%')\n          OR (LOWER(dd.long_title) LIKE '%copd%' AND LOWER(dd.long_title) LIKE '%exacerb%')\n          OR LOWER(dd.long_title) LIKE '%acute exacerbation%'\n        ) THEN 1 ELSE 0\n      END\n    ) AS has_copd_exacerb\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  GROUP BY d.hadm_id\n),\n\ncohort_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    SAFE_DIVIDE(TIMESTAMP_DIFF(a.dischtime, a.admittime, MINUTE), 1440.0) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN hadm_dx_flags h\n    ON a.hadm_id = h.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND h.has_hemorrhagic = 1\n    AND h.has_copd_exacerb = 1\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\n\nquant AS (\n  SELECT APPROX_QUANTILES(los_days, 4) AS quantiles\n  FROM cohort_admissions\n),\n\ncounts AS (\n  SELECT COUNT(*) AS n_admissions\n  FROM cohort_admissions\n)\n\nSELECT\n  c.n_admissions,\n  q.quantiles[OFFSET(1)] AS p25_days,\n  q.quantiles[OFFSET(2)] AS median_days,\n  q.quantiles[OFFSET(3)] AS p75_days,\n  q.quantiles[OFFSET(3)] - q.quantiles[OFFSET(1)] AS iqr_days\nFROM counts c\nCROSS JOIN quant q;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column quantiles which is neither grouped nor aggregated at [50:3]; reason: invalidQuery, location: query, message: SELECT list expression references column quantiles which is neither grouped nor aggregated at [50:3]\n\nLocation: US\nJob ID: f8e467ae-01f7-445d-836b-1bc8be1e472e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

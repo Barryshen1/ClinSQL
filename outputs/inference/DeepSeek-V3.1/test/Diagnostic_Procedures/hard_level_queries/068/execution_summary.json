@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating an 82\u2011year\u2011old man. Among male ICU patients aged 77\u201387 admitted with asthma exacerbation, stratify first 72\u2011hour ICU procedure burden into quartiles and report each quartile\u2019s mean procedure count, mean hospital LOS (days), and hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    -- Calculate hospital LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 77 AND 87\n    AND d.seq_num = 1  -- primary diagnosis\n    AND (\n      (d.icd_version = 10 AND d.icd_code LIKE 'J45%') OR\n      (d.icd_version = 9 AND d.icd_code LIKE '493%')\n    )\n),\n\nprocedures_in_first_72h AS (\n  SELECT \n    c.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.subject_id = pe.subject_id \n    AND c.hadm_id = pe.hadm_id \n    AND c.stay_id = pe.stay_id\n    AND pe.starttime >= c.intime\n    AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY c.stay_id\n),\n\ncohort_with_procedures AS (\n  SELECT \n    c.*,\n    COALESCE(p.procedure_count, 0) AS procedure_count\n  FROM cohort c\n  LEFT JOIN procedures_in_first_72h p\n    ON c.stay_id = p.stay_id\n),\n\nquartiles AS (\n  SELECT \n    stay_id,\n    procedure_count,\n    los_days,\n    hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM cohort_with_procedures\n)\n\nSELECT \n  quartile,\n  COUNT(*) AS n_stays,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(los_days) AS mean_los_days,\n  AVG(hospital_expire_flag) AS hospital_mortality\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

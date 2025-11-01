@@ -1,0 +1,22 @@
+{
+  "query": "For a 55-year-old male: among male patients 50\u201360 admitted with chest pain or AMI whose initial hs\u2011TnT > ULN (0.014 ng/mL), report patient and admission counts, mean, median, IQR.",
+  "final_sql": "WITH\n  -- 1) Male patients aged 50-60 (proxy)\n  male_age_filtered AS (\n    SELECT a.hadm_id, a.subject_id, a.admittime, a.dischtime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n    WHERE LOWER(p.gender) = 'm'\n      AND p.anchor_age BETWEEN 50 AND 60\n      AND a.dischtime IS NOT NULL\n  ),\n  -- 2) Admissions with chest pain or AMI\n  chest_pain_ami AS (\n    SELECT DISTINCT di.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d\n      ON di.icd_code = d.icd_code\n     AND di.icd_version = d.icd_version\n    WHERE LOWER(d.long_title) LIKE '%chest pain%'\n       OR LOWER(d.long_title) LIKE '%acute myocardial infarction%'\n       OR LOWER(d.long_title) LIKE '%myocardial infarction%'\n  ),\n  -- 3) Earliest troponin measurement per admission\n  first_troponin AS (\n    SELECT le.hadm_id, MIN(le.charttime) AS first_charttime\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli\n      ON le.itemid = dli.itemid\n    WHERE LOWER(dli.label) LIKE '%troponin%'\n    GROUP BY le.hadm_id\n  ),\n  -- 4) Values for the earliest troponin per admission\n  first_troponin_values AS (\n    SELECT ft.hadm_id, le.valuenum\n    FROM first_troponin ft\n    JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n      ON le.hadm_id = ft.hadm_id\n     AND le.charttime = ft.first_charttime\n  ),\n  -- 5) Filtered admissions: male 50-60, chest pain/AMI, initial hs-TnT > ULN (0.014)\n  filtered AS (\n    SELECT a.subject_id, a.hadm_id,\n           (TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0) AS los\n    FROM male_age_filtered AS a\n    JOIN chest_pain_ami AS cpa ON a.hadm_id = cpa.hadm_id\n    JOIN first_troponin_values AS tn ON a.hadm_id = tn.hadm_id\n    WHERE tn.valuenum > 0.014\n  ),\n  -- 6) Quantiles across the filtered dataset\n  quant AS (\n    SELECT APPROX_QUANTILES(los, 4) AS cuts\n    FROM filtered\n  )\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(*) AS admission_count,\n  AVG(los) AS mean_los_days,\n  (SELECT cuts[OFFSET(2)] FROM quant) AS median_los_days,\n  ((SELECT cuts[OFFSET(3)] FROM quant) - (SELECT cuts[OFFSET(1)] FROM quant)) AS iqr_los_days\nFROM filtered;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [44:3]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [44:3]\n\nLocation: US\nJob ID: 44a9e2ba-81d1-4723-8914-5da3af4dfb25\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

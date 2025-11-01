@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 45\u2011year\u2011old man with heart failure. In male inpatients aged 40\u201350 with HF, stratified by quintiles of a 7\u2011day medication complexity score, report patient counts, score ranges, mean LOS (days), in\u2011hospital mortality, and 30\u2011day readmission.",
+  "final_sql": "WITH hf_admissions AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, p.gender, p.anchor_age, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND (\n      (d.icd_version = 9  AND d.icd_code LIKE '428%') OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n    )\n),\nmed_complexity AS (\n  SELECT\n    ha.subject_id,\n    ha.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM hf_admissions ha\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON ha.hadm_id = pr.hadm_id\n    AND pr.starttime >= ha.admittime\n    AND pr.starttime < ha.admittime + INTERVAL 7 DAY\n  GROUP BY ha.subject_id, ha.hadm_id\n),\nlos_mort_readmit AS (\n  SELECT\n    ha.subject_id,\n    ha.hadm_id,\n    mc.complexity_score,\n    TIMESTAMP_DIFF(ha.dischtime, ha.admittime, DAY) AS los_days,\n    ha.hospital_expire_flag,\n    -- 30-day readmission:\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = ha.subject_id\n        AND a2.admittime > ha.dischtime\n        AND TIMESTAMP_DIFF(a2.admittime, ha.dischtime, DAY) <= 30\n    ) THEN 1 ELSE 0 END AS readmit_30d\n  FROM hf_admissions ha\n  JOIN med_complexity mc\n    ON ha.subject_id = mc.subject_id\n   AND ha.hadm_id = mc.hadm_id\n),\nwith_quintiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    complexity_score,\n    los_days,\n    hospital_expire_flag,\n    readmit_30d,\n    NTILE(5) OVER (ORDER BY complexity_score) AS quintile\n  FROM los_mort_readmit\n)\nSELECT\n  quintile,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  COUNT(DISTINCT hadm_id) AS patient_count,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(AVG(hospital_expire_flag)*100, 2) AS in_hosp_mortality_percent,\n  ROUND(AVG(readmit_30d)*100, 2) AS readmit_30d_percent\nFROM with_quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

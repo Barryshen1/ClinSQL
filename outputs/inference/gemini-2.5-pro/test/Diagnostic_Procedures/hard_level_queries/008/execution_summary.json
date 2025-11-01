@@ -1,0 +1,22 @@
+{
+  "query": "I have a 53-year-old man with upper GI bleeding. Among male ICU patients aged 48\u201358 with UGIB, stratify first 24\u2011hour diagnostic procedure counts into quintiles and report average procedures, hospital LOS (days), and in\u2011hospital mortality (%) per quintile.",
+  "final_sql": "WITH ugib_hadm_ids AS (\n  -- Identify hospital admissions with a diagnosis of Upper GI Bleeding\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_code IN (\n    -- ICD-9 codes for UGIB\n    '531.00', '531.01', '531.20', '531.21', '531.40', '531.41', '531.60', '531.61',\n    '532.00', '532.01', '532.20', '532.21', '532.40', '532.41', '532.60', '532.61',\n    '533.00', '533.01', '533.20', '533.21', '533.40', '533.41', '533.60', '533.61',\n    '534.00', '534.01', '534.20', '534.21', '534.40', '534.41', '534.60', '534.61',\n    '578.0', '578.1', '578.9', '456.0', '456.20',\n    -- ICD-10 codes for UGIB\n    'K25.0', 'K25.1', 'K25.2', 'K25.4', 'K25.5', 'K25.6',\n    'K26.0', 'K26.1', 'K26.2', 'K26.4', 'K26.5', 'K26.6',\n    'K27.0', 'K27.1', 'K27.2', 'K27.4', 'K27.5', 'K27.6',\n    'K28.0', 'K28.1', 'K28.2', 'K28.4', 'K28.5', 'K28.6',\n    'K29.01', 'K92.0', 'K92.1', 'K92.2', 'I85.01', 'I85.11'\n  )\n),\n\nfirst_icu_stay AS (\n  -- Build the base cohort of male patients, aged 48-58 with UGIB, selecting their first ICU stay per hospital admission.\n  -- A subquery is used here because window functions like ROW_NUMBER() are not allowed in a WHERE clause.\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    hospital_expire_flag,\n    hospital_los\n  FROM (\n    SELECT\n      pat.subject_id,\n      adm.hadm_id,\n      icu.stay_id,\n      icu.intime,\n      adm.hospital_expire_flag,\n      DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS hospital_los,\n      ROW_NUMBER() OVER (PARTITION BY adm.hadm_id ORDER BY icu.intime) as rn\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n    INNER JOIN ugib_hadm_ids\n      ON adm.hadm_id = ugib_hadm_ids.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n      ON adm.hadm_id = icu.hadm_id\n    WHERE\n      pat.gender = 'M'\n      AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) BETWEEN 48 AND 58\n  )\n  WHERE rn = 1\n),\n\nproc_counts AS (\n  -- Count procedures for each patient that occurred on the same calendar day as ICU admission\n  SELECT\n    cohort.subject_id,\n    cohort.hadm_id,\n    cohort.stay_id,\n    cohort.hospital_los,\n    cohort.hospital_expire_flag,\n    COUNT(proc.icd_code) AS procedure_count\n  FROM first_icu_stay AS cohort\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n    ON cohort.hadm_id = proc.hadm_id\n    AND proc.chartdate = DATE(cohort.intime)\n  GROUP BY\n    cohort.subject_id,\n    cohort.hadm_id,\n    cohort.stay_id,\n    cohort.hospital_los,\n    cohort.hospital_expire_flag\n),\n\nquintiled_cohort AS (\n  -- Stratify the cohort into quintiles based on procedure counts\n  SELECT\n    procedure_count,\n    hospital_los,\n    hospital_expire_flag,\n    NTILE(5) OVER (ORDER BY procedure_count) AS procedure_quintile\n  FROM proc_counts\n)\n\n-- Final aggregation and reporting\nSELECT\n  procedure_quintile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(hospital_los) AS avg_hospital_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_percent\nFROM quintiled_cohort\nGROUP BY procedure_quintile\nORDER BY procedure_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in WHERE clause at [40:9]; reason: invalidQuery, location: query, message: Analytic function not allowed in WHERE clause at [40:9]\n\nLocation: US\nJob ID: 9745acd5-b7f9-4cdd-9f9a-819ff438e8c1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

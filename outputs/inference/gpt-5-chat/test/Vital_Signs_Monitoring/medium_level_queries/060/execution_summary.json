@@ -1,0 +1,16 @@
+{
+  "query": "Concerned about my 75-year-old female ICU patient: among female ICU patients aged 70\u201380, based on maximum SBP in first 24h, report percent by SBP category (<130;130\u2013139;140\u2013159;\u2265160) and stroke rate.",
+  "final_sql": "WITH cohort AS (\n  SELECT icu.subject_id, icu.hadm_id, icu.stay_id, icu.intime, icu.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 70 AND 80\n),\nsbp24h AS (\n  SELECT c.stay_id,\n         MAX(ch.valuenum) AS max_sbp\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ch\n    ON c.subject_id = ch.subject_id\n    AND c.stay_id = ch.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ch.itemid = di.itemid\n  WHERE ch.valuenum IS NOT NULL\n    AND di.label LIKE '%Systolic%'\n    AND di.label LIKE '%Blood Pressure%'\n    AND ch.charttime >= c.intime\n    AND ch.charttime < DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY c.stay_id\n),\nstroke_flags AS (\n  SELECT DISTINCT c.stay_id,\n    CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS stroke_flag\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON c.hadm_id = dx.hadm_id\n  WHERE ( (dx.icd_version = 9 AND (\n              dx.icd_code LIKE '430%' OR\n              dx.icd_code LIKE '431%' OR\n              dx.icd_code LIKE '433%' OR\n              dx.icd_code LIKE '434%' OR\n              dx.icd_code LIKE '436%' ))\n       OR (dx.icd_version = 10 AND (\n              dx.icd_code LIKE 'I63%' OR\n              dx.icd_code LIKE 'I64%' ))\n        )\n  GROUP BY c.stay_id\n),\nsbp_cat AS (\n  SELECT s.stay_id,\n         CASE\n           WHEN s.max_sbp < 130 THEN '<130'\n           WHEN s.max_sbp BETWEEN 130 AND 139 THEN '130-139'\n           WHEN s.max_sbp BETWEEN 140 AND 159 THEN '140-159'\n           WHEN s.max_sbp >= 160 THEN '>=160'\n         END AS sbp_category\n  FROM sbp24h s\n)\nSELECT sc.sbp_category,\n       COUNT(*) AS n_stays,\n       ROUND(100 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percent_stays,\n       ROUND(100 * SUM(CASE WHEN sf.stroke_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS stroke_rate_percent\nFROM sbp_cat sc\nLEFT JOIN stroke_flags sf\n  ON sc.stay_id = sf.stay_id\nGROUP BY sc.sbp_category\nORDER BY sc.sbp_category;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

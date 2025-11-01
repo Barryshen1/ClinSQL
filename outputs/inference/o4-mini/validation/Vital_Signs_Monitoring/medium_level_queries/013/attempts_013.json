@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH spo2_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%o2%' \n    AND LOWER(label) LIKE '%saturation%'\n),\n\nmale_icustays AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 51 AND 61\n),\n\nstay_spo2 AS (\n  SELECT\n    ms.stay_id,\n    AVG(ce.valuenum) AS avg_spo2\n  FROM male_icustays ms\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = ms.stay_id\n  JOIN spo2_items si\n    ON ce.itemid = si.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN ms.intime\n      AND TIMESTAMP_ADD(ms.intime, INTERVAL 48 HOUR)\n  GROUP BY ms.stay_id\n),\n\ncategorized_spo2 AS (\n  SELECT\n    stay_id,\n    CASE\n      WHEN avg_spo2 <  90 THEN '< 90'\n      WHEN avg_spo2 BETWEEN 90 AND 92 THEN '90\u201392'\n      WHEN avg_spo2 BETWEEN 93 AND 95 THEN '93\u201395'\n      ELSE '> 95'\n    END AS spo2_category\n  FROM stay_spo2\n),\n\naki_flags AS (\n  SELECT DISTINCT\n    icu.stay_id,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = icu.hadm_id\n          AND (\n            (d.icd_version = 9  AND d.icd_code LIKE '584%')\n         OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n          )\n      )\n      THEN 1 ELSE 0\n    END AS aki_flag\n  FROM male_icustays icu\n)\n\nSELECT\n  cs.spo2_category,\n  COUNT(*) AS total_stays,\n  SUM(af.aki_flag) AS aki_count,\n  ROUND( SAFE_DIVIDE(SUM(af.aki_flag), COUNT(*)) , 3) AS aki_rate\nFROM categorized_spo2 cs\nJOIN aki_flags af\n  ON cs.stay_id = af.stay_id\nGROUP BY cs.spo2_category\nORDER BY\n  CASE cs.spo2_category\n    WHEN '< 90' THEN 1\n    WHEN '90\u201392' THEN 2\n    WHEN '93\u201395' THEN 3\n    WHEN '> 95' THEN 4\n  END;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

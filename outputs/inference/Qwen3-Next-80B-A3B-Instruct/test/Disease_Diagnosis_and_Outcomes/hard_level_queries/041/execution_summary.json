@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old male inpatient with intracranial hemorrhage transferred from ICU. For male patients aged 68\u201378 with ICH post\u2011ICU, report cohort size, 30\u2011day mortality, AKI and ARDS rates, composite risk score 25/50/75th percentiles, and median survival among decedents.",
+  "final_sql": "WITH ich_cohort AS (\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    di.long_title AS diagnosis,\n    i.stay_id,\n    t.careunit,\n    t.eventtype,\n    t.intime AS icu_intime,\n    t.outtime AS icu_outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di_cd ON a.hadm_id = di_cd.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON di_cd.icd_code = di.icd_code AND di_cd.icd_version = di.icd_version\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON p.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.transfers` t ON p.subject_id = t.subject_id AND a.hadm_id = t.hadm_id\n  WHERE p.anchor_age BETWEEN 68 AND 78\n    AND p.gender = 'M'\n    AND (\n      LOWER(di.long_title) LIKE '%intracranial hemorrhage%'\n      OR LOWER(di.long_title) LIKE '%intracerebral hemorrhage%'\n      OR LOWER(di.long_title) LIKE '%subarachnoid hemorrhage%'\n      OR LOWER(di.long_title) LIKE '%other nontraumatic intracranial hemorrhage%'\n    )\n    AND t.eventtype = 'transfer'\n    AND t.careunit LIKE 'ICU%'\n),\nmortality_30d AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    CASE\n      WHEN deathtime IS NOT NULL AND deathtime <= DATETIME_ADD(dischtime, INTERVAL 30 DAY) THEN 1\n      WHEN deathtime IS NULL AND dod IS NOT NULL AND dod <= DATETIME_ADD(dischtime, INTERVAL 30 DAY) THEN 1\n      ELSE 0\n    END AS died_30d\n  FROM ich_cohort\n),\naki_ards AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    MAX(CASE WHEN LOWER(di2.long_title) LIKE '%acute kidney injury%' OR LOWER(di2.long_title) LIKE '%acute renal failure%' THEN 1 ELSE 0 END) AS has_aki,\n    MAX(CASE WHEN LOWER(di2.long_title) LIKE '%acute respiratory distress syndrome%' OR LOWER(di2.long_title) LIKE '%ards%' THEN 1 ELSE 0 END) AS has_ards\n  FROM ich_cohort ic\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di_cd2 ON ic.hadm_id = di_cd2.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di2 ON di_cd2.icd_code = di2.icd_code AND di_cd2.icd_version = di2.icd_version\n  GROUP BY subject_id, hadm_id\n),\nsurvival_decedents AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    COALESCE(deathtime, dod) AS death_time,\n    DATETIME_DIFF(COALESCE(deathtime, dod), admittime, DAY) AS survival_days\n  FROM ich_cohort\n  WHERE deathtime IS NOT NULL OR dod IS NOT NULL\n)\nSELECT\n  COUNT(*) AS cohort_size,\n  AVG(m.died_30d) AS thirty_day_mortality_rate,\n  AVG(a.has_aki) AS aki_rate,\n  AVG(a.has_ards) AS ards_rate,\n  -- Composite risk score omitted per instructions\n  (SELECT PERCENTILE_CONT(survival_days, 0.5) FROM survival_decedents) AS median_survival_days_decedents\nFROM ich_cohort ic\nJOIN mortality_30d m ON ic.subject_id = m.subject_id AND ic.hadm_id = m.hadm_id\nJOIN aki_ards a ON ic.subject_id = a.subject_id AND ic.hadm_id = a.hadm_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: dod at [40:34]; reason: invalidQuery, location: query, message: Unrecognized name: dod at [40:34]\n\nLocation: US\nJob ID: 54681c14-77b5-4ba9-8114-4012b310b896\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"d_icd_diagnoses\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"d_icd_diagnoses\" at [1:1]\n\nLocation: US\nJob ID: 16bc30d2-958d-4cec-8faf-740ad9f2b5e5\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got identifier \"ILIKE\" at [26:21]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got identifier \"ILIKE\" at [26:21]\n\nLocation: US\nJob ID: 3ba4d84c-91ba-4b56-a2fb-740fb32ed32d\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: dod at [40:34]; reason: invalidQuery, location: query, message: Unrecognized name: dod at [40:34]\n\nLocation: US\nJob ID: 54681c14-77b5-4ba9-8114-4012b310b896\n"
+    }
+  ]
+}

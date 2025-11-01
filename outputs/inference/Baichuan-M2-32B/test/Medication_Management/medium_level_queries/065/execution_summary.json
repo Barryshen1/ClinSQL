@@ -1,0 +1,29 @@
+{
+  "query": "For my 82-year-old male inpatient: among inpatients 77\u201387 with diabetes and heart failure, report initiation rates and net change (pp) for insulin vs oral agents, 0\u201348h vs final 72h.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        -- Approximate age at admission: birth year = anchor_year - anchor_age\n        EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission,\n        p.gender,\n        -- Flags for conditions (at least one diagnosis per condition)\n        MAX(CASE \n            WHEN d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E12%' OR \n                 d.icd_code LIKE 'E13%' OR d.icd_code LIKE 'E14%' OR d.icd_code LIKE '250%' \n            THEN 1 ELSE 0 END) AS has_diabetes,\n        MAX(CASE \n            WHEN d.icd_code LIKE 'I50%' OR d.icd_code LIKE '428%' \n            THEN 1 ELSE 0 END) AS has_heart_failure\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n        ON p.subject_id = a.subject_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n        ON a.hadm_id = d.hadm_id\n    WHERE \n        -- Age between 77 and 87 at admission\n        EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 77 AND 87\n        AND a.hospital_expire_flag = 0  -- Only discharged patients for window2\n    GROUP BY p.subject_id, a.hadm_id, a.admittime, a.dischtime, p.anchor_year, p.anchor_age, p.gender\n    HAVING has_diabetes = 1 AND has_heart_failure = 1\n),\ntime_windows AS (\n    SELECT \n        subject_id,\n        hadm_id,\n        admittime,\n        dischtime,\n        admittime AS window1_start,\n        admittime + INTERVAL 48 HOUR AS window1_end,\n        dischtime - INTERVAL 72 HOUR AS window2_start,\n        dischtime AS window2_end\n    FROM cohort\n),\nprescriptions AS (\n    SELECT \n        subject_id,\n        hadm_id,\n        starttime,\n        stoptime,\n        drug,\n        -- Classify drug\n        CASE \n            WHEN drug LIKE '%insulin%' THEN 'insulin'\n            WHEN drug IN (\n                'metformin', 'glipizide', 'glyburide', 'glimepiride', 'pioglitazone', \n                'rosiglitazone', 'sitagliptin', 'linagliptin', 'alogliptin', 'vildagliptin', \n                'canagliflozin', 'dapagliflozin', 'empagliflozin', 'saxagliptin', \n                'repaglinide', 'nateglinide', 'acarbose', 'miglitol', 'troglitazone'\n            ) THEN 'oral'\n            ELSE NULL \n        END AS drug_class\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n    WHERE drug IS NOT NULL\n),\nprescription_events AS (\n    SELECT \n        t.subject_id,\n        t.hadm_id,\n        t.window1_start,\n        t.window1_end,\n        t.window2_start,\n        t.window2_end,\n        p.drug_class,\n        -- For window1\n        CASE WHEN p.starttime BETWEEN t.window1_start AND t.window1_end THEN 1 ELSE 0 END AS init_window1,\n        CASE WHEN p.stoptime BETWEEN t.window1_start AND t.window1_end THEN 1 ELSE 0 END AS disc_window1,\n        -- For window2\n        CASE WHEN p.starttime BETWEEN t.window2_start AND t.window2_end THEN 1 ELSE 0 END AS init_window2,\n        CASE WHEN p.stoptime BETWEEN t.window2_start AND t.window2_end THEN 1 ELSE 0 END AS disc_window2\n    FROM time_windows t\n    LEFT JOIN prescriptions p \n        ON t.subject_id = p.subject_id AND t.hadm_id = p.hadm_id\n        AND p.drug_class IS NOT NULL  -- Only include classified prescriptions\n),\naggregated AS (\n    SELECT \n        subject_id,\n        hadm_id,\n        drug_class,\n        -- Window1\n        SUM(init_window1) AS initiations_window1,\n        SUM(disc_window1) AS discontinuations_window1,\n        SUM(init_window1) - SUM(disc_window1) AS net_change_window1,\n        -- Window2\n        SUM(init_window2) AS initiations_window2,\n        SUM(disc_window2) AS discontinuations_window2,\n        SUM(init_window2) - SUM(disc_window2) AS net_change_window2\n    FROM prescription_events\n    GROUP BY subject_id, hadm_id, drug_class\n)\nSELECT \n    drug_class,\n    -- Average net change per patient per drug class per window\n    AVG(net_change_window1) AS avg_net_change_window1,\n    AVG(net_change_window2) AS avg_net_change_window2\nFROM aggregated\nGROUP BY drug_class;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"window_final_72_start\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"window_final_72_start\" at [1:1]\n\nLocation: US\nJob ID: d5ca58a7-247e-4fc7-8906-0c0ab31bb6ce\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: 728c2447-2c9c-4d65-a9b3-6108331a2df7\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

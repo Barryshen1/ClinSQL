@@ -1,0 +1,16 @@
+{
+  "query": "My 64-year-old female inpatient has T2DM and heart failure. Among female inpatients 59\u201369 (\u226548h), report prevalence of injectable GLP\u20111 use in first 48h vs final 12h and absolute pp difference.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    DATETIME_ADD(adm.admittime, INTERVAL 48 HOUR) AS first_48h_end,\n    DATETIME_SUB(adm.dischtime, INTERVAL 12 HOUR) AS final_12h_start\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 59 AND 69\n    AND DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) >= 48\n    AND adm.hadm_id IN (\n      -- T2DM diagnosis\n      SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE icd_code LIKE 'E11%' OR (icd_version = 9 AND icd_code LIKE '250%' AND (icd_code LIKE '%0' OR icd_code LIKE '%2'))\n      INTERSECT DISTINCT\n      -- Heart failure diagnosis\n      SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE icd_code LIKE 'I50%' OR (icd_version = 9 AND icd_code LIKE '428%')\n    )\n),\nglp1_first48 AS (\n  SELECT \n    c.hadm_id,\n    MAX(1) AS glp1_first48 -- flag if at least one GLP-1 in first 48h\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n  WHERE p.starttime >= c.admittime \n    AND p.starttime <= c.first_48h_end\n    AND LOWER(p.drug) LIKE '%exenatide%' \n    OR LOWER(p.drug) LIKE '%liraglutide%'\n    OR LOWER(p.drug) LIKE '%dulaglutide%'\n    OR LOWER(p.drug) LIKE '%semaglutide%'\n    OR LOWER(p.drug) LIKE '%lixisenatide%'\n    OR LOWER(p.drug) LIKE '%albiglutide%'\n  GROUP BY c.hadm_id\n),\nglp1_final12 AS (\n  SELECT \n    c.hadm_id,\n    MAX(1) AS glp1_final12 -- flag if at least one GLP-1 in final 12h\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n  WHERE p.starttime >= c.final_12h_start \n    AND p.starttime <= c.dischtime\n    AND (LOWER(p.drug) LIKE '%exenatide%' \n      OR LOWER(p.drug) LIKE '%liraglutide%'\n      OR LOWER(p.drug) LIKE '%dulaglutide%'\n      OR LOWER(p.drug) LIKE '%semaglutide%'\n      OR LOWER(p.drug) LIKE '%lixisenatide%'\n      OR LOWER(p.drug) LIKE '%albiglutide%')\n  GROUP BY c.hadm_id\n),\ncohort_glp1 AS (\n  SELECT \n    c.hadm_id,\n    COALESCE(f48.glp1_first48, 0) AS glp1_first48,\n    COALESCE(f12.glp1_final12, 0) AS glp1_final12\n  FROM cohort c\n  LEFT JOIN glp1_first48 f48 ON c.hadm_id = f48.hadm_id\n  LEFT JOIN glp1_final12 f12 ON c.hadm_id = f12.hadm_id\n)\nSELECT \n  COUNT(*) AS total_admissions,\n  SUM(glp1_first48) AS count_first48,\n  ROUND(100 * SUM(glp1_first48) / COUNT(*), 2) AS prevalence_first48,\n  SUM(glp1_final12) AS count_final12,\n  ROUND(100 * SUM(glp1_final12) / COUNT(*), 2) AS prevalence_final12,\n  ROUND(100 * SUM(glp1_first48) / COUNT(*) - 100 * SUM(glp1_final12) / COUNT(*), 2) AS absolute_pp_difference\nFROM cohort_glp1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

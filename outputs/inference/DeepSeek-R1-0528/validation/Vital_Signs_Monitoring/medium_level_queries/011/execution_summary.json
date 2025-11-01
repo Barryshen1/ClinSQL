@@ -1,0 +1,16 @@
+{
+  "query": "I have a 59-year-old man. Among male ICU patients 54\u201364, categorize per-stay average RR during first 48 hours as <12, 12\u201320, 21\u201329, \u226530 and give n, mean, median, IQR.",
+  "final_sql": "WITH patient_stays AS (\n  SELECT\n    p.subject_id,\n    i.stay_id,\n    i.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON p.subject_id = i.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n),\nrr_events AS (\n  SELECT\n    ps.stay_id,\n    ce.valuenum AS rr_value\n  FROM patient_stays ps\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ps.stay_id = ce.stay_id\n    AND ce.itemid IN (220210, 224422)  -- Respiratory Rate itemIDs\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n    AND ce.valuenum <= 100  -- Filter physiologically plausible values\n    AND ce.charttime >= ps.intime\n    AND ce.charttime <= DATETIME_ADD(ps.intime, INTERVAL 48 HOUR)\n),\nper_stay_avg AS (\n  SELECT\n    stay_id,\n    AVG(rr_value) AS avg_rr\n  FROM rr_events\n  GROUP BY stay_id\n  HAVING AVG(rr_value) IS NOT NULL  -- Ensure at least one valid measurement\n),\ncategorized AS (\n  SELECT\n    stay_id,\n    avg_rr,\n    CASE\n      WHEN avg_rr < 12 THEN '<12'\n      WHEN avg_rr BETWEEN 12 AND 20 THEN '12-20'\n      WHEN avg_rr BETWEEN 21 AND 29 THEN '21-29'\n      ELSE '>=30'\n    END AS category\n  FROM per_stay_avg\n)\nSELECT\n  category,\n  COUNT(stay_id) AS n,\n  AVG(avg_rr) AS mean,\n  APPROX_QUANTILES(avg_rr, 100)[OFFSET(50)] AS median,\n  APPROX_QUANTILES(avg_rr, 100)[OFFSET(25)] AS q1,\n  APPROX_QUANTILES(avg_rr, 100)[OFFSET(75)] AS q3\nFROM categorized\nGROUP BY category\nORDER BY\n  CASE category\n    WHEN '<12' THEN 1\n    WHEN '12-20' THEN 2\n    WHEN '21-29' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

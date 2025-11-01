@@ -1,0 +1,29 @@
+{
+  "query": "I have a 58-year-old woman. For females 53\u201363 admitted with upper GI bleeding (1\u20138 day stays), what are p25, p50, p75 diagnostic procedures per admission for 1\u20134 vs 5\u20138 days?",
+  "final_sql": "WITH upper_gi_bleeding_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    -- ICD-10\n    (icd_version = 10 AND (\n      (icd_code BETWEEN 'K250' AND 'K256') OR\n      (icd_code BETWEEN 'K260' AND 'K266') OR\n      (icd_code BETWEEN 'K270' AND 'K276') OR\n      (icd_code BETWEEN 'K280' AND 'K286') OR\n      icd_code IN ('K920', 'K921', 'K922')\n    ))\n    OR\n    -- ICD-9\n    (icd_version = 9 AND (\n      (icd_code BETWEEN '5310' AND '5316') OR\n      (icd_code BETWEEN '5320' AND '5326') OR\n      (icd_code BETWEEN '5330' AND '5336') OR\n      (icd_code BETWEEN '5340' AND '5346') OR\n      icd_code IN ('5780', '5781', '5789')\n    ))\n),\negd_procedure_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE \n    LOWER(long_title) LIKE '%endoscopy%'\n    AND (LOWER(long_title) LIKE '%upper%' \n         OR LOWER(long_title) LIKE '%esophag%' \n         OR LOWER(long_title) LIKE '%gastroduoden%')\n),\nfiltered_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    -- Calculate length of stay in days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  -- Join with diagnoses to filter for upper GI bleeding\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN upper_gi_bleeding_codes u\n    ON d.icd_code = u.icd_code AND d.icd_version = u.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 53 AND 63\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) BETWEEN 1 AND 8\n),\nadmission_procedure_counts AS (\n  SELECT\n    fa.hadm_id,\n    fa.los_days,\n    COUNT(p.icd_code) AS procedure_count\n  FROM filtered_admissions fa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n    ON fa.hadm_id = p.hadm_id\n    AND EXISTS (\n      SELECT 1 \n      FROM egd_procedure_codes e \n      WHERE p.icd_code = e.icd_code AND p.icd_version = e.icd_version\n    )\n    -- Ensure procedure happened during admission\n    AND DATE(p.chartdate) BETWEEN DATE(fa.admittime) AND DATE(fa.dischtime)\n  GROUP BY fa.hadm_id, fa.los_days\n)\nSELECT\n  CASE \n    WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n    WHEN los_days BETWEEN 5 AND 8 THEN '5-8 days'\n  END AS los_group,\n  APPROX_QUANTILES(procedure_count, 1000)[OFFSET(250)] AS p25,\n  APPROX_QUANTILES(procedure_count, 1000)[OFFSET(500)] AS p50,\n  APPROX_QUANTILES(procedure_count, 1000)[OFFSET(750)] AS p75\nFROM admission_procedure_counts\nGROUP BY los_group;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 EXISTS subquery is not supported inside join predicate.; reason: invalidQuery, location: query, message: EXISTS subquery is not supported inside join predicate.\n\nLocation: US\nJob ID: dbe68a18-e40b-4596-b1dc-57301a2eff05\n",
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"GI\" at [1:12]\n\nLocation: US\nJob ID: b618acfc-9ceb-44dc-9f95-cbc2a38b2ba8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [27:16]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [27:16]\n\nLocation: US\nJob ID: b721bda7-a0d1-4dad-af65-bf50a1f78d5b\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 EXISTS subquery is not supported inside join predicate.; reason: invalidQuery, location: query, message: EXISTS subquery is not supported inside join predicate.\n\nLocation: US\nJob ID: dbe68a18-e40b-4596-b1dc-57301a2eff05\n"
+    }
+  ]
+}

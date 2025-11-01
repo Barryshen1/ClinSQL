@@ -1,0 +1,16 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH pe_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON p.subject_id = adm.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code LIKE '4151%')\n      OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I26%')\n    )\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 44 AND 54\n),\n\nfirst_icu_stay AS (\n  SELECT \n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY icu.intime) AS stay_rank\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN pe_patients pp\n    ON icu.hadm_id = pp.hadm_id\n),\n\ncohort AS (\n  SELECT\n    pp.*,\n    icu.stay_id,\n    icu.intime\n  FROM pe_patients pp\n  INNER JOIN first_icu_stay icu\n    ON pp.hadm_id = icu.hadm_id\n    AND pp.subject_id = icu.subject_id\n    AND icu.stay_rank = 1\n),\n\nprocedure_counts AS (\n  SELECT\n    c.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY c.stay_id\n),\n\ncohort_with_counts AS (\n  SELECT\n    c.*,\n    COALESCE(pc.procedure_count, 0) AS procedure_count,\n    DATE_DIFF(c.dischtime, c.admittime, DAY) AS hospital_los\n  FROM cohort c\n  LEFT JOIN procedure_counts pc\n    ON c.stay_id = pc.stay_id\n),\n\nquintiles AS (\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM cohort_with_counts\n)\n\nSELECT\n  quintile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(hospital_los) AS avg_hospital_los,\n  100.0 * SUM(hospital_expire_flag) / COUNT(*) AS mortality_percentage\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

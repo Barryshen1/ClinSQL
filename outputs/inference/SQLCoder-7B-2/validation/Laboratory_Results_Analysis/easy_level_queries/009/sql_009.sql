@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY MIN(value)) AS nadir_troponin_25th_percentile FROM labevents JOIN patients ON labevents.subject_id = patients.subject_id JOIN admissions ON labevents.subject_id = admissions.subject_id WHERE patients.gender = 'F' AND admissions.admission_type = 'ACS' AND d_labitems.itemid = labevents.itemid AND d_labitems.label = 'Troponin';

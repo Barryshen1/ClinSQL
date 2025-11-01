@@ -1,0 +1,16 @@
+{
+  "query": "For a 55-year-old man, among male patients 50\u201360 with sepsis (no septic shock), report in\u2011hospital mortality (%) and median LOS by LOS \u22647 vs >7 days and day\u20111 ICU status.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.hadm_id,\n    p.subject_id,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 50 AND 60\n),\n\nsepsis_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE (\n    (icd_version = 10 AND (\n      icd_code LIKE 'A41%' OR \n      icd_code = 'A409' OR \n      icd_code = 'R6520'\n    ))\n  )\n),\n\nseptic_shock_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE icd_version = 10 AND icd_code = 'R6521'\n),\n\nsepsis_admissions AS (\n  SELECT pa.*\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON pa.hadm_id = di.hadm_id\n  INNER JOIN sepsis_codes sc\n    ON di.icd_code = sc.icd_code\n  WHERE NOT EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di2\n    JOIN septic_shock_codes ss ON di2.icd_code = ss.icd_code\n    WHERE di2.hadm_id = pa.hadm_id\n  )\n  AND pa.admittime IS NOT NULL\n  AND pa.dischtime IS NOT NULL\n  AND pa.los_days >= 0\n),\n\nicu_status AS (\n  SELECT DISTINCT\n    sa.hadm_id,\n    sa.age,\n    sa.gender,\n    sa.admittime,\n    sa.dischtime,\n    sa.hospital_expire_flag,\n    sa.los_days,\n    CASE WHEN i.intime IS NOT NULL THEN 1 ELSE 0 END AS icu_day1\n  FROM sepsis_admissions sa\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.icustays i\n    ON sa.hadm_id = i.hadm_id\n    AND i.intime <= DATETIME_ADD(sa.admittime, INTERVAL 24 HOUR)\n    AND i.intime >= sa.admittime\n),\n\ngrouped_data AS (\n  SELECT\n    CASE WHEN los_days <= 7 THEN '\u22647 days' ELSE '>7 days' END AS los_group,\n    CASE WHEN icu_day1 = 1 THEN 'ICU Day-1' ELSE 'No ICU Day-1' END AS icu_day1,\n    hospital_expire_flag,\n    los_days\n  FROM icu_status\n)\n\nSELECT\n  los_group,\n  icu_day1,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_rate,\n  ROUND(APPROX_QUANTILES(los_days, 2)[OFFSET(1)], 2) AS median_los\nFROM grouped_data\nGROUP BY los_group, icu_day1\nORDER BY los_group DESC, icu_day1;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

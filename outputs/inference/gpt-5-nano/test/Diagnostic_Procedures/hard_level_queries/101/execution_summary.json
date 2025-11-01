@@ -1,0 +1,22 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH target_base AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = icu.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 88 AND 98\n    -- COPD exacerbation: COPD-related ICD codes in the admission\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE di.hadm_id = icu.hadm_id\n        AND (\n             (di.icd_version = 10 AND di.icd_code LIKE 'J44%')\n             OR (di.icd_version = 9 AND (di.icd_code LIKE '491%' OR di.icd_code LIKE '492%' OR di.icd_code LIKE '493%'))\n        )\n    )\n),\nproc_counts AS (\n  SELECT\n    t.hadm_id,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedures_first72\n  FROM target_base t\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON pe.hadm_id = t.hadm_id\n   AND pe.stay_id = t.stay_id\n   AND pe.starttime >= t.intime\n   AND pe.starttime < TIMESTAMP_ADD(t.intime, INTERVAL 72 HOUR)\n  GROUP BY t.hadm_id\n),\np75 AS (\n  SELECT quantiles[OFFSET(75)] AS p75_distinct_procedures\n  FROM (\n    SELECT APPROX_QUANTILES(distinct_procedures_first72, 100) AS quantiles\n    FROM proc_counts\n  )\n),\ntarget_stats AS (\n  SELECT\n    AVG(i.los) AS mean_los_target,\n    AVG(CASE\n          WHEN a.hospital_expire_flag = 1 OR a.deathtime IS NOT NULL THEN 1.0\n          ELSE 0.0\n        END) AS mortality_rate_target\n  FROM target_base t\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON i.hadm_id = t.hadm_id AND i.stay_id = t.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.hadm_id = t.hadm_id\n),\nage_match_base AS (\n  SELECT icu.subject_id, icu.hadm_id, icu.stay_id\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = icu.subject_id\n  WHERE p.anchor_age BETWEEN 88 AND 98\n),\nage_match_stats AS (\n  SELECT\n    AVG(i.los) AS mean_los_age_match,\n    AVG(CASE\n          WHEN a.hospital_expire_flag = 1 OR a.deathtime IS NOT NULL THEN 1.0\n          ELSE 0.0\n        END) AS mortality_rate_age_match\n  FROM age_match_base am\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON i.hadm_id = am.hadm_id AND i.stay_id = am.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.hadm_id = am.hadm_id\n)\nSELECT\n  p75_distinct_procedures,\n  mean_los_target,\n  mortality_rate_target,\n  mean_los_age_match,\n  mortality_rate_age_match\nFROM p75\nCROSS JOIN target_stats\nCROSS JOIN age_match_stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 A valid date part name is required but found H at [32:59]; reason: invalidQuery, location: query, message: A valid date part name is required but found H at [32:59]\n\nLocation: US\nJob ID: 23201015-5c8b-49b4-afa1-81371abe8e3c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

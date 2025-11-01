@@ -1,0 +1,1 @@
+SELECT mp.subject_id AS patient_id, mp.anchor_year AS age_at_admission, mds.diagnosis_days AS days_di;

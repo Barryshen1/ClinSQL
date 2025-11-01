@@ -1,0 +1,16 @@
+{
+  "query": "For my 57-year-old male, among men aged 52\u201362 undergoing their first PCI, what is the average 30-day readmission rate?",
+  "final_sql": "WITH pci_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE REGEXP_CONTAINS(LOWER(long_title), r'percutaneous.*coronary|ptca|coronary.*angioplasty')\n),\nhas_pci AS (\n  SELECT DISTINCT pi.subject_id, pi.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n  INNER JOIN pci_codes pc\n    ON pi.icd_code = pc.icd_code AND pi.icd_version = pc.icd_version\n),\nfirst_pci_adm AS (\n  SELECT subject_id, hadm_id, admittime, dischtime\n  FROM (\n    SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime,\n           ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN has_pci hp\n      ON a.subject_id = hp.subject_id AND a.hadm_id = hp.hadm_id\n    WHERE a.hospital_expire_flag = 0\n  )\n  WHERE rn = 1\n),\nindex_adms AS (\n  SELECT fpa.*, p.gender, p.anchor_age\n  FROM first_pci_adm fpa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON fpa.subject_id = p.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 52 AND 62\n),\nreadmission_check AS (\n  SELECT ia.*,\n         EXISTS(\n           SELECT 1\n           FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n           WHERE a.subject_id = ia.subject_id\n             AND a.hadm_id <> ia.hadm_id\n             AND a.admittime > ia.dischtime\n             AND a.admittime <= TIMESTAMP_ADD(ia.dischtime, INTERVAL 30 DAY)\n         ) AS has_readmission\n  FROM index_adms ia\n)\nSELECT\n  COUNT(*) AS total_patients,\n  SUM(CASE WHEN has_readmission THEN 1 ELSE 0 END) AS num_readmitted,\n  ROUND(AVG(CASE WHEN has_readmission THEN 1.0 ELSE 0.0 END) * 100, 2) AS readmission_rate_percent\nFROM readmission_check;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

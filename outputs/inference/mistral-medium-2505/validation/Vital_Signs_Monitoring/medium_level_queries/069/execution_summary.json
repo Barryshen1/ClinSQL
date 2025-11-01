@@ -1,0 +1,22 @@
+{
+  "query": "I have a 46-year-old female ICU patient. Among female ICU patients 41\u201351, how many had per\u2011stay average RR <12, 12\u201320, 21\u201329, \u226530 in first 48h, and what were stroke rates?",
+  "final_sql": "WITH\n-- Get female patients aged 41-51 with their admission IDs\nfemale_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year_group,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 41 AND 51\n),\n\n-- Get their ICU stays\nicu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime AS icu_intime,\n    s.outtime AS icu_outtime,\n    s.first_careunit,\n    s.last_careunit,\n    s.los\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    female_patients p ON s.subject_id = p.subject_id AND s.hadm_id = p.hadm_id\n),\n\n-- Get respiratory rate measurements in first 48 hours\nrr_measurements AS (\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum AS rr_value\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  JOIN\n    icu_stays s ON ce.subject_id = s.subject_id AND ce.stay_id = s.stay_id\n  WHERE\n    di.label = 'Respiratory Rate'\n    AND ce.charttime BETWEEN s.icu_intime AND DATETIME_ADD(s.icu_intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\n\n-- Calculate average RR per stay in first 48 hours\navg_rr_per_stay AS (\n  SELECT\n    subject_id,\n    stay_id,\n    AVG(rr_value) AS avg_rr,\n    COUNT(rr_value) AS rr_count\n  FROM\n    rr_measurements\n  GROUP BY\n    subject_id, stay_id\n  HAVING\n    COUNT(rr_value) >= 1  -- At least one RR measurement\n),\n\n-- Categorize patients by RR ranges\nrr_categories AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    s.stay_id,\n    CASE\n      WHEN a.avg_rr < 12 THEN 'RR <12'\n      WHEN a.avg_rr BETWEEN 12 AND 20 THEN 'RR 12-20'\n      WHEN a.avg_rr BETWEEN 21 AND 29 THEN 'RR 21-29'\n      WHEN a.avg_rr >= 30 THEN 'RR \u226530'\n      ELSE 'Unknown RR'\n    END AS rr_category,\n    a.avg_rr\n  FROM\n    female_patients p\n  JOIN\n    icu_stays s ON p.subject_id = s.subject_id AND p.hadm_id = s.hadm_id\n  JOIN\n    avg_rr_per_stay a ON p.subject_id = a.subject_id AND s.stay_id = a.stay_id\n),\n\n-- Identify stroke patients\nstroke_patients AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id,\n    d.icd_code,\n    di.long_title\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    -- ICD-9 codes for stroke: 430-438\n    (d.icd_version = 9 AND d.icd_code BETWEEN '430' AND '438')\n    OR\n    -- ICD-10 codes for stroke: I60-I69\n    (d.icd_version = 10 AND d.icd_code BETWEEN 'I60' AND 'I69')\n)\n\n-- Final analysis: Count patients by RR category and stroke status\nSELECT\n  r.rr_category,\n  COUNT(DISTINCT r.subject_id) AS total_patients,\n  COUNT(DISTINCT s.subject_id) AS stroke_patients,\n  ROUND(COUNT(DISTINCT s.subject_id) / COUNT(DISTINCT r.subject_id) * 100, 2) AS stroke_rate_percentage\nFROM\n  rr_categories r\nLEFT JOIN\n  stroke_patients s ON r.subject_id = s.subject_id AND r.hadm_id = s.hadm_id\nGROUP BY\n  r.rr_category\nORDER BY\n  CASE r.rr_category\n    WHEN 'RR <12' THEN 1\n    WHEN 'RR 12-20' THEN 2\n    WHEN 'RR 21-29' THEN 3\n    WHEN 'RR \u226530' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside p at [72:7]; reason: invalidQuery, location: query, message: Name hadm_id not found inside p at [72:7]\n\nLocation: US\nJob ID: d4b8e393-5868-4064-8d68-f1ccc47a1901\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

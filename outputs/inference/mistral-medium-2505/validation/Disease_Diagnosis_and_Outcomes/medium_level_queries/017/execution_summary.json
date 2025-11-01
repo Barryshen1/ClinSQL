@@ -1,0 +1,22 @@
+{
+  "query": "For a 55-year-old man: among males 50\u201360 with sepsis (excluding septic shock), report in-hospital mortality (%) with 95% CIs and median time-to-death among non-survivors (days) by LOS (<8 vs \u22658 days).",
+  "final_sql": "WITH sepsis_patients AS (\n  -- Identify male patients aged 50-60 with sepsis (excluding septic shock)\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) < 8 THEN '<8 days' ELSE '>=8 days' END AS los_category\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND (\n      -- Sepsis codes (excluding septic shock)\n      (di.icd_code LIKE 'A41.%' AND di.icd_code NOT LIKE 'A41.9') -- Other sepsis, excluding unspecified\n      OR (di.icd_code LIKE 'R65.2%' AND di.icd_code != 'R65.21') -- Severe sepsis, excluding septic shock\n      OR di.icd_code IN ('A40.0', 'A40.1', 'A40.2', 'A40.3', 'A40.8', 'A40.9') -- Streptococcal sepsis\n      OR di.icd_code IN ('A41.0', 'A41.1', 'A41.2', 'A41.3', 'A41.4', 'A41.5', 'A41.8')\n    )\n    AND di.icd_code NOT IN ('R65.21', 'R57.2', 'A41.9') -- Exclude septic shock and unspecified sepsis\n),\n\nmortality_stats AS (\n  -- Calculate mortality rates and 95% CIs\n  SELECT\n    los_category,\n    COUNT(*) AS total_patients,\n    SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS deaths,\n    -- Calculate mortality rate with 95% CI using Wilson score interval\n    ROUND(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS mortality_rate,\n    -- Wilson score interval for 95% CI\n    ROUND(\n      (SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) + 1.96*1.96/2) /\n      (COUNT(*) + 1.96*1.96) +\n      1.96*1.96/(4*(COUNT(*) + 1.96*1.96)) /\n      SQRT(COUNT(*) + 1.96*1.96) *\n      SQRT(\n        4*SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END)*(COUNT(*) - SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END)) +\n        1.96*1.96\n      )\n    * 100, 2) AS ci_upper,\n    ROUND(\n      (SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) + 1.96*1.96/2) /\n      (COUNT(*) + 1.96*1.96) -\n      1.96*1.96/(4*(COUNT(*) + 1.96*1.96)) /\n      SQRT(COUNT(*) + 1.96*1.96) *\n      SQRT(\n        4*SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END)*(COUNT(*) - SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END)) +\n        1.96*1.96\n      )\n    * 100, 2) AS ci_lower\n  FROM\n    sepsis_patients\n  GROUP BY\n    los_category\n),\n\nmedian_time_to_death AS (\n  -- Calculate median time-to-death for non-survivors\n  SELECT\n    los_category,\n    PERCENTILE_CONT(TIMESTAMP_DIFF(deathtime, admittime, DAY), 0.5) OVER (PARTITION BY los_category) AS median_time_to_death\n  FROM\n    sepsis_patients\n  WHERE\n    hospital_expire_flag = 1\n)\n\nSELECT\n  m.los_category,\n  m.total_patients,\n  m.deaths,\n  m.mortality_rate,\n  m.ci_lower,\n  m.ci_upper,\n  t.median_time_to_death\nFROM\n  mortality_stats m\nLEFT JOIN\n  median_time_to_death t ON m.los_category = t.los_category\nGROUP BY\n  m.los_category, m.total_patients, m.deaths, m.mortality_rate, m.ci_lower, m.ci_upper, t.median_time_to_death\nORDER BY\n  m.los_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" or keyword ORDER or keyword RANGE or keyword ROWS but got keyword WHERE at [65:7]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" or keyword ORDER or keyword RANGE or keyword ROWS but got keyword WHERE at [65:7]\n\nLocation: US\nJob ID: b6c7c266-5912-4887-9f79-a9f0f52d2f21\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

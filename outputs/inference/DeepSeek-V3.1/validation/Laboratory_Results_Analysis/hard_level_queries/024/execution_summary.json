@@ -1,0 +1,16 @@
+{
+  "query": "I have a 58-year-old woman after cardiac arrest. Among female inpatients 53\u201363 with post\u2011arrest, what is the 90th percentile 48\u2011hour lab instability score? For those \u2265 that value, report count, mortality, mean LOS, and compare critical lab frequency to all inpatients.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id, \n        p.gender, \n        p.anchor_age,\n        a.hadm_id, \n        a.admittime, \n        a.dischtime, \n        a.hospital_expire_flag,\n        DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON a.hadm_id = diag.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n    WHERE p.gender = 'F'\n        AND p.anchor_age BETWEEN 53 AND 63\n        AND d.long_title LIKE 'Cardiac arrest%'\n),\n\nlabs_48hr AS (\n    SELECT \n        c.subject_id,\n        c.hadm_id,\n        COUNT(DISTINCT l.itemid) AS instability_score\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n        ON c.hadm_id = l.hadm_id\n        AND l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n        AND l.flag IS NOT NULL\n    GROUP BY c.subject_id, c.hadm_id\n),\n\npercentile_calc AS (\n    SELECT \n        PERCENTILE_CONT(instability_score, 0.9) OVER() AS p90_score\n    FROM labs_48hr\n    LIMIT 1\n),\n\nhigh_instability_cohort AS (\n    SELECT \n        c.*,\n        l.instability_score\n    FROM cohort c\n    INNER JOIN labs_48hr l\n        ON c.hadm_id = l.hadm_id\n    CROSS JOIN percentile_calc p\n    WHERE l.instability_score >= p.p90_score\n),\n\nall_inpatients_labs AS (\n    SELECT \n        a.hadm_id,\n        COUNT(DISTINCT l.itemid) AS abnormal_labs_count\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n        ON a.hadm_id = l.hadm_id\n        AND l.flag IS NOT NULL\n    GROUP BY a.hadm_id\n)\n\nSELECT \n    (SELECT COUNT(*) FROM high_instability_cohort) AS n_patients,\n    (SELECT COUNT(*) FROM high_instability_cohort WHERE hospital_expire_flag = 1) AS n_died,\n    (SELECT AVG(los_days) FROM high_instability_cohort) AS mean_los_days,\n    (SELECT AVG(instability_score) FROM high_instability_cohort) AS mean_abnormal_labs_subgroup,\n    (SELECT AVG(abnormal_labs_count) FROM all_inpatients_labs) AS mean_abnormal_labs_all_inpatients;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

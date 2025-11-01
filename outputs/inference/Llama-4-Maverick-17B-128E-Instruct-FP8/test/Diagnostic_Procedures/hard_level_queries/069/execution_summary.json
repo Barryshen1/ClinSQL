@@ -1,0 +1,16 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH \npe_patients AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n  ON d.icd_code = diag.icd_code AND d.icd_version = diag.icd_version\n  WHERE diag.long_title LIKE '%Pulmonary embolism%' AND d.icd_version = 10\n),\nfiltered_patients AS (\n  SELECT p.subject_id, p.anchor_age, a.hadm_id, icu.stay_id, icu.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON a.hadm_id = icu.hadm_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 44 AND 54\n  AND a.hadm_id IN (SELECT hadm_id FROM pe_patients)\n  AND icu.stay_id IN (SELECT stay_id FROM (\n    SELECT stay_id, ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) as rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) WHERE rn = 1)\n),\nprocedure_counts AS (\n  SELECT fp.subject_id, fp.hadm_id, COUNT(DISTINCT pe.itemid) as procedure_count\n  FROM filtered_patients fp\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  ON fp.stay_id = pe.stay_id\n  WHERE pe.starttime BETWEEN fp.intime AND TIMESTAMP_ADD(fp.intime, INTERVAL 72 HOUR)\n  GROUP BY fp.subject_id, fp.hadm_id\n),\npatient_outcomes AS (\n  SELECT a.hadm_id, \n         DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24 AS hospital_los,\n         a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\ncombined_data AS (\n  SELECT pc.procedure_count, po.hospital_los, po.hospital_expire_flag,\n         NTILE(5) OVER (ORDER BY pc.procedure_count) as quintile\n  FROM procedure_counts pc\n  JOIN patient_outcomes po ON pc.hadm_id = po.hadm_id\n),\nquintile_averages AS (\n  SELECT quintile,\n         AVG(procedure_count) as avg_procedure_count,\n         AVG(hospital_los) as avg_hospital_los,\n         AVG(hospital_expire_flag) * 100 as mortality_percent\n  FROM combined_data\n  GROUP BY quintile\n)\nSELECT quintile,\n       avg_procedure_count,\n       avg_hospital_los,\n       mortality_percent\nFROM quintile_averages\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

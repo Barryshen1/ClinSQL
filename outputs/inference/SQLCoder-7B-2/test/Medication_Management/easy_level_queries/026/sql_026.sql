@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY duration) AS percentile_duration FROM dihydropyridine_ccb;

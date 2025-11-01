@@ -1,0 +1,28 @@
+{
+  "query": "Asking for my 95\u2011year\u2011old female ICU patient: among female ICU patients aged 90\u2013100, by first\u201124h per\u2011stay average SpO2 (<90, 90\u201392, 93\u201395, >95), give N, mean, median, IQR and AKI rate.",
+  "final_sql": "WITH icu_patients AS (\n  SELECT \n    i.stay_id,\n    i.hadm_id,\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    i.intime,\n    i.outtime,\n    CASE \n      WHEN di.icd_code LIKE 'N17%' OR LOWER(ddi.long_title) LIKE '%acute kidney injury%' \n      THEN 1 \n      ELSE 0 \n    END AS has_aki\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON i.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n    ON i.hadm_id = di.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi \n    ON di.icd_code = ddi.icd_code AND di.icd_version = ddi.icd_version\n  WHERE p.gender = 'F' \n    AND p.anchor_age BETWEEN 90 AND 100\n),\n\n-- Deduplicate AKI flag per stay: if any diagnosis exists, flag as 1\n-- Also carry forward intime for time window filtering\nicu_patients_aki AS (\n  SELECT \n    stay_id,\n    MAX(has_aki) AS has_aki,\n    MAX(intime) AS intime  -- intime is functionally dependent on stay_id; use MAX to include in aggregation\n  FROM icu_patients\n  GROUP BY stay_id\n),\n\n-- Extract SpO2 measurements within first 24 hours of ICU stay\nspo2_first24 AS (\n  SELECT \n    ce.stay_id,\n    ce.valuenum AS spo2_value,\n    ipa.has_aki\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN icu_patients_aki ipa \n    ON ce.stay_id = ipa.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di \n    ON ce.itemid = di.itemid\n  WHERE di.label = 'SpO2'\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= ipa.intime\n    AND ce.charttime < DATETIME_ADD(ipa.intime, INTERVAL 24 HOUR)\n)\n\n-- Final aggregation by SpO2 category\nSELECT\n  CASE \n    WHEN spo2_value < 90 THEN '<90'\n    WHEN spo2_value BETWEEN 90 AND 92 THEN '90-92'\n    WHEN spo2_value BETWEEN 93 AND 95 THEN '93-95'\n    WHEN spo2_value > 95 THEN '>95'\n  END AS spo2_category,\n  COUNT(*) AS N,\n  AVG(spo2_value) AS mean,\n  PERCENTILE_CONT(spo2_value, 0.5) AS median,\n  PERCENTILE_CONT(spo2_value, 0.25) AS q1,\n  PERCENTILE_CONT(spo2_value, 0.75) AS q3,\n  AVG(has_aki) AS aki_rate\nFROM spo2_first24\nGROUP BY spo2_category\nORDER BY \n  CASE spo2_category\n    WHEN '<90' THEN 1\n    WHEN '90-92' THEN 2\n    WHEN '93-95' THEN 3\n    WHEN '>95' THEN 4\n  END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 812d093d-8f58-4a7c-bb79-85426ff0e603\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword CORRESPONDING at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword CORRESPONDING at [1:15]\n\nLocation: US\nJob ID: 80e7d6f5-0cb1-489e-a287-382f8cd3cd89\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside ipa at [48:29]; reason: invalidQuery, location: query, message: Name intime not found inside ipa at [48:29]\n\nLocation: US\nJob ID: 4830b7f2-5715-47a0-9ff4-ddcb3b011b63\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 812d093d-8f58-4a7c-bb79-85426ff0e603\n"
+    }
+  ]
+}

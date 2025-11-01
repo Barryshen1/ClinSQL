@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 72-year-old female. Among female ICU patients aged 67\u201377, what percentile is a per-stay average HR of 110 bpm during the first 24 hours?",
+  "final_sql": "WITH hr_first_24_hours AS (\n    -- Select Heart Rate measurements for the first 24 hours of each ICU stay\n    SELECT\n        ie.subject_id,\n        ie.hadm_id,\n        ie.stay_id,\n        ie.intime, -- Include intime for age calculation later\n        AVG(ce.valuenum) AS avg_hr_24h\n    FROM\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` ie\n        ON ce.stay_id = ie.stay_id\n    WHERE\n        ce.itemid = 220045 -- Itemid for Heart Rate\n        AND ce.valuenum IS NOT NULL\n        AND ce.valuenum > 0 AND ce.valuenum < 300 -- Filter for physiologically plausible HR values\n        -- Limit to measurements within the first 24 hours of ICU stay\n        AND ce.charttime BETWEEN ie.intime AND DATETIME_ADD(ie.intime, INTERVAL 24 HOUR)\n    GROUP BY\n        ie.subject_id, ie.hadm_id, ie.stay_id, ie.intime\n    HAVING\n        -- Ensure an average could be calculated for the stay and it's physiologically plausible\n        AVG(ce.valuenum) IS NOT NULL\n        AND AVG(ce.valuenum) > 0 AND AVG(ce.valuenum) < 300\n),\nfiltered_cohort AS (\n    -- Filter the average HR data for female ICU patients aged 67-77 at admission\n    SELECT\n        hr.avg_hr_24h\n    FROM\n        hr_first_24_hours hr\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON hr.subject_id = p.subject_id\n    WHERE\n        p.gender = 'F'\n        -- Calculate age at ICU admission\n        AND (p.anchor_age + (EXTRACT(YEAR FROM hr.intime) - p.anchor_year)) BETWEEN 67 AND 77\n),\ncohort_with_target AS (\n    -- Combine the filtered cohort's average HRs with the target HR (110 bpm)\n    -- This allows PERCENT_RANK() to calculate where 110 falls within the distribution\n    SELECT avg_hr_24h FROM filtered_cohort\n    UNION ALL\n    SELECT 110 AS avg_hr_24h -- Add the target value to the distribution\n),\npercentile_calculation AS (\n    -- Calculate the PERCENT_RANK for every value in the combined set\n    SELECT\n        avg_hr_24h,\n        PERCENT_RANK() OVER (ORDER BY avg_hr_24h) AS p_rank\n    FROM cohort_with_target\n)\n-- Select the percentile rank specifically for the 110 bpm target value\nSELECT\n    -- Multiply by 100 to express as a percentage, round to 2 decimal places for readability\n    ROUND(p_rank * 100, 2) AS percentile_of_110_bpm\nFROM percentile_calculation\nWHERE avg_hr_24h = 110\nORDER BY p_rank DESC -- In case there are multiple entries for 110 (from original data and UNION), pick one.\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [36:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [36:1]\n\nLocation: US\nJob ID: 8f1211de-9f44-41bf-9401-11ecc4e7ebcc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

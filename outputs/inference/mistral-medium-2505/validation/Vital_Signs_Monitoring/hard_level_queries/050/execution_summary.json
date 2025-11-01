@@ -1,0 +1,28 @@
+{
+  "query": "For a 57-year-old female ICU patient: among female ICU patients aged 52\u201362 who received renal replacement therapy, what percentile is a first\u201172\u2011hour vital-sign instability score of 65? Also report mean ICU length of stay and mortality for the top decile.",
+  "final_sql": "WITH\n-- Get female patients aged 52-62\nfemale_patients AS (\n  SELECT\n    subject_id,\n    anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 52 AND 62\n),\n\n-- Identify patients who received RRT (using procedure codes and chart events)\nrrt_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.hadm_id,\n    p.stay_id,\n    p.intime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n    ON p.hadm_id = proc.hadm_id\n  WHERE\n    -- RRT procedure codes (ICD-9/10)\n    (proc.icd_code IN ('39.95', '5A1D60Z', '5A1D70Z', '5A1D80Z', '5A1D90Z')\n     OR proc.icd_code LIKE '5A1D%')\n    -- Or chart events indicating RRT\n    OR EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      WHERE ce.subject_id = p.subject_id\n        AND ce.hadm_id = p.hadm_id\n        AND ce.stay_id = p.stay_id\n        AND ce.itemid IN (223900, 223901) -- Example RRT itemids\n    )\n),\n\n-- Calculate vital-sign instability score for first 72 hours\nvital_scores AS (\n  SELECT\n    r.subject_id,\n    r.hadm_id,\n    r.stay_id,\n    -- Calculate a simple instability score (example formula)\n    -- This is a placeholder - adjust based on actual clinical definition\n    (AVG(CASE WHEN ce.itemid = 220045 THEN ce.valuenum ELSE NULL END) * 0.3 +  -- Heart Rate\n     AVG(CASE WHEN ce.itemid = 220050 THEN ce.valuenum ELSE NULL END) * 0.2 +  -- Systolic BP\n     AVG(CASE WHEN ce.itemid = 220210 THEN ce.valuenum ELSE NULL END) * 0.3 +  -- Respiratory Rate\n     AVG(CASE WHEN ce.itemid = 220277 THEN ce.valuenum ELSE NULL END) * 0.2) AS instability_score -- SpO2\n  FROM\n    rrt_patients r\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON r.subject_id = ce.subject_id\n    AND r.hadm_id = ce.hadm_id\n    AND r.stay_id = ce.stay_id\n  WHERE\n    ce.charttime BETWEEN r.intime AND DATETIME_ADD(r.intime, INTERVAL 72 HOUR)\n    AND ce.itemid IN (220045, 220050, 220210, 220277) -- Heart rate, BP, RR, SpO2\n  GROUP BY\n    r.subject_id, r.hadm_id, r.stay_id\n),\n\n-- Get percentile rank for score of 65\npercentile_info AS (\n  SELECT\n    instability_score,\n    PERCENT_RANK() OVER (ORDER BY instability_score) AS percentile_rank\n  FROM\n    vital_scores\n  WHERE\n    instability_score IS NOT NULL\n),\n\n-- Calculate the 90th percentile threshold\npercentile_threshold AS (\n  SELECT\n    PERCENTILE_CONT(instability_score, 0.9) AS threshold\n  FROM\n    vital_scores\n  WHERE\n    instability_score IS NOT NULL\n),\n\n-- Get mean LOS and mortality for top decile\ntop_decile_stats AS (\n  SELECT\n    AVG(i.los) AS mean_icu_los,\n    AVG(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS mortality_rate\n  FROM\n    vital_scores vs\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON vs.subject_id = i.subject_id\n    AND vs.hadm_id = i.hadm_id\n    AND vs.stay_id = i.stay_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON vs.hadm_id = a.hadm_id\n  CROSS JOIN\n    percentile_threshold pt\n  WHERE\n    vs.instability_score >= pt.threshold\n)\n\n-- Final results\nSELECT\n  (SELECT percentile_rank FROM percentile_info WHERE instability_score = 65) AS percentile_for_score_65,\n  (SELECT mean_icu_los FROM top_decile_stats) AS mean_icu_los_top_decile,\n  (SELECT mortality_rate FROM top_decile_stats) AS mortality_rate_top_decile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 55a9299f-f5f6-4893-85bf-8e5aa6dcdb55\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name intime not found inside r at [60:28]; reason: invalidQuery, location: query, message: Name intime not found inside r at [60:28]\n\nLocation: US\nJob ID: 05ae3725-56d9-427a-a570-de0810f0fd8f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/13906e64-cd28-4771-b6bc-c5903a2d8fba?maxResults=0&location=US&prettyPrint=false: Scalar subquery produced more than one element\n\nLocation: US\nJob ID: 13906e64-cd28-4771-b6bc-c5903a2d8fba\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 55a9299f-f5f6-4893-85bf-8e5aa6dcdb55\n"
+    }
+  ]
+}

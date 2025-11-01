@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY l.value) - percentile_cont(0.25) within GROUP (ORDER BY l.value)) AS interquartile_range FROM labevents l JOIN male_icu_patients mp ON l.subject_id IN mp.subject_id JOIN male_hosp_patients mh ON l.subject_id IN mh.subject_id WHERE l.itemid = 10178;

@@ -1,0 +1,28 @@
+{
+  "query": "For my 57-year-old female: among women aged 52\u201362 with AKI, what is the per-encounter standard deviation of 30-day readmission?",
+  "final_sql": "WITH aki_patients AS (\n  -- Identify primary AKI admissions for women aged 52-62\n  SELECT DISTINCT \n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n    ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND EXTRACT(YEAR FROM a.admittime) - p.anchor_year BETWEEN 0 AND 1  -- Age at admission approx\n    AND d.seq_num = 1  -- Primary diagnosis\n    AND d.icd_version = 10  -- Correct integer for ICD-10\n    AND REGEXP_CONTAINS(d.icd_code, r'^N17\\..*')  -- Precise AKI ICD-10 codes (N17.0-N17.9)\n    AND a.hospital_expire_flag = 0  -- Exclude deaths\n    AND a.admission_type != 'ELECTIVE'  -- Focus on acute admissions\n    -- Ensure this is a primary AKI admission (not a readmission from prior AKI)\n    AND NOT EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d_prior\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a_prior\n        ON d_prior.hadm_id = a_prior.hadm_id\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd_prior\n        ON d_prior.icd_code = icd_prior.icd_code \n        AND d_prior.icd_version = icd_prior.icd_version\n      WHERE d_prior.subject_id = a.subject_id\n        AND a_prior.dischtime < a.admittime\n        AND DATE_DIFF(a.admittime, a_prior.dischtime, DAY) <= 30\n        AND d_prior.icd_version = 10\n        AND REGEXP_CONTAINS(d_prior.icd_code, r'^N17\\..*')\n        AND a_prior.hospital_expire_flag = 0\n    )\n),\n\nreadmissions AS (\n  -- Detect 30-day readmissions per patient, ordered by discharge time\n  SELECT \n    ap.subject_id,\n    ap.hadm_id AS index_hadm_id,\n    a.dischtime AS index_dischtime,\n    -- Binary readmit flag: 1 if any readmit within 30 days after this discharge\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a3\n        INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d3\n          ON a3.hadm_id = d3.hadm_id\n        INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd3\n          ON d3.icd_code = icd3.icd_code AND d3.icd_version = icd3.icd_version\n        WHERE a3.subject_id = ap.subject_id\n          AND a3.hadm_id != ap.hadm_id\n          AND a3.hospital_expire_flag = 0\n          AND a3.admission_type != 'ELECTIVE'\n          AND a3.admittime > a.dischtime\n          AND DATE_DIFF(a3.admittime, a.dischtime, DAY) <= 30\n          AND d3.seq_num = 1  -- Any readmission (primary dx not restricted to AKI)\n          AND d3.icd_version = 10\n      ) THEN 1 \n      ELSE 0 \n    END AS readmit_count\n  FROM aki_patients ap\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ap.hadm_id = a.hadm_id\n  -- Ensure this is an index admission (no readmission status from prior non-AKI)\n  WHERE NOT EXISTS (\n    SELECT 1 \n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a_prior\n    WHERE a_prior.subject_id = ap.subject_id\n      AND a_prior.hadm_id != ap.hadm_id\n      AND a_prior.dischtime < a.admittime\n      AND DATE_DIFF(a.admittime, a_prior.dischtime, DAY) <= 30\n      AND a_prior.hospital_expire_flag = 0\n      AND a_prior.admission_type != 'ELECTIVE'\n  )\n)\n\n-- Compute per-encounter standard deviation of readmission count\nSELECT \n  STDDEV(readmit_count) AS per_encounter_stddev_30day_readmission\nFROM readmissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:9]\n\nLocation: US\nJob ID: ed76b74d-05d5-4649-a9a1-20703babb2e0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [19:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [19:9]\n\nLocation: US\nJob ID: 01207020-7d34-446a-9abe-3ae065fec050\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

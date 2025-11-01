@@ -1,0 +1,16 @@
+{
+  "query": "I have a 48-year-old male inpatient. Among male inpatients aged 43\u201353 with a transplant diagnosis, compute medication complexity score over the first 7 hospital days, stratify into quartiles, and report per quartile: n, mean score, LOS, in-hospital mortality, and 30-day readmission",
+  "final_sql": "WITH cohort AS (\n  SELECT p.subject_id, a.hadm_id, p.anchor_age, a.admittime, a.dischtime, a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 43 AND 53\n  AND a.hadm_id IN (\n    SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_code LIKE 'T%' OR icd_code LIKE 'Z94%'  -- Simplified transplant diagnosis filter\n  )\n),\nmed_complexity AS (\n  SELECT c.hadm_id, COUNT(DISTINCT pr.drug) AS med_count\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON c.hadm_id = pr.hadm_id\n  WHERE pr.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.hadm_id\n),\nstratified AS (\n  SELECT hadm_id, med_count,\n         NTILE(4) OVER (ORDER BY med_count) AS quartile\n  FROM med_complexity\n),\noutcomes AS (\n  SELECT s.quartile,\n         COUNT(*) AS n,\n         AVG(s.med_count) AS mean_med_count,\n         AVG(TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY)) AS mean_los,\n         AVG(CASE WHEN c.deathtime IS NOT NULL THEN 1 ELSE 0 END) AS in_hospital_mortality,\n         AVG(CASE WHEN EXISTS (\n           SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n           WHERE a2.subject_id = c.subject_id AND a2.admittime BETWEEN c.dischtime AND TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n         ) THEN 1 ELSE 0 END) AS readmission_30day\n  FROM stratified s\n  JOIN cohort c ON s.hadm_id = c.hadm_id\n  GROUP BY s.quartile\n)\nSELECT * FROM outcomes\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

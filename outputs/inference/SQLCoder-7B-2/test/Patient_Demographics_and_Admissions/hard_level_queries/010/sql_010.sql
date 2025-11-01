@@ -1,0 +1,1 @@
+SELECT COUNT(DISTINCT a.hadm_id) FROM admissions a JOIN patients p ON a.subject_id = p.subject_id JOIN diagnoses_icd d ON a.subject_id = d.subject_id WHERE p.gender = 'M' AND p.anchor_age = 48 AND p.anchor_year_group BETWEEN 43 AND 53 AND a.admission_type = 'ED' AND d.icd_code = '450.0' AND a.edregtime = a.charttime;

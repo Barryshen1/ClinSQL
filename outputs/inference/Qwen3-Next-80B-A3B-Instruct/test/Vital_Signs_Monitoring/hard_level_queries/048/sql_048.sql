@@ -1,0 +1,1 @@
+cis_score, los, PERCENT_RANK() OVER (ORDER BY cis_score) AS percentile_rank;

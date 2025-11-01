@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY (p.dischtime - p.admittime)) AS q25 FROM patients p JOIN admissions a ON p.subject_id = a.subject_id JOIN prescriptions pr ON a.subject_id = pr.subject_id WHERE p.gender = 'F' AND p.anchor_year = 47 AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2015 AND 2016 AND pr.drug = 'amiodarone';

@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old man. In male inpatients aged 74\u201384 with AKI, what are the cohort\u2019s median risk score (IQR) and 30\u2011day mortality? Compare ARDS rate and survivor LOS to general male inpatients 74\u201384 and give the risk percentile.",
+  "final_sql": "WITH cohort_base AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 74 AND 84\n),\n\naki_cohort AS (\n  SELECT DISTINCT\n    cb.*\n  FROM\n    cohort_base cb\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    cb.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE\n    (d.icd_version = 9 AND d.icd_code = '5849')\n    OR (d.icd_version = 10 AND d.icd_code = 'N179')\n),\n\ncreatinine_max AS (\n  SELECT\n    l.hadm_id,\n    MAX(l.valuenum) AS max_creatinine\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d\n  ON\n    l.itemid = d.itemid\n  WHERE\n    LOWER(d.label) LIKE '%creatinine%'\n    AND l.valuenum IS NOT NULL\n  GROUP BY\n    l.hadm_id\n),\n\naki_with_creatinine AS (\n  SELECT\n    a.*,\n    c.max_creatinine\n  FROM\n    aki_cohort a\n  LEFT JOIN\n    creatinine_max c\n  ON\n    a.hadm_id = c.hadm_id\n),\n\ngeneral_creatinine AS (\n  SELECT\n    cb.hadm_id,\n    MAX(l.valuenum) AS max_creatinine\n  FROM\n    cohort_base cb\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  ON\n    cb.hadm_id = l.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d\n  ON\n    l.itemid = d.itemid\n  WHERE\n    LOWER(d.label) LIKE '%creatinine%'\n    AND l.valuenum IS NOT NULL\n  GROUP BY\n    cb.hadm_id\n),\n\naki_ards AS (\n  SELECT DISTINCT\n    a.hadm_id\n  FROM\n    aki_with_creatinine a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE\n    (d.icd_version = 9 AND d.icd_code = '5185')\n    OR (d.icd_version = 10 AND d.icd_code = 'J80')\n),\n\naki_stats AS (\n  SELECT\n    APPROX_QUANTILES(max_creatinine, 100)[OFFSET(50)] AS median_creatinine,\n    APPROX_QUANTILES(max_creatinine, 100)[OFFSET(25)] AS q1_creatinine,\n    APPROX_QUANTILES(max_creatinine, 100)[OFFSET(75)] AS q3_creatinine,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_30d,\n    AVG(CASE WHEN los_days IS NOT NULL AND hospital_expire_flag = 0 THEN los_days ELSE NULL END) AS mean_survivor_los,\n    COUNT(*) AS total_aki,\n    COUNT(ards.hadm_id) AS ards_count\n  FROM\n    aki_with_creatinine aki\n  LEFT JOIN\n    aki_ards ards\n  ON\n    aki.hadm_id = ards.hadm_id\n),\n\ngeneral_stats AS (\n  SELECT\n    APPROX_QUANTILES(max_creatinine, 100) AS creatinine_percentiles\n  FROM\n    general_creatinine\n),\n\naki_median_scalar AS (\n  SELECT APPROX_QUANTILES(max_creatinine, 100)[OFFSET(50)] AS aki_median\n  FROM aki_with_creatinine\n),\n\npercentile_lookup AS (\n  SELECT\n    aki_median,\n    creatinine_percentiles\n  FROM\n    aki_median_scalar\n  CROSS JOIN\n    general_stats\n)\n\nSELECT\n  aki_stats.median_creatinine,\n  aki_stats.q1_creatinine,\n  aki_stats.q3_creatinine,\n  aki_stats.mortality_30d,\n  aki_stats.ards_count,\n  aki_stats.total_aki,\n  SAFE_DIVIDE(aki_stats.ards_count, aki_stats.total_aki) AS ards_rate,\n  aki_stats.mean_survivor_los,\n  (\n    SELECT\n      i\n    FROM\n      UNNEST(ARRAY(SELECT AS STRUCT GENERATE_ARRAY(1, 100) AS idx)) AS arr,\n      UNNEST(arr.idx) AS i\n    WHERE\n      pl.creatinine_percentiles[ORDINAL(i)] >= pl.aki_median\n    ORDER BY\n      i\n    LIMIT 1\n  ) AS risk_percentile\nFROM\n  aki_stats\nCROSS JOIN\n  percentile_lookup pl\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Array position in [] must be coercible to INT64 type, but has type FLOAT64 at [142:42]; reason: invalidQuery, location: query, message: Array position in [] must be coercible to INT64 type, but has type FLOAT64 at [142:42]\n\nLocation: US\nJob ID: 4c4c66b4-70a0-4c5c-9e47-75f4a198af21\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in WHERE clause at [159:63]; reason: invalidQuery, location: query, message: Analytic function not allowed in WHERE clause at [159:63]\n\nLocation: US\nJob ID: 3dd0440b-f887-443d-8747-0f95877a6e72\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

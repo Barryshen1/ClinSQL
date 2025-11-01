@@ -1,0 +1,22 @@
+{
+  "query": "My 64-year-old female inpatient has T2DM and heart failure. Among female inpatients 59\u201369 (\u226548h), report prevalence of injectable GLP\u20111 use in first 48h vs final 12h and absolute pp difference.",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.dischtime - a.admittime AS los,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND (a.dischtime - a.admittime) >= INTERVAL '48' HOUR\n),\n-- Get admissions with T2DM and Heart Failure\nt2dm_hf_admissions AS (\n  SELECT\n    pa.subject_id,\n    pa.hadm_id,\n    pa.admittime,\n    pa.dischtime,\n    pa.age_at_admit\n  FROM patient_admissions pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di1\n    ON pa.hadm_id = di1.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d1\n    ON di1.icd_code = d1.icd_code AND di1.icd_version = d1.icd_version\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di2\n    ON pa.hadm_id = di2.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d2\n    ON di2.icd_code = d2.icd_code AND di2.icd_version = d2.icd_version\n  WHERE d1.icd_code LIKE 'E11%' AND d1.icd_version = 10  -- T2DM\n    AND d2.icd_code LIKE 'I50%' AND d2.icd_version = 10  -- Heart Failure\n    AND pa.age_at_admit BETWEEN 59 AND 69\n),\n-- Identify GLP-1 agonists (injectable) in prescriptions\nglp1_drugs AS (\n  SELECT DISTINCT\n    LOWER(drug) AS drug_name\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions\n  WHERE LOWER(drug) IN ('liraglutide', 'semaglutide', 'exenatide', 'dulaglutide', 'lixisenatide')\n    OR EXISTS (\n      SELECT 1\n      FROM UNNEST(SPLIT(gsn, ';')) AS gs\n      WHERE TRIM(LOWER(gs)) IN ('liraglutide', 'semaglutide', 'exenatide', 'dulaglutide', 'lixisenatide')\n    )\n),\n-- Flag GLP-1 use in first 48h and final 12h\nglp1_usage AS (\n  SELECT\n    tha.hadm_id,\n    -- First 48h: started within 48h of admission\n    MAX(CASE\n      WHEN p.starttime >= tha.admittime\n       AND p.starttime <= tha.admittime + INTERVAL '48' HOUR\n       THEN 1 ELSE 0 END) AS used_glp1_first_48h,\n    -- Final 12h: active in last 12h before discharge\n    MAX(CASE\n      WHEN (p.starttime <= tha.dischtime AND p.stoptime >= tha.dischtime - INTERVAL '12' HOUR)\n        OR (p.starttime <= tha.dischtime AND p.stoptime IS NULL)\n        THEN 1 ELSE 0 END) AS used_glp1_final_12h\n  FROM t2dm_hf_admissions tha\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.prescriptions p\n    ON tha.hadm_id = p.hadm_id\n  INNER JOIN glp1_drugs g\n    ON LOWER(p.drug) = g.drug_name\n  WHERE (LOWER(p.route) LIKE '%subcut%' OR LOWER(p.route) LIKE '%inj%')\n    AND p.drug IS NOT NULL\n  GROUP BY tha.hadm_id\n),\n-- Aggregate prevalence\nprevalence AS (\n  SELECT\n    AVG(used_glp1_first_48h) AS prev_first_48h,\n    AVG(used_glp1_final_12h) AS prev_final_12h,\n    COUNT(*) AS n\n  FROM glp1_usage\n)\n-- Final output: prevalence and absolute difference\nSELECT\n  ROUND(prev_first_48h, 4) AS prevalence_first_48h,\n  ROUND(prev_final_12h, 4) AS prevalence_final_12h,\n  ROUND(ABS(prev_final_12h - prev_first_48h), 4) AS absolute_difference,\n  n AS total_patients\nFROM prevalence;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword CROSS at [50:3]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword CROSS at [50:3]\n\nLocation: US\nJob ID: cb09ac71-21ad-4217-b2da-03083c0b1b9f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

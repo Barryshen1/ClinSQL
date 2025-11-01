@@ -1,0 +1,1 @@
+SELECT amicadmissions75percentile.p75, amicadmissionsmortality.mortality_count, amicadmissionsmortality.average_los, alladmissions.total_admissions, alladmissions.average_los FROM amicadmissions75percentile JOIN amicadmissionsmortality ON TRUE JOIN alladmissions ON TRUE;

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 63-year-old male in ICU; among male ICU patients, what's the IQR of peak arterial blood gas pH?",
+  "final_sql": "WITH ph_ce AS (\n  -- pH measurements charted in the ICU (chartevents + d_items)\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND SAFE_CAST(ce.valuenum AS FLOAT64) BETWEEN 6.5 AND 8.0\n    AND LOWER(di.label) LIKE '%ph%'\n    AND (\n      LOWER(di.label) LIKE '%arterial%'\n      OR LOWER(di.label) LIKE '%abg%'\n      OR LOWER(di.label) LIKE '%blood gas%'\n    )\n),\nph_lab AS (\n  -- pH measurements from hospital lab results that fall within an ICU stay\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    ic.stay_id,\n    le.charttime,\n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n    ON le.itemid = dli.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` ic\n    ON le.subject_id = ic.subject_id\n   AND le.hadm_id = ic.hadm_id\n   AND le.charttime BETWEEN ic.intime AND ic.outtime\n  WHERE le.valuenum IS NOT NULL\n    AND SAFE_CAST(le.valuenum AS FLOAT64) BETWEEN 6.5 AND 8.0\n    AND LOWER(dli.label) LIKE '%ph%'\n    AND (\n      LOWER(dli.label) LIKE '%arterial%'\n      OR LOWER(dli.label) LIKE '%abg%'\n      OR LOWER(dli.label) LIKE '%blood gas%'\n      OR LOWER(dli.fluid) LIKE '%arterial%'\n    )\n),\nall_ph AS (\n  SELECT * FROM ph_ce\n  UNION ALL\n  SELECT * FROM ph_lab\n),\npeak_ph_per_stay AS (\n  -- peak (maximum) pH per ICU stay\n  SELECT\n    stay_id,\n    subject_id,\n    MAX(valuenum) AS peak_ph\n  FROM all_ph\n  GROUP BY stay_id, subject_id\n),\nmale_peaks AS (\n  -- restrict to male patients\n  SELECT pps.*\n  FROM peak_ph_per_stay pps\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON pps.subject_id = pat.subject_id\n  WHERE pat.gender = 'M'\n)\n-- compute 25th, 75th percentiles and IQR across male ICU stay peak pH values\nSELECT\n  APPROX_QUANTILES(peak_ph, 100)[OFFSET(25)] AS p25_peak_ph,\n  APPROX_QUANTILES(peak_ph, 100)[OFFSET(75)] AS p75_peak_ph,\n  APPROX_QUANTILES(peak_ph, 100)[OFFSET(75)] - APPROX_QUANTILES(peak_ph, 100)[OFFSET(25)] AS iqr_peak_ph,\n  COUNT(*) AS n_stays\nFROM male_peaks;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

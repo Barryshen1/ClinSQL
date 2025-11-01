@@ -1,0 +1,28 @@
+{
+  "query": "I am evaluating an 81-year-old woman with cardiac arrest. Among female inpatients 76\u201386 with cardiac arrest, stratified by medication complexity quintiles (first 7 hospital days), report per quintile: patient count, avg/min/max score, LOS, in-hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cardiac_arrest_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_icd\n    ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND LOWER(d_icd.long_title) LIKE '%cardiac arrest%'\n),\n\nmedication_complexity AS (\n  SELECT\n    cap.subject_id,\n    cap.hadm_id,\n    COUNT(DISTINCT pr.drug) AS drug_count\n  FROM cardiac_arrest_patients cap\n  INNER JOIN physionet-data.mimiciv_3_1_hosp.prescriptions pr\n    ON cap.hadm_id = pr.hadm_id\n  WHERE pr.starttime >= cap.admittime\n    AND pr.starttime < DATE_ADD(cap.admittime, INTERVAL 7 DAY)\n    AND pr.starttime IS NOT NULL\n  GROUP BY cap.subject_id, cap.hadm_id\n),\n\nquintiles AS (\n  SELECT\n    mc.subject_id,\n    mc.hadm_id,\n    mc.drug_count,\n    NTILE(5) OVER (ORDER BY mc.drug_count) AS medication_quintile\n  FROM medication_complexity mc\n),\n\nreadmission_30d AS (\n  SELECT\n    a1.subject_id,\n    a1.hadm_id,\n    CASE\n      WHEN a2.hadm_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS readmission_30d_flag\n  FROM cardiac_arrest_patients a1\n  LEFT JOIN (\n    SELECT\n      subject_id,\n      hadm_id,\n      admittime,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n    FROM physionet-data.mimiciv_3_1_hosp.admissions\n  ) a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.rn = 2\n    AND a2.admittime BETWEEN a1.dischtime AND DATE_ADD(a1.dischtime, INTERVAL 30 DAY)\n)\n\nSELECT\n  q.medication_quintile,\n  COUNT(*) AS patient_count,\n  AVG(q.drug_count) AS avg_score,\n  MIN(q.drug_count) AS min_score,\n  MAX(q.drug_count) AS max_score,\n  AVG(TIMESTAMP_DIFF(cap.dischtime, cap.admittime, DAY)) AS avg_los,\n  AVG(CAST(cap.hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_pct,\n  AVG(CAST(ra.readmission_30d_flag AS FLOAT64)) * 100 AS thirty_day_readmission_pct\nFROM quintiles q\nINNER JOIN cardiac_arrest_patients cap\n  ON q.subject_id = cap.subject_id AND q.hadm_id = cap.hadm_id\nLEFT JOIN readmission_30d ra\n  ON q.hadm_id = ra.hadm_id\nGROUP BY q.medication_quintile\nORDER BY q.medication_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [33:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [33:3]\n\nLocation: US\nJob ID: 47ddfdcc-23ce-4121-957b-f15f7532a1b7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [73:40]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [73:40]\n\nLocation: US\nJob ID: 0e57788a-7d46-44dc-877d-19f405caa46c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

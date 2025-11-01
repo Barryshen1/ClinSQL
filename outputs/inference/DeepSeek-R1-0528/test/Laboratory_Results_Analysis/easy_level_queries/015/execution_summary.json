@@ -1,0 +1,22 @@
+{
+  "query": "For comparison in my female patient, among women hospitalized with pneumonia what's the minimum 24-hour average serum creatinine?",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON diag.icd_code = d.icd_code \n    AND diag.icd_version = d.icd_version\n  WHERE \n    pat.gender = 'F'\n    AND d.long_title LIKE '%pneumonia%'\n),\ncreatinine_data AS (\n  SELECT \n    l.subject_id, \n    l.hadm_id, \n    l.charttime,\n    UNIX_SECONDS(CAST(l.charttime AS TIMESTAMP)) AS charttime_sec,  -- Convert to numeric seconds\n    CASE \n      WHEN l.valueuom = 'mg/dL' THEN l.valuenum\n      WHEN l.valueuom = 'umol/L' THEN l.valuenum / 88.4\n    END AS creatinine_mgdL\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN cohort\n    ON l.hadm_id = cohort.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dlab\n    ON l.itemid = dlab.itemid\n  WHERE \n    dlab.label = 'Creatinine'\n    AND dlab.fluid = 'Blood'\n    AND l.valuenum IS NOT NULL\n    AND l.valueuom IN ('mg/dL', 'umol/L')\n),\nrolling_avg AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    charttime,\n    AVG(creatinine_mgdL) OVER (\n      PARTITION BY subject_id, hadm_id\n      ORDER BY charttime_sec  -- Order by numeric seconds\n      RANGE BETWEEN 86400 PRECEDING AND CURRENT ROW  -- 24 hours in seconds\n    ) AS avg_24h_creatinine\n  FROM creatinine_data\n)\nSELECT \n  MIN(avg_24h_creatinine) AS min_24h_avg_creatinine\nFROM rolling_avg;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type DATETIME at [42:7]; reason: invalidQuery, location: query, message: ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type DATETIME at [42:7]\n\nLocation: US\nJob ID: 5f99ea0d-88ed-4393-882f-55540ebca1a1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

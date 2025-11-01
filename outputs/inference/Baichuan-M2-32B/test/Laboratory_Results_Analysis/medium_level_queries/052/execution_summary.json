@@ -1,0 +1,23 @@
+{
+  "query": "For an 81-year-old male, among male patients aged 76\u201386 admitted with AMI, what's the distribution of first Troponin I (\u22640.04 normal; 0.04\u20130.40 borderline; \u22650.40 elevated)? Provide counts, percentages, mean, median, IQR.",
+  "final_sql": "WITH patients AS (\n    SELECT subject_id, gender, anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp`.patients\n    WHERE gender = 'M' AND anchor_age BETWEEN 76 AND 86\n),\nadmissions AS (\n    SELECT a.hadm_id, a.subject_id, a.admittime\n    FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n    JOIN patients p ON a.subject_id = p.subject_id\n),\nami_admissions AS (\n    SELECT DISTINCT d.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n    JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses dd \n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n    WHERE dd.long_title LIKE '%myocardial infarction%'\n    AND d.hadm_id IN (SELECT hadm_id FROM admissions)\n),\ntroponin_itemid AS (\n    SELECT itemid\n    FROM `physionet-data.mimiciv_3_1_hosp`.d_labitems\n    WHERE label LIKE '%Troponin I%' AND category LIKE 'Cardiac'\n    ORDER BY itemid\n    LIMIT 1\n),\nfirst_troponin AS (\n    SELECT \n        l.hadm_id,\n        l.valuenum,\n        ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp`.labevents l\n    JOIN troponin_itemid t ON l.itemid = t.itemid\n    WHERE l.hadm_id IN (SELECT hadm_id FROM ami_admissions)\n      AND l.valuenum IS NOT NULL\n),\nfirst_troponin_per_admission AS (\n    SELECT hadm_id, valuenum\n    FROM first_troponin\n    WHERE rn = 1\n),\ncategorized AS (\n    SELECT \n        hadm_id,\n        valuenum,\n        CASE \n            WHEN valuenum <= 0.04 THEN 'Normal'\n            WHEN valuenum > 0.04 AND valuenum <= 0.40 THEN 'Borderline'\n            WHEN valuenum > 0.40 THEN 'Elevated'\n            ELSE 'Unknown'\n        END AS category\n    FROM first_troponin_per_admission\n),\ncategory_counts AS (\n    SELECT \n        category,\n        COUNT(*) AS count,\n        COUNT(*) * 100.0 / (SELECT COUNT(*) FROM categorized) AS percentage\n    FROM categorized\n    GROUP BY category\n),\noverall_stats AS (\n    SELECT \n        COUNT(*) AS total_count,\n        AVG(valuenum) AS mean,\n        APPROX_QUANTILES(valuenum, 100) AS quantiles\n    FROM first_troponin_per_admission\n),\noverall_stats_expanded AS (\n    SELECT \n        total_count,\n        mean,\n        quantiles[OFFSET(50)] AS median,   -- 50th percentile (median)\n        quantiles[OFFSET(25)] AS p25,       -- 25th percentile\n        quantiles[OFFSET(75)] AS p75,       -- 75th percentile\n        quantiles[OFFSET(75)] - quantiles[OFFSET(25)] AS iqr\n    FROM overall_stats\n)\nSELECT \n    category,\n    count,\n    percentage,\n    NULL AS mean,\n    NULL AS median,\n    NULL AS iqr\nFROM category_counts\nUNION ALL\nSELECT \n    'Overall' AS category,\n    total_count,\n    NULL AS percentage,\n    mean,\n    median,\n    iqr\nFROM overall_stats_expanded;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [65:30]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [65:30]\n\nLocation: US\nJob ID: 67b81da6-2bae-4808-a2a6-12c9a37f04d5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

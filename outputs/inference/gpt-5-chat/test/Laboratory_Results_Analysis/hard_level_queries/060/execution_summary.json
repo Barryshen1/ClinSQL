@@ -1,0 +1,28 @@
+{
+  "query": "I have a 57-year-old female post\u2013cardiac arrest inpatient. Among females 52\u201362 with post\u2013cardiac arrest, in the first 48 h what is the instability score IQR (Q1, median)? Compare critical lab events/admission to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.gender,\n    pat.anchor_age,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    CASE WHEN icu.stay_id IS NOT NULL THEN 1 ELSE 0 END AS is_icu\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON adm.hadm_id = icu.hadm_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 52 AND 62\n    AND (\n         (diag.icd_version = 9 AND diag.icd_code = '4275')\n      OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I46%')\n    )\n),\ninstability AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.is_icu,\n    COUNTIF(LOWER(lab.flag) LIKE 'abnormal%') AS instability_score,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR)/24.0 AS los_days,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` lab\n    ON c.hadm_id = lab.hadm_id\n    AND lab.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.subject_id, c.hadm_id, c.is_icu, c.admittime, c.dischtime, c.hospital_expire_flag\n),\nstats AS (\n  SELECT\n    CASE WHEN is_icu = 1 THEN 'Critical care' ELSE 'General inpatient' END AS cohort_type,\n    COUNT(*) OVER (PARTITION BY is_icu) AS n_admissions,\n    PERCENTILE_CONT(instability_score, 0.25) OVER (PARTITION BY is_icu) AS instability_q1,\n    PERCENTILE_CONT(instability_score, 0.5) OVER (PARTITION BY is_icu) AS instability_median,\n    AVG(los_days) OVER (PARTITION BY is_icu) AS avg_los_days,\n    AVG(hospital_expire_flag) OVER (PARTITION BY is_icu) AS mortality_rate\n  FROM instability\n)\nSELECT DISTINCT\n  cohort_type,\n  n_admissions,\n  instability_q1,\n  instability_median,\n  avg_los_days,\n  mortality_rate\nFROM stats\nORDER BY cohort_type DESC;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column instability_score which is neither grouped nor aggregated at [42:19]; reason: invalidQuery, location: query, message: SELECT list expression references column instability_score which is neither grouped nor aggregated at [42:19]\n\nLocation: US\nJob ID: 9c18676a-ddd8-4e32-8932-d83fbf1603a7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 ORDER BY clause expression references column is_icu which is not visible after SELECT DISTINCT at [58:10]; reason: invalidQuery, location: query, message: ORDER BY clause expression references column is_icu which is not visible after SELECT DISTINCT at [58:10]\n\nLocation: US\nJob ID: f0dfa5c2-6db1-4403-878d-1b77407f7a6b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

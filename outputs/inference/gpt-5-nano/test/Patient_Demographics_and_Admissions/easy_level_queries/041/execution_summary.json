@@ -1,0 +1,28 @@
+{
+  "query": "For a 55-year-old female, among females 50\u201360 on anticoagulants, median ICU LOS (days) for first ICU stay during first admission?",
+  "final_sql": "WITH first_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'Female'\n    AND p.anchor_age BETWEEN 50 AND 60\n),\nfirst_admission_rank AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n  FROM first_admissions\n),\nfirst_admission AS (\n  SELECT\n    subject_id,\n    hadm_id\n  FROM first_admission_rank\n  WHERE rn = 1\n),\nfirst_icu AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY f.subject_id, f.hadm_id ORDER BY i.intime) AS rn\n  FROM first_admission f\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS i\n    ON i.subject_id = f.subject_id\n   AND i.hadm_id = f.hadm_id\n),\nfirst_icu_per_admission AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    los\n  FROM first_icu\n  WHERE rn = 1\n),\nanticoagulant_icu AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.los\n  FROM first_icu_per_admission AS f\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_icu.inputevents` AS ie\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n      ON di.itemid = ie.itemid\n    WHERE ie.subject_id = f.subject_id\n      AND ie.stay_id = f.stay_id\n      AND (\n        LOWER(di.label) LIKE '%heparin%'\n        OR LOWER(di.label) LIKE '%warfarin%'\n        OR LOWER(di.label) LIKE '%enoxaparin%'\n        OR LOWER(di.label) LIKE '%lovenox%'\n        OR LOWER(di.label) LIKE '%fondaparinux%'\n        OR LOWER(di.label) LIKE '%apixaban%'\n        OR LOWER(di.label) LIKE '%rivaroxaban%'\n        OR LOWER(di.label) LIKE '%dabigatran%'\n        OR LOWER(di.label) LIKE '%edoxaban%'\n        OR LOWER(di.label) LIKE '%tinzaparin%'\n        OR LOWER(di.label) LIKE '%nadroparin%'\n        OR LOWER(di.label) LIKE '%argatroban%'\n        OR LOWER(di.label) LIKE '%bivalirudin%'\n      )\n  )\n),\nmedian_calc AS (\n  -- Collect LOS values for all qualifying ICU stays into a single ordered array\n  SELECT ARRAY_AGG(los ORDER BY los) AS los_arr\n  FROM anticoagulant_icu\n),\nmedian_final AS (\n  SELECT los_arr, ARRAY_LENGTH(los_arr) AS n\n  FROM median_calc\n)\nSELECT\n  CASE\n    WHEN n = 0 THEN NULL\n    ELSE (los_arr[OFFSET(CAST((n - 1) / 2 AS INT64))] + los_arr[OFFSET(CAST(n / 2 AS INT64))]) / 2.0\n  END AS median_icu_los_days\nFROM median_final;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [82:3]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [82:3]\n\nLocation: US\nJob ID: 82caaf78-09fc-4aff-97c7-421874f0e9be\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Array position in [] must be coercible to INT64 type, but has type FLOAT64 at [93:26]; reason: invalidQuery, location: query, message: Array position in [] must be coercible to INT64 type, but has type FLOAT64 at [93:26]\n\nLocation: US\nJob ID: 4fbd9325-86ab-4b32-af24-c5963c373438\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

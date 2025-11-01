@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 79\u2011year\u2011old man. Among male ICU patients aged 74\u201384 admitted with upper GI bleeding, using first ICU stay, stratify first\u201172\u2011hour diagnostic intensity into quartiles and report mean procedure count, mean hospital LOS (days), and in\u2011hospital mortality per quartile.",
+  "final_sql": "WITH \n-- Step 1: Filter patients by age and gender\neligible_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M' AND anchor_age BETWEEN 74 AND 84\n),\n\n-- Step 2: Identify admissions with upper GI bleeding\nugi_bleeding_admissions AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` USING (icd_code, icd_version)\n  WHERE LOWER(long_title) LIKE '%gastrointestinal hemorrhage%' OR LOWER(long_title) LIKE '%upper gi bleeding%'\n),\n\n-- Step 3: First ICU stay for eligible patients\nfirst_icu_stay AS (\n  SELECT icu.subject_id, icu.hadm_id, icu.stay_id, icu.intime\n  FROM (\n    SELECT subject_id, hadm_id, stay_id, intime,\n           ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) as rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) icu\n  JOIN eligible_patients ON icu.subject_id = eligible_patients.subject_id\n  JOIN ugi_bleeding_admissions ON icu.hadm_id = ugi_bleeding_admissions.hadm_id\n  WHERE rn = 1\n),\n\n-- Step 4: Calculate diagnostic intensity\ndiagnostic_intensity AS (\n  SELECT ce.stay_id, COUNT(*) as event_count\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN first_icu_stay fis ON ce.stay_id = fis.stay_id\n  WHERE ce.charttime BETWEEN fis.intime AND TIMESTAMP_ADD(fis.intime, INTERVAL 3 DAY)\n  GROUP BY ce.stay_id\n),\n\n-- Step 5: Stratify diagnostic intensity into quartiles\nquartiles AS (\n  SELECT stay_id, event_count,\n         NTILE(4) OVER (ORDER BY event_count) as quartile\n  FROM diagnostic_intensity\n),\n\n-- Step 6: Calculate required metrics per quartile\nmetrics AS (\n  SELECT q.quartile,\n         AVG(pe_cnt) as mean_procedure_count,\n         AVG(hosp_los) as mean_hosp_los,\n         AVG(hospital_expire_flag) as in_hospital_mortality\n  FROM (\n    SELECT q.stay_id, q.quartile,\n           COALESCE(pe_cnt, 0) as pe_cnt,\n           DATETIME_DIFF(a.dischtime, a.admittime, DAY) as hosp_los,\n           a.hospital_expire_flag\n    FROM quartiles q\n    JOIN first_icu_stay fis ON q.stay_id = fis.stay_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON fis.hadm_id = a.hadm_id\n    LEFT JOIN (\n      SELECT stay_id, COUNT(*) as pe_cnt\n      FROM `physionet-data.mimiciv_3_1_icu.procedureevents`\n      GROUP BY stay_id\n    ) pe ON q.stay_id = pe.stay_id\n  ) sub\n  GROUP BY quartile\n)\n\nSELECT * FROM metrics ORDER BY quartile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: q at [48:10]; reason: invalidQuery, location: query, message: Unrecognized name: q at [48:10]\n\nLocation: US\nJob ID: 218ae3ec-0bef-42a2-91f7-2db8fdd819d8\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: chartevents at [38:76]; reason: invalidQuery, location: query, message: Unrecognized name: chartevents at [38:76]\n\nLocation: US\nJob ID: b73a9211-b239-42ca-af4b-eb6c998abd2c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: chartevents at [35:81]; reason: invalidQuery, location: query, message: Unrecognized name: chartevents at [35:81]\n\nLocation: US\nJob ID: 700fd490-185d-4499-b617-63ef520754e4\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: q at [48:10]; reason: invalidQuery, location: query, message: Unrecognized name: q at [48:10]\n\nLocation: US\nJob ID: 218ae3ec-0bef-42a2-91f7-2db8fdd819d8\n"
+    }
+  ]
+}

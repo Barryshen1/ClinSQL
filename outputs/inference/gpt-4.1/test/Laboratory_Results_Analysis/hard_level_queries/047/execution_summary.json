@@ -1,0 +1,28 @@
+{
+  "query": "I have a 76-year-old man. Among male inpatients with ARDS aged 71\u201381, what is the 90th\u2011percentile instability score in the first 72 hours? For patients at/above that threshold, report mortality, mean LOS, and compare critical lab rates to general inpatients.",
+  "final_sql": "WITH ards_patients AS (\n  -- Identify male inpatients aged 71-81 with ARDS diagnosis\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    p.anchor_age,\n    p.gender,\n    a.hospital_expire_flag,\n    i.intime,\n    i.outtime,\n    i.los\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n    JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n      ON p.subject_id = a.subject_id\n    JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      ON a.hadm_id = d.hadm_id\n    JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n      ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n    JOIN physionet-data.mimiciv_3_1_icu.icustays i\n      ON a.hadm_id = i.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 71 AND 81\n    AND (\n      -- ARDS ICD-10: J80, ICD-9: 518.82, 518.5\n      (d.icd_version = 10 AND d.icd_code = 'J80')\n      OR (d.icd_version = 9 AND d.icd_code IN ('51882', '5185'))\n      OR LOWER(dd.long_title) LIKE '%acute respiratory distress%'\n    )\n),\n\ninstability_scores AS (\n  -- Count critical labs in first 72h of ICU stay\n  SELECT\n    ap.subject_id,\n    ap.hadm_id,\n    ap.stay_id,\n    COUNT(DISTINCT le.labevent_id) AS instability_score\n  FROM\n    ards_patients ap\n    JOIN physionet-data.mimiciv_3_1_hosp.labevents le\n      ON ap.subject_id = le.subject_id\n      AND ap.hadm_id = le.hadm_id\n      AND le.charttime BETWEEN ap.intime AND TIMESTAMP_ADD(ap.intime, INTERVAL 72 HOUR)\n  WHERE\n    le.flag = 'abnormal'\n  GROUP BY\n    ap.subject_id, ap.hadm_id, ap.stay_id\n),\n\npercentile_90 AS (\n  -- Calculate 90th percentile instability score\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS p90_score\n  FROM\n    instability_scores\n),\n\nhigh_instability_patients AS (\n  -- Patients at/above 90th percentile\n  SELECT\n    ap.subject_id,\n    ap.hadm_id,\n    ap.stay_id,\n    ap.anchor_age,\n    ap.gender,\n    ap.hospital_expire_flag,\n    ap.los,\n    ap.intime,\n    ap.outtime,\n    s.instability_score\n  FROM\n    ards_patients ap\n    JOIN instability_scores s\n      ON ap.subject_id = s.subject_id\n      AND ap.hadm_id = s.hadm_id\n      AND ap.stay_id = s.stay_id\n    CROSS JOIN percentile_90 p\n  WHERE\n    s.instability_score >= p.p90_score\n),\n\nhigh_instability_lab_rates AS (\n  -- Critical lab rate for high instability patients (first 72h)\n  SELECT\n    hip.subject_id,\n    hip.hadm_id,\n    hip.stay_id,\n    COUNT(DISTINCT le.labevent_id) AS critical_lab_count\n  FROM\n    high_instability_patients hip\n    JOIN physionet-data.mimiciv_3_1_hosp.labevents le\n      ON hip.subject_id = le.subject_id\n      AND hip.hadm_id = le.hadm_id\n      AND le.charttime BETWEEN hip.intime AND TIMESTAMP_ADD(hip.intime, INTERVAL 72 HOUR)\n  WHERE\n    le.flag = 'abnormal'\n  GROUP BY\n    hip.subject_id, hip.hadm_id, hip.stay_id\n),\n\ngeneral_inpatient_lab_rates AS (\n  -- Critical lab rate for all inpatients (first 72h of admission)\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    COUNT(DISTINCT le.labevent_id) AS critical_lab_count\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    JOIN physionet-data.mimiciv_3_1_hosp.labevents le\n      ON a.subject_id = le.subject_id\n      AND a.hadm_id = le.hadm_id\n      AND le.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n  WHERE\n    le.flag = 'abnormal'\n  GROUP BY\n    a.subject_id, a.hadm_id\n)\n\n-- Final output: summary for high instability ARDS patients and comparison to general inpatients\nSELECT\n  'ARDS high instability (>=90th percentile)' AS cohort,\n  COUNT(DISTINCT hip.subject_id) AS n_patients,\n  SUM(CASE WHEN hip.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS n_deaths,\n  AVG(hip.los) AS mean_icu_los,\n  AVG(lr.critical_lab_count) AS mean_critical_lab_count_72h\nFROM\n  high_instability_patients hip\n  JOIN high_instability_lab_rates lr\n    ON hip.subject_id = lr.subject_id\n    AND hip.hadm_id = lr.hadm_id\n    AND hip.stay_id = lr.stay_id\n\nUNION ALL\n\nSELECT\n  'General inpatients' AS cohort,\n  COUNT(DISTINCT a.subject_id) AS n_patients,\n  SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS n_deaths,\n  NULL AS mean_icu_los,\n  AVG(lr.critical_lab_count) AS mean_critical_lab_count_72h\nFROM\n  physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN general_inpatient_lab_rates lr\n    ON a.subject_id = lr.subject_id\n    AND a.hadm_id = lr.hadm_id;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dl at [55:15]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dl at [55:15]\n\nLocation: US\nJob ID: 77dcccab-5a4a-4b14-8489-8df2636f2fd7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unsupported subquery with table in join predicate.; reason: invalidQuery, location: query, message: Unsupported subquery with table in join predicate.\n\nLocation: US\nJob ID: d2be50a5-4955-4b08-926f-d5c026882c52\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

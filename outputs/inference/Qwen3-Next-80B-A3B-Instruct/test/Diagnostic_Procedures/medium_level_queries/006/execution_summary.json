@@ -1,0 +1,22 @@
+{
+  "query": "For my 53-year-old male with sepsis (no shock), among men 48\u201358, give patient counts and mean ultrasounds/admission by LOS (1\u20134 vs 5\u20138 days), stratified by ICU vs no ICU.",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT DISTINCT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.gender,\n    CASE \n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 5 AND 8 THEN '5-8 days'\n    END AS los_group\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p ON a.subject_id = p.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON a.hadm_id = d.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dic ON d.icd_code = dic.icd_code AND d.icd_version = dic.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND (\n      (d.icd_version = 9 AND d.icd_code IN ('99592') OR d.icd_code LIKE '038%')\n      OR\n      (d.icd_version = 10 AND d.icd_code IN ('A419', 'R6520', 'R6521'))\n    )\n    AND a.hadm_id NOT IN (\n      SELECT DISTINCT hadm_id\n      FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd\n      WHERE (icd_version = 10 AND icd_code = 'R6522')\n         OR (icd_version = 9 AND icd_code = '78552')\n    )\n),\nultrasound_counts AS (\n  SELECT hadm_id, COUNT(*) AS ultrasound_count\n  FROM (\n    -- ICU procedureevents with ultrasound label\n    SELECT p.hadm_id\n    FROM physionet-data.mimiciv_3_1_icu.procedureevents p\n    JOIN physionet-data.mimiciv_3_1_icu.d_items d ON p.itemid = d.itemid\n    WHERE LOWER(d.label) LIKE '%ultrasound%'\n    \n    UNION ALL\n    \n    -- HOSP hcpcsevents with ultrasound description\n    SELECT h.hadm_id\n    FROM physionet-data.mimiciv_3_1_hosp.hcpcsevents h\n    JOIN physionet-data.mimiciv_3_1_hosp.d_hcpcs dh ON h.hcpcs_cd = dh.code\n    WHERE LOWER(dh.short_description) LIKE '%ultrasound%'\n  ) AS combined_ultrasounds\n  GROUP BY hadm_id\n),\ncohort_with_icu AS (\n  SELECT \n    s.hadm_id,\n    s.los_group,\n    CASE WHEN i.stay_id IS NOT NULL THEN TRUE ELSE FALSE END AS has_icu_stay\n  FROM sepsis_cohort s\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.icustays i ON s.hadm_id = i.hadm_id\n)\nSELECT\n  c.los_group,\n  c.has_icu_stay,\n  COUNT(*) AS patient_count,\n  AVG(COALESCE(u.ultrasound_count, 0)) AS mean_ultrasounds_per_admission\nFROM cohort_with_icu c\nLEFT JOIN ultrasound_counts u ON c.hadm_id = u.hadm_id\nWHERE c.los_group IS NOT NULL\nGROUP BY c.los_group, c.has_icu_stay\nORDER BY c.los_group, c.has_icu_stay;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:13]\n\nLocation: US\nJob ID: 6e202500-d39d-4cd3-8ca2-bd510d24ed28\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

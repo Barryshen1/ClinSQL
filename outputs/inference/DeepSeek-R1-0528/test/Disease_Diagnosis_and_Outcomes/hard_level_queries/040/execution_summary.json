@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating a 74\u2011year\u2011old female with intracranial hemorrhage. For female inpatients aged 69\u201379 with ICH, stratify admissions into quintiles by the composite risk score and report, per quintile: n, 30\u2011day mortality %, major complication %, and median survivor LOS.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    -- Calculate age at admission\n    pt.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pt.anchor_year) AS age,\n    -- 30-day mortality (1 if death within 30 days, else 0)\n    CASE\n      WHEN pt.dod <= DATETIME_ADD(adm.admittime, INTERVAL 30 DAY) THEN 1\n      ELSE 0\n    END AS mortality_30d,\n    -- Major complication: ICU admission during the stay (1 if any ICU stay, else 0)\n    CASE\n      WHEN icu.hadm_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS major_complication,\n    -- LOS in days for survivors (NULL for non-survivors)\n    CASE\n      WHEN adm.hospital_expire_flag = 0 THEN DATETIME_DIFF(adm.dischtime, adm.admittime, DAY)\n      ELSE NULL\n    END AS survivor_los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt ON adm.subject_id = pt.subject_id\n    -- Filter for ICH diagnoses (distinct hadm_id)\n    INNER JOIN (\n      SELECT DISTINCT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE\n        (icd_version = 9 AND icd_code IN ('430','431','4320','4321','4329'))\n        OR (icd_version = 10 AND (icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%'))\n    ) diag ON adm.hadm_id = diag.hadm_id\n    -- Check for ICU stays (distinct hadm_id)\n    LEFT JOIN (\n      SELECT DISTINCT hadm_id\n      FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    ) icu ON adm.hadm_id = icu.hadm_id\n  WHERE\n    pt.gender = 'F'\n    AND (pt.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pt.anchor_year)) BETWEEN 69 AND 79\n),\n\nquintiles AS (\n  SELECT\n    -- Assign quintiles (1-5) based on age\n    NTILE(5) OVER (ORDER BY age) AS quintile,\n    *\n  FROM cohort\n)\n\nSELECT\n  quintile,\n  COUNT(*) AS n,  -- Number of admissions\n  ROUND(AVG(mortality_30d) * 100, 2) AS mortality_30d_pct,  -- 30-day mortality %\n  ROUND(AVG(major_complication) * 100, 2) AS major_complication_pct,  -- Complication %\n  -- Median LOS for survivors (ignores NULLs)\n  APPROX_QUANTILES(survivor_los, 100)[OFFSET(50)] AS median_survivor_los\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

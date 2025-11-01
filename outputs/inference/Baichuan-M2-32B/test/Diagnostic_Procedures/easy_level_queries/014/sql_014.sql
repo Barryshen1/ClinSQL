@@ -1,0 +1,2 @@
+-- Alternative age calculation (if anchor_year is birth year)
+-- AND DATE_DIFF(admittime, DATE(anchor_year, 1, 1), YEAR) BETWEEN 73 AND 83;

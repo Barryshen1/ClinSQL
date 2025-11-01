@@ -1,0 +1,23 @@
+{
+  "query": "I have a 54-year-old female with ACS. Among female ICU patients aged 49\u201359, what percentile is a first-24h composite vital instability score of 70? Also report ICU length of stay (mean days) and hospital mortality (%) for the top decile.",
+  "final_sql": "WITH population AS (\n  SELECT \n    i.stay_id,\n    i.intime,\n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year) BETWEEN 49 AND 59\n),\nvital_signs AS (\n  SELECT \n    c.stay_id,\n    AVG(CASE WHEN c.itemid = 220045 AND c.valuenum IS NOT NULL \n             THEN ABS(c.valuenum - 80) \n             ELSE NULL END) AS hr_deviation,\n    AVG(CASE WHEN c.itemid = 220179 AND c.valuenum IS NOT NULL \n             THEN ABS(c.valuenum - 105) \n             ELSE NULL END) AS sbp_deviation,\n    AVG(CASE WHEN c.itemid = 220210 AND c.valuenum IS NOT NULL \n             THEN ABS(c.valuenum - 16) \n             ELSE NULL END) AS rr_deviation,\n    AVG(CASE WHEN c.itemid = 220277 AND c.valuenum IS NOT NULL \n             THEN ABS(97.5 - c.valuenum) \n             ELSE NULL END) AS spo2_deviation\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` c\n  INNER JOIN population p\n    ON c.stay_id = p.stay_id\n  WHERE c.charttime BETWEEN p.intime AND TIMESTAMP_ADD(p.intime, INTERVAL 24 HOUR)\n    AND c.valuenum IS NOT NULL\n  GROUP BY c.stay_id\n),\nscored_population AS (\n  SELECT \n    p.stay_id,\n    p.los,\n    p.hospital_expire_flag,\n    COALESCE(vs.hr_deviation, 0) + \n    COALESCE(vs.sbp_deviation, 0) + \n    COALESCE(vs.rr_deviation, 0) + \n    COALESCE(vs.spo2_deviation, 0) AS vital_instability_score\n  FROM population p\n  LEFT JOIN vital_signs vs\n    ON p.stay_id = vs.stay_id\n  WHERE vs.stay_id IS NOT NULL\n),\nwith_decile AS (\n  SELECT *,\n    NTILE(10) OVER (ORDER BY vital_instability_score DESC) AS decile\n  FROM scored_population\n)\nSELECT \n  SUM(CASE WHEN vital_instability_score <= 70 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS percentile_70,\n  AVG(CASE WHEN decile = 1 THEN los END) AS mean_los_top_decile,\n  AVG(CASE WHEN decile = 1 THEN hospital_expire_flag END) * 100 AS mortality_pct_top_decile\nFROM with_decile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:9]\n\nLocation: US\nJob ID: 79d6fdf9-06ff-4155-b162-d83a1b186e87\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

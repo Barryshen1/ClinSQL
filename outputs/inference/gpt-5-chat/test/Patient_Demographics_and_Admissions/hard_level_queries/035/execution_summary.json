@@ -1,0 +1,22 @@
+{
+  "query": "I have a 73-year-old man admitted from a SNF with principal UTI. Among male Medicare patients 68\u201378 admitted from SNF with principal UTI, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of stays >6 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    ROW_NUMBER() OVER (PARTITION BY adm.subject_id ORDER BY adm.admittime) AS admit_seq\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n    AND diag.seq_num = 1\n  WHERE pat.gender = 'M'\n    AND adm.insurance = 'Medicare'\n    AND pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) BETWEEN 68 AND 78\n    AND LOWER(adm.admission_location) LIKE '%skilled nursing facility%'\n    AND (\n         (diag.icd_version = 9 AND diag.icd_code = '5990')\n      OR (diag.icd_version = 10 AND diag.icd_code = 'N390')\n        )\n    AND adm.dischtime IS NOT NULL\n),\nreadmissions AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.los_days,\n    MIN(next_adm.admittime) AS next_admit_time\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` next_adm\n    ON c.subject_id = next_adm.subject_id\n    AND next_adm.admittime > c.dischtime\n    AND DATETIME_DIFF(next_adm.admittime, c.dischtime, DAY) <= 30\n  GROUP BY c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.los_days\n),\nflagged AS (\n  SELECT\n    *,\n    CASE WHEN next_admit_time IS NOT NULL THEN 1 ELSE 0 END AS readmit_30d,\n    CASE WHEN los_days > 6 THEN 1 ELSE 0 END AS los_gt6\n  FROM readmissions\n)\nSELECT\n  COUNT(*) AS total_index_admissions,\n  ROUND(SUM(readmit_30d)/COUNT(*)*100, 2) AS readmit_rate_pct,\n  -- median LOS for readmitted\n  ROUND( APPROX_QUANTILES(IF(readmit_30d=1, los_days, NULL), 100)[OFFSET(50)], 2 ) AS median_los_readmit,\n  -- median LOS for non-readmitted\n  ROUND( APPROX_QUANTILES(IF(readmit_30d=0, los_days, NULL), 100)[OFFSET(50)], 2 ) AS median_los_no_readmit,\n  ROUND(SUM(los_gt6)/COUNT(*)*100, 2) AS pct_los_gt6\nFROM flagged;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [50:40]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [50:40]\n\nLocation: US\nJob ID: bc565e78-491f-4e69-9417-ff1e01cf577a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

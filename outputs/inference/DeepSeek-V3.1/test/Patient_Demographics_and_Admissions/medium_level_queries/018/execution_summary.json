@@ -1,0 +1,16 @@
+{
+  "query": "I have a 48-year-old male transferred from another hospital. Among males 43\u201353 transferred inpatients, report median and IQR LOS by discharge: home vs facility vs in-hospital death, and percent \u226410 days.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.discharge_location,\n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n    CASE \n      WHEN adm.hospital_expire_flag = 1 THEN 'Death'\n      WHEN adm.discharge_location LIKE 'HOME%' THEN 'Home'\n      ELSE 'Facility'\n    END AS discharge_category\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE \n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 43 AND 53\n    AND (adm.admission_type = 'TRANSFER' OR adm.admission_location = 'TRANSFER FROM HOSPITAL')\n    AND adm.dischtime IS NOT NULL\n),\n\nstats AS (\n  SELECT\n    discharge_category,\n    COUNT(*) AS n_patients,\n    PERCENTILE_DISC(los_days, 0.5) OVER (PARTITION BY discharge_category) AS median_los,\n    PERCENTILE_DISC(los_days, 0.25) OVER (PARTITION BY discharge_category) AS q1_los,\n    PERCENTILE_DISC(los_days, 0.75) OVER (PARTITION BY discharge_category) AS q3_los,\n    SUM(CASE WHEN los_days <= 10 THEN 1 ELSE 0 END) AS los_leq_10\n  FROM cohort\n  GROUP BY discharge_category, los_days  -- Note: PERCENTILE_DISC requires grouping by the value column? Actually, we need to use a different approach.\n)\n\n-- Alternatively, we can use approximate percentiles with one pass.\n-- Let's use APPROX_QUANTILES for median and IQR in a grouped way.\n, quantiles AS (\n  SELECT\n    discharge_category,\n    COUNT(*) AS n_patients,\n    APPROX_QUANTILES(los_days, 100) [OFFSET(50)] AS median_los,\n    APPROX_QUANTILES(los_days, 100) [OFFSET(25)] AS q1_los,\n    APPROX_QUANTILES(los_days, 100) [OFFSET(75)] AS q3_los,\n    SUM(CASE WHEN los_days <= 10 THEN 1 ELSE 0 END) AS los_leq_10\n  FROM cohort\n  GROUP BY discharge_category\n)\n\nSELECT\n  discharge_category,\n  n_patients,\n  median_los,\n  q1_los,\n  q3_los,\n  ROUND(los_leq_10 * 100.0 / n_patients, 2) AS percent_los_leq_10\nFROM quantiles\nORDER BY discharge_category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

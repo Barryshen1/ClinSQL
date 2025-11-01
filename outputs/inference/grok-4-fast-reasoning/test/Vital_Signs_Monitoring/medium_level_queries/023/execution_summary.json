@@ -1,0 +1,16 @@
+{
+  "query": "I have a 67-year-old female ICU patient. Among female ICU patients aged 62\u201372, show first-24h per-measurement temperature categories (<36.0 / 36.0\u201337.9 / \u226538.0\u00b0C) with mean, median, IQR and AKI rate.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age, \n    i.hadm_id, \n    i.stay_id, \n    i.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'F' \n    AND p.anchor_age BETWEEN 62 AND 72\n),\nfirst_stays AS (\n  SELECT *\n  FROM (\n    SELECT *, ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM cohort\n  )\n  WHERE rn = 1\n),\naki AS (\n  SELECT \n    fs.subject_id,\n    CASE \n      WHEN LOGICAL_OR(icd_code LIKE '584%' OR icd_code LIKE 'N17%') THEN 1 \n      ELSE 0 \n    END AS has_aki\n  FROM first_stays fs\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON fs.subject_id = d.subject_id \n    AND fs.hadm_id = d.hadm_id\n  GROUP BY fs.subject_id\n),\ntemps AS (\n  SELECT \n    c.subject_id, \n    c.valuenum,\n    CASE \n      WHEN c.valuenum < 36.0 THEN '<36.0'\n      WHEN c.valuenum >= 36.0 AND c.valuenum <= 37.9 THEN '36.0\u201337.9'\n      ELSE '>=38.0'\n    END AS temp_category\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` c\n  INNER JOIN first_stays fs\n    ON c.stay_id = fs.stay_id\n  WHERE c.itemid = 676\n    AND c.valuenum IS NOT NULL\n    AND c.charttime >= fs.intime\n    AND c.charttime < TIMESTAMP_ADD(fs.intime, INTERVAL 24 HOUR)\n),\ntemp_stats AS (\n  SELECT \n    temp_category,\n    COUNT(*) AS num_measurements,\n    AVG(valuenum) AS mean_temp,\n    APPROX_QUANTILES(valuenum, 5)[OFFSET(2)] AS median_temp,\n    APPROX_QUANTILES(valuenum, 5)[OFFSET(3)] - APPROX_QUANTILES(valuenum, 5)[OFFSET(1)] AS iqr_temp\n  FROM temps\n  GROUP BY temp_category\n),\npatient_categories AS (\n  SELECT DISTINCT \n    subject_id, \n    temp_category\n  FROM temps\n),\naki_per_cat AS (\n  SELECT \n    pc.temp_category,\n    COUNT(DISTINCT pc.subject_id) AS num_patients,\n    AVG(aki.has_aki) AS aki_rate\n  FROM patient_categories pc\n  INNER JOIN aki \n    ON pc.subject_id = aki.subject_id\n  GROUP BY pc.temp_category\n)\nSELECT \n  ts.temp_category,\n  ts.num_measurements,\n  ROUND(ts.mean_temp, 2) AS mean_temp,\n  ROUND(ts.median_temp, 2) AS median_temp,\n  ROUND(ts.iqr_temp, 2) AS iqr_temp,\n  ac.num_patients,\n  ROUND(ac.aki_rate * 100, 2) AS aki_rate_percent\nFROM temp_stats ts\nLEFT JOIN aki_per_cat ac \n  ON ts.temp_category = ac.temp_category\nORDER BY \n  CASE temp_category\n    WHEN '<36.0' THEN 1\n    WHEN '36.0\u201337.9' THEN 2\n    WHEN '>=38.0' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

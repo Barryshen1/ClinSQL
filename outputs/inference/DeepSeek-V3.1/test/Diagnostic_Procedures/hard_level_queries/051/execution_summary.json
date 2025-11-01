@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 95\u2011year\u2011old male ICU patient with sepsis. Among male ICU patients age 90\u2013100 with sepsis, what is the SD of diagnostic utilization in the first 24h? Also report p75, p95, in\u2011hospital mortality %, average LOS, and admissions versus overall ICU.",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT \n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ie.los,\n    adm.hospital_expire_flag,\n    -- Count distinct lab tests in first 24h\n    COUNT(DISTINCT le.itemid) AS lab_test_count,\n    -- Count distinct microbiology tests in first 24h\n    COUNT(DISTINCT me.test_itemid) AS micro_test_count\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  -- Left join to labevents (first 24h)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ie.hadm_id = le.hadm_id\n    AND le.charttime >= ie.intime\n    AND le.charttime < DATETIME_ADD(ie.intime, INTERVAL 24 HOUR)\n  -- Left join to microbiologyevents (first 24h)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.microbiologyevents` me\n    ON ie.hadm_id = me.hadm_id\n    AND me.charttime >= ie.intime\n    AND me.charttime < DATETIME_ADD(ie.intime, INTERVAL 24 HOUR)\n  -- Sepsis diagnosis (ICD-9 and ICD-10 codes) and demographic filters\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    WHERE ie.hadm_id = di.hadm_id\n      AND (\n        (di.icd_version = 9 AND di.icd_code LIKE '038%') OR\n        (di.icd_version = 9 AND di.icd_code = '995.91') OR\n        (di.icd_version = 9 AND di.icd_code = '995.92') OR\n        (di.icd_version = 10 AND di.icd_code LIKE 'A41%') OR\n        (di.icd_version = 10 AND di.icd_code LIKE 'R65.2%')\n      )\n  )\n  AND p.anchor_age BETWEEN 90 AND 100\n  AND p.gender = 'M'\n  GROUP BY ie.subject_id, ie.hadm_id, ie.stay_id, ie.intime, ie.outtime, ie.los, adm.hospital_expire_flag\n),\ncohort_aggregates AS (\n  SELECT\n    COUNT(DISTINCT stay_id) AS n_icu_stays,\n    COUNT(DISTINCT hadm_id) AS n_admissions,\n    -- Total diagnostic tests (labs + micro)\n    AVG(lab_test_count + micro_test_count) AS avg_dx_utilization,\n    STDDEV(lab_test_count + micro_test_count) AS sd_dx_utilization,\n    APPROX_QUANTILES(lab_test_count + micro_test_count, 100)[OFFSET(75)] AS p75_dx_utilization,\n    APPROX_QUANTILES(lab_test_count + micro_test_count, 100)[OFFSET(95)] AS p95_dx_utilization,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_percent,\n    AVG(los) AS avg_icu_los_days\n  FROM sepsis_cohort\n),\noverall_icu AS (\n  SELECT COUNT(DISTINCT hadm_id) AS total_icu_admissions\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n)\nSELECT\n  n_icu_stays,\n  n_admissions,\n  avg_dx_utilization,\n  sd_dx_utilization,\n  p75_dx_utilization,\n  p95_dx_utilization,\n  in_hospital_mortality_percent,\n  avg_icu_los_days,\n  total_icu_admissions,\n  n_admissions / total_icu_admissions * 100 AS admissions_percent_of_total_icu\nFROM cohort_aggregates, overall_icu;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword LEFT at [35:3]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword LEFT at [35:3]\n\nLocation: US\nJob ID: 70bf8d63-a65a-4707-8944-99261d9ee3ec\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

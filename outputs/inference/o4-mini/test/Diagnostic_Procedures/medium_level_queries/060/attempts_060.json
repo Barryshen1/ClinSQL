@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH heart_failure_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.subject_id = d.subject_id\n     AND a.hadm_id    = d.hadm_id\n     AND d.seq_num    = 1\n     AND d.icd_version = 10\n     AND d.icd_code LIKE 'I50%'    -- primary heart failure\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\nlos_strata AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    los_days,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7'\n    END AS los_group\n  FROM heart_failure_admissions\n),\nicu_flag AS (\n  SELECT\n    ls.*,\n    CASE\n      WHEN icu.stay_id IS NOT NULL THEN 'Yes'\n      ELSE 'No'\n    END AS icu_use\n  FROM los_strata ls\n  LEFT JOIN (\n    SELECT DISTINCT subject_id, hadm_id, stay_id\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  ) icu\n    ON ls.subject_id = icu.subject_id\n   AND ls.hadm_id    = icu.hadm_id\n),\nct_mri_counts AS (\n  SELECT\n    hadm_id,\n    COUNT(*) AS ct_mri_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n  WHERE\n    LOWER(short_description) LIKE '%ct%'\n    OR LOWER(short_description) LIKE '%mri%'\n  GROUP BY hadm_id\n)\nSELECT\n  icu_use,\n  los_group,\n  COUNT(DISTINCT icu.hadm_id) AS admission_count,\n  ROUND(AVG(IFNULL(c.ct_mri_count, 0)), 2) AS mean_ct_mri_per_admission\nFROM\n  icu_flag icu\nLEFT JOIN ct_mri_counts c\n  ON icu.hadm_id = c.hadm_id\nWHERE\n  los_group IS NOT NULL\nGROUP BY\n  icu_use,\n  los_group\nORDER BY\n  icu_use,\n  los_group;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

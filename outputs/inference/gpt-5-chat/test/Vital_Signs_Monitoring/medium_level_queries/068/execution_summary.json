@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46-year-old female in ICU. Among female ICU patients aged 41\u201351, what are patient counts and stroke rates for each per-measurement MAP category: <65, 65\u201374, 75\u201384, \u226585 mmHg?",
+  "final_sql": "WITH female_icu AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    pat.gender,\n    pat.anchor_age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 41 AND 51\n),\nmap_itemids AS (\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE linksto = 'chartevents'\n    AND (\n      LOWER(label) LIKE '%mean arterial pressure%'\n      OR LOWER(abbreviation) = 'map'\n    )\n),\nstroke_flags AS (\n  SELECT\n    di.subject_id,\n    di.hadm_id,\n    CASE\n      WHEN LOWER(dd.long_title) LIKE '%stroke%' THEN 1\n      ELSE 0\n    END AS stroke_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n),\nstroke_per_adm AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    MAX(stroke_flag) AS stroke_flag\n  FROM stroke_flags\n  GROUP BY subject_id, hadm_id\n),\nmap_measurements AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    ce.valuenum,\n    CASE\n      WHEN ce.valuenum < 65 THEN '<65'\n      WHEN ce.valuenum >= 65 AND ce.valuenum <= 74 THEN '65-74'\n      WHEN ce.valuenum >= 75 AND ce.valuenum <= 84 THEN '75-84'\n      WHEN ce.valuenum >= 85 THEN '\u226585'\n    END AS map_category\n  FROM female_icu f\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON f.subject_id = ce.subject_id\n   AND f.stay_id = ce.stay_id\n  JOIN map_itemids mi\n    ON ce.itemid = mi.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0\n    AND ce.valueuom = 'mmHg'\n),\nmap_with_stroke AS (\n  SELECT\n    m.subject_id,\n    m.map_category,\n    sa.stroke_flag\n  FROM map_measurements m\n  LEFT JOIN stroke_per_adm sa\n    ON m.subject_id = sa.subject_id\n   AND m.hadm_id = sa.hadm_id\n)\nSELECT\n  map_category,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(DISTINCT CASE WHEN stroke_flag = 1 THEN subject_id END) AS stroke_patient_count,\n  SAFE_DIVIDE(\n    COUNT(DISTINCT CASE WHEN stroke_flag = 1 THEN subject_id END),\n    COUNT(DISTINCT subject_id)\n  ) * 100 AS stroke_rate_percent\nFROM map_with_stroke\nGROUP BY map_category\nORDER BY map_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

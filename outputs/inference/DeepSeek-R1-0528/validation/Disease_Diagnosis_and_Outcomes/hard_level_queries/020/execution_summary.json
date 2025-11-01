@@ -1,0 +1,22 @@
+{
+  "query": "I have a 51-year-old male inpatient. Among male inpatients 46\u201356 with acute myocardial infarction, stratify by the composite risk score (age plus major complications) into quintiles and report in-hospital mortality%, major complication%, and median survivor LOS per quintile.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    adm.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n),\nami_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  WHERE \n    (diag.icd_version = 9 AND diag.icd_code LIKE '410%') \n    OR (diag.icd_version = 10 AND (diag.icd_code LIKE 'I21%' OR diag.icd_code LIKE 'I22%'))\n),\ncohort_with_age AS (\n  SELECT \n    c.subject_id, \n    c.hadm_id, \n    c.admittime, \n    c.dischtime,\n    c.hospital_expire_flag,\n    c.anchor_age + (EXTRACT(YEAR FROM c.admittime) - c.anchor_year) AS computed_age\n  FROM cohort c\n  INNER JOIN ami_admissions a\n    ON c.hadm_id = a.hadm_id\n  WHERE c.anchor_age + (EXTRACT(YEAR FROM c.admittime) - c.anchor_year) BETWEEN 46 AND 56\n),\ndrg_severity AS (\n  SELECT \n    hadm_id, \n    MAX(SAFE_CAST(drg_severity AS INT64)) AS max_drg_severity\n  FROM `physionet-data.mimiciv_3_1_hosp.drgcodes`\n  GROUP BY hadm_id\n),\ncohort_risk AS (\n  SELECT \n    c.*,\n    d.max_drg_severity,\n    (c.computed_age + d.max_drg_severity) AS risk_score\n  FROM cohort_with_age c\n  INNER JOIN drg_severity d\n    ON c.hadm_id = d.hadm_id\n),\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY risk_score) AS quintile\n  FROM cohort_risk\n),\nquintile_agg AS (\n  SELECT \n    quintile,\n    COUNT(*) AS total_patients,\n    AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_percent,\n    AVG(CASE WHEN max_drg_severity >= 3 THEN 1 ELSE 0 END) * 100 AS major_complication_percent\n  FROM quintiles\n  GROUP BY quintile\n),\nsurvivor_los AS (\n  SELECT \n    quintile,\n    APPROX_QUANTILES(\n      DATETIME_DIFF(dischtime, admittime, SECOND) / 86400.0, \n      100\n    )[OFFSET(50)] AS median_survivor_los_days\n  FROM quintiles\n  WHERE hospital_expire_flag = 0\n  GROUP BY quintile\n)\nSELECT \n  qa.quintile,\n  qa.total_patients,\n  ROUND(qa.in_hospital_mortality_percent, 2) AS in_hospital_mortality_percent,\n  ROUND(qa.major_complication_percent, 2) AS major_complication_percent,\n  ROUND(sl.median_survivor_los_days, 2) AS median_survivor_los_days\nFROM quintile_agg qa\nLEFT JOIN survivor_los sl\n  ON qa.quintile = sl.quintile\nORDER BY qa.quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: b5315738-addd-4895-aba8-f67d1fb16201\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT p.subject_id, ph.pharmacy_id, ph.poe_id, ph.starttime, lag(ph.drug) OVER (PARTITION BY p.subject_id ORDER BY ph.starttime) AS previous_drug, (ph.drug - previous_drug) / NULLIF(ph.doses_per_24_hrs, 0) AS pp FROM patients p JOIN prescriptions ph ON p.subject_id = ph.subject_id WHERE p.subject_id IN (SELECT subject_id FROM diabetes_hf);

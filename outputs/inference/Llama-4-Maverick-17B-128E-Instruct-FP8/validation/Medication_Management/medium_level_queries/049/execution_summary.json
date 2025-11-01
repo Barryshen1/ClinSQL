@@ -1,0 +1,16 @@
+{
+  "query": "For my 71-year-old male inpatient, among male admissions aged 66\u201376 with diabetes and heart failure (\u226572\u2011h), report percentages only for each antidiabetic class in first 72h vs final 24h.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT DISTINCT a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age BETWEEN 66 AND 76\n    AND a.hadm_id IN (\n      SELECT hadm_id \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE icd_code IN ('250', 'E11', 'E10', 'E13', 'E14')  -- Simplified diabetes ICD-9/10 codes\n        OR icd_code LIKE 'I50%'  -- Heart failure ICD-10 codes\n    )\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 96  -- Stay >= 96 hours to have at least 72h + 24h\n),\n\n-- Step 2: Extract antidiabetic medications in the first 72h and last 24h\nmedications AS (\n  SELECT c.hadm_id, \n         p.drug,\n         CASE \n           WHEN p.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR) THEN 'First 72h'\n           WHEN p.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 24 HOUR) AND c.dischtime THEN 'Last 24h'\n         END AS time_period\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON c.hadm_id = p.hadm_id\n  WHERE p.drug_type = 'MAIN'  -- Focus on main drug prescriptions\n    AND LOWER(p.drug) LIKE '%insulin%' OR LOWER(p.drug) LIKE '%metformin%'  -- Example antidiabetic drugs\n),\n\n-- Step 3: Calculate percentages for each antidiabetic class\npercentages AS (\n  SELECT time_period, \n         drug,\n         COUNT(DISTINCT hadm_id) as num_admissions,\n         COUNT(DISTINCT hadm_id) * 100.0 / (SELECT COUNT(DISTINCT hadm_id) FROM cohort) AS percentage\n  FROM medications\n  GROUP BY time_period, drug\n)\n\n-- Final output\nSELECT drug, \n       SUM(CASE WHEN time_period = 'First 72h' THEN percentage ELSE 0 END) AS percentage_first_72h,\n       SUM(CASE WHEN time_period = 'Last 24h' THEN percentage ELSE 0 END) AS percentage_last_24h\nFROM percentages\nGROUP BY drug\nORDER BY drug;",
+  "execution_success": true,
+  "row_count": 21,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 21,
+      "error": null
+    }
+  ]
+}

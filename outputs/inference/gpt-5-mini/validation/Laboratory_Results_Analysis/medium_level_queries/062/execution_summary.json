@@ -1,0 +1,16 @@
+{
+  "query": "I have a 51-year-old female with suspected ACS. Among female ACS admissions age 46\u201356, what are counts, percentages, and mean hospital length of stay for first hs\u2011TnT: Normal, Borderline, Myocardial Injury?",
+  "final_sql": "WITH acs_admissions AS (\n  -- female admissions age 46-56 with an ACS-related diagnosis (ICD description text search)\n  SELECT DISTINCT a.subject_id,\n         a.hadm_id,\n         a.admittime,\n         a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id\n   AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON di.icd_code = dicd.icd_code\n   AND di.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 46 AND 56\n    -- text match to capture acute MI / ACS / unstable angina / acute coronary descriptions\n    AND (\n      lower(dicd.long_title) LIKE '%acute%' \n      AND (\n        lower(dicd.long_title) LIKE '%myocardial%' \n        OR lower(dicd.long_title) LIKE '%infarct%' \n        OR lower(dicd.long_title) LIKE '%unstable%' \n        OR lower(dicd.long_title) LIKE '%acute coronary%'\n        OR lower(dicd.long_title) LIKE '%angina%'\n      )\n    )\n),\n\ntroponin_events AS (\n  -- first troponin measurement (numeric) during the admission\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.valuenum,\n    COALESCE(le.charttime, le.storetime) AS event_time,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY COALESCE(le.charttime, le.storetime) ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON le.itemid = dl.itemid\n  JOIN acs_admissions aa\n    ON le.hadm_id = aa.hadm_id\n  WHERE lower(dl.label) LIKE '%troponin%'\n    AND le.valuenum IS NOT NULL\n),\n\nfirst_hsTnT AS (\n  -- keep only the first troponin per admission\n  SELECT te.subject_id,\n         te.hadm_id,\n         te.valuenum\n  FROM troponin_events te\n  WHERE te.rn = 1\n),\n\ncategorized AS (\n  SELECT\n    f.hadm_id,\n    f.valuenum,\n    CASE\n      WHEN f.valuenum < 14 THEN 'Normal'\n      WHEN f.valuenum >= 14 AND f.valuenum < 50 THEN 'Borderline'\n      WHEN f.valuenum >= 50 THEN 'Myocardial Injury'\n      ELSE 'Unknown'\n    END AS category\n  FROM first_hsTnT f\n),\n\nsummary AS (\n  SELECT\n    c.category,\n    COUNT(*) AS n,\n    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct_of_measured,\n    ROUND(AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0), 2) AS mean_los_days\n  FROM categorized c\n  JOIN acs_admissions a\n    ON c.hadm_id = a.hadm_id\n  GROUP BY c.category\n)\n\nSELECT\n  category,\n  n,\n  pct_of_measured,\n  mean_los_days\nFROM summary\nORDER BY CASE\n         WHEN category = 'Normal' THEN 1\n         WHEN category = 'Borderline' THEN 2\n         WHEN category = 'Myocardial Injury' THEN 3\n         ELSE 4 END;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

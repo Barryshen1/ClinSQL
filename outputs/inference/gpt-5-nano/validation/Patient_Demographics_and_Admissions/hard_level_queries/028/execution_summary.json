@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 60\u2011year\u2011old woman. In female Medicare patients aged 55\u201365 admitted from the ED with principal cellulitis, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >7 days?",
+  "final_sql": "WITH index_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id\n   AND di.hadm_id = a.hadm_id\n   AND di.seq_num = 1  -- principal diagnosis\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON dd.icd_code = di.icd_code\n   AND dd.icd_version = di.icd_version\n  WHERE a.edregtime IS NOT NULL                    -- admitted from ED\n    AND LOWER(a.insurance) LIKE '%medicare%'        -- Medicare patients\n    AND p.gender = 'F'                               -- female\n    AND p.anchor_age BETWEEN 55 AND 65             -- age 55-65\n    AND LOWER(dd.long_title) LIKE '%cellulitis%'     -- principal cellulitis\n),\ncohort_with_readmit AS (\n  SELECT\n    idx.subject_id,\n    idx.hadm_id,\n    idx.admittime,\n    idx.dischtime,\n    DATE_DIFF(DATE(idx.dischtime), DATE(idx.admittime), DAY) AS los_days,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = idx.subject_id\n          AND a2.hadm_id <> idx.hadm_id\n          AND a2.admittime >= idx.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(idx.dischtime, INTERVAL 30 DAY)\n      )\n      THEN 1 ELSE 0\n    END AS readmit_flag\n  FROM index_admissions AS idx\n)\nSELECT\n  ROUND(100.0 * SUM(readmit_flag) / COUNT(*), 2) AS readmission_30d_pct,\n  (SELECT APPROX_QUANTILES(los_days, 2)[OFFSET(1)]\n     FROM cohort_with_readmit\n     WHERE readmit_flag = 1) AS median_los_readmit_days,\n  (SELECT APPROX_QUANTILES(los_days, 2)[OFFSET(1)]\n     FROM cohort_with_readmit\n     WHERE readmit_flag = 0) AS median_los_non_readmit_days,\n  100.0 * SUM(CASE WHEN los_days > 7 THEN 1 ELSE 0 END) / COUNT(*) AS pct_index_los_gt_7_days\nFROM cohort_with_readmit;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [45:3]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [45:3]\n\nLocation: US\nJob ID: b2c1944e-94fb-4de4-91bb-c79015c31b3f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

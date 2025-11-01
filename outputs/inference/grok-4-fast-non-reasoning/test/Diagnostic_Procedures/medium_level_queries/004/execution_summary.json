@@ -1,0 +1,28 @@
+{
+  "query": "For a 50\u2011year\u2011old woman: among female HF admissions aged 45\u201355, LOS 1\u20137 days, by primary vs secondary diagnosis and 1\u20133 vs 4\u20137 day stays, what are mean/min/max CT/MRI per admission?",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: female, age 45-55, LOS 1-7 days, non-expired admissions\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    EXTRACT(DAY FROM (DATE(a.dischtime) - DATE(a.admittime))) AS los_days\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND EXTRACT(DAY FROM (DATE(a.dischtime) - DATE(a.admittime))) BETWEEN 1 AND 7\n    AND a.hospital_expire_flag = 0\n),\n\nhf_cohort AS (\n  -- Add HF diagnosis classification (primary vs secondary)\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.gender,\n    c.anchor_age,\n    c.los_days,\n    CASE WHEN d.seq_num = 1 AND SUBSTR(icd.icd_code, 1, 3) = 'I50' THEN 1 ELSE 0 END AS is_primary_hf,\n    CASE WHEN d.seq_num > 1 AND SUBSTR(icd.icd_code, 1, 3) = 'I50' THEN 1 ELSE 0 END AS has_secondary_hf\n  FROM \n    cohort c\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON c.hadm_id = d.hadm_id\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n  ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  -- Include only admissions with at least one HF diagnosis (primary or secondary)\n  QUALIFY LOGICAL_OR(is_primary_hf = 1 OR has_secondary_hf = 1)\n),\n\nimaging_counts AS (\n  -- Count CT and MRI per hadm_id using HCPCS\n  SELECT \n    hc.hadm_id,\n    -- CT: HCPCS starting with '7' (common CT range)\n    COUNTIF(SUBSTR(hc.hcpcs_cd, 1, 1) = '7') AS ct_count,\n    -- MRI: HCPCS starting with '7' and description contains 'MRI'\n    COUNTIF(\n      SUBSTR(hc.hcpcs_cd, 1, 1) = '7' \n      AND LOWER(dh.short_description) LIKE '%mri%'\n    ) AS mri_count\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents` hc\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_hcpcs` dh\n  ON hc.hcpcs_cd = dh.code\n  GROUP BY hadm_id\n),\n\nstratified_stats AS (\n  -- Join imaging to cohort and stratify by primary/secondary HF and LOS bin\n  SELECT \n    hf.is_primary_hf,\n    CASE \n      WHEN hf.los_days BETWEEN 1 AND 3 THEN '1-3 days'\n      ELSE '4-7 days' \n    END AS los_bin,\n    COUNT(DISTINCT hf.hadm_id) AS n_admissions,\n    AVG(COALESCE(img.ct_count, 0)) AS mean_ct_per_adm,\n    MIN(COALESCE(img.ct_count, 0)) AS min_ct_per_adm,\n    MAX(COALESCE(img.ct_count, 0)) AS max_ct_per_adm,\n    AVG(COALESCE(img.mri_count, 0)) AS mean_mri_per_adm,\n    MIN(COALESCE(img.mri_count, 0)) AS min_mri_per_adm,\n    MAX(COALESCE(img.mri_count, 0)) AS max_mri_per_adm\n  FROM \n    hf_cohort hf\n  LEFT JOIN \n    imaging_counts img\n  ON hf.hadm_id = img.hadm_id\n  -- Only include admissions with primary HF or secondary HF\n  WHERE \n    hf.is_primary_hf = 1 OR hf.has_secondary_hf = 1\n  GROUP BY \n    hf.is_primary_hf, los_bin\n)\n\nSELECT \n  CASE WHEN is_primary_hf = 1 THEN 'Primary HF' ELSE 'Secondary HF' END AS diagnosis_type,\n  los_bin,\n  n_admissions,\n  ROUND(mean_ct_per_adm, 2) AS mean_ct,\n  min_ct_per_adm AS min_ct,\n  max_ct_per_adm AS max_ct,\n  ROUND(mean_mri_per_adm, 2) AS mean_mri,\n  min_mri_per_adm AS min_mri,\n  max_mri_per_adm AS max_mri\nFROM \n  stratified_stats\nORDER BY \n  diagnosis_type, \n  CASE WHEN los_bin = '1-3 days' THEN 1 ELSE 2 END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references c.subject_id which is neither grouped nor aggregated at [24:5]; reason: invalidQuery, location: query, message: SELECT list expression references c.subject_id which is neither grouped nor aggregated at [24:5]\n\nLocation: US\nJob ID: 59521e0b-6df9-4b14-afa0-0b1541bd426e\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator BETWEEN\n  Argument types: INTERVAL, INT64, INT64\n  Signature: (T1) BETWEEN (T1) AND (T1)\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, INTERVAL} at [17:47]; reason: invalidQuery, location: query, message: No matching signature for operator BETWEEN\n  Argument types: INTERVAL, INT64, INT64\n  Signature: (T1) BETWEEN (T1) AND (T1)\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, INTERVAL} at [17:47]\n\nLocation: US\nJob ID: afeeaf5a-d15d-4dbd-a1b8-fd9367bc0719\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Star expansion expression references column subject_id which is neither grouped nor aggregated at [24:5]; reason: invalidQuery, location: query, message: Star expansion expression references column subject_id which is neither grouped nor aggregated at [24:5]\n\nLocation: US\nJob ID: 72d5f8a4-aefa-4d85-9f96-cf1db2ad9e67\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references c.subject_id which is neither grouped nor aggregated at [24:5]; reason: invalidQuery, location: query, message: SELECT list expression references c.subject_id which is neither grouped nor aggregated at [24:5]\n\nLocation: US\nJob ID: 59521e0b-6df9-4b14-afa0-0b1541bd426e\n"
+    }
+  ]
+}

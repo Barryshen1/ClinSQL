@@ -1,0 +1,16 @@
+{
+  "query": "My 57-year-old male with ACS: among male ACS inpatients, what is the minimum serum troponin measured during hospitalization?",
+  "final_sql": "WITH acs_admissions AS (\n  -- Admissions that have at least one diagnosis matching ACS terms\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dic\n    ON d.icd_code = dic.icd_code\n   AND d.icd_version = dic.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON d.hadm_id = a.hadm_id\n  WHERE (\n    LOWER(dic.long_title) LIKE '%myocardial infarction%'\n    OR LOWER(dic.long_title) LIKE '%unstable angina%'\n    OR LOWER(dic.long_title) LIKE '%acute coronary%'\n    OR LOWER(dic.long_title) LIKE '%stemi%'\n    OR LOWER(dic.long_title) LIKE '%nstemi%'\n  )\n),\nmale_acs_admissions AS (\n  -- Restrict to male patients\n  SELECT aa.subject_id, aa.hadm_id\n  FROM acs_admissions aa\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON aa.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n  -- If you want to restrict to age 57, uncomment:\n  -- AND p.anchor_age = 57\n),\ntroponin_items AS (\n  -- Lab items that likely correspond to troponin assays\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin%'\n),\ntroponin_measurements AS (\n  -- All troponin lab measurements for male ACS admissions, with numeric value extraction\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.labevent_id,\n    le.itemid,\n    dli.label AS lab_label,\n    le.charttime,\n    le.value,\n    le.valueuom,\n    le.valuenum,\n    -- prefer valuenum; otherwise try to coerce numeric characters from value text\n    COALESCE(\n      le.valuenum,\n      SAFE_CAST(REGEXP_REPLACE(COALESCE(le.value, ''), r'[^0-9\\.\\-eE\\+]', '') AS FLOAT64)\n    ) AS troponin_value\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items dli\n    ON le.itemid = dli.itemid\n  JOIN male_acs_admissions maa\n    ON le.hadm_id = maa.hadm_id\n  WHERE le.hadm_id IS NOT NULL\n),\ntroponin_filtered AS (\n  -- Keep only rows where we successfully obtained a numeric troponin\n  SELECT *\n  FROM troponin_measurements\n  WHERE troponin_value IS NOT NULL\n),\noverall_min AS (\n  SELECT\n    MIN(troponin_value) AS min_troponin,\n    COUNT(DISTINCT hadm_id) AS n_admissions,\n    COUNT(*) AS n_measurements\n  FROM troponin_filtered\n),\nmin_example AS (\n  -- Provide one example row that equals the minimum (earliest charttime if multiple)\n  SELECT tf.*\n  FROM troponin_filtered tf\n  JOIN overall_min om ON tf.troponin_value = om.min_troponin\n  ORDER BY tf.charttime ASC\n  LIMIT 1\n)\nSELECT\n  om.min_troponin AS minimum_troponin_value,\n  me.lab_label AS example_lab_label,\n  me.valueuom AS example_value_unit,\n  me.charttime AS example_charttime,\n  me.subject_id AS example_subject_id,\n  me.hadm_id AS example_hadm_id,\n  om.n_admissions,\n  om.n_measurements\nFROM overall_min om\nLEFT JOIN min_example me ON TRUE;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+SELECT DISTINCT PERCENTILE_CONT(cv_sum, 0.75) OVER() AS p75
+   FROM final_scores;

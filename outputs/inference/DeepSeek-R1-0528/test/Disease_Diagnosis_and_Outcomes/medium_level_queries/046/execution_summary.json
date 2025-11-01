@@ -1,0 +1,16 @@
+{
+  "query": "For my 77\u2011yo male with heart failure: among males 72\u201382 with HF, compare ICU vs non\u2011ICU by LOS (\u22643, 4\u20136, 7\u201310, >10 days); report in\u2011hospital mortality, median LOS, average comorbidity count.",
+  "final_sql": "WITH hf_admissions AS (\n  SELECT DISTINCT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    patients.anchor_age,\n    patients.anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS patients\n    ON adm.subject_id = patients.subject_id\n  WHERE patients.gender = 'M'\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n      WHERE diag.subject_id = adm.subject_id \n        AND diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code LIKE '428%')\n          OR (diag.icd_version = 10 AND diag.icd_code LIKE 'I50%')\n        )\n    )\n),\n\ncomorbidity_counts AS (\n  SELECT \n    hadm_id,\n    COUNT(*) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\n\nicu_flags AS (\n  SELECT \n    hadm_id,\n    1 AS has_icu\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  GROUP BY hadm_id\n),\n\ncohort AS (\n  SELECT \n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_hospital,\n    adm.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - adm.anchor_year) AS age_at_admission,\n    COALESCE(cc.comorbidity_count, 0) AS comorbidity_count,\n    CASE WHEN icu.hadm_id IS NOT NULL THEN 'ICU' ELSE 'Non-ICU' END AS ICU_status\n  FROM hf_admissions AS adm\n  LEFT JOIN comorbidity_counts AS cc\n    ON adm.hadm_id = cc.hadm_id\n  LEFT JOIN icu_flags AS icu\n    ON adm.hadm_id = icu.hadm_id\n)\n\nSELECT \n  ICU_status,\n  CASE \n    WHEN los_hospital <= 3 THEN '<=3'\n    WHEN los_hospital BETWEEN 4 AND 6 THEN '4-6'\n    WHEN los_hospital BETWEEN 7 AND 10 THEN '7-10'\n    ELSE '>10'\n  END AS los_group,\n  COUNT(*) AS num_admissions,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_rate,\n  AVG(comorbidity_count) AS avg_comorbidity_count,\n  APPROX_QUANTILES(los_hospital, 100 RESPECT NULLS)[OFFSET(50)] AS median_los\nFROM cohort\nWHERE age_at_admission BETWEEN 72 AND 82\nGROUP BY ICU_status, los_group\nORDER BY ICU_status, \n  CASE los_group\n    WHEN '<=3' THEN 1\n    WHEN '4-6' THEN 2\n    WHEN '7-10' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

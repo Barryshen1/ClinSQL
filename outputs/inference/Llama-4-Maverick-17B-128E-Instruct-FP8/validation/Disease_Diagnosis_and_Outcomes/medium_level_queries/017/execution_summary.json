@@ -1,0 +1,16 @@
+{
+  "query": "For a 55-year-old man: among males 50\u201360 with sepsis (excluding septic shock), report in-hospital mortality (%) with 95% CIs and median time-to-death among non-survivors (days) by LOS (<8 vs \u22658 days).",
+  "final_sql": "WITH \n-- Step 1: Identify patients with sepsis\nsepsis_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n  ON diag.icd_code = d_icd.icd_code AND diag.icd_version = d_icd.icd_version\n  WHERE d_icd.long_title LIKE '%Sepsis%' OR d_icd.long_title LIKE '%septic%'\n),\n-- Step 2: Exclude patients with septic shock\nseptic_shock_patients AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_icd\n  ON diag.icd_code = d_icd.icd_code AND diag.icd_version = d_icd.icd_version\n  WHERE LOWER(d_icd.long_title) LIKE '%septic shock%'\n),\n-- Step 3: Cohort definition\ncohort AS (\n  SELECT pat.subject_id, adm.hadm_id, \n         CASE \n           WHEN pat.anchor_age BETWEEN 50 AND 60 AND pat.gender = 'M' THEN 1 \n           ELSE 0 \n         END AS eligible,\n         adm.hospital_expire_flag,\n         DATETIME_DIFF(adm.deathtime, adm.admittime, DAY) AS time_to_death,\n         icu.los\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` pat\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm ON pat.subject_id = adm.subject_id\n  JOIN sepsis_patients ON adm.hadm_id = sepsis_patients.hadm_id\n  LEFT JOIN septic_shock_patients ON adm.hadm_id = septic_shock_patients.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON adm.hadm_id = icu.hadm_id\n  WHERE septic_shock_patients.hadm_id IS NULL\n),\n-- Step 4: Calculate mortality and time-to-death by LOS group\nresults AS (\n  SELECT \n    CASE WHEN los < 8 THEN '<8 days' ELSE '>=8 days' END AS los_group,\n    COUNT(*) AS total_patients,\n    SUM(hospital_expire_flag) AS deaths,\n    APPROX_QUANTILES(time_to_death, 100)[OFFSET(50)] AS median_time_to_death\n  FROM cohort\n  WHERE eligible = 1\n  GROUP BY los_group\n)\n\n-- Final query to get the required statistics\nSELECT \n  los_group,\n  (deaths / total_patients) * 100 AS mortality_percent,\n  -- Using a simpler method for 95% CI, consider using a more precise method if needed\n  ((deaths / total_patients) * 100) - 1.96 * SQRT((deaths / total_patients) * (1 - (deaths / total_patients)) / total_patients) * 100 AS mortality_ci_lower,\n  ((deaths / total_patients) * 100) + 1.96 * SQRT((deaths / total_patients) * (1 - (deaths / total_patients)) / total_patients) * 100 AS mortality_ci_upper,\n  median_time_to_death\nFROM results;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "Patient is a 67-year-old man. Among male ICU patients aged 62\u201372, report counts per ICU-stay mean heart\u2011rate category (<60; 60\u201399; 100\u2013119; \u2265120 bpm) and percent with acute MI.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    -- Calculate age at ICU admission\n    p.anchor_age + (EXTRACT(YEAR FROM ie.intime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n),\nfiltered_cohort AS (\n  SELECT *\n  FROM cohort\n  WHERE age BETWEEN 62 AND 72\n),\nheart_rate AS (\n  SELECT\n    fc.stay_id,\n    AVG(ce.valuenum) AS mean_hr\n  FROM filtered_cohort fc\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON fc.stay_id = ce.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE\n    di.label = 'Heart Rate'  -- ItemID 220045\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime BETWEEN fc.intime AND fc.outtime\n  GROUP BY fc.stay_id\n),\nhr_categories AS (\n  SELECT\n    stay_id,\n    mean_hr,\n    CASE\n      WHEN mean_hr < 60 THEN '<60'\n      WHEN mean_hr BETWEEN 60 AND 99 THEN '60-99'\n      WHEN mean_hr BETWEEN 100 AND 119 THEN '100-119'\n      WHEN mean_hr >= 120 THEN '>=120'\n      ELSE NULL\n    END AS hr_category\n  FROM heart_rate\n),\nacute_mi AS (\n  SELECT\n    fc.hadm_id,\n    MAX(\n      CASE\n        WHEN (d.icd_version = 9 AND d.icd_code LIKE '410%') OR\n             (d.icd_version = 10 AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%'))\n        THEN 1\n        ELSE 0\n      END\n    ) AS acute_mi_flag\n  FROM filtered_cohort fc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON fc.hadm_id = d.hadm_id\n  GROUP BY fc.hadm_id\n)\nSELECT\n  hc.hr_category,\n  COUNT(DISTINCT hc.stay_id) AS total_stays,\n  ROUND(100 * AVG(ami.acute_mi_flag), 2) AS percent_with_acute_mi\nFROM hr_categories hc\nINNER JOIN filtered_cohort fc\n  ON hc.stay_id = fc.stay_id\nINNER JOIN acute_mi ami\n  ON fc.hadm_id = ami.hadm_id\nWHERE hc.hr_category IS NOT NULL\nGROUP BY hc.hr_category\nORDER BY\n  CASE hc.hr_category\n    WHEN '<60' THEN 1\n    WHEN '60-99' THEN 2\n    WHEN '100-119' THEN 3\n    WHEN '>=120' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old female Medicare patient. Among female Medicare patients aged 68\u201378 admitted from the ED with a principal hemorrhagic stroke, what are the 30-day readmission rate, median index LOS for readmitted vs non-readmitted, and % with LOS >4 days?",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, \n         p.anchor_age, \n         DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE a.admission_location = 'EMERGENCY ROOM ADMIT'\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND a.insurance = 'Medicare'\n    AND a.hadm_id IN (\n      SELECT d.hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n      WHERE d.seq_num = 1 AND dicd.long_title LIKE '%Hemorrhagic stroke%' AND d.icd_version = 10\n    )\n),\nreadmissions AS (\n  SELECT subject_id, hadm_id, admittime, dischtime, los,\n         LAG(dischtime) OVER (PARTITION BY subject_id ORDER BY admittime) AS prev_dischtime\n  FROM patient_cohort\n),\nreadmission_labels AS (\n  SELECT hadm_id, los,\n         CASE \n           WHEN admittime <= DATE_ADD(prev_dischtime, INTERVAL 30 DAY) THEN 1 \n           ELSE 0 \n         END AS is_readmission,\n         prev_dischtime\n  FROM readmissions\n)\nSELECT \n  AVG(is_readmission) AS readmission_rate,\n  APPROX_QUANTILES(CASE WHEN is_readmission = 1 THEN los END, 100)[OFFSET(50)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN is_readmission = 0 THEN los END, 100)[OFFSET(50)] AS median_los_not_readmitted,\n  AVG(CASE WHEN los > 4 THEN 1 ELSE 0 END) AS percent_los_gt_4\nFROM readmission_labels\nWHERE prev_dischtime IS NOT NULL;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: prev_dischtime at [38:7]; reason: invalidQuery, location: query, message: Unrecognized name: prev_dischtime at [38:7]\n\nLocation: US\nJob ID: 86e311cd-419c-458d-b72a-5252b5705755\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unsupported type INTERVAL for aggregate function approx_quantiles; reason: invalidQuery, location: query, message: Unsupported type INTERVAL for aggregate function approx_quantiles\n\nLocation: US\nJob ID: 1d867cae-2b59-4c29-979c-fa74de1b813e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

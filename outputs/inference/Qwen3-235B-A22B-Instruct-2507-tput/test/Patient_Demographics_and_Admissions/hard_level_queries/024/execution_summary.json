@@ -1,0 +1,16 @@
+{
+  "query": "I have an 81-year-old man. Among male Medicare patients 76\u201386 admitted from the ED with a principal ischemic stroke, what are the 30-day all-cause readmission rate, median index LOS for readmitted vs non-readmitted, and percent index stays >5 days?",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.admission_location,\n    a.insurance,\n    a.hospital_expire_flag,\n    p.gender,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit,\n    -- Compute LOS in days\n    DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  -- Join to get principal diagnosis\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    -- Principal diagnosis\n    di.seq_num = 1\n    -- Ischemic stroke: ICD-10 codes I63.* or I64\n    AND d.icd_version = 10\n    AND (d.icd_code LIKE 'I63%' OR d.icd_code = 'I64')\n    -- Male\n    AND p.gender = 'M'\n    -- Age 76-86 at admission\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 76 AND 86\n    -- Medicare\n    AND a.insurance = 'Medicare'\n    -- Admitted from ED\n    AND LOWER(a.admission_location) LIKE '%emergency%'\n),\n-- Now, for each admission, check if there is a readmission within 30 days\nadmissions_with_next AS (\n  SELECT\n    *,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n  FROM patient_admissions\n),\ncohort_with_readmission AS (\n  SELECT\n    hadm_id,\n    los_days,\n    -- Check if readmitted within 30 days\n    CASE\n      WHEN next_admittime IS NOT NULL\n        AND DATETIME_DIFF(next_admittime, dischtime, DAY) <= 30\n        AND DATETIME_DIFF(next_admittime, dischtime, DAY) >= 0\n        THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM admissions_with_next\n)\n-- Final aggregation\nSELECT\n  -- 30-day all-cause readmission rate\n  AVG(readmitted_30d) AS readmission_rate,\n  -- Median index LOS for readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted,\n  -- Median index LOS for non-readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted_30d = 0 THEN los_days END, 100)[OFFSET(50)] AS median_los_non_readmitted,\n  -- Percent of index stays > 5 days\n  AVG(CASE WHEN los_days > 5 THEN 1 ELSE 0 END) AS pct_index_stay_gt_5_days\nFROM cohort_with_readmission;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

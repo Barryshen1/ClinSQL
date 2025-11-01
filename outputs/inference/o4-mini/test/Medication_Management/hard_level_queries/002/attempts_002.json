@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH am_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON a.subject_id = di.subject_id\n      AND a.hadm_id    = di.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON di.icd_code    = dd.icd_code\n      AND di.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 67 AND 77\n    AND LOWER(dd.long_title) LIKE '%acute myocardial infarction%'\n),\nmed_complexity AS (\n  SELECT\n    c.hadm_id,\n    COALESCE(COUNT(DISTINCT pr.drug), 0) AS complexity_score\n  FROM\n    am_cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n      ON c.subject_id = pr.subject_id\n      AND c.hadm_id   = pr.hadm_id\n      AND pr.starttime >= c.admittime\n      AND pr.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR)\n  GROUP BY\n    c.hadm_id\n),\ncohort_metrics AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    mc.complexity_score,\n    DATE_DIFF(DATE(c.dischtime), DATE(c.admittime), DAY) AS los_days,\n    c.hospital_expire_flag,\n    -- 30-day readmission flag\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = c.subject_id\n        AND a2.hadm_id != c.hadm_id\n        AND a2.admittime > c.dischtime\n        AND a2.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n    ) AS readmit30_flag\n  FROM\n    am_cohort c\n    JOIN med_complexity mc\n      ON c.hadm_id = mc.hadm_id\n),\nranked AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM\n    cohort_metrics\n)\nSELECT\n  tertile,\n  COUNT(*) AS admissions,\n  MIN(complexity_score) AS score_min,\n  MAX(complexity_score) AS score_max,\n  ROUND(AVG(complexity_score), 2) AS score_mean,\n  ROUND(AVG(los_days), 2) AS los_mean_days,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 1) AS in_hospital_mortality_pct,\n  ROUND(100.0 * SUM(CAST(readmit30_flag AS INT64)) / COUNT(*), 1) AS readmit30_pct\nFROM\n  ranked\nGROUP BY\n  tertile\nORDER BY\n  tertile;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

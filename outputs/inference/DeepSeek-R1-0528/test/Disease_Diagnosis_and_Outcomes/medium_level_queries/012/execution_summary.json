@@ -1,0 +1,22 @@
+{
+  "query": "In women 83\u201393 with heart failure, stratified by ICU vs non\u2011ICU, LOS <8 vs \u22658, and comorbidity burden (0\u20131/2/\u22653), report mortality (%), median LOS, CKD and diabetes prevalence.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    adm.hadm_id,\n    adm.subject_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    -- Calculate age at admission: (admittime year) - (anchor_year - anchor_age)\n    CAST(EXTRACT(YEAR FROM adm.admittime) AS INT64) - (p.anchor_year - p.anchor_age) AS age_at_admission,\n    -- Calculate hospital LOS in days\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON adm.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag \n      ON adm.hadm_id = diag.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code LIKE '428%') OR\n      (diag.icd_version = 10 AND diag.icd_code LIKE 'I50%')\n    )\n    -- Filter for age 83-93 at admission\n    AND (CAST(EXTRACT(YEAR FROM adm.admittime) AS INT64) - (p.anchor_year - p.anchor_age)) BETWEEN 83 AND 93\n),\n\ncomorbidities AS (\n  SELECT\n    c.hadm_id,\n    -- Comorbidity burden (count of: hypertension, obesity, atrial fibrillation)\n    MAX(CASE \n          WHEN (d.icd_version = 9 AND d.icd_code LIKE '401%') \n             OR (d.icd_version = 10 AND d.icd_code LIKE 'I1[0-5]%') \n         THEN 1 ELSE 0 END) AS hypertension,\n    MAX(CASE \n          WHEN (d.icd_version = 9 AND d.icd_code = '278.0') \n             OR (d.icd_version = 10 AND d.icd_code LIKE 'E66%') \n         THEN 1 ELSE 0 END) AS obesity,\n    MAX(CASE \n          WHEN (d.icd_version = 9 AND d.icd_code = '427.31') \n             OR (d.icd_version = 10 AND d.icd_code LIKE 'I48%') \n         THEN 1 ELSE 0 END) AS afib,\n    -- Conditions to report separately (CKD and diabetes)\n    MAX(CASE \n          WHEN (d.icd_version = 9 AND (d.icd_code LIKE '58[5-8]%' OR d.icd_code LIKE 'V42.0' OR d.icd_code LIKE 'V45.1' OR d.icd_code LIKE 'V56%')) \n             OR (d.icd_version = 10 AND (d.icd_code LIKE 'N1[89]%' OR d.icd_code LIKE 'I1[23]%' OR d.icd_code LIKE 'N25%' OR d.icd_code LIKE 'Z49%' OR d.icd_code = 'Z94.0' OR d.icd_code = 'Z99.2')) \n         THEN 1 ELSE 0 END) AS ckd_flag,\n    MAX(CASE \n          WHEN (d.icd_version = 9 AND d.icd_code LIKE '250%') \n             OR (d.icd_version = 10 AND d.icd_code LIKE 'E1[0-4]%') \n         THEN 1 ELSE 0 END) AS diabetes_flag\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON c.hadm_id = d.hadm_id\n  GROUP BY c.hadm_id\n),\n\nicu_flag AS (\n  SELECT\n    c.hadm_id,\n    CASE WHEN i.stay_id IS NOT NULL THEN 'ICU' ELSE 'non-ICU' END AS icu_group\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON c.hadm_id = i.hadm_id\n)\n\nSELECT\n  icu.icu_group,\n  CASE \n    WHEN c.los_days < 8 THEN '<8' \n    ELSE '>=8' \n  END AS los_group,\n  CASE\n    WHEN (com.hypertension + com.obesity + com.afib) <= 1 THEN '0-1'\n    WHEN (com.hypertension + com.obesity + com.afib) = 2 THEN '2'\n    ELSE '>=3' \n  END AS comorbidity_burden,\n  COUNT(*) AS admissions,\n  ROUND(AVG(c.hospital_expire_flag) * 100, 2) AS mortality_percentage,\n  ROUND(APPROX_QUANTILES(c.los_days, 100)[OFFSET(50)], 2) AS median_los_days,\n  ROUND(AVG(com.ckd_flag) * 100, 2) AS ckd_prevalence,\n  ROUND(AVG(com.diabetes_flag) * 100, 2) AS diabetes_prevalence\nFROM cohort c\nINNER JOIN comorbidities com \n  ON c.hadm_id = com.hadm_id\nINNER JOIN icu_flag icu \n  ON c.hadm_id = icu.hadm_id\nGROUP BY \n  icu_group, \n  los_group, \n  comorbidity_burden\nORDER BY \n  icu_group, \n  los_group, \n  comorbidity_burden;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword THEN but got integer literal \"1\" at [38:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword THEN but got integer literal \"1\" at [38:10]\n\nLocation: US\nJob ID: 861d1bec-5876-4862-ba85-1ed8682b674e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

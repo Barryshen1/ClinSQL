@@ -1,0 +1,29 @@
+{
+  "query": "I have a 58-year-old woman after cardiac arrest. Among female inpatients 53\u201363 with post\u2011arrest, what is the 90th percentile 48\u2011hour lab instability score? For those \u2265 that value, report count, mortality, mean LOS, and compare critical lab frequency to all inpatients.",
+  "final_sql": "WITH target_admissions AS (\n  SELECT \n    a.hadm_id,\n    p.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 53 AND 63\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code IN ('4275', '99801'))\n          OR (d.icd_version = 10 AND d.icd_code IN ('I460', 'I461', 'I462', 'I468'))\n        )\n    )\n),\ncritical_labs AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) IN (\n    'potassium', 'sodium', 'chloride', 'bicarbonate', 'co2', 'total co2',\n    'creatinine', 'bun', 'blood urea nitrogen', 'glucose',\n    'hemoglobin', 'hgb', 'hematocrit', 'hct',\n    'platelet', 'platelets',\n    'wbc', 'white blood cells',\n    'magnesium', 'calcium', 'phosphate',\n    'inr', 'pt', 'prothrombin time', 'ptt', 'partial thromboplastin time'\n  )\n),\nlab_abnormal AS (\n  SELECT \n    le.hadm_id,\n    COUNT(*) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN critical_labs cl ON le.itemid = cl.itemid\n  INNER JOIN target_admissions ta ON le.hadm_id = ta.hadm_id\n  WHERE le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n    AND le.charttime BETWEEN ta.admittime AND DATETIME_ADD(ta.admittime, INTERVAL 48 HOUR)\n    AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n  GROUP BY le.hadm_id\n),\np90_value AS (\n  SELECT \n    PERCENTILE_CONT(instability_score, 0.9) OVER () AS p90\n  FROM lab_abnormal\n  LIMIT 1\n),\nhigh_group AS (\n  SELECT \n    ta.hadm_id,\n    ta.hospital_expire_flag,\n    ta.admittime,\n    ta.dischtime\n  FROM target_admissions ta\n  INNER JOIN lab_abnormal la ON ta.hadm_id = la.hadm_id\n  CROSS JOIN p90_value p\n  WHERE la.instability_score >= p.p90\n),\nhigh_group_lab_count AS (\n  SELECT \n    hg.hadm_id,\n    COUNT(cl.itemid) AS critical_lab_count\n  FROM high_group hg\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON hg.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN hg.admittime AND DATETIME_ADD(hg.admittime, INTERVAL 48 HOUR)\n  LEFT JOIN critical_labs cl ON le.itemid = cl.itemid\n  GROUP BY hg.hadm_id\n),\nall_inpatients AS (\n  SELECT \n    hadm_id,\n    admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\nall_inpatients_lab_count AS (\n  SELECT \n    ai.hadm_id,\n    COUNT(cl.itemid) AS critical_lab_count\n  FROM all_inpatients ai\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ai.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN ai.admittime AND DATETIME_ADD(ai.admittime, INTERVAL 48 HOUR)\n  LEFT JOIN critical_labs cl ON le.itemid = cl.itemid\n  GROUP BY ai.hadm_id\n)\nSELECT \n  (SELECT COUNT(*) FROM high_group) AS count_high,\n  (SELECT AVG(hospital_expire_flag) FROM high_group) AS mortality_high,\n  (SELECT AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) FROM high_group) AS mean_los_days_high,\n  (SELECT AVG(critical_lab_count) FROM high_group_lab_count) AS critical_lab_frequency_high,\n  (SELECT AVG(critical_lab_count) FROM all_inpatients_lab_count) AS critical_lab_frequency_all;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"-\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"-\" at [1:10]\n\nLocation: US\nJob ID: 7381928a-f99a-44f6-ba81-91a784bad8e4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 IN subquery is not supported inside join predicate.; reason: invalidQuery, location: query, message: IN subquery is not supported inside join predicate.\n\nLocation: US\nJob ID: 0a36286f-c9e3-483d-8b0f-3d70a43ed602\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "For my 61-year-old male ICU patient: among male ICU patients aged 56\u201366, categorize per-stay mean arterial pressure (<65, 65\u201374, 75\u201384, \u226585 mmHg) and report patient counts and stroke rates.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.stay_id,\n    icu.hadm_id,\n    icu.subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 56 AND 66\n),\nmap_measurements AS (\n  SELECT\n    ce.stay_id,\n    ce.valuenum\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  WHERE\n    ce.itemid IN (220045, 225312) -- MAP itemids\n    AND ce.valuenum IS NOT NULL\n),\nstay_map AS (\n  SELECT\n    c.stay_id,\n    c.hadm_id,\n    c.subject_id,\n    AVG(m.valuenum) AS mean_map\n  FROM\n    cohort c\n  JOIN\n    map_measurements m\n    ON c.stay_id = m.stay_id\n  GROUP BY\n    c.stay_id, c.hadm_id, c.subject_id\n),\nstroke_stays AS (\n  SELECT DISTINCT\n    s.stay_id\n  FROM\n    stay_map s\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON s.hadm_id = d.hadm_id\n  WHERE\n    (\n      -- ICD-9 stroke codes\n      (d.icd_version = 9 AND (\n        REGEXP_CONTAINS(d.icd_code, r'^430') OR\n        REGEXP_CONTAINS(d.icd_code, r'^431') OR\n        REGEXP_CONTAINS(d.icd_code, r'^433[0-9]1') OR\n        REGEXP_CONTAINS(d.icd_code, r'^434[0-9]1') OR\n        REGEXP_CONTAINS(d.icd_code, r'^436')\n      ))\n      OR\n      -- ICD-10 stroke codes\n      (d.icd_version = 10 AND (\n        REGEXP_CONTAINS(d.icd_code, r'^I60') OR\n        REGEXP_CONTAINS(d.icd_code, r'^I61') OR\n        REGEXP_CONTAINS(d.icd_code, r'^I63')\n      ))\n    )\n),\nfinal AS (\n  SELECT\n    s.subject_id,\n    s.stay_id,\n    s.mean_map,\n    CASE\n      WHEN s.mean_map < 65 THEN '<65'\n      WHEN s.mean_map >= 65 AND s.mean_map < 75 THEN '65\u201374'\n      WHEN s.mean_map >= 75 AND s.mean_map < 85 THEN '75\u201384'\n      WHEN s.mean_map >= 85 THEN '\u226585'\n      ELSE 'Unknown'\n    END AS map_category,\n    IF(st.stay_id IS NOT NULL, 1, 0) AS stroke\n  FROM\n    stay_map s\n  LEFT JOIN\n    stroke_stays st\n    ON s.stay_id = st.stay_id\n)\nSELECT\n  map_category,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(*) AS stay_count,\n  SUM(stroke) AS stroke_count,\n  ROUND(SUM(stroke) / COUNT(*), 4) AS stroke_rate\nFROM\n  final\nGROUP BY\n  map_category\nORDER BY\n  -- Order by MAP category in clinical order\n  CASE map_category\n    WHEN '<65' THEN 1\n    WHEN '65\u201374' THEN 2\n    WHEN '75\u201384' THEN 3\n    WHEN '\u226585' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

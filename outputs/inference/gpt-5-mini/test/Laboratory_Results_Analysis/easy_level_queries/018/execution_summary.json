@@ -1,0 +1,16 @@
+{
+  "query": "For my female patient in the ICU, what's the median arterial blood gas pH on ICU admission?",
+  "final_sql": "WITH abg_ph_candidates AS (\n  -- Candidate arterial pH measurements from ICU chartevents based on d_items labels\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum AS ph,\n    LOWER(d.label) AS item_label\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON ce.itemid = d.itemid\n  WHERE LOWER(d.label) LIKE '%ph%'\n    AND (\n      LOWER(d.label) LIKE '%arterial%'\n      OR LOWER(d.label) LIKE '%abg%'\n      OR LOWER(d.label) LIKE '%blood gas%'\n    )\n    AND ce.valuenum IS NOT NULL\n    -- restrict to a plausible pH range to reduce clear data-entry errors\n    AND ce.valuenum BETWEEN 6.0 AND 8.0\n),\n\nabg_within_admit_hour AS (\n  -- Join to icustays and keep only measurements within the first hour after ICU intime\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.stay_id,\n    a.charttime,\n    a.ph\n  FROM abg_ph_candidates a\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.subject_id = i.subject_id\n    AND a.hadm_id = i.hadm_id\n    AND a.stay_id = i.stay_id\n  WHERE a.charttime >= i.intime\n    AND a.charttime <= TIMESTAMP_ADD(i.intime, INTERVAL 1 HOUR)\n),\n\nfirst_abg_per_stay AS (\n  -- For each ICU stay, pick the earliest ABG pH within the admission hour\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    ph\n  FROM (\n    SELECT\n      aw.subject_id,\n      aw.hadm_id,\n      aw.stay_id,\n      aw.ph,\n      ROW_NUMBER() OVER (PARTITION BY aw.stay_id ORDER BY aw.charttime ASC) AS rn\n    FROM abg_within_admit_hour aw\n  )\n  WHERE rn = 1\n)\n\n-- Final: restrict to female patients and compute median pH across stays\nSELECT\n  approx_quantiles(f.ph, 100)[OFFSET(50)] AS median_abg_ph_on_icu_admit,\n  COUNT(*) AS n_icustays_with_abg_on_admit\nFROM first_abg_per_stay f\nJOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON f.subject_id = p.subject_id\nWHERE p.gender = 'F' OR LOWER(p.gender) = 'female';",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH pe_patients AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age, \n    p.anchor_year, \n    adm.hadm_id, \n    adm.admittime, \n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON p.subject_id = adm.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code IN ('4151', '41511', '41519')) \n      OR \n      (diag.icd_version = 10 AND diag.icd_code IN ('I26', 'I260', 'I269'))\n    )\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 65 AND 75\n),\nfirst_icu_stay AS (\n  SELECT \n    icu.subject_id, \n    icu.hadm_id, \n    icu.stay_id, \n    icu.intime, \n    icu.outtime, \n    icu.los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN pe_patients pat\n    ON icu.hadm_id = pat.hadm_id\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY icu.hadm_id ORDER BY icu.intime) = 1\n),\nprocedure_counts AS (\n  SELECT \n    icu.stay_id,\n    COUNT(proc.itemid) AS procedure_count\n  FROM first_icu_stay icu\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` proc\n    ON icu.stay_id = proc.stay_id\n    AND proc.starttime BETWEEN icu.intime \n        AND DATETIME_ADD(icu.intime, INTERVAL 72 HOUR)\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON proc.itemid = di.itemid\n    AND REGEXP_CONTAINS(di.category, r'Diagnostic|Imaging|Radiology')\n  GROUP BY icu.stay_id\n),\nquartile_data AS (\n  SELECT \n    icu.stay_id,\n    COALESCE(pc.procedure_count, 0) AS procedure_count,\n    icu.los,\n    pat.hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY COALESCE(pc.procedure_count, 0)) AS quartile\n  FROM first_icu_stay icu\n  LEFT JOIN procedure_counts pc\n    ON icu.stay_id = pc.stay_id\n  INNER JOIN pe_patients pat\n    ON icu.hadm_id = pat.hadm_id\n)\nSELECT \n  quartile,\n  COUNT(stay_id) AS N,\n  ROUND(AVG(procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(los), 2) AS mean_icu_los_days,\n  ROUND(100 * AVG(hospital_expire_flag), 2) AS hospital_mortality_percent\nFROM quartile_data\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "42-year-old male with pneumonia: among male ICU patients aged 37\u201347 in their first ICU stay, stratify distinct procedures in the first 48 hours into quintiles and report mean procedure count, mean ICU LOS (days), and hospital mortality by quintile.",
+  "final_sql": "WITH first_icustays AS (\n    SELECT\n        subject_id,\n        hadm_id,\n        stay_id,\n        intime,\n        los AS icu_los_hours,\n        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\neligible_patients AS (\n    SELECT\n        p.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.hospital_expire_flag,\n        fi.stay_id,\n        fi.intime,\n        fi.icu_los_hours,\n        p.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    INNER JOIN first_icustays fi\n        ON p.subject_id = fi.subject_id\n        AND a.hadm_id = fi.hadm_id\n        AND fi.rn = 1  -- first ICU stay\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        ON a.hadm_id = d.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n        AND d.icd_version = dd.icd_version\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 37 AND 47\n        AND dd.long_title LIKE '%pneumonia%'\n),\nprocedure_counts AS (\n    SELECT\n        ep.subject_id,\n        ep.hadm_id,\n        ep.stay_id,\n        COUNT(DISTINCT pe.itemid) AS distinct_procedure_count\n    FROM eligible_patients ep\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n        ON ep.subject_id = pe.subject_id\n        AND ep.hadm_id = pe.hadm_id\n        AND ep.stay_id = pe.stay_id\n        AND pe.starttime BETWEEN ep.intime AND TIMESTAMP_ADD(ep.intime, INTERVAL 48 HOUR)\n    GROUP BY ep.subject_id, ep.hadm_id, ep.stay_id\n),\nquintile_assignment AS (\n    SELECT\n        pc.subject_id,\n        pc.distinct_procedure_count,\n        ep.icu_los_hours,\n        ep.hospital_expire_flag,\n        NTILE(5) OVER (ORDER BY pc.distinct_procedure_count) AS quintile\n    FROM procedure_counts pc\n    INNER JOIN eligible_patients ep\n        ON pc.subject_id = ep.subject_id\n        AND pc.hadm_id = ep.hadm_id\n        AND pc.stay_id = ep.stay_id\n)\nSELECT\n    quintile,\n    AVG(distinct_procedure_count) AS mean_procedure_count,\n    AVG(icu_los_hours / 24.0) AS mean_icu_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS hospital_mortality\nFROM quintile_assignment\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: 6f767594-8af3-49cc-97a6-0080498abc25\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

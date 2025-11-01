@@ -1,0 +1,23 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH eligible_patients AS (\n    SELECT \n        p.subject_id,\n        p.gender,\n        p.anchor_year - p.anchor_age AS birth_year,\n        a.hadm_id,\n        a.admittime,\n        EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n    FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n    JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a \n        ON p.subject_id = a.subject_id\n    WHERE p.gender = 'F'\n        AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 53 AND 63\n),\nicu_stays AS (\n    SELECT \n        subject_id,\n        hadm_id,\n        intime,\n        outtime,\n        TIMESTAMP_DIFF(outtime, intime, DAY) AS los_days,\n        ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu`.icustays\n    WHERE subject_id IN (SELECT subject_id FROM eligible_patients)\n),\nfirst_icu_stays AS (\n    SELECT \n        subject_id,\n        hadm_id,\n        intime,\n        outtime,\n        los_days\n    FROM icu_stays\n    WHERE rn = 1\n),\nsepsis_diagnoses AS (\n    SELECT \n        d.hadm_id,\n        MAX(CASE WHEN d.icd_code IN (\n            'A40', 'A41', 'R65.20', 'R65.21', 'R65.22', 'R65.23', 'R65.24', 'R65.25', \n            'R65.26', 'R65.27', 'R65.28', 'R65.29', 'R65.81', 'R65.82', 'R65.83', \n            'R65.84', 'R65.85', 'R65.86', 'R65.87', 'R65.88', 'R65.89', 'R65.9'\n        ) AND d.icd_version = 10 THEN 1 ELSE 0 END) AS sepsis_flag\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n    WHERE d.hadm_id IN (SELECT hadm_id FROM first_icu_stays)\n        AND d.icd_version = 10\n    GROUP BY d.hadm_id\n),\nprocedures_count AS (\n    SELECT \n        f.subject_id,\n        f.hadm_id,\n        COUNT(*) AS procedure_count  -- Fixed: Count rows instead of non-existent column\n    FROM first_icu_stays f\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents p \n        ON f.subject_id = p.subject_id \n        AND f.hadm_id = p.hadm_id \n        AND p.starttime BETWEEN f.intime AND f.intime + INTERVAL 24 HOUR\n    GROUP BY f.subject_id, f.hadm_id\n),\nadmissions_info AS (\n    SELECT \n        a.hadm_id,\n        a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n    WHERE a.hadm_id IN (SELECT hadm_id FROM first_icu_stays)\n),\nall_data AS (\n    SELECT \n        f.subject_id,\n        f.hadm_id,\n        f.los_days,\n        a.hospital_expire_flag,\n        s.sepsis_flag,\n        p.procedure_count\n    FROM first_icu_stays f\n    JOIN admissions_info a ON f.hadm_id = a.hadm_id\n    JOIN sepsis_diagnoses s ON f.hadm_id = s.hadm_id\n    JOIN procedures_count p ON f.hadm_id = p.hadm_id\n),\nsepsis_pcts AS (\n    SELECT \n        APPROX_QUANTILES(procedure_count, 100)[OFFSET(75)] AS p75,\n        APPROX_QUANTILES(procedure_count, 100)[OFFSET(90)] AS p90\n    FROM all_data\n    WHERE sepsis_flag = 1\n),\ngroup_metrics AS (\n    SELECT \n        sepsis_flag,\n        AVG(los_days) AS avg_los,\n        AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality\n    FROM all_data\n    GROUP BY sepsis_flag\n)\nSELECT \n    'sepsis' AS group_type,\n    p75 AS percentile_75,\n    p90 AS percentile_90,\n    (SELECT avg_los FROM group_metrics WHERE sepsis_flag = 1) AS avg_los,\n    (SELECT mortality FROM group_metrics WHERE sepsis_flag = 1) AS mortality\nFROM sepsis_pcts\nUNION ALL\nSELECT \n    'non_sepsis' AS group_type,\n    NULL AS percentile_75,\n    NULL AS percentile_90,\n    (SELECT avg_los FROM group_metrics WHERE sepsis_flag = 0) AS avg_los,\n    (SELECT mortality FROM group_metrics WHERE sepsis_flag = 0) AS mortality\nFROM (SELECT 1);",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name procedureevents_id not found inside p at [53:17]; reason: invalidQuery, location: query, message: Name procedureevents_id not found inside p at [53:17]\n\nLocation: US\nJob ID: 710918b1-3909-4ea7-9bfa-c4f6f5837578\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

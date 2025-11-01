@@ -1,0 +1,22 @@
+{
+  "query": "Male, 75, with heart failure: among male ICU patients 70\u201380 with heart failure, what is diagnostic intensity in first 72 ICU hours (mean, median, 75th and 95th percentiles)? Compare to general ICU population; report mean ICU LOS and hospital mortality.",
+  "final_sql": "WITH hf_codes AS (\n  -- ICD-9 and ICD-10 codes for heart failure\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    (icd_version = 10 AND icd_code LIKE 'I50%') OR\n    (icd_version = 9 AND icd_code IN ('4280', '4281', '4282', '4283', '4284', '4289'))\n),\n\ntarget_cohort AS (\n  SELECT DISTINCT\n    ie.stay_id,\n    ie.subject_id,\n    ie.hadm_id,\n    COUNT(DISTINCT le.itemid) AS num_labs_72h\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON ie.hadm_id = diag.hadm_id\n  INNER JOIN hf_codes\n    ON diag.icd_code = hf_codes.icd_code \n    AND diag.icd_version = hf_codes.icd_version\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ie.hadm_id = le.hadm_id\n    AND le.charttime >= ie.intime\n    AND le.charttime < DATETIME_ADD(ie.intime, INTERVAL 72 HOUR)\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 70 AND 80\n  GROUP BY ie.stay_id, ie.subject_id, ie.hadm_id\n),\n\ngeneral_cohort AS (\n  SELECT \n    ie.stay_id,\n    ie.subject_id,\n    ie.hadm_id,\n    COUNT(DISTINCT le.itemid) AS num_labs_72h\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ie.hadm_id = le.hadm_id\n    AND le.charttime >= ie.intime\n    AND le.charttime < DATETIME_ADD(ie.intime, INTERVAL 72 HOUR)\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 70 AND 80\n  GROUP BY ie.stay_id, ie.subject_id, ie.hadm_id\n),\n\ntarget_aggregates AS (\n  SELECT\n    'Heart Failure Cohort' AS cohort,\n    COUNT(*) AS n_stays,\n    AVG(num_labs_72h) AS mean_diag_intensity,\n    APPROX_QUANTILES(num_labs_72h, 100)[OFFSET(50)] AS median_diag_intensity,\n    APPROX_QUANTILES(num_labs_72h, 100)[OFFSET(75)] AS p75_diag_intensity,\n    APPROX_QUANTILES(num_labs_72h, 100)[OFFSET(95)] AS p95_diag_intensity,\n    AVG(ie.los) AS mean_icu_los,\n    AVG(adm.hospital_expire_flag) AS hospital_mortality\n  FROM target_cohort tc\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie\n    ON tc.stay_id = ie.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON tc.hadm_id = adm.hadm_id\n),\n\ngeneral_aggregates AS (\n  SELECT\n    'General ICU Population' AS cohort,\n    COUNT(*) AS n_stays,\n    AVG(num_labs_72h) AS mean_diag_intensity,\n    APPROX_QUANTILES(num_labs_72h, 100)[OFFSET(50)] AS median_diag_intensity,\n    APPROX_QUANTILES(num_labs_72h, 100)[OFFSET(75)] AS p75_diag_intensity,\n    APPROX_QUANTILES(num_labs_72h, 100)[OFFSET(95)] AS p95_diag_intensity,\n    AVG(ie.los) AS mean_icu_los,\n    AVG(adm.hospital_expire_flag) AS hospital_mortality\n  FROM general_cohort gc\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie\n    ON gc.stay_id = ie.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON gc.hadm_id = adm.hadm_id\n)\n\nSELECT * FROM target_aggregates\nUNION ALL\nSELECT * FROM general_aggregates;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Query without FROM clause cannot have a WHERE clause at [5:3]; reason: invalidQuery, location: query, message: Query without FROM clause cannot have a WHERE clause at [5:3]\n\nLocation: US\nJob ID: bba58871-cef6-463d-b2d5-12a40d9bbbc6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

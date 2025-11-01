@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY num_procedures) AS percentile FROM male_procedures WHERE subject_id IN (SELECT subject_id FROM male_patients);

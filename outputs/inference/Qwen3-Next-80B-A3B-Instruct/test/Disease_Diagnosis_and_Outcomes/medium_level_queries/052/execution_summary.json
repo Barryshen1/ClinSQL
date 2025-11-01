@@ -1,0 +1,28 @@
+{
+  "query": "For my 57\u2011year\u2011old male stroke patient: among males 52\u201362, by ICU vs non\u2011ICU, LOS \u22645 vs >5 days and comorbidity tertile, report in\u2011hospital mortality (%) and CKD and diabetes prevalence (%).",
+  "final_sql": "WITH stroke_patients AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON d.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON d.hadm_id = a.hadm_id\n  WHERE p.anchor_age BETWEEN 52 AND 62\n    AND p.gender = 'M'\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '43%')\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I6%')\n    )\n),\ncomorbidities AS (\n  SELECT\n    sp.subject_id,\n    sp.hadm_id,\n    sp.hospital_expire_flag,\n    CASE \n      WHEN d.icd_version = 9 AND d.icd_code LIKE '585%' THEN 1\n      WHEN d.icd_version = 10 AND d.icd_code LIKE 'N18%' THEN 1\n      ELSE 0\n    END AS ckd_flag,\n    CASE \n      WHEN d.icd_version = 9 AND d.icd_code LIKE '250%' THEN 1\n      WHEN d.icd_version = 10 AND d.icd_code IN ('E10','E11','E12','E13','E14') THEN 1\n      ELSE 0\n    END AS diabetes_flag,\n    CASE \n      WHEN i.stay_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS icu_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM stroke_patients sp\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON sp.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON sp.subject_id = d.subject_id AND sp.hadm_id = d.hadm_id\n    AND (\n      (d.icd_version = 9 AND (d.icd_code LIKE '585%' OR d.icd_code LIKE '250%'))\n      OR (d.icd_version = 10 AND (d.icd_code LIKE 'N18%' OR d.icd_code IN ('E10','E11','E12','E13','E14')))\n    )\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i \n    ON sp.hadm_id = i.hadm_id\n),\ncomorbidity_counts AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    hospital_expire_flag,\n    MAX(ckd_flag) AS ckd_flag,\n    MAX(diabetes_flag) AS diabetes_flag,\n    MAX(icu_flag) AS icu_flag,\n    MAX(los) AS los,\n    COUNT(*) AS total_comorbidities\n  FROM comorbidities\n  WHERE ckd_flag = 1 OR diabetes_flag = 1\n  GROUP BY subject_id, hadm_id, hospital_expire_flag\n),\nfinal_with_tertile AS (\n  SELECT *,\n    NTILE(3) OVER (ORDER BY total_comorbidities) AS comorbidity_tertile\n  FROM comorbidity_counts\n)\nSELECT\n  icu_flag,\n  CASE WHEN los <= 5 THEN 'LOS <=5' ELSE 'LOS >5' END AS los_group,\n  comorbidity_tertile,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_pct,\n  AVG(ckd_flag) * 100 AS ckd_prevalence_pct,\n  AVG(diabetes_flag) * 100 AS diabetes_prevalence_pct\nFROM final_with_tertile\nGROUP BY icu_flag, los_group, comorbidity_tertile\nORDER BY icu_flag, los_group, comorbidity_tertile;",
+  "execution_success": true,
+  "row_count": 12,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"COUNT\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"COUNT\" at [1:1]\n\nLocation: US\nJob ID: 6e9f5a03-66f8-48bf-8255-5d0ab5173e56\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword NO at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword NO at [1:6]\n\nLocation: US\nJob ID: 6ec22d3d-5410-4fdf-8b79-84d2c9a6fe28\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 12,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have an 82-year-old male. Among male patients age 77\u201387 admitted with AMI, what's the distribution of initial hs\u2011TnT (normal / borderline / myocardial injury)? Report counts and percentages.",
+  "final_sql": "WITH ami_admissions AS (\n  -- Identify admissions with primary AMI diagnosis\n  SELECT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n    )\n),\n\neligible_patients AS (\n  -- Filter patients by age and gender\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    ami_admissions a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 77 AND 87\n),\n\nfirst_hstnt AS (\n  -- Get first hs-TnT value within 24 hours of admission\n  SELECT\n    l.hadm_id,\n    l.valuenum\n  FROM\n    physionet-data.mimiciv_3_1_hosp.labevents l\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_labitems d\n    ON l.itemid = d.itemid\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON l.hadm_id = adm.hadm_id\n  WHERE\n    LOWER(d.label) LIKE '%troponin t%high%sens%'\n    AND l.valuenum IS NOT NULL\n    AND l.charttime BETWEEN adm.admittime AND DATETIME_ADD(adm.admittime, INTERVAL 24 HOUR)\n    AND l.hadm_id IN (SELECT hadm_id FROM eligible_patients)\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime) = 1\n),\n\ncategorized AS (\n  -- Categorize hs-TnT values\n  SELECT\n    hadm_id,\n    CASE\n      WHEN valuenum < 14 THEN 'Normal'\n      WHEN valuenum BETWEEN 14 AND 19 THEN 'Borderline'\n      WHEN valuenum >= 20 THEN 'Myocardial Injury'\n      ELSE 'Other'\n    END AS category\n  FROM\n    first_hstnt\n)\n\n-- Final aggregation\nSELECT\n  category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage\nFROM\n  categorized\nGROUP BY\n  category\nORDER BY\n  CASE category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Myocardial Injury' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

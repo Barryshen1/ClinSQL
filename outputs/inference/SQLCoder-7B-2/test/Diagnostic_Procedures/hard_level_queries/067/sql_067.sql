@@ -1,0 +1,1 @@
+SELECT d.hadm_id, AVG(d.diagnostic_intensity) AS average_diagnostic_intensity, PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY d.diagnostic_intensity) AS percentile_75, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY d.diagnostic_intensity) AS percentile_95 FROM diagnostic_intensity d GROUP BY d.hadm_id ORDER BY d.hadm_id NULLS LAST;

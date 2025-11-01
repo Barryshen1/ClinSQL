@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH male_middle_aged AS (\n  SELECT\n    p.subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n),\n\nacs_admissions AS (\n  SELECT DISTINCT\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    LOWER(dd.long_title) LIKE '%acute coronary syndrome%'\n),\n\nhs_troponin_events AS (\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.ref_range_upper,\n    di.label\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` di\n      ON le.itemid = di.itemid\n  WHERE\n    LOWER(di.label) LIKE '%troponin t%'\n    AND LOWER(di.label) LIKE '%high sensitivity%'\n    AND le.valuenum IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n    AND le.valuenum > le.ref_range_upper\n),\n\ninitial_hs_troponin AS (\n  SELECT\n    he.subject_id,\n    he.hadm_id,\n    he.valuenum AS initial_value\n  FROM (\n    SELECT\n      he.*,\n      ROW_NUMBER() OVER (PARTITION BY he.hadm_id ORDER BY he.charttime) AS rn\n    FROM\n      hs_troponin_events he\n    -- only keep patients who are male, middle\u2010aged, with ACS admission\n    JOIN male_middle_aged m\n      ON he.subject_id = m.subject_id\n    JOIN acs_admissions acs\n      ON he.hadm_id = acs.hadm_id\n  ) he\n  WHERE\n    he.rn = 1\n)\n\nSELECT\n  -- Extract approximate quartiles: [min, Q1, median, Q3, max]\n  quantiles[OFFSET(2)] AS median_ng_per_ml,\n  quantiles[OFFSET(3)] - quantiles[OFFSET(1)] AS iqr_ng_per_ml,\n  quantiles[OFFSET(1)] AS q1_ng_per_ml,\n  quantiles[OFFSET(3)] AS q3_ng_per_ml\nFROM (\n  SELECT\n    APPROX_QUANTILES(initial_value, 4) AS quantiles\n  FROM\n    initial_hs_troponin\n);",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

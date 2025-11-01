@@ -1,0 +1,16 @@
+{
+  "query": "For my 93-year-old female with AMI who had an ICU stay, among female inpatients 88\u201398 with AMI post-ICU, what is the average composite risk percentile? Report cohort 30\u2011day mortality, AKI and ARDS rates, and median survival of decedents.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id,\n        a.hadm_id,\n        p.anchor_age,\n        a.admittime,\n        a.dischtime,\n        p.dod,\n        -- Check for 30-day mortality\n        CASE WHEN DATE_DIFF(CAST(p.dod AS DATE), CAST(a.admittime AS DATE), DAY) <= 30 THEN 1 ELSE 0 END AS mortality_30day,\n        -- Check for AKI (ICD9: 584, ICD10: N17)\n        CASE WHEN EXISTS (\n            SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n            WHERE di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id \n            AND (di.icd_code LIKE '584%' OR di.icd_code LIKE 'N17%')\n        ) THEN 1 ELSE 0 END AS aki,\n        -- Check for ARDS (ICD9: 518.82, ICD10: J80)\n        CASE WHEN EXISTS (\n            SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n            WHERE di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id \n            AND (di.icd_code = '518.82' OR di.icd_code = 'J80')\n        ) THEN 1 ELSE 0 END AS ards\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    -- Filter: female, age 88-98\n    WHERE p.gender = 'F'\n        AND p.anchor_age BETWEEN 88 AND 98\n    -- Has AMI (ICD9: 410.x, ICD10: I21.x, I22.x)\n    AND EXISTS (\n        SELECT 1 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        WHERE di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n        AND (\n            (di.icd_version = 9 AND di.icd_code LIKE '410%') OR\n            (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%'))\n        )\n    )\n    -- Has an ICU stay\n    AND EXISTS (\n        SELECT 1 FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n        WHERE ie.subject_id = a.subject_id AND ie.hadm_id = a.hadm_id\n    )\n),\ndecedents AS (\n    SELECT \n        subject_id,\n        hadm_id,\n        DATE_DIFF(CAST(dod AS DATE), CAST(admittime AS DATE), DAY) AS survival_days\n    FROM cohort\n    WHERE dod IS NOT NULL\n)\nSELECT \n    COUNT(*) AS total_patients,\n    AVG(mortality_30day) * 100 AS mortality_30day_rate_percent,\n    AVG(aki) * 100 AS aki_rate_percent,\n    AVG(ards) * 100 AS ards_rate_percent,\n    (SELECT PERCENTILE_CONT(survival_days, 0.5) OVER() FROM decedents LIMIT 1) AS median_survival_days_decedents\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

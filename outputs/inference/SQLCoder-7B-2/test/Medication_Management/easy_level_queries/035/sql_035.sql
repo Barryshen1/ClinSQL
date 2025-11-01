@@ -1,0 +1,1 @@
+SELECT MAX(p.stoptime - p.starttime) AS max_duration FROM prescriptions p JOIN patients pt ON p.subject_id = pt.subject_id WHERE pt.gender = 'F' AND pt.anchor_age = 85 AND p.drug_type IN ('IV', 'oral', 'sublingual') AND p.drug = 'nitrate';

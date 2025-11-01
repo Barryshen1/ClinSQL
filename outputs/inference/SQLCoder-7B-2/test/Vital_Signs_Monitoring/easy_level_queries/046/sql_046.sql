@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY result_value) - percentile_cont(0.25) within GROUP (ORDER BY result_value)) AS interquartile_range FROM patient_spo2;

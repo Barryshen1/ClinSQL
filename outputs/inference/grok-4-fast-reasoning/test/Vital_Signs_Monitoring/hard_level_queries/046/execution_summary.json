@@ -1,0 +1,22 @@
+{
+  "query": "89-year-old male ICU patient with ischemic stroke: among male ICU patients aged 84\u201394 with ischemic stroke, what percentile is a first 72 hours vital-sign instability score of 80? Also report ICU LOS and mortality for the top instability quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    icu.stay_id,\n    icu.subject_id,\n    icu.hadm_id,\n    icu.intime,\n    icu.los,\n    adm.hospital_expire_flag,\n    pat.anchor_age\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.patients pat\n    ON icu.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 84 AND 94\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd diag\n      WHERE diag.subject_id = icu.subject_id\n        AND diag.hadm_id = icu.hadm_id\n        AND (\n          (diag.icd_version = 9\n           AND (diag.icd_code LIKE '433%' OR diag.icd_code LIKE '434%' OR diag.icd_code = '436'))\n          OR\n          (diag.icd_version = 10 AND diag.icd_code LIKE 'I63%')\n        )\n    )\n),\nabnormal_counts AS (\n  SELECT\n    ce.stay_id,\n    SUM(\n      CASE\n        WHEN (ce.itemid = 220045 AND (ce.valuenum < 50 OR ce.valuenum > 130)) THEN 1\n        WHEN ce.itemid = 220179 AND (ce.valuenum < 90 OR ce.valuenum > 180) THEN 1\n        WHEN ce.itemid = 220180 AND (ce.valuenum < 60 OR ce.valuenum > 100) THEN 1\n        WHEN ce.itemid = 220210 AND (ce.valuenum < 10 OR ce.valuenum > 30) THEN 1\n        WHEN ce.itemid = 223762 AND (ce.valuenum < 36 OR ce.valuenum > 38) THEN 1\n        WHEN ce.itemid = 220277 AND (ce.valuenum < 92 OR ce.valuenum > 100) THEN 1\n        ELSE 0\n      END\n    ) AS instability_score\n  FROM `physionet-data.mimiciv_3_1_icu`.chartevents ce\n  INNER JOIN cohort c\n    ON ce.stay_id = c.stay_id\n  WHERE ce.itemid IN (220045, 220179, 220180, 220210, 223762, 220277)\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= c.intime\n    AND ce.charttime <= TIMESTAMP_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY ce.stay_id\n),\nscores AS (\n  SELECT\n    c.stay_id,\n    COALESCE(ac.instability_score, 0) AS instability_score,\n    c.los,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN abnormal_counts ac\n    ON c.stay_id = ac.stay_id\n),\npercentile_calc AS (\n  SELECT\n    COUNTIF(instability_score <= 80) * 100.0 / COUNT(*) AS percentile_80\n  FROM scores\n),\ntop_quartile AS (\n  SELECT\n    AVG(los) AS avg_los_top,\n    AVG(hospital_expire_flag) * 100 AS mortality_top_pct\n  FROM (\n    SELECT\n      los,\n      hospital_expire_flag,\n      NTILE(4) OVER (ORDER BY instability_score DESC) AS ntile\n    FROM scores\n  )\n  WHERE ntile = 1\n)\nSELECT\n  p.percentile_80,\n  t.avg_los_top,\n  t.mortality_top_pct\nFROM percentile_calc p\nCROSS JOIN top_quartile t;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [23:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [23:12]\n\nLocation: US\nJob ID: 73e5bcb1-a811-4f7a-8cd4-c8224eb7752a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

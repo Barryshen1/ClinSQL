@@ -1,0 +1,22 @@
+{
+  "query": "For my 69\u2011year\u2011old man inpatient with diabetes and acute HF, among men aged 64\u201374 report initiation percentages by antidiabetic class (insulin, metformin, sulfonylureas, DPP\u20114, SGLT2, GLP\u20111, TZDs) first 12h vs final 48h.",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    -- Calculate age at admission\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 64 AND 74\n    -- Must have diabetes diagnosis (ICD-10 E11*)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n      JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d \n        ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE di.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND d.icd_code LIKE 'E11%'\n    )\n    -- Must have acute heart failure (I50.2x or I50.3x)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n      JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d \n        ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE di.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND (d.icd_code LIKE 'I50.2%' OR d.icd_code LIKE 'I50.3%')\n    )\n),\ndrug_class_initiation AS (\n  SELECT \n    pc.subject_id,\n    pc.hadm_id,\n    CASE\n      WHEN LOWER(p.drug) LIKE '%insulin%' THEN 'insulin'\n      WHEN LOWER(p.drug) LIKE '%metformin%' THEN 'metformin'\n      WHEN LOWER(p.drug) IN ('glipizide', 'glyburide', 'gliburide', 'glimepiride') \n        OR LOWER(p.drug) LIKE '%sulfonylurea%' THEN 'sulfonylureas'\n      WHEN LOWER(p.drug) IN ('sitagliptin', 'saxagliptin', 'linagliptin', 'alogliptin') \n        OR LOWER(p.drug) LIKE '%dpp-4%' THEN 'dpp-4'\n      WHEN LOWER(p.drug) IN ('empagliflozin', 'canagliflozin', 'dapagliflozin', 'ertugliflozin') \n        OR LOWER(p.drug) LIKE '%sglt2%' THEN 'sglt2'\n      WHEN LOWER(p.drug) IN ('liraglutide', 'semaglutide', 'dulaglutide', 'exenatide') \n        OR LOWER(p.drug) LIKE '%glp-1%' THEN 'glp-1'\n      WHEN LOWER(p.drug) IN ('pioglitazone', 'rosiglitazone') \n        OR LOWER(p.drug) LIKE '%tzd%' THEN 'tzds'\n      ELSE NULL\n    END AS drug_class,\n    p.starttime\n  FROM patient_cohort pc\n  JOIN `physionet-data.mimiciv_3_1_hosp`.prescriptions p \n    ON pc.hadm_id = p.hadm_id\n  WHERE p.starttime IS NOT NULL\n    AND p.starttime >= pc.admittime\n    AND p.starttime <= COALESCE(pc.dischtime, CURRENT_DATETIME())\n),\nfirst_exposure AS (\n  SELECT \n    subject_id,\n    drug_class,\n    MIN(starttime) AS first_start\n  FROM drug_class_initiation\n  WHERE drug_class IS NOT NULL\n  GROUP BY subject_id, drug_class\n),\nexposure_windows AS (\n  SELECT \n    fe.subject_id,\n    fe.drug_class,\n    fe.first_start,\n    pc.admittime,\n    pc.dischtime,\n    -- Flag if initiated in first 12h\n    CASE \n      WHEN fe.first_start <= pc.admittime + INTERVAL '12' HOUR \n      THEN 1 ELSE 0 \n    END AS initiated_first_12h,\n    -- Flag if initiated in final 48h\n    CASE \n      WHEN fe.first_start >= pc.dischtime - INTERVAL '48' HOUR \n      AND fe.first_start <= pc.dischtime\n      THEN 1 ELSE 0 \n    END AS initiated_final_48h\n  FROM first_exposure fe\n  JOIN patient_cohort pc ON fe.subject_id = pc.subject_id\n),\nsummary AS (\n  SELECT\n    drug_class,\n    AVG(initiated_first_12h) * 100 AS pct_initiated_first_12h,\n    AVG(initiated_final_48h) * 100 AS pct_initiated_final_48h\n  FROM exposure_windows\n  GROUP BY drug_class\n)\nSELECT\n  drug_class,\n  ROUND(pct_initiated_first_12h, 2) AS pct_initiated_first_12h,\n  ROUND(pct_initiated_final_48h, 2) AS pct_initiated_final_48h\nFROM summary\nORDER BY drug_class;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:15]\n\nLocation: US\nJob ID: 922c3999-e2f1-42bd-82ac-e2d5ae1b121c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

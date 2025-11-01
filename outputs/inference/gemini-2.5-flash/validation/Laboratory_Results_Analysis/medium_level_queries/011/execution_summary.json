@@ -1,0 +1,22 @@
+{
+  "query": "I have a 66-year-old man with chest pain. Among male patients aged 61\u201371 admitted for chest pain, what's the percent distribution of initial hs\u2011TnT: normal, borderline, myocardial injury?",
+  "final_sql": "WITH PatientAdmissions AS (\n    SELECT\n        pa.subject_id,\n        ad.hadm_id,\n        ad.admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` pa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        ON pa.subject_id = ad.subject_id\n    WHERE\n        pa.gender = 'M'\n        AND pa.anchor_age BETWEEN 61 AND 71\n),\nChestPainAdmissions AS (\n    SELECT DISTINCT\n        pa.subject_id,\n        pa.hadm_id,\n        pa.admittime\n    FROM\n        PatientAdmissions pa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON pa.subject_id = di.subject_id AND pa.hadm_id = di.hadm_id\n    WHERE\n        -- Using ICD-10 codes for chest pain\n        di.icd_version = 10\n        AND di.icd_code IN ('R07.0', 'R07.1', 'R07.2', 'R07.4')\n),\nFirstTnT AS (\n    SELECT\n        cpa.subject_id,\n        cpa.hadm_id,\n        le.valuenum,\n        ROW_NUMBER() OVER (PARTITION BY cpa.hadm_id ORDER BY le.charttime) AS rn\n    FROM\n        ChestPainAdmissions cpa\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON cpa.subject_id = le.subject_id\n        AND cpa.hadm_id = le.hadm_id\n    WHERE\n        le.itemid = 51003 -- Itemid for Troponin T, High Sensitivity from d_labitems\n        AND le.valuenum IS NOT NULL\n        -- Restrict to lab tests performed within the first 24 hours of admission for 'initial'\n        AND le.charttime BETWEEN cpa.admittime AND DATETIME_ADD(cpa.admittime, INTERVAL 24 HOUR)\n),\nCategorizedTnT AS (\n    SELECT\n        hadm_id,\n        CASE\n            WHEN valuenum < 6 THEN 'Normal' -- Hs-TnT < 6 ng/L\n            WHEN valuenum >= 6 AND valuenum <= 12 THEN 'Borderline' -- Hs-TnT 6-12 ng/L\n            WHEN valuenum > 12 THEN 'Myocardial Injury' -- Hs-TnT > 12 ng/L\n            ELSE 'Other/Unknown' -- Fallback for unexpected values\n        END AS tnt_category\n    FROM\n        FirstTnT\n    WHERE\n        rn = 1 -- Select only the first hs-TnT result for each admission\n)\nSELECT\n    tnt_category,\n    COUNT(hadm_id) AS count_admissions,\n    ROUND(COUNT(hadm_id) * 100.0 / SUM(COUNT(hadm_id)) OVER (), 2) AS percentage_distribution\nFROM\n    CategorizedTnT\nGROUP BY\n    tnt_category\nORDER BY\n    CASE tnt_category\n        WHEN 'Normal' THEN 1\n        WHEN 'Borderline' THEN 2\n        WHEN 'Myocardial Injury' THEN 3\n        ELSE 4\n    END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [59:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [59:1]\n\nLocation: US\nJob ID: aca34396-63d6-42b8-917d-21e3a3145060\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

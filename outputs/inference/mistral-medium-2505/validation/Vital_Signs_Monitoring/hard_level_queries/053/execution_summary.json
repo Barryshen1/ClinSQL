@@ -1,0 +1,28 @@
+{
+  "query": "Evaluating a 64\u2011year\u2011old woman: among female ICU patients aged 59\u201369 with a shock diagnosis versus without shock, in the first 24 hours what are mean and percentiles of composite instability score, hypotension (MAP<65) and tachycardia burden, ICU LOS, and mortality?",
+  "final_sql": "WITH\n-- Get female patients aged 59-69\nfemale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 59 AND 69\n),\n\n-- Get ICU stays for these patients\nicu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime AS icu_intime,\n    s.outtime AS icu_outtime,\n    TIMESTAMP_DIFF(s.outtime, s.intime, HOUR) AS icu_los_hours,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    s.subject_id = a.subject_id AND s.hadm_id = a.hadm_id\n  WHERE\n    s.subject_id IN (SELECT subject_id FROM female_patients)\n),\n\n-- Identify patients with shock diagnosis\nshock_patients AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n  ON\n    d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    d.icd_code IN ('R57.0', 'R57.1', 'R57.9') -- Shock ICD codes\n    AND d.subject_id IN (SELECT subject_id FROM female_patients)\n),\n\n-- Get MAP and heart rate measurements in first 24 hours\nvital_signs AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.charttime,\n    c.itemid,\n    c.valuenum,\n    TIMESTAMP_DIFF(c.charttime, i.icu_intime, HOUR) AS hours_since_icu_admission,\n    CASE\n      WHEN c.itemid = 220050 THEN 'MAP'\n      WHEN c.itemid = 220045 THEN 'Heart Rate'\n    END AS measurement_type\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` c\n  JOIN\n    icu_stays i\n  ON\n    c.subject_id = i.subject_id AND c.hadm_id = i.hadm_id AND c.stay_id = i.stay_id\n  WHERE\n    c.itemid IN (220050, 220045) -- MAP and Heart Rate\n    AND TIMESTAMP_DIFF(c.charttime, i.icu_intime, HOUR) <= 24\n),\n\n-- Calculate hypotension and tachycardia burden\nhypotension_tachycardia AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    SUM(CASE WHEN measurement_type = 'MAP' AND valuenum < 65 THEN 1 ELSE 0 END) AS hypotension_count,\n    SUM(CASE WHEN measurement_type = 'Heart Rate' AND valuenum > 100 THEN 1 ELSE 0 END) AS tachycardia_count,\n    COUNT(CASE WHEN measurement_type = 'MAP' THEN 1 END) AS total_map_measurements,\n    COUNT(CASE WHEN measurement_type = 'Heart Rate' THEN 1 END) AS total_hr_measurements\n  FROM\n    vital_signs\n  GROUP BY\n    subject_id, hadm_id, stay_id\n),\n\n-- Combine all data\ncombined_data AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.icu_los_hours,\n    i.hospital_expire_flag,\n    CASE WHEN s.subject_id IS NOT NULL THEN 1 ELSE 0 END AS has_shock,\n    h.hypotension_count,\n    h.tachycardia_count,\n    h.total_map_measurements,\n    h.total_hr_measurements,\n    (h.hypotension_count / NULLIF(h.total_map_measurements, 0)) * 100 AS hypotension_burden,\n    (h.tachycardia_count / NULLIF(h.total_hr_measurements, 0)) * 100 AS tachycardia_burden\n  FROM\n    icu_stays i\n  LEFT JOIN\n    shock_patients s\n  ON\n    i.subject_id = s.subject_id AND i.hadm_id = s.hadm_id\n  LEFT JOIN\n    hypotension_tachycardia h\n  ON\n    i.subject_id = h.subject_id AND i.hadm_id = h.hadm_id AND i.stay_id = h.stay_id\n)\n\n-- Final aggregation\nSELECT\n  has_shock,\n  COUNT(*) AS patient_count,\n  AVG(icu_los_hours) AS avg_icu_los_hours,\n  APPROX_QUANTILES(icu_los_hours, 100)[OFFSET(25)] AS p25_icu_los,\n  APPROX_QUANTILES(icu_los_hours, 100)[OFFSET(50)] AS p50_icu_los,\n  APPROX_QUANTILES(icu_los_hours, 100)[OFFSET(75)] AS p75_icu_los,\n  AVG(hypotension_burden) AS avg_hypotension_burden,\n  APPROX_QUANTILES(hypotension_burden, 100)[OFFSET(25)] AS p25_hypotension,\n  APPROX_QUANTILES(hypotension_burden, 100)[OFFSET(50)] AS p50_hypotension,\n  APPROX_QUANTILES(hypotension_burden, 100)[OFFSET(75)] AS p75_hypotension,\n  AVG(tachycardia_burden) AS avg_tachycardia_burden,\n  APPROX_QUANTILES(tachycardia_burden, 100)[OFFSET(25)] AS p25_tachycardia,\n  APPROX_QUANTILES(tachycardia_burden, 100)[OFFSET(50)] AS p50_tachycardia,\n  APPROX_QUANTILES(tachycardia_burden, 100)[OFFSET(75)] AS p75_tachycardia,\n  SUM(hospital_expire_flag) AS mortality_count,\n  SUM(hospital_expire_flag) / COUNT(*) * 100 AS mortality_rate\nFROM\n  combined_data\nGROUP BY\n  has_shock\nORDER BY\n  has_shock;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column icu_los_hours which is neither grouped nor aggregated at [122:19]; reason: invalidQuery, location: query, message: SELECT list expression references column icu_los_hours which is neither grouped nor aggregated at [122:19]\n\nLocation: US\nJob ID: 6ce838fb-e8b8-4b69-93cc-48996daca7a3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 6b8ca694-3fab-47d0-b247-8b1fa6467836\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

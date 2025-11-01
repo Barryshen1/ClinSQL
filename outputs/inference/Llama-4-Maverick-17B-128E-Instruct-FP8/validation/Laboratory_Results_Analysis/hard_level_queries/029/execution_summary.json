@@ -1,0 +1,28 @@
+{
+  "query": "Patient: female, 55. Among female inpatients aged 50\u201360 with hyperosmolar hyperglycemic state, what is the 75th percentile of the first\u201148\u2011hour laboratory instability score? For admissions \u2265 this threshold, give mortality, mean LOS (days), and compare critical\u2011lab rates versus general inpatients.",
+  "final_sql": "WITH patients_with_hh AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, a.admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n  AND p.anchor_age BETWEEN 50 AND 60\n  AND dicd.long_title LIKE '%Hyperosmolar hyperglycemic state%'\n),\nlab_events AS (\n  SELECT le.hadm_id, le.itemid, le.charttime, le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN patients_with_hh p ON le.hadm_id = p.hadm_id\n  WHERE le.charttime <= TIMESTAMP_ADD(p.admittime, INTERVAL 48 HOUR)\n),\nlab_instability AS (\n  SELECT hadm_id, COUNT(CASE WHEN itemid = 50813 AND valuenum > 4 THEN 1 END) AS instability_score\n  FROM lab_events\n  GROUP BY hadm_id\n),\npercentile_75 AS (\n  SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(75)] AS threshold\n  FROM lab_instability\n),\nhigh_risk_admissions AS (\n  SELECT li.hadm_id\n  FROM lab_instability li\n  WHERE li.instability_score >= (SELECT threshold FROM percentile_75)\n),\nadmission_outcomes AS (\n  SELECT \n    a.hadm_id,\n    a.dischtime - a.admittime AS los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\nhigh_risk_outcomes AS (\n  SELECT \n    hra.hadm_id,\n    ao.los,\n    ao.hospital_expire_flag,\n    (SELECT COUNT(CASE WHEN le.itemid = 50813 AND le.valuenum > 4 THEN 1 END) \n     FROM lab_events le WHERE le.hadm_id = hra.hadm_id) AS count_critical_labs\n  FROM high_risk_admissions hra\n  JOIN admission_outcomes ao ON hra.hadm_id = ao.hadm_id\n)\nSELECT \n  AVG(hospital_expire_flag) AS mortality_high_risk,\n  AVG(los) AS mean_los_high_risk,\n  AVG(count_critical_labs) AS mean_critical_labs_high_risk,\n  (SELECT AVG(count_critical_labs) FROM high_risk_outcomes) AS mean_critical_labs_general\nFROM high_risk_outcomes;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"lab_instability\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: lab_instability, message: Table \"lab_instability\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: cf715213-cfe1-4d9e-8cbd-74fe92fc899e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/45b194b9-9e10-4211-8fd0-e792fd6a07a4?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: 45b194b9-9e10-4211-8fd0-e792fd6a07a4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

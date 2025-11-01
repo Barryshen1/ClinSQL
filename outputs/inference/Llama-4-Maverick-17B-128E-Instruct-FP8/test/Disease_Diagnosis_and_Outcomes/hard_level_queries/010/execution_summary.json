@@ -1,0 +1,28 @@
+{
+  "query": "For a 44-year-old male with DKA: among male inpatients 39\u201349, what are mean risk score and 30\u2011day mortality for DKA vs all males? Compare cardiovascular and neurologic complication rates, mean survivor LOS, and the risk percentile for this matched profile.",
+  "final_sql": "WITH \n-- Step 1: Identify DKA patients\ndka_patients AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd \n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Diabetic ketoacidosis%' \n    AND d.icd_version = 9  \n),\n-- Step 2: Filter cohort by age and gender\ncohort AS (\n  SELECT p.subject_id, a.hadm_id, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 39 AND 49\n),\n-- Step 3 & 5: Calculate 30-day mortality and LOS\nmortality_los AS (\n  SELECT \n    c.hadm_id,\n    c.anchor_age,\n    CASE \n      WHEN a.deathtime <= DATE_ADD(a.admittime, INTERVAL 30 DAY) THEN 1\n      WHEN a.dischtime <= DATE_ADD(a.admittime, INTERVAL 30 DAY) AND a.deathtime IS NULL THEN 0\n      ELSE 0  \n    END AS thirty_day_mortality,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON c.hadm_id = a.hadm_id\n),\n-- Complications\ncomplications AS (\n  SELECT DISTINCT d.hadm_id, \n    CASE WHEN dicd.long_title LIKE '%Cardiac%' OR dicd.long_title LIKE '%Myocardial%' THEN 1 ELSE 0 END AS cardiovascular_complication,\n    CASE WHEN dicd.long_title LIKE '%Neurological%' THEN 1 ELSE 0 END AS neurologic_complication\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd \n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n),\n-- Calculate risk percentile\nrisk_percentile AS (\n  SELECT \n    ml.hadm_id,\n    PERCENT_RANK() OVER (ORDER BY ml.thirty_day_mortality) AS risk_percentile\n  FROM mortality_los ml\n)\n\n-- Final query\nSELECT \n  AVG(CASE WHEN c.hadm_id IN (SELECT hadm_id FROM dka_patients) THEN ml.thirty_day_mortality ELSE NULL END) AS dka_30day_mortality,\n  AVG(CASE WHEN c.hadm_id NOT IN (SELECT hadm_id FROM dka_patients) THEN ml.thirty_day_mortality ELSE NULL END) AS non_dka_30day_mortality,\n  AVG(CASE WHEN c.hadm_id IN (SELECT hadm_id FROM dka_patients) AND ml.los > 0 THEN ml.los ELSE NULL END) AS dka_los,\n  AVG(CASE WHEN c.hadm_id NOT IN (SELECT hadm_id FROM dka_patients) AND ml.los > 0 THEN ml.los ELSE NULL END) AS non_dka_los,\n  AVG(CASE WHEN c.hadm_id IN (SELECT hadm_id FROM dka_patients) THEN comp.cardiovascular_complication ELSE NULL END) AS dka_cardiovascular_complication_rate,\n  AVG(CASE WHEN c.hadm_id IN (SELECT hadm_id FROM dka_patients) THEN comp.neurologic_complication ELSE NULL END) AS dka_neurologic_complication_rate,\n  -- Filter for a specific patient profile (e.g., 44-year-old with DKA) to get the risk percentile\n  (SELECT rp.risk_percentile FROM risk_percentile rp JOIN cohort c2 ON rp.hadm_id = c2.hadm_id WHERE c2.anchor_age = 44 AND c2.hadm_id IN (SELECT hadm_id FROM dka_patients) LIMIT 1) AS risk_percentile_for_dka_44yo\nFROM cohort c\nJOIN mortality_los ml ON c.hadm_id = ml.hadm_id\nLEFT JOIN complications comp ON c.hadm_id = comp.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Window ORDER BY expression references ml.thirty_day_mortality which is neither grouped nor aggregated at [50:33]; reason: invalidQuery, location: query, message: Window ORDER BY expression references ml.thirty_day_mortality which is neither grouped nor aggregated at [50:33]\n\nLocation: US\nJob ID: 061b6627-0afa-4489-b911-2932260b1d40\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references rp.risk_percentile which is neither grouped nor aggregated at [57:3]; reason: invalidQuery, location: query, message: SELECT list expression references rp.risk_percentile which is neither grouped nor aggregated at [57:3]\n\nLocation: US\nJob ID: 4b8ec8a0-3f60-4adf-80d8-b10e392d1e83\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

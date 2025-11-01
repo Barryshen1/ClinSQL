@@ -1,0 +1,16 @@
+{
+  "query": "42-year-old male with pneumonia: among male ICU patients aged 37\u201347 in their first ICU stay, stratify distinct procedures in the first 48 hours into quintiles and report mean procedure count, mean ICU LOS (days), and hospital mortality by quintile.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    DATETIME_DIFF(i.outtime, i.intime, SECOND) / 86400.0 AS icu_los_days,\n    a.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays i\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  ON\n    i.hadm_id = a.hadm_id\n  WHERE\n    i.stay_id IN (\n      SELECT\n        stay_id\n      FROM\n        physionet-data.mimiciv_3_1_icu.icustays\n      QUALIFY\n        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) = 1\n    )\n),\nfiltered_patients AS (\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    f.stay_id,\n    f.intime,\n    f.icu_los_days,\n    f.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    first_icu_stays f\n  ON\n    p.subject_id = f.subject_id\n  WHERE\n    p.anchor_age BETWEEN 37 AND 47\n    AND p.gender = 'M'\n),\nprocedures_first_48h AS (\n  SELECT\n    f.subject_id,\n    f.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM\n    filtered_patients f\n  JOIN\n    physionet-data.mimiciv_3_1_icu.procedureevents pe\n  ON\n    f.stay_id = pe.stay_id\n  WHERE\n    pe.starttime >= f.intime\n    AND pe.starttime <= DATETIME_ADD(f.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    f.subject_id, f.stay_id\n),\nquintile_data AS (\n  SELECT\n    p.*,\n    COALESCE(pr.procedure_count, 0) AS procedure_count,\n    NTILE(5) OVER (ORDER BY COALESCE(pr.procedure_count, 0)) AS quintile\n  FROM\n    filtered_patients p\n  LEFT JOIN\n    procedures_first_48h pr\n  ON\n    p.stay_id = pr.stay_id\n)\nSELECT\n  quintile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(icu_los_days) AS mean_icu_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS hospital_mortality_rate\nFROM\n  quintile_data\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

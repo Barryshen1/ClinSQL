@@ -1,0 +1,1 @@
+SELECT tertiles.hadm_id, tertiles.patient_count, tertiles.medication_count, tertiles.los_count, tertiles.mortality_count, tertiles.readmission_count FROM tertiles;

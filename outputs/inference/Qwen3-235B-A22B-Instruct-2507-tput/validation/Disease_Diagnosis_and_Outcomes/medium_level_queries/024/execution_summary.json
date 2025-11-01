@@ -1,0 +1,28 @@
+{
+  "query": "For my 54\u2011year\u2011old female: among females 49\u201359 with sepsis (no septic shock), by LOS \u22645 vs >5 and day\u20111 ICU vs non\u2011ICU, report N, mortality %, CKD and diabetes prevalence.",
+  "final_sql": "WITH age_calc AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 49 AND 59\n),\n\nsepsis_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE icd_version = 10 \n    AND (\n      icd_code LIKE 'A41%' OR \n      icd_code = 'R6520'\n    )\n),\n\nseptic_shock_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE icd_version = 10 \n    AND (\n      icd_code = 'R6521' OR \n      LOWER(long_title) LIKE '%septic shock%'\n    )\n),\n\nadmissions_with_sepsis AS (\n  SELECT DISTINCT ac.*\n  FROM age_calc ac\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON ac.hadm_id = di.hadm_id\n  INNER JOIN sepsis_codes sc\n    ON di.icd_code = sc.icd_code\n    AND di.icd_version = 10\n  WHERE ac.hadm_id NOT IN (\n    SELECT DISTINCT di2.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di2\n    INNER JOIN septic_shock_codes ssc\n      ON di2.icd_code = ssc.icd_code\n      AND di2.icd_version = 10\n  )\n),\n\nicu_day1_flag AS (\n  SELECT\n    aws.*,\n    CASE WHEN i.intime IS NOT NULL AND i.intime <= DATETIME_ADD(aws.admittime, INTERVAL 1 DAY) \n      THEN 1 ELSE 0 END AS icu_on_day1\n  FROM admissions_with_sepsis aws\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.icustays i\n    ON aws.hadm_id = i.hadm_id\n),\n\ncomorbidity_flag AS (\n  SELECT\n    i1.*,\n    -- CKD: ICD-10 N18.*\n    MAX(CASE WHEN di.icd_version = 10 AND di.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS has_ckd,\n    -- Diabetes: E10.*, E11.*, E13.*, but E11.* most common for type 2; include all\n    MAX(CASE WHEN di.icd_version = 10 AND (di.icd_code LIKE 'E10%' OR di.icd_code LIKE 'E11%' OR di.icd_code LIKE 'E13%') THEN 1 ELSE 0 END) AS has_diabetes\n  FROM icu_day1_flag i1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    ON i1.hadm_id = di.hadm_id\n  GROUP BY i1.subject_id, i1.gender, i1.anchor_age, i1.anchor_year, i1.hadm_id, i1.admittime, i1.dischtime, i1.hospital_expire_flag, i1.age_at_admit, i1.icu_on_day1\n),\n\nlos_group AS (\n  SELECT\n    *,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days,\n    CASE WHEN DATETIME_DIFF(dischtime, admittime, DAY) <= 5 THEN '\u22645 days' ELSE '>5 days' END AS los_group\n  FROM comorbidity_flag\n),\n\nsummary AS (\n  SELECT\n    los_group,\n    CASE WHEN icu_on_day1 = 1 THEN 'ICU day 1' ELSE 'non-ICU day 1' END AS icu_day1_group,\n    COUNT(*) AS n,\n    AVG(hospital_expire_flag) * 100 AS mortality_pct,\n    AVG(has_ckd) * 100 AS ckd_pct,\n    AVG(has_diabetes) * 100 AS diabetes_pct\n  FROM los_group\n  GROUP BY los_group, icu_on_day1\n)\n\nSELECT\n  los_group,\n  icu_day1_group,\n  n,\n  ROUND(mortality_pct, 2) AS mortality_pct,\n  ROUND(ckd_pct, 2) AS ckd_pct,\n  ROUND(diabetes_pct, 2) AS diabetes_pct\nFROM summary\nORDER BY los_group, \n         CASE WHEN icu_day1_group = 'ICU day 1' THEN 1 ELSE 2 END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 ORDER BY does not support expressions of type STRUCT<subject_id INT64, gender STRING, anchor_age INT64, ...> at [108:10]; reason: invalidQuery, location: query, message: ORDER BY does not support expressions of type STRUCT<subject_id INT64, gender STRING, anchor_age INT64, ...> at [108:10]\n\nLocation: US\nJob ID: 29e6daaf-0796-453f-b709-c9bd3db9349f\n",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"but\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"but\" at [1:13]\n\nLocation: US\nJob ID: ffcc0cd8-4701-46be-9f9b-d64705bed8ee\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: icu_on_day1_group at [97:23]; reason: invalidQuery, location: query, message: Unrecognized name: icu_on_day1_group at [97:23]\n\nLocation: US\nJob ID: 9d6ecda2-81b5-4f72-bccc-e5f6851ae1db\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 ORDER BY does not support expressions of type STRUCT<subject_id INT64, gender STRING, anchor_age INT64, ...> at [108:10]; reason: invalidQuery, location: query, message: ORDER BY does not support expressions of type STRUCT<subject_id INT64, gender STRING, anchor_age INT64, ...> at [108:10]\n\nLocation: US\nJob ID: 29e6daaf-0796-453f-b709-c9bd3db9349f\n"
+    }
+  ]
+}

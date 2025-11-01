@@ -1,0 +1,28 @@
+{
+  "query": "I have an 81-year-old man. Among male ICU patients aged 76\u201386 with acute myocardial infarction, stratified by quartiles of distinct procedures in the first 24 hours, report mean procedure count, mean ICU LOS, and hospital mortality (%) for each quartile.",
+  "final_sql": "WITH ami_admissions AS (\n  -- admissions that include an acute myocardial infarction diagnosis\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%acute myocardial infarction%'\n),\n\ncohort_stays AS (\n  -- ICU stays for male patients aged 76-86 whose admission had AMI\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    pt.anchor_age,\n    pt.gender,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n    ON icu.subject_id = pt.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN ami_admissions ami\n    ON icu.hadm_id = ami.hadm_id\n  WHERE pt.gender = 'M'\n    AND pt.anchor_age BETWEEN 76 AND 86\n),\n\nprocedure_counts AS (\n  -- Count distinct procedure ICD codes per ICU stay occurring in the first 24 hours of the ICU stay.\n  SELECT\n    cs.subject_id,\n    cs.hadm_id,\n    cs.stay_id,\n    cs.intime,\n    cs.outtime,\n    cs.los,\n    cs.anchor_age,\n    cs.gender,\n    cs.hospital_expire_flag,\n    COALESCE(COUNT(DISTINCT pr.icd_code), 0) AS procedure_count\n  FROM cohort_stays cs\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n    ON pr.hadm_id = cs.hadm_id\n   AND pr.chartdate BETWEEN DATE(cs.intime) AND DATE_ADD(DATE(cs.intime), INTERVAL 1 DAY)\n  GROUP BY\n    cs.subject_id, cs.hadm_id, cs.stay_id, cs.intime, cs.outtime, cs.los,\n    cs.anchor_age, cs.gender, cs.hospital_expire_flag\n),\n\nwith_quartile AS (\n  -- Assign quartiles based on procedure_count distribution (NTILE(4))\n  SELECT\n    pc.*,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM procedure_counts pc\n)\n\nSELECT\n  quartile,\n  ROUND(AVG(procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(los), 2) AS mean_icu_los_days,\n  ROUND(100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS hospital_mortality_pct,\n  COUNT(*) AS n_stays\nFROM with_quartile\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"admission\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"admission\" at [1:9]\n\nLocation: US\nJob ID: 2d78bb0b-b812-4434-b365-aff74d3ddf48\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"admission\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"admission\" at [1:9]\n\nLocation: US\nJob ID: 90114c78-2282-4cba-b192-bb00c4f2d083\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

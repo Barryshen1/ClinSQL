@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH first_icu AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    outtime,\n    los\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      outtime,\n      los,\n      ROW_NUMBER() OVER(PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  )\n  WHERE rn = 1\n),\nhepatic_admissions AS (\n  -- Hospital admissions with hepatic failure diagnosis\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code\n    AND d.icd_version = dicd.icd_version\n  WHERE LOWER(dicd.long_title) LIKE '%hepatic failure%'\n),\nproc_counts AS (\n  -- Count distinct diagnostic procedure itemids in first 72h of ICU\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM first_icu f\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON pe.subject_id = f.subject_id\n   AND pe.hadm_id = f.hadm_id\n   AND pe.stay_id = f.stay_id\n   AND pe.starttime BETWEEN f.intime\n                        AND TIMESTAMP_ADD(f.intime, INTERVAL 72 HOUR)\n  GROUP BY\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id\n),\npatient_stats AS (\n  -- Assemble patient-level stats\n  SELECT\n    pc.subject_id,\n    pc.hadm_id,\n    pc.stay_id,\n    pc.proc_count,\n    fi.los,\n    adm.hospital_expire_flag\n  FROM proc_counts pc\n  JOIN first_icu fi\n    ON pc.subject_id = fi.subject_id\n   AND pc.hadm_id = fi.hadm_id\n   AND pc.stay_id = fi.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON pc.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON pc.subject_id = p.subject_id\n  JOIN hepatic_admissions ha\n    ON pc.subject_id = ha.subject_id\n   AND pc.hadm_id = ha.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 90 AND 100\n),\nquartiled AS (\n  -- Assign quartiles by procedure count\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY proc_count) AS quartile\n  FROM patient_stats\n)\nSELECT\n  quartile,\n  COUNT(*) AS num_patients,\n  MIN(proc_count) AS min_proc,\n  MAX(proc_count) AS max_proc,\n  ROUND(AVG(proc_count), 2) AS mean_proc,\n  ROUND(AVG(los), 2) AS mean_los_days,\n  ROUND(100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2)\n    AS in_hospital_mortality_pct\nFROM quartiled\nGROUP BY quartile\nORDER BY quartile;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

@@ -1,0 +1,22 @@
+{
+  "query": "My 64-year-old female inpatient has T2DM and heart failure. Among female inpatients 59\u201369 (\u226548h), report prevalence of injectable GLP\u20111 use in first 48h vs final 12h and absolute pp difference.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: females 59-69, inpatient LOS >=48h, with first ICU stay\n  SELECT DISTINCT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    FIRST_VALUE(i.stay_id) OVER (PARTITION BY a.subject_id, a.hadm_id ORDER BY i.stay_id) AS first_stay_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND a.admission_type IN ('ADMITTED', 'NEWBORN', 'EMERGENCY')\n    AND DATE_DIFF(a.dischtime, a.admittime, HOUR) >= 48\n),\n\nglp1_items AS (\n  -- Injectable GLP-1 itemids\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%glp-1%' \n     OR LOWER(label) LIKE '%exenatide%' \n     OR LOWER(label) LIKE '%liraglutide%' \n     OR LOWER(label) LIKE '%semaglutide%'  -- Injectable form\n     OR LOWER(label) LIKE '%dulaglutide%'\n),\n\nglp1_events AS (\n  -- GLP-1 administrations by time window\n  SELECT \n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    'first_48h' AS period,\n    1 AS used_flag\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.inputevents` ie\n    ON c.hadm_id = ie.hadm_id\n    AND c.first_stay_id = ie.stay_id\n  INNER JOIN glp1_items gi ON ie.itemid = gi.itemid\n  WHERE ie.amount > 0\n    AND ie.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n\n  UNION ALL\n\n  SELECT \n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    'final_12h' AS period,\n    1 AS used_flag\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.inputevents` ie\n    ON c.hadm_id = ie.hadm_id\n    AND c.first_stay_id = ie.stay_id\n  INNER JOIN glp1_items gi ON ie.itemid = gi.itemid\n  WHERE ie.amount > 0\n    AND ie.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR) AND c.dischtime\n),\n\nsummary AS (\n  SELECT \n    period,\n    COUNT(DISTINCT hadm_id) AS total_admissions,\n    SUM(used_flag) AS admissions_with_glp1,\n    ROUND(SUM(used_flag) * 100.0 / COUNT(DISTINCT hadm_id), 2) AS prevalence_pct\n  FROM glp1_events\n  GROUP BY period\n\n  UNION ALL\n\n  -- Total cohort size (for reference; same for both periods)\n  SELECT \n    'total' AS period,\n    COUNT(DISTINCT hadm_id) AS total_admissions,\n    NULL AS admissions_with_glp1,\n    NULL AS prevalence_pct\n  FROM cohort\n)\n\nSELECT \n  period,\n  total_admissions,\n  admissions_with_glp1,\n  prevalence_pct\nFROM summary\nWHERE period != 'total'\n\nUNION ALL\n\nSELECT \n  'absolute_pp_difference' AS period,\n  NULL AS total_admissions,\n  NULL AS admissions_with_glp1,\n  ROUND(\n    (MAX(CASE WHEN period = 'final_12h' THEN prevalence_pct END) - \n     MAX(CASE WHEN period = 'first_48h' THEN prevalence_pct END)), \n    2\n  ) AS prevalence_pct  -- Absolute percentage points\nFROM summary\nWHERE period IN ('first_48h', 'final_12h')\nORDER BY \n  CASE period \n    WHEN 'first_48h' THEN 1 \n    WHEN 'final_12h' THEN 2 \n    WHEN 'absolute_pp_difference' THEN 3 \n  END\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unsupported subquery with table in join predicate.; reason: invalidQuery, location: query, message: Unsupported subquery with table in join predicate.\n\nLocation: US\nJob ID: 45c1a4ac-7b93-408a-91f6-f9180bbbe538\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

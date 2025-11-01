@@ -1,0 +1,28 @@
+{
+  "query": "Male, 75, with heart failure: among male ICU patients 70\u201380 with heart failure, what is diagnostic intensity in first 72 ICU hours (mean, median, 75th and 95th percentiles)? Compare to general ICU population; report mean ICU LOS and hospital mortality.",
+  "final_sql": "WITH hf_admissions AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND (\n      icd_code LIKE '428%' OR\n      icd_code IN ('39891', '40201', '40211', '40291', '40401', '40411', '40491', '4254')\n    ))\n    OR\n    (icd_version = 10 AND (\n      icd_code LIKE 'I50%' OR\n      icd_code IN ('I0981', 'I110', 'I130', 'I132')\n    ))\n  )\n),\nicu_with_demo AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,\n    p.gender,\n    FLOOR(p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON i.subject_id = p.subject_id\n),\ncohort_stays AS (\n  SELECT s.*, 1 AS has_hf\n  FROM icu_with_demo s\n  INNER JOIN hf_admissions h ON s.subject_id = h.subject_id AND s.hadm_id = h.hadm_id\n  WHERE s.gender = 'M'\n    AND s.age BETWEEN 70 AND 80\n),\ngeneral_stays AS (\n  SELECT *\n  FROM icu_with_demo\n  WHERE age >= 18\n),\nintensity_data_cohort AS (\n  SELECT \n    cs.stay_id,\n    COALESCE(COUNT(le.labevent_id), 0) AS diag_intensity\n  FROM cohort_stays cs\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le \n    ON le.subject_id = cs.subject_id\n    AND le.hadm_id = cs.hadm_id\n    AND le.charttime >= cs.intime\n    AND le.charttime < TIMESTAMP_ADD(cs.intime, INTERVAL 72 HOUR)\n    AND le.valuenum IS NOT NULL\n  GROUP BY cs.stay_id\n),\ncohort_intensity_stats AS (\n  SELECT \n    AVG(diag_intensity) AS mean_intensity,\n    PERCENTILE_CONT(diag_intensity, 0.5) AS median_intensity,\n    PERCENTILE_CONT(diag_intensity, 0.75) AS p75_intensity,\n    PERCENTILE_CONT(diag_intensity, 0.95) AS p95_intensity\n  FROM intensity_data_cohort\n),\nlos_stats AS (\n  SELECT AVG(los) AS mean_los\n  FROM cohort_stays\n),\nmortality_stats AS (\n  SELECT \n    COUNT(DISTINCT CASE WHEN hospital_expire_flag = 1 THEN hadm_id END) * 1.0 / \n    COUNT(DISTINCT hadm_id) AS mortality_rate\n  FROM cohort_stays\n),\nintensity_data_general AS (\n  SELECT \n    gs.stay_id,\n    COALESCE(COUNT(le.labevent_id), 0) AS diag_intensity\n  FROM general_stays gs\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le \n    ON le.subject_id = gs.subject_id\n    AND le.hadm_id = gs.hadm_id\n    AND le.charttime >= gs.intime\n    AND le.charttime < TIMESTAMP_ADD(gs.intime, INTERVAL 72 HOUR)\n    AND le.valuenum IS NOT NULL\n  GROUP BY gs.stay_id\n),\ngeneral_intensity_stats AS (\n  SELECT \n    AVG(diag_intensity) AS mean_intensity,\n    PERCENTILE_CONT(diag_intensity, 0.5) AS median_intensity,\n    PERCENTILE_CONT(diag_intensity, 0.75) AS p75_intensity,\n    PERCENTILE_CONT(diag_intensity, 0.95) AS p95_intensity\n  FROM intensity_data_general\n)\nSELECT \n  cis.mean_intensity AS cohort_mean_intensity,\n  cis.median_intensity AS cohort_median_intensity,\n  cis.p75_intensity AS cohort_p75_intensity,\n  cis.p95_intensity AS cohort_p95_intensity,\n  ls.mean_los AS cohort_mean_los,\n  ms.mortality_rate AS cohort_mortality_rate,\n  gis.mean_intensity AS general_mean_intensity,\n  gis.median_intensity AS general_median_intensity,\n  gis.p75_intensity AS general_p75_intensity,\n  gis.p95_intensity AS general_p95_intensity\nFROM cohort_intensity_stats cis, los_stats ls, mortality_stats ms, general_intensity_stats gis\nLIMIT 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 7e78c0cc-b98b-4d84-afbe-cb4cf93e5ee2\n",
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [5:6]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [5:6]\n\nLocation: US\nJob ID: 440f6c4b-30c5-4752-943b-dadaf1d80275\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column diag_intensity which is neither grouped nor aggregated at [58:21]; reason: invalidQuery, location: query, message: SELECT list expression references column diag_intensity which is neither grouped nor aggregated at [58:21]\n\nLocation: US\nJob ID: d08478ac-0636-4caf-a225-b082c605d2b2\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 7e78c0cc-b98b-4d84-afbe-cb4cf93e5ee2\n"
+    }
+  ]
+}

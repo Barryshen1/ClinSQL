@@ -1,0 +1,16 @@
+{
+  "query": "For a 64-year-old man, among males 59\u201369 with heart failure, give the 25th, 50th, and 75th percentiles of radiography/CT per admission for 1\u20134 vs 5\u20138 day stays, by ICU use.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- LOS group: 1-4 days vs 5-8 days\n    CASE\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 4 THEN '1-4'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 5 AND 8 THEN '5-8'\n      ELSE NULL\n    END AS los_group,\n    -- ICU use: yes if there exists any icustay for this admission, otherwise no\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n        WHERE icu.subject_id = a.subject_id\n          AND icu.hadm_id = a.hadm_id\n      ) THEN 'ICU'\n      ELSE 'Non-ICU'\n    END AS icu_use,\n    -- Radiography/CT count per admission (from ICU procedureevents)\n    COALESCE(r.radiography_events, 0) AS radiography_events\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  LEFT JOIN (\n    SELECT di.subject_id, di.hadm_id, di.icd_code, di.icd_version, dd.long_title\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON dd.icd_code = di.icd_code\n     AND dd.icd_version = di.icd_version\n  ) AS diag ON diag.subject_id = a.subject_id AND diag.hadm_id = a.hadm_id\n  LEFT JOIN (\n    SELECT hadm_id\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    GROUP BY hadm_id\n  ) icu ON icu.hadm_id = a.hadm_id\n  LEFT JOIN (\n    SELECT pe.hadm_id, COUNT(*) AS radiography_events\n    FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` di2\n      ON pe.itemid = di2.itemid\n    WHERE REGEXP_CONTAINS( di2.label, r'(?i)(Radiography|Radiology|X-?Ray|CT)')\n    GROUP BY pe.hadm_id\n  ) r ON r.hadm_id = a.hadm_id\n  WHERE p.gender = 'Male'\n    AND p.anchor_age BETWEEN 59 AND 69\n    AND REGEXP_CONTAINS(diag.long_title, r'(?i)heart\\\\s*failure')\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n)\n\n-- Part 2: Aggregate percentiles by LOS group and ICU use\nSELECT\n  los_group,\n  icu_use,\n  -- p25, p50, p75 percentiles of radiography_counts per admission within the group\n  quantiles[OFFSET(1)] AS p25,\n  quantiles[OFFSET(2)] AS p50,\n  quantiles[OFFSET(3)] AS p75\nFROM (\n  SELECT\n    icu_use,\n    los_group,\n    APPROX_QUANTILES(radiography_events, 4) AS quantiles\n  FROM cohort\n  WHERE los_group IS NOT NULL\n  GROUP BY icu_use, los_group\n)\nORDER BY icu_use, los_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

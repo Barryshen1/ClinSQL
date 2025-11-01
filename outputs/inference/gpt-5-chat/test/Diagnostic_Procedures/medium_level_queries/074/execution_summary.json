@@ -1,0 +1,16 @@
+{
+  "query": "For my 45\u2011year\u2011old female with ischemic stroke: among women 40\u201350 with 1\u20137 day stays, give mean, min, max imaging procedures per admission for 1\u20134 vs 5\u20137 days, stratified by ICU.",
+  "final_sql": "WITH base_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n),\nstroke_admissions AS (\n  SELECT DISTINCT adm.subject_id, adm.hadm_id,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN base_patients bp\n    ON adm.subject_id = bp.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON adm.subject_id = di.subject_id AND adm.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE DATE_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 7\n    AND (\n      -- ICD-9 ischemic stroke patterns\n      (di.icd_version = 9 AND REGEXP_CONTAINS(di.icd_code, r'^(433[0-9]1|434[0-9]1)$'))\n      OR\n      -- ICD-10 ischemic stroke\n      (di.icd_version = 10 AND REGEXP_CONTAINS(di.icd_code, r'^I63'))\n    )\n),\nimaging_counts AS (\n  SELECT\n    sa.subject_id,\n    sa.hadm_id,\n    COUNT(*) AS imaging_proc_count\n  FROM stroke_admissions sa\n  JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n    ON sa.subject_id = pi.subject_id AND sa.hadm_id = pi.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dpi\n    ON pi.icd_code = dpi.icd_code AND pi.icd_version = dpi.icd_version\n  WHERE REGEXP_CONTAINS(LOWER(dpi.long_title), r'(ct|mri|magnetic resonance|tomography|ultrasound|x-ray|radiography)')\n  GROUP BY sa.subject_id, sa.hadm_id\n),\nicu_flags AS (\n  SELECT DISTINCT\n    hadm_id,\n    TRUE AS icu_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n)\nSELECT\n  CASE WHEN sa.los_days BETWEEN 1 AND 4 THEN 'LOS_1_4'\n       WHEN sa.los_days BETWEEN 5 AND 7 THEN 'LOS_5_7' END AS los_group,\n  IF(IFNULL(icuf.icu_flag, FALSE), 'ICU', 'NoICU') AS icu_group,\n  AVG(ic.imaging_proc_count) AS mean_imaging_procs,\n  MIN(ic.imaging_proc_count) AS min_imaging_procs,\n  MAX(ic.imaging_proc_count) AS max_imaging_procs\nFROM stroke_admissions sa\nLEFT JOIN imaging_counts ic\n  ON sa.subject_id = ic.subject_id AND sa.hadm_id = ic.hadm_id\nLEFT JOIN icu_flags icuf\n  ON sa.hadm_id = icuf.hadm_id\nGROUP BY los_group, icu_group\nORDER BY los_group, icu_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

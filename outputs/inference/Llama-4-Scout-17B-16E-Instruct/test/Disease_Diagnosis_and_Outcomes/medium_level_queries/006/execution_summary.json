@@ -1,0 +1,22 @@
+{
+  "query": "I have a 69\u2011year\u2011old man. In male patients aged 64\u201374 with sepsis (excluding septic shock), what are in\u2011hospital mortality rates by LOS quartile (Q1\u2013Q4), and CKD and diabetes prevalence per quartile?",
+  "final_sql": "WITH \n-- Define sepsis and septic shock\nsepsis_patients AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    icu.stay_id,\n    icu.intime AS icu_intime,\n    icu.outtime AS icu_outtime,\n    icu.los\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p \n      ON a.subject_id = p.subject_id\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` icu \n      ON a.hadm_id = icu.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n      AND d.icd_code LIKE '995.91'  -- Sepsis\n    )\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n      AND d.icd_code LIKE '785.52'  -- Septic shock\n    )\n),\n\n-- Identify CKD and diabetes\nckd_diabetes AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = hadm_id\n        AND d.icd_code IN ('585', '585.1', '585.2', '585.3', '585.4', '585.5', '585.6', '585.9', '586')\n      ) THEN 1\n      ELSE 0\n    END AS has_ckd,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = hadm_id\n        AND d.icd_code IN ('250', '250.0', '250.1', '250.2', '250.3', '250.4', '250.5', '250.6', '250.7', '250.8', '250.9')\n      ) THEN 1\n      ELSE 0\n    END AS has_diabetes\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions`\n),\n\n-- Calculate LOS and quartiles\nlos_quartiles AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    los,\n    NTILE(4) OVER (ORDER BY los) AS los_quartile\n  FROM (\n    SELECT \n      s.subject_id,\n      s.hadm_id,\n      COALESCE(TIMESTAMP_DIFF(s.dischtime, s.admittime, DAY), \n               TIMESTAMP_DIFF(s.deathtime, s.admittime, DAY)) AS los\n    FROM \n      sepsis_patients s\n  ) t\n)\n\n-- Final calculation\nSELECT \n  lq.los_quartile,\n  AVG(CASE WHEN s.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS mortality_rate,\n  AVG(CKD.has_ckd) AS ckd_prevalence,\n  AVG(CKD.has_diabetes) AS diabetes_prevalence\nFROM \n  los_quartiles lq\nJOIN \n  sepsis_patients s ON lq.hadm_id = s.hadm_id\nJOIN \n  ckd_diabetes CKD ON s.hadm_id = CKD.hadm_id\nGROUP BY \n  lq.los_quartile\nORDER BY \n  lq.los_quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name gender not found inside a at [21:7]; reason: invalidQuery, location: query, message: Name gender not found inside a at [21:7]\n\nLocation: US\nJob ID: 9ef03fb1-dee8-4b31-89d7-e8979a0a05fc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

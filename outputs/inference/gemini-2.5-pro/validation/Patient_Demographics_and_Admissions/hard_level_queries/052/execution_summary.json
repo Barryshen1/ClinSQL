@@ -1,0 +1,16 @@
+{
+  "query": "I have a 56\u2011year\u2011old man to evaluate. Among male Medicare patients aged 51\u201361 admitted via the ED with principal acute pancreatitis, what is the 30\u2011day readmission rate? Report median index LOS for readmitted vs non\u2011readmitted and percent stays >9 days.",
+  "final_sql": "WITH index_admissions AS (\n  -- Step 1: Identify the specific cohort of hospital admissions.\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    ON adm.hadm_id = dx.hadm_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 51 AND 61\n    AND adm.insurance = 'Medicare'\n    AND adm.admission_location = 'EMERGENCY DEPARTMENT'\n    AND dx.seq_num = 1 -- Filter for principal diagnosis\n    AND (\n      dx.icd_code = '5770' -- ICD-9 for Acute Pancreatitis\n      OR dx.icd_code LIKE 'K85%' -- ICD-10 for Acute Pancreatitis\n    )\n),\n\ncohort_with_metrics AS (\n  -- Step 2: For each index admission, calculate LOS and check for 30-day readmission.\n  SELECT\n    ia.hadm_id,\n    -- Calculate length of stay in fractional days\n    DATETIME_DIFF(ia.dischtime, ia.admittime, HOUR) / 24.0 AS los_days,\n    -- Flag admissions that are followed by another admission within 30 days\n    (\n      EXISTS (\n        SELECT\n          1\n        FROM\n          `physionet-data.mimiciv_3_1_hosp.admissions` AS next_adm\n        WHERE\n          next_adm.subject_id = ia.subject_id\n          AND next_adm.admittime > ia.dischtime\n          AND DATETIME_DIFF(next_adm.admittime, ia.dischtime, DAY) <= 30\n      )\n    ) AS is_readmitted_30_days\n  FROM\n    index_admissions AS ia\n)\n\n-- Step 3: Aggregate the metrics to answer the question.\nSELECT\n  -- 30-day readmission rate\n  AVG(\n    CASE\n      WHEN is_readmitted_30_days\n      THEN 1.0\n      ELSE 0.0\n    END\n  ) * 100 AS readmission_rate_30_day_percent,\n\n  -- Median index LOS for readmitted vs non-readmitted patients\n  APPROX_QUANTILES(\n    CASE\n      WHEN is_readmitted_30_days\n      THEN los_days\n    END, 2\n  )[\n  OFFSET\n    (1)] AS median_los_readmitted,\n  APPROX_QUANTILES(\n    CASE\n      WHEN NOT is_readmitted_30_days\n      THEN los_days\n    END, 2\n  )[\n  OFFSET\n    (1)] AS median_los_non_readmitted,\n\n  -- Percent of stays longer than 9 days\n  AVG(\n    CASE\n      WHEN los_days > 9\n      THEN 1.0\n      ELSE 0.0\n    END\n  ) * 100 AS percent_stays_gt_9_days\nFROM\n  cohort_with_metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

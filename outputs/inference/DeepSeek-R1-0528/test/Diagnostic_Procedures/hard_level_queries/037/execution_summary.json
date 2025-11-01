@@ -1,0 +1,22 @@
+{
+  "query": "For a 58\u2011year\u2011old woman: among female ICU patients aged 53\u201363 with sepsis, what are the 75th and 90th percentiles of procedures in the first 24 hours? Compare to age\u2011matched ICU patients and report average ICU LOS and hospital mortality.",
+  "final_sql": "WITH sepsis_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE REGEXP_CONTAINS(LOWER(long_title), r'sepsis|septicemia|bacteremia')\n),\nbase_cohort AS (\n  SELECT \n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ie.los,\n    p.gender,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age,\n    a.hospital_expire_flag,\n    CASE WHEN di.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS sepsis_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ie.hadm_id = a.hadm_id\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    INNER JOIN sepsis_codes sc\n      ON di.icd_code = sc.icd_code AND di.icd_version = sc.icd_version\n  ) di\n    ON ie.hadm_id = di.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 53 AND 63\n),\nprocedure_counts AS (\n  SELECT \n    bc.stay_id,\n    COUNT(pe.itemid) AS procedure_count\n  FROM base_cohort bc\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON bc.stay_id = pe.stay_id\n    AND pe.starttime >= bc.intime\n    AND pe.starttime < DATETIME_ADD(bc.intime, INTERVAL 24 HOUR)\n  GROUP BY bc.stay_id\n),\ncohort AS (\n  SELECT \n    bc.*,\n    COALESCE(pc.procedure_count, 0) AS procedure_count\n  FROM base_cohort bc\n  LEFT JOIN procedure_counts pc\n    ON bc.stay_id = pc.stay_id\n),\nsepsis_procedure_quantiles AS (\n  SELECT \n    APPROX_QUANTILES(procedure_count, 100) AS percentiles\n  FROM cohort\n  WHERE sepsis_flag = 1\n)\nSELECT \n  'Sepsis' AS cohort,\n  AVG(los) AS avg_icu_los,\n  AVG(hospital_expire_flag) AS hospital_mortality_rate,\n  (SELECT percentiles[OFFSET(75)] FROM sepsis_procedure_quantiles) AS p75_procedures,\n  (SELECT percentiles[OFFSET(90)] FROM sepsis_procedure_quantiles) AS p90_procedures\nFROM cohort\nWHERE sepsis_flag = 1\nUNION ALL\nSELECT \n  'Control' AS cohort,\n  AVG(los) AS avg_icu_los,\n  AVG(hospital_expire_flag) AS hospital_mortality_rate,\n  NULL AS p75_procedures,\n  NULL AS p90_procedures\nFROM cohort\nWHERE sepsis_flag = 0;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "403 Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.\n\nLocation: US\nJob ID: c933872e-7e18-4a0e-adec-e22b2ea21fc1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For an 85\u2011year\u2011old male with sepsis: among male inpatients 80\u201390 with sepsis, during first 24 h what are medication complexity score distribution and percentile ranks for those on both QT\u2011prolonging and bleeding\u2011risk drugs versus other patients, and LOS/mortality for top quartile?",
+  "final_sql": "WITH sepsis_icd_codes AS (\n  SELECT 'A40%' AS code_pattern UNION ALL\n  SELECT 'A41%' UNION ALL\n  SELECT 'R65.20' UNION ALL\n  SELECT 'R65.21'\n),\nsepsis_diagnoses AS (\n  SELECT DISTINCT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d \n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  CROSS JOIN sepsis_icd_codes s\n  WHERE d.icd_code LIKE s.code_pattern\n),\ncohort AS (\n  SELECT a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.hospital_expire_flag,\n         DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / (24 * 60 * 60) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN sepsis_diagnoses s ON a.hadm_id = s.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 80 AND 90\n),\nmeds_24h AS (\n  SELECT p.hadm_id, p.drug, p.starttime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN cohort c ON p.hadm_id = c.hadm_id\n  WHERE p.starttime >= c.admittime\n    AND p.starttime < DATETIME_ADD(c.admittime, INTERVAL 24 HOUR)\n),\ndrug_classification AS (\n  SELECT hadm_id, drug,\n    CASE\n      WHEN LOWER(drug) IN (\n        'amiodarone', 'sotalol', 'dofetilide', 'quinidine', 'procainamide',\n        'haloperidol', 'thioridazine', 'ziprasidone', 'iloperidone',\n        'ciprofloxacin', 'levofloxacin', 'moxifloxacin',\n        'ondansetron', 'methadone', 'pimozide'\n      ) THEN 1\n      ELSE 0\n    END AS is_qt_drug,\n    CASE\n      WHEN LOWER(drug) IN (\n        'warfarin', 'heparin', 'enoxaparin', 'dalteparin',\n        'apixaban', 'rivaroxaban', 'dabigatran', 'edoxaban',\n        'clopidogrel', 'prasugrel', 'ticagrelor',\n        'aspirin', 'abciximab', 'eptifibatide', 'tirofiban'\n      ) THEN 1\n      ELSE 0\n    END AS is_bleeding_drug\n  FROM meds_24h\n),\npatient_level AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT dc.drug) AS complexity_score,\n    MAX(dc.is_qt_drug) AS has_qt_drug,\n    MAX(dc.is_bleeding_drug) AS has_bleeding_drug,\n    c.los_days,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN drug_classification dc ON c.hadm_id = dc.hadm_id\n  GROUP BY c.hadm_id, c.los_days, c.hospital_expire_flag\n),\ncomplexity_stats AS (\n  SELECT \n    *,\n    PERCENT_RANK() OVER (ORDER BY complexity_score) AS pct_rank,\n    PERCENTILE_CONT(complexity_score, 0.75) OVER () AS q75_score\n  FROM patient_level\n),\ntop_quartile AS (\n  SELECT *\n  FROM complexity_stats\n  WHERE complexity_score >= q75_score\n)\nSELECT\n  -- Distribution of complexity score by group\n  has_qt_drug, has_bleeding_drug,\n  COUNT(*) AS n,\n  AVG(complexity_score) AS avg_complexity,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  APPROX_QUANTILES(complexity_score, 100)[OFFSET(25)] AS q25_complexity,\n  APPROX_QUANTILES(complexity_score, 100)[OFFSET(50)] AS median_complexity,\n  APPROX_QUANTILES(complexity_score, 100)[OFFSET(75)] AS q75_complexity,\n  -- For top quartile: LOS and mortality\n  AVG(CASE WHEN complexity_score >= q75_score THEN los_days END) AS avg_los_top_quartile,\n  AVG(CASE WHEN complexity_score >= q75_score THEN hospital_expire_flag END) AS mortality_rate_top_quartile\nFROM complexity_stats\nGROUP BY has_qt_drug, has_bleeding_drug\nORDER BY has_qt_drug DESC, has_bleeding_drug DESC;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:12]\n\nLocation: US\nJob ID: 7f5d36dd-f7c5-4381-a550-f6346473eb18\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Wait, I see one more issue. In BigQuery, the INTERVAL syntax is slightly different. BigQuery uses `INTERVAL 12 HOUR` without quotes around the number. Let me fix that:;

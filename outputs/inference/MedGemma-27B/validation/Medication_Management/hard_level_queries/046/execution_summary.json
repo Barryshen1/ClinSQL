@@ -1,0 +1,29 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH PatientCohort AS (\n  -- Select patients meeting the criteria: female, age 45-55, multi-trauma\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND a.admission_type = 'EMERGENCY' -- Assuming multi-trauma patients are admitted via emergency\n    AND EXISTS (\n      SELECT\n        1\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      WHERE\n        d.subject_id = p.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND d.icd_code LIKE 'S06%' -- ICD-10 codes for multiple injuries (S06.0-S06.9)\n    )\n),\n\nMedicationComplexity AS (\n  -- Calculate medication complexity score for each patient admission\n  SELECT\n    pc.subject_id,\n    pc.hadm_id,\n    pc.admittime,\n    pc.dischtime,\n    pc.deathtime,\n    pc.hospital_expire_flag,\n    COUNT(DISTINCT e.drug) AS medication_complexity_score\n  FROM\n    PatientCohort AS pc\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.emar` AS e\n    ON pc.subject_id = e.subject_id\n    AND pc.hadm_id = e.hadm_id\n    AND e.charttime BETWEEN pc.admittime AND DATE_ADD(pc.admittime, INTERVAL 7 DAY)\n  GROUP BY\n    pc.subject_id,\n    pc.hadm_id,\n    pc.admittime,\n    pc.dischtime,\n    pc.deathtime,\n    pc.hospital_expire_flag\n),\n\nTertiles AS (\n  -- Stratify medication complexity into tertiles\n  SELECT\n    mc.subject_id,\n    mc.hadm_id,\n    mc.medication_complexity_score,\n    NTILE(3) OVER (ORDER BY mc.medication_complexity_score) AS complexity_tertile\n  FROM\n    MedicationComplexity AS mc\n),\n\nAdmissionStats AS (\n  -- Calculate admission statistics per tertile\n  SELECT\n    t.complexity_tertile,\n    COUNT(DISTINCT t.hadm_id) AS admissions,\n    AVG(mc.medication_complexity_score) AS mean_score,\n    MIN(mc.medication_complexity_score) AS min_score,\n    MAX(mc.medication_complexity_score) AS max_score,\n    AVG(TIMESTAMP_DIFF(t.dischtime, t.admittime, DAY)) AS mean_los, -- Calculate mean LOS in days\n    AVG(CASE WHEN t.hospital_expire_flag = TRUE THEN 1 ELSE 0 END) AS mortality_percent, -- Calculate mortality percentage\n    AVG(CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n      WHERE a2.subject_id = t.subject_id\n      AND a2.admittime > t.dischtime\n      AND a2.admittime <= DATE_ADD(t.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END) AS readmission_percent -- Calculate 30-day readmission percentage\n  FROM\n    Tertiles AS t\n  INNER JOIN\n    MedicationComplexity AS mc\n    ON t.hadm_id = mc.hadm_id\n  GROUP BY\n    t.complexity_tertile\n)\n\nSELECT\n  *\nFROM\n  AdmissionStats\nORDER BY\n  complexity_tertile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name drug not found inside e at [42:22]; reason: invalidQuery, location: query, message: Name drug not found inside e at [42:22]\n\nLocation: US\nJob ID: d948f845-2248-420a-8f41-f2cf214e19e1\n",
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \";\" at [100:73]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \";\" at [100:73]\n\nLocation: US\nJob ID: 12f66f69-9d62-4abb-ae47-8f6f80dd0342\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \";\" at [78:49]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \";\" at [78:49]\n\nLocation: US\nJob ID: 60259a05-dc91-44aa-bb8e-906b76c42bd3\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name drug not found inside e at [42:22]; reason: invalidQuery, location: query, message: Name drug not found inside e at [42:22]\n\nLocation: US\nJob ID: d948f845-2248-420a-8f41-f2cf214e19e1\n"
+    }
+  ]
+}

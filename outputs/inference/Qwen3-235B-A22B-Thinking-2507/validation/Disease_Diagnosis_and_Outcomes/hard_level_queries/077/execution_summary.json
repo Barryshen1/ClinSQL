@@ -1,0 +1,17 @@
+{
+  "query": "For a 93-year-old male admitted with pneumonia, among males aged 88\u201398 with pneumonia and ICU stay, report cohort size; composite risk score distribution (min, 25th, median, 75th, max); in-hospital mortality, AKI, ARDS rates; and median survival days for decedents.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE \n    pat.gender = 'M'\n    AND (\n      (pat.anchor_age >= 88 AND pat.anchor_age <= 89) \n      OR pat.anchor_age = 300\n    )\n    AND EXISTS (  -- Pneumonia diagnosis\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE \n        diag.hadm_id = adm.hadm_id\n        AND (\n          (diag.icd_version = 9 AND diag.icd_code BETWEEN '480' AND '486')\n          OR (diag.icd_version = 10 AND diag.icd_code >= 'J12' AND diag.icd_code < 'J19')\n        )\n    )\n    AND EXISTS (  -- ICU stay\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n      WHERE icu.hadm_id = adm.hadm_id\n    )\n),\ncohort_details AS (\n  SELECT \n    c.hadm_id,\n    adm.hospital_expire_flag,\n    MAX(CASE  -- AKI flag\n      WHEN (diag.icd_version = 9 AND diag.icd_code = '584') \n        OR (diag.icd_version = 10 AND diag.icd_code LIKE 'N17%') \n      THEN 1 ELSE 0 \n    END) AS has_aki,\n    MAX(CASE  -- ARDS flag\n      WHEN (diag.icd_version = 9 AND diag.icd_code = '5185') \n        OR (diag.icd_version = 10 AND diag.icd_code = 'J80') \n      THEN 1 ELSE 0 \n    END) AS has_ards,\n    MAX(drg.drg_severity) AS drg_severity,  -- Max severity per admission\n    CASE  -- Survival days (for decedents only)\n      WHEN adm.hospital_expire_flag = 1 \n      THEN DATETIME_DIFF(adm.deathtime, adm.admittime, DAY) \n      ELSE NULL \n    END AS survival_days\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON c.hadm_id = adm.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON c.hadm_id = diag.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.drgcodes` drg\n    ON c.hadm_id = drg.hadm_id AND drg.drg_type = 'HCFA'\n  GROUP BY c.hadm_id, adm.hospital_expire_flag, adm.deathtime, adm.admittime\n)\nSELECT \n  COUNT(*) AS cohort_size,\n  MIN(IF(drg_severity IS NOT NULL, drg_severity, NULL)) AS min_score,\n  APPROX_QUANTILES(IF(drg_severity IS NOT NULL, drg_severity, NULL), 100)[OFFSET(25)] AS p25_score,\n  APPROX_QUANTILES(IF(drg_severity IS NOT NULL, drg_severity, NULL), 100)[OFFSET(50)] AS median_score,\n  APPROX_QUANTILES(IF(drg_severity IS NOT NULL, drg_severity, NULL), 100)[OFFSET(75)] AS p75_score,\n  MAX(IF(drg_severity IS NOT NULL, drg_severity, NULL)) AS max_score,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  AVG(has_aki) AS aki_rate,\n  AVG(has_ards) AS ards_rate,\n  APPROX_QUANTILES(survival_days, 100)[OFFSET(50)] AS median_survival_days\nFROM cohort_details;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

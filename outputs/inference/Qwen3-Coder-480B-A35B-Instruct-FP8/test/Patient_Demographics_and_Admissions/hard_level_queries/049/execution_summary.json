@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 66\u2011year\u2011old woman. Among female Medicare patients 61\u201371 admitted from SNF with a principal diagnosis of acute kidney injury, what's the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >6 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.admission_location,\n    p.gender,\n    p.anchor_age,\n    a.insurance,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'SKILLED NURSING FACILITY'\n    AND p.anchor_age BETWEEN 61 AND 71\n    AND d.seq_num = 1\n    AND LOWER(dd.long_title) LIKE '%acute kidney injury%'\n    AND a.deathtime IS NULL\n),\n\nreadmit_flags AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime,\n    CASE\n      WHEN LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) \n           BETWEEN dischtime AND DATETIME_ADD(dischtime, INTERVAL 30 DAY)\n      THEN 1\n      ELSE 0\n    END AS is_readmitted_30d\n  FROM\n    cohort\n),\n\nmetrics AS (\n  SELECT\n    is_readmitted_30d,\n    los_days,\n    CASE WHEN los_days > 6 THEN 1 ELSE 0 END AS long_stay\n  FROM\n    readmit_flags\n)\n\nSELECT\n  ROUND(AVG(is_readmitted_30d) * 100, 2) AS readmission_rate_pct,\n  APPROX_QUANTILES(CASE WHEN is_readmitted_30d = 1 THEN los_days ELSE NULL END, 2)[OFFSET(1)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN is_readmitted_30d = 0 THEN los_days ELSE NULL END, 2)[OFFSET(1)] AS median_los_not_readmitted,\n  ROUND(AVG(long_stay) * 100, 2) AS pct_long_stay\nFROM\n  metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

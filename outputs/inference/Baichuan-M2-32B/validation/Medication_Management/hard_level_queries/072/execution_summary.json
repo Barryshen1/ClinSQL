@@ -1,0 +1,29 @@
+{
+  "query": "89-year-old woman with DKA. Among female inpatients 84\u201394 with DKA during first 48h, compare those with vs without hyperkalemia\u2011risk drug interactions: mean medication complexity and percentile, LOS and mortality; report LOS and mortality for top complexity quartile.",
+  "final_sql": "WITH\n-- Define DKA ICD-10 codes (truncated for brevity; use full list in practice)\ndka_codes AS (\n  SELECT * FROM UNNEST([\n    'E10.10', 'E10.11', 'E10.12', 'E10.13', 'E10.14', 'E10.15', 'E10.16', 'E10.19',\n    'E11.10', 'E11.11', 'E11.12', 'E11.13', 'E11.14', 'E11.15', 'E11.16', 'E11.19'\n  ]) AS icd_code\n),\n-- Define hyperkalemia-risk drug names\nhyperkalemia_drugs AS (\n  SELECT * FROM UNNEST([\n    'Lisinopril', 'Enalapril', 'Ramipril', 'Quinapril', 'Perindopril', 'Fosinopril', 'Captopril', 'Benazepril',\n    'Losartan', 'Valsartan', 'Irbesartan', 'Candesartan', 'Telmisartan', 'Olmesartan', 'Eprosartan',\n    'Spironolactone', 'Amiloride', 'Triamterene', 'Eplerenone',\n    'Ibuprofen', 'Naproxen', 'Diclofenac', 'Indomethacin', 'Celecoxib',\n    'Heparin', 'Trimethoprim', 'Cyclosporine', 'Tacrolimus', 'Cisplatin'\n  ]) AS drug_name\n),\n-- Eligible admissions: female, age 84-94, with DKA diagnosis\neligible_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.admittime, DATE(p.anchor_year - p.anchor_age, 1, 1), YEAR) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND TIMESTAMP_DIFF(a.admittime, DATE(p.anchor_year - p.anchor_age, 1, 1), YEAR) BETWEEN 84 AND 94\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN dka_codes dc ON d.icd_code = dc.icd_code\n      WHERE d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n    )\n),\n-- Prescriptions during admission (filtered by time)\nadmission_prescriptions AS (\n  SELECT\n    p.hadm_id,\n    p.drug,\n    p.starttime,\n    p.stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN eligible_admissions e ON p.hadm_id = e.hadm_id\n  WHERE p.starttime BETWEEN e.admittime AND e.dischtime\n    AND p.drug IS NOT NULL\n),\n-- Medication complexity (distinct drugs per admission)\nadmission_complexity AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT drug) AS med_complexity\n  FROM admission_prescriptions\n  GROUP BY hadm_id\n),\n-- Hyperkalemia-risk drug interactions (\u22652 distinct drugs per admission)\nhyperkalemia_interactions AS (\n  SELECT\n    ap.hadm_id,\n    COUNT(DISTINCT CASE WHEN hd.drug_name IS NOT NULL THEN ap.drug END) AS hyperkalemia_drug_count\n  FROM admission_prescriptions ap\n  LEFT JOIN hyperkalemia_drugs hd ON ap.drug = hd.drug_name\n  GROUP BY ap.hadm_id\n  HAVING hyperkalemia_drug_count >= 2\n),\n-- Cohort with outcomes and exposure status\ncohort AS (\n  SELECT\n    e.hadm_id,\n    e.subject_id,\n    e.age_at_admission,\n    e.hospital_expire_flag,\n    TIMESTAMP_DIFF(e.dischtime, e.admittime, DAY) AS los,\n    COALESCE(ac.med_complexity, 0) AS med_complexity,\n    CASE WHEN hi.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_hyperkalemia_interaction\n  FROM eligible_admissions e\n  LEFT JOIN admission_complexity ac ON e.hadm_id = ac.hadm_id\n  LEFT JOIN hyperkalemia_interactions hi ON e.hadm_id = hi.hadm_id\n),\n-- Add complexity percentiles and quartiles\ncohort_with_percentile AS (\n  SELECT\n    *,\n    PERCENT_RANK() OVER (ORDER BY med_complexity) AS complexity_percentile,\n    NTILE(4) OVER (ORDER BY med_complexity) AS complexity_quartile\n  FROM cohort\n)\n-- Compare exposed vs. unexposed groups\nSELECT\n  has_hyperkalemia_interaction,\n  AVG(med_complexity) AS mean_med_complexity,\n  AVG(complexity_percentile) AS mean_complexity_percentile,\n  AVG(los) AS mean_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality\nFROM cohort_with_percentile\nGROUP BY has_hyperkalemia_interaction\n\nUNION ALL\n\n-- Top complexity quartile (quartile 4)\nSELECT\n  NULL AS has_hyperkalemia_interaction,\n  NULL AS mean_med_complexity,\n  NULL AS mean_complexity_percentile,\n  AVG(los) AS mean_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality\nFROM cohort_with_percentile\nWHERE complexity_quartile = 4;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:9]\n\nLocation: US\nJob ID: 37954fe1-61b7-4f12-b375-7c747b9a57b0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:9]\n\nLocation: US\nJob ID: a39f1958-f2b8-49e1-9ca2-b144e36e59da\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

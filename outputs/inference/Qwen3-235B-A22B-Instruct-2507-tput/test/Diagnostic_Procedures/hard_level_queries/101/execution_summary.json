@@ -1,0 +1,22 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH icu_stays_filtered AS (\n  SELECT \n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.los AS icu_los,\n    a.hospital_expire_flag,\n    DATETIME_ADD(ie.intime, INTERVAL 72 HOUR) AS time_72h\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ie.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 88 AND 98\n),\n-- Get COPD exacerbation status per admission\ncopd_dx AS (\n  SELECT DISTINCT\n    di.hadm_id,\n    TRUE AS has_copd_exacerbation\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_code = 'J441' AND d.icd_version = 10\n),\n-- For each ICU stay, count distinct procedures in first 72h\nprocedure_counts AS (\n  SELECT \n    ie.stay_id,\n    COUNT(DISTINCT ie.itemid) AS distinct_procedure_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` ie\n  INNER JOIN icu_stays_filtered s\n    ON ie.stay_id = s.stay_id\n  WHERE ie.starttime >= s.intime \n    AND ie.starttime <= s.time_72h\n    AND ie.statusdescription = 'completed'\n  GROUP BY ie.stay_id\n),\n-- Combine ICU stays with COPD status and procedure counts\ncohort AS (\n  SELECT \n    s.subject_id,\n    s.stay_id,\n    s.hadm_id,\n    s.icu_los,\n    s.hospital_expire_flag,\n    COALESCE(cd.has_copd_exacerbation, FALSE) AS has_copd_exacerbation,\n    COALESCE(pc.distinct_procedure_count, 0) AS distinct_procedure_count\n  FROM icu_stays_filtered s\n  LEFT JOIN copd_dx cd ON s.hadm_id = cd.hadm_id\n  LEFT JOIN procedure_counts pc ON s.stay_id = pc.stay_id\n)\n-- Final aggregation: 75th percentile for COPD group, and compare outcomes\nSELECT\n  APPROX_QUANTILES(CASE WHEN has_copd_exacerbation THEN distinct_procedure_count END, 100)[OFFSET(75)] AS copd_75th_percentile_distinct_procedures,\n  AVG(CASE WHEN has_copd_exacerbation THEN icu_los END) AS copd_mean_icu_los,\n  AVG(CASE WHEN has_copd_exacerbation THEN hospital_expire_flag END) AS copd_in_hospital_mortality,\n  AVG(CASE WHEN NOT has_copd_exacerbation THEN icu_los END) AS non_copd_mean_icu_los,\n  AVG(CASE WHEN NOT has_copd_exacerbation THEN hospital_expire_flag END) AS non_copd_in_hospital_mortality\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: has_copd_exacerbation at [57:30]; reason: invalidQuery, location: query, message: Unrecognized name: has_copd_exacerbation at [57:30]\n\nLocation: US\nJob ID: 9b1b1c74-2579-421a-b725-fd712541f1ff\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

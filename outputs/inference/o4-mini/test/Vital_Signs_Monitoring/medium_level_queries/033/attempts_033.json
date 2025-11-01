@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    icu.stay_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      USING (subject_id)\n    JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n      USING (subject_id, hadm_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 62 AND 72\n),\n\nhr_per_stay AS (\n  SELECT\n    c.stay_id,\n    AVG(ce.valuenum) AS mean_hr\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      ON ce.subject_id = c.subject_id\n      AND ce.hadm_id    = c.hadm_id\n      AND ce.stay_id    = c.stay_id\n    JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n      ON ce.itemid = di.itemid\n  WHERE\n    di.label = 'Heart Rate'\n    AND ce.valuenum BETWEEN 30 AND 300\n  GROUP BY\n    c.stay_id\n),\n\nhr_bucketed AS (\n  SELECT\n    stay_id,\n    mean_hr,\n    CASE\n      WHEN mean_hr < 60 THEN '<60'\n      WHEN mean_hr BETWEEN 60 AND 99 THEN '60-99'\n      WHEN mean_hr BETWEEN 100 AND 119 THEN '100-119'\n      ELSE '>=120'\n    END AS hr_category\n  FROM\n    hr_per_stay\n),\n\nmi_flags AS (\n  SELECT\n    DISTINCT icu.stay_id,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = icu.hadm_id\n          AND (\n            (d.icd_version = 9  AND d.icd_code LIKE '410%')\n            OR\n            (d.icd_version = 10 AND d.icd_code LIKE 'I21%')\n          )\n      ) THEN 1\n      ELSE 0\n    END AS acute_mi_flag\n  FROM\n    cohort icu\n)\n\nSELECT\n  hb.hr_category,\n  COUNT(*)                      AS total_stays,\n  SUM(mf.acute_mi_flag)         AS mi_count,\n  ROUND(SUM(mf.acute_mi_flag) / COUNT(*) * 100, 2) AS mi_percent\nFROM\n  hr_bucketed hb\n  LEFT JOIN mi_flags mf\n    USING (stay_id)\nGROUP BY\n  hb.hr_category\nORDER BY\n  -- Preserve the natural order of categories\n  CASE\n    WHEN hb.hr_category = '<60'   THEN 1\n    WHEN hb.hr_category = '60-99' THEN 2\n    WHEN hb.hr_category = '100-119' THEN 3\n    WHEN hb.hr_category = '>=120' THEN 4\n  END;",
+      "success": true,
+      "error": null,
+      "row_count": 4
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 4
+}

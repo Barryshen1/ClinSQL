@@ -1,0 +1,16 @@
+{
+  "query": "For my 54-year-old female: among females 49\u201359 with ischemic stroke, what are the mean, min, and max diagnostic procedures per admission for 1\u20134 vs 5\u20138 day stays, by primary vs secondary diagnosis?",
+  "final_sql": "WITH stroke_admissions AS (\n  -- Identify admissions with ischemic stroke (primary or secondary)\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.gender,\n    p.anchor_age,\n    -- LOS in days\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los,\n    -- Primary diagnosis flag\n    CASE WHEN di.seq_num = 1 THEN 1 ELSE 0 END AS is_primary\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 49 AND 59\n    AND (\n      -- ICD-9 ischemic stroke (occlusion of cerebral arteries)\n      (di.icd_version = 9 AND di.icd_code LIKE '43[0-4]%')\n      OR\n      -- ICD-10 ischemic stroke\n      (di.icd_version = 10 AND di.icd_code LIKE 'I63%')\n    )\n    AND DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) BETWEEN 1 AND 8  -- Only 1-8 day stays\n),\n\ndiagnostic_procs AS (\n  -- Count distinct diagnostic procedures per admission\n  SELECT \n    pi.hadm_id,\n    COUNT(DISTINCT pi.icd_code) AS proc_count\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n  WHERE \n    -- ICD-9 diagnostic procedures (surgical: imaging, etc.)\n    ((pi.icd_version = 9 AND pi.icd_code LIKE '87%') OR pi.icd_code LIKE '88%')\n    OR\n    -- ICD-10 PCS diagnostic (B codes: imaging, nuclear med, etc.)\n    (pi.icd_version = 10 AND pi.icd_code LIKE 'B[0-9][0-9]%')\n  GROUP BY \n    pi.hadm_id\n),\n\nadmissions_with_procs AS (\n  -- Join admissions to procedure counts (0 if none)\n  SELECT \n    sa.*,\n    COALESCE(dp.proc_count, 0) AS num_procs\n  FROM \n    stroke_admissions sa\n  LEFT JOIN \n    diagnostic_procs dp\n    ON sa.hadm_id = dp.hadm_id\n)\n\n-- Aggregate statistics by LOS bin and primary/secondary\nSELECT \n  los_bin,\n  diagnosis_type,\n  ROUND(AVG(num_procs), 2) AS mean_procs,\n  MIN(num_procs) AS min_procs,\n  MAX(num_procs) AS max_procs,\n  COUNT(*) AS num_admissions\nFROM (\n  SELECT \n    num_procs,\n    CASE \n      WHEN los BETWEEN 1 AND 4 THEN '1-4 days'\n      ELSE '5-8 days'\n    END AS los_bin,\n    CASE \n      WHEN is_primary = 1 THEN 'Primary diagnosis'\n      ELSE 'Secondary diagnosis'\n    END AS diagnosis_type\n  FROM \n    admissions_with_procs\n)\nGROUP BY \n  los_bin, diagnosis_type\nORDER BY \n  los_bin, diagnosis_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 51-year-old man with stroke. Among male stroke patients 46\u201356, what's the IQR of first-admission ICU LOS in days?",
+  "final_sql": "WITH\n-- first hospital admission per patient\nfirst_admission AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 46 AND 56\n),\n-- keep only the true first admissions\nfirst_admission_only AS (\n  SELECT subject_id, hadm_id, admittime, dischtime\n  FROM first_admission\n  WHERE rn = 1\n),\n-- admissions among those first admissions that have a stroke diagnosis\nstroke_first_admissions AS (\n  SELECT DISTINCT fa.subject_id, fa.hadm_id, fa.admittime, fa.dischtime\n  FROM first_admission_only fa\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON fa.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE LOWER(COALESCE(dd.long_title, '')) LIKE '%stroke%'\n),\n-- first icustay per (subject_id, hadm_id)\nfirst_icustay_per_admission AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    outtime,\n    los,\n    ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY intime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays`\n),\n-- join stroke first admissions to their first icustay and collect los\nstroke_first_admission_iculoss AS (\n  SELECT\n    sfa.subject_id,\n    sfa.hadm_id,\n    ficu.stay_id,\n    ficu.intime,\n    ficu.outtime,\n    ficu.los\n  FROM stroke_first_admissions sfa\n  JOIN first_icustay_per_admission ficu\n    ON sfa.subject_id = ficu.subject_id\n    AND sfa.hadm_id = ficu.hadm_id\n    AND ficu.rn = 1\n  WHERE ficu.los IS NOT NULL\n)\n\nSELECT\n  SAFE_CAST(quantiles[OFFSET(25)] AS FLOAT64) AS p25_days,\n  SAFE_CAST(quantiles[OFFSET(75)] AS FLOAT64) AS p75_days,\n  SAFE_CAST(quantiles[OFFSET(75)] - quantiles[OFFSET(25)] AS FLOAT64) AS iqr_days,\n  n_patients_used\nFROM (\n  SELECT\n    APPROX_QUANTILES(los, 100) AS quantiles,\n    COUNT(*) AS n_patients_used\n  FROM stroke_first_admission_iculoss\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column quantiles which is neither grouped nor aggregated at [70:13]; reason: invalidQuery, location: query, message: SELECT list expression references column quantiles which is neither grouped nor aggregated at [70:13]\n\nLocation: US\nJob ID: e912c8c8-d55e-4ceb-9cc1-a8704bd14606\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

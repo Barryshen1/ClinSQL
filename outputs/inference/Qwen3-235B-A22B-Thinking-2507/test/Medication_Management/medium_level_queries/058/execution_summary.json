@@ -1,0 +1,23 @@
+{
+  "query": "41-year-old man: among male inpatients 36\u201346 with T2DM and heart failure, compare initiation rates (%) of each antidiabetic class in first 12h versus final 48h pre-discharge and report net change (pp).",
+  "final_sql": "WITH \ncohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 36 AND 46\n),\nt2dm AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '250%' AND LENGTH(icd_code) >= 5 AND SUBSTR(icd_code, 5, 1) IN ('0', '2'))\n    OR (icd_version = 10 AND icd_code LIKE 'E11%')\n  GROUP BY hadm_id\n),\nheart_failure AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '428%')\n    OR (icd_version = 10 AND icd_code LIKE 'I50%')\n  GROUP BY hadm_id\n),\nfinal_cohort AS (\n  SELECT c.hadm_id, c.admittime, c.dischtime\n  FROM cohort c\n  INNER JOIN t2dm t ON c.hadm_id = t.hadm_id\n  INNER JOIN heart_failure h ON c.hadm_id = h.hadm_id\n),\nantidiabetic_drugs AS (\n  SELECT \n    hadm_id,\n    drug_class,\n    starttime\n  FROM (\n    SELECT \n      p.hadm_id,\n      p.starttime,\n      CASE\n        WHEN LOWER(p.drug) LIKE '%metform%' THEN 'Biguanides'\n        WHEN LOWER(p.drug) LIKE '%glybur%' OR LOWER(p.drug) LIKE '%glib%' OR LOWER(p.drug) LIKE '%glime%' THEN 'Sulfonylureas'\n        WHEN LOWER(p.drug) LIKE '%pioglit%' OR LOWER(p.drug) LIKE '%rosiglit%' THEN 'Thiazolidinediones'\n        WHEN LOWER(p.drug) LIKE '%sitagli%' OR LOWER(p.drug) LIKE '%saxagli%' OR LOWER(p.drug) LIKE '%linagli%' OR LOWER(p.drug) LIKE '%alogli%' THEN 'DPP-4 inhibitors'\n        WHEN LOWER(p.drug) LIKE '%exenat%' OR LOWER(p.drug) LIKE '%liraglut%' OR LOWER(p.drug) LIKE '%dulaglut%' OR LOWER(p.drug) LIKE '%semaglut%' THEN 'GLP-1 receptor agonists'\n        WHEN LOWER(p.drug) LIKE '%canaglif%' OR LOWER(p.drug) LIKE '%dapaglif%' OR LOWER(p.drug) LIKE '%empaglif%' THEN 'SGLT2 inhibitors'\n        WHEN LOWER(p.drug) LIKE '%insulin%' THEN 'Insulins'\n        ELSE NULL\n      END AS drug_class\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    INNER JOIN final_cohort fc ON p.hadm_id = fc.hadm_id\n    WHERE p.starttime IS NOT NULL\n  )\n  WHERE drug_class IS NOT NULL\n),\nclass_initiation AS (\n  SELECT \n    ad.hadm_id,\n    ad.drug_class,\n    MAX(CASE WHEN ad.starttime >= fc.admittime AND ad.starttime <= fc.admittime + INTERVAL '12' HOUR THEN 1 ELSE 0 END) AS early_init,\n    MAX(CASE WHEN ad.starttime >= fc.dischtime - INTERVAL '48' HOUR AND ad.starttime <= fc.dischtime THEN 1 ELSE 0 END) AS late_init\n  FROM antidiabetic_drugs ad\n  INNER JOIN final_cohort fc ON ad.hadm_id = fc.hadm_id\n  GROUP BY ad.hadm_id, ad.drug_class\n),\ntotal_admissions AS (\n  SELECT COUNT(*) AS total\n  FROM final_cohort\n)\nSELECT \n  drug_class,\n  ROUND(SUM(early_init) * 100.0 / total, 2) AS early_rate_pct,\n  ROUND(SUM(late_init) * 100.0 / total, 2) AS late_rate_pct,\n  ROUND((SUM(late_init) * 100.0 / total) - (SUM(early_init) * 100.0 / total), 2) AS net_change_pp\nFROM class_initiation\nCROSS JOIN total_admissions\nGROUP BY drug_class, total\nORDER BY drug_class;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: drug_class at [53:9]; reason: invalidQuery, location: query, message: Unrecognized name: drug_class at [53:9]\n\nLocation: US\nJob ID: 2c4a4cdf-93a1-4732-abc2-1d698789caa1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

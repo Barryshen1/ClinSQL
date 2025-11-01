@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72-year-old woman admitted with ACS. For females aged 67\u201377 with ACS and initial Troponin T above the 99th percentile, report patient/admission counts and initial troponin mean, median, IQR.",
+  "final_sql": "WITH\n  -- Step 1: Identify female patients aged 67-77\n  patient_cohort AS (\n    SELECT\n      p.subject_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    WHERE\n      p.gender = 'F'\n      AND p.anchor_age BETWEEN 67 AND 77\n  ),\n  -- Step 2: Identify hospital admissions with an ACS diagnosis\n  acs_admissions AS (\n    SELECT DISTINCT\n      dx.subject_id, -- MODIFIED: Included subject_id for a direct join later\n      dx.hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    LEFT JOIN\n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddx\n      ON dx.icd_code = ddx.icd_code AND dx.icd_version = ddx.icd_version\n    WHERE\n      LOWER(ddx.long_title) LIKE '%acute coronary syndrome%'\n      OR LOWER(ddx.long_title) LIKE '%unstable angina%'\n      OR (\n        LOWER(ddx.long_title) LIKE '%myocardial infarction%'\n        AND LOWER(ddx.long_title) LIKE '%acute%'\n      )\n  ),\n  -- Step 3: Find the first Troponin T measurement for each admission\n  initial_troponin AS (\n    SELECT\n      le.hadm_id,\n      le.valuenum,\n      ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    WHERE\n      le.itemid = 51003 -- Troponin T\n      AND le.valuenum IS NOT NULL\n  ),\n  -- Step 4: Combine the cohorts and apply all filters\n  final_cohort AS (\n    SELECT\n      p.subject_id,\n      a.hadm_id,\n      it.valuenum AS initial_troponin_t\n    FROM\n      patient_cohort AS p\n      -- MODIFIED: Replaced the unsupported subquery with a direct join\n    INNER JOIN\n      acs_admissions AS a\n      ON p.subject_id = a.subject_id\n    INNER JOIN\n      initial_troponin AS it\n      ON a.hadm_id = it.hadm_id\n    WHERE\n      it.rn = 1 -- Only the initial measurement\n      AND it.valuenum > 0.01 -- Above the 99th percentile threshold (0.01 ng/mL)\n  )\n-- Step 5: Calculate and report final statistics\nSELECT\n  COUNT(DISTINCT fc.subject_id) AS patient_count,\n  COUNT(DISTINCT fc.hadm_id) AS admission_count,\n  AVG(fc.initial_troponin_t) AS mean_initial_troponin,\n  APPROX_QUANTILES(fc.initial_troponin_t, 100)[OFFSET(50)] AS median_initial_troponin,\n  (\n    APPROX_QUANTILES(fc.initial_troponin_t, 100)[OFFSET(75)] - APPROX_QUANTILES(fc.initial_troponin_t, 100)[OFFSET(25)]\n  ) AS iqr_initial_troponin\nFROM\n  final_cohort AS fc;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unsupported subquery with table in join predicate.; reason: invalidQuery, location: query, message: Unsupported subquery with table in join predicate.\n\nLocation: US\nJob ID: 90d3f38e-15f7-42dd-9017-35cae60be22b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

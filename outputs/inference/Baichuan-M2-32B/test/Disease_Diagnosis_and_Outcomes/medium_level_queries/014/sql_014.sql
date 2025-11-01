@@ -1,0 +1,1 @@
+**Note**: The ICD code lists for HF, CKD, and diabetes are simplified and may require expansion for clinical accuracy. The ICU stay check uses a 24-hour window from admission. LOS groups are based on hospital LOS. The query uses BigQuery-specific functions (`APPROX_QUANTILES`) for efficiency.;

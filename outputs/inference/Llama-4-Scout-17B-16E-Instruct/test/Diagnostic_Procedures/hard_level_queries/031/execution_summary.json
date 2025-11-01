@@ -1,0 +1,28 @@
+{
+  "query": "I have a 71\u2011year\u2011old male ICU patient. For male ICU patients aged 66\u201376 with HHS, stratify 48\u2011hour procedure burden into quintiles and report per quintile: number of ICU stays, mean procedures, min/max, hospital mortality %, mean hospital LOS, and 30\u2011day readmission %.",
+  "final_sql": "WITH \n  -- Filter patients and calculate procedure burden\n  patient_info AS (\n    SELECT \n      p.subject_id,\n      p.anchor_age,\n      p.gender,\n      a.hadm_id,\n      a.admittime,\n      a.hospital_expire_flag,\n      a.dischtime,\n      a.admission_location\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON \n      p.subject_id = a.subject_id\n    WHERE \n      p.gender = 'M' AND p.anchor_age BETWEEN 66 AND 76\n      AND a.admission_location IN ('Hospice', 'Home Health', 'Skilled Nursing')\n  ),\n  \n  icu_stays AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      outtime\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays`\n  ),\n  \n  procedure_burden AS (\n    SELECT \n      icu_stay.stay_id,\n      COUNT(pe.itemid) AS procedure_count\n    FROM \n      icu_stays icu_stay\n    JOIN \n      `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON \n      icu_stay.stay_id = pe.stay_id\n    WHERE \n      pe.starttime BETWEEN icu_stay.intime AND TIMESTAMP_ADD(icu_stay.intime, INTERVAL 48 HOUR)\n    GROUP BY \n      icu_stay.stay_id\n  ),\n  \n  -- Calculate hospital LOS and 30-day readmission\n  hospital_outcomes AS (\n    SELECT \n      pi.hadm_id,\n      pi.hospital_expire_flag,\n      TIMESTAMP_DIFF(pi.dischtime, pi.admittime, DAY) AS hospital_los,\n      CASE \n        WHEN EXISTS (\n          SELECT \n            1 \n          FROM \n            `physionet-data.mimiciv_3_1_hosp.admissions` a2\n          WHERE \n            a2.subject_id = pi.subject_id \n            AND a2.admittime BETWEEN TIMESTAMP_ADD(pi.dischtime, INTERVAL 1 DAY) \n            AND TIMESTAMP_ADD(pi.dischtime, INTERVAL 30 DAY)\n        ) THEN 1 \n        ELSE 0 \n      END AS readmitted\n    FROM \n      patient_info pi\n  ),\n  \n  -- Combine procedure burden with hospital outcomes\n  combined_info AS (\n    SELECT \n      pb.stay_id,\n      pb.procedure_count,\n      ho.hadm_id,\n      ho.hospital_expire_flag,\n      ho.hospital_los,\n      ho.readmitted\n    FROM \n      procedure_burden pb\n    JOIN \n      icu_stays icu_stay\n    ON \n      pb.stay_id = icu_stay.stay_id\n    JOIN \n      hospital_outcomes ho\n    ON \n      icu_stay.hadm_id = ho.hadm_id\n  )\n\n-- Stratify into quintiles and calculate statistics\nSELECT \n  quintile,\n  COUNT(DISTINCT stay_id) AS num_icu_stays,\n  AVG(procedure_count) AS mean_procedures,\n  MIN(procedure_count) AS min_procedures,\n  MAX(procedure_count) AS max_procedures,\n  AVG(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100 AS hospital_mortality_pct,\n  AVG(hospital_los) AS mean_hospital_los,\n  AVG(readmitted) * 100 AS thirty_day_readmission_pct\nFROM (\n  SELECT \n    stay_id,\n    procedure_count,\n    hadm_id,\n    hospital_expire_flag,\n    hospital_los,\n    readmitted,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM \n    combined_info\n)\nGROUP BY \n  quintile\nORDER BY \n  quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword IS at [35:7]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword IS at [35:7]\n\nLocation: US\nJob ID: d2b8633d-4a03-4206-9236-a6b56d001d12\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [54:7]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [54:7]\n\nLocation: US\nJob ID: 93a4defb-b559-4f29-a1ea-7b5f5f162c20\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

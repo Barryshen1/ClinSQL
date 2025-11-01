@@ -1,0 +1,28 @@
+{
+  "query": "Evaluating a 64\u2011year\u2011old woman: among female ICU patients aged 59\u201369 with a shock diagnosis versus without shock, in the first 24 hours what are mean and percentiles of composite instability score, hypotension (MAP<65) and tachycardia burden, ICU LOS, and mortality?",
+  "final_sql": "WITH shock AS (\n  SELECT DISTINCT\n    subject_id,\n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    (icd_version = 9 AND icd_code = '785.5')\n    OR (icd_version = 10 AND icd_code LIKE 'R57%')\n),\ncohort AS (\n  SELECT\n    i.subject_id,\n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag AS mortality,\n    CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_shock\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  LEFT JOIN shock s\n    ON i.subject_id = s.subject_id AND i.hadm_id = s.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 59 AND 69\n),\nmap_events AS (\n  SELECT\n    ce.stay_id,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN cohort co\n    ON ce.subject_id = co.subject_id\n    AND ce.hadm_id = co.hadm_id\n    AND ce.stay_id = co.stay_id\n  WHERE\n    ce.itemid = 220045  -- Mean arterial blood pressure (arterial)\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= co.intime\n    AND ce.charttime <= LEAST(co.intime + INTERVAL 1 DAY, co.outtime)\n),\nhypo_summary AS (\n  SELECT\n    stay_id,\n    SUM(CASE WHEN valuenum < 65 THEN 1 ELSE 0 END) AS num_low,\n    COUNT(*) AS total_map\n  FROM map_events\n  GROUP BY stay_id\n),\nhr_events AS (\n  SELECT\n    ce.stay_id,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN cohort co\n    ON ce.subject_id = co.subject_id\n    AND ce.hadm_id = co.hadm_id\n    AND ce.stay_id = co.stay_id\n  WHERE\n    ce.itemid = 211  -- Heart Rate\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= co.intime\n    AND ce.charttime <= LEAST(co.intime + INTERVAL 1 DAY, co.outtime)\n),\ntachy_summary AS (\n  SELECT\n    stay_id,\n    SUM(CASE WHEN valuenum > 100 THEN 1 ELSE 0 END) AS num_high,\n    COUNT(*) AS total_hr\n  FROM hr_events\n  GROUP BY stay_id\n),\nmetrics AS (\n  SELECT\n    co.stay_id,\n    co.has_shock,\n    co.los,\n    co.mortality,\n    COALESCE(hs.num_low * 1.0 / NULLIF(hs.total_map, 0), 0) AS hypo_burden,\n    COALESCE(ts.num_high * 1.0 / NULLIF(ts.total_hr, 0), 0) AS tachy_burden,\n    (COALESCE(hs.num_low * 1.0 / NULLIF(hs.total_map, 0), 0) +\n     COALESCE(ts.num_high * 1.0 / NULLIF(ts.total_hr, 0), 0)) / 2 AS instability_score\n  FROM cohort co\n  LEFT JOIN hypo_summary hs\n    ON co.stay_id = hs.stay_id\n  LEFT JOIN tachy_summary ts\n    ON co.stay_id = ts.stay_id\n)\nSELECT\n  has_shock,\n  -- ICU LOS\n  AVG(los) AS mean_los,\n  APPROX_QUANTILES(los, 4)[OFFSET(1)] AS p25_los,\n  APPROX_QUANTILES(los, 4)[OFFSET(2)] AS p50_los,\n  APPROX_QUANTILES(los, 4)[OFFSET(3)] AS p75_los,\n  -- Composite instability score\n  AVG(instability_score) AS mean_instability_score,\n  APPROX_QUANTILES(instability_score, 4)[OFFSET(1)] AS p25_instability_score,\n  APPROX_QUANTILES(instability_score, 4)[OFFSET(2)] AS p50_instability_score,\n  APPROX_QUANTILES(instability_score, 4)[OFFSET(3)] AS p75_instability_score,\n  -- Hypotension burden\n  AVG(hypo_burden) AS mean_hypotension_burden,\n  APPROX_QUANTILES(hypo_burden, 4)[OFFSET(1)] AS p25_hypotension_burden,\n  APPROX_QUANTILES(hypo_burden, 4)[OFFSET(2)] AS p50_hypotension_burden,\n  APPROX_QUANTILES(hypo_burden, 4)[OFFSET(3)] AS p75_hypotension_burden,\n  -- Tachycardia burden\n  AVG(tachy_burden) AS mean_tachycardia_burden,\n  APPROX_QUANTILES(tachy_burden, 4)[OFFSET(1)] AS p25_tachycardia_burden,\n  APPROX_QUANTILES(tachy_burden, 4)[OFFSET(2)] AS p50_tachycardia_burden,\n  APPROX_QUANTILES(tachy_burden, 4)[OFFSET(3)] AS p75_tachycardia_burden,\n  -- Mortality\n  AVG(mortality * 1.0) AS mortality_rate\nFROM metrics\nGROUP BY has_shock\nORDER BY has_shock;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [7:6]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [7:6]\n\nLocation: US\nJob ID: 6e14833c-7fc4-4776-9381-edf103a62613\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name subject_id not found inside co at [36:27]; reason: invalidQuery, location: query, message: Name subject_id not found inside co at [36:27]\n\nLocation: US\nJob ID: 335313cd-7a2a-4a85-af3d-706ceffd95c2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

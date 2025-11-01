@@ -1,0 +1,16 @@
+{
+  "query": "I have a 57\u2011year\u2011old male inpatient. In males 52\u201362 with T2DM and heart failure, report prevalence (%) of injectable GLP\u20111s in first 24h versus final 48h, and absolute and relative change.",
+  "final_sql": "WITH cohort AS (\n  -- Get males aged 52-62 with T2DM and heart failure\n  SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 52 AND 62\n    AND adm.hadm_id IN (\n      -- T2DM: ICD10 E11\n      SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE icd_code LIKE 'E11%' AND icd_version = 10\n    )\n    AND adm.hadm_id IN (\n      -- Heart failure: ICD10 I50\n      SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` \n      WHERE icd_code LIKE 'I50%' AND icd_version = 10\n    )\n), \nglp1_orders AS (\n  -- Get GLP-1 prescriptions for the cohort\n  SELECT pr.subject_id, pr.hadm_id, pr.starttime, pr.drug\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  INNER JOIN cohort c\n    ON pr.hadm_id = c.hadm_id\n  WHERE LOWER(pr.drug) LIKE '%exenatide%' \n     OR LOWER(pr.drug) LIKE '%liraglutide%' \n     OR LOWER(pr.drug) LIKE '%dulaglutide%' \n     OR LOWER(pr.drug) LIKE '%semaglutide%'\n    AND (LOWER(pr.route) LIKE '%inject%' OR LOWER(pr.route) LIKE '%iv%')\n),\nfirst_24h AS (\n  -- Check if GLP-1 given in first 24h\n  SELECT c.hadm_id,\n    MAX(CASE WHEN go.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 24 HOUR) THEN 1 ELSE 0 END) AS glp1_first24h\n  FROM cohort c\n  LEFT JOIN glp1_orders go\n    ON c.hadm_id = go.hadm_id\n  GROUP BY c.hadm_id\n),\nfinal_48h AS (\n  -- Check if GLP-1 given in final 48h\n  SELECT c.hadm_id,\n    MAX(CASE WHEN go.starttime BETWEEN DATETIME_SUB(c.dischtime, INTERVAL 48 HOUR) AND c.dischtime THEN 1 ELSE 0 END) AS glp1_final48h\n  FROM cohort c\n  LEFT JOIN glp1_orders go\n    ON c.hadm_id = go.hadm_id\n  GROUP BY c.hadm_id\n),\ncombined AS (\n  SELECT \n    f24.hadm_id,\n    f24.glp1_first24h,\n    f48.glp1_final48h\n  FROM first_24h f24\n  INNER JOIN final_48h f48\n    ON f24.hadm_id = f48.hadm_id\n)\nSELECT \n  COUNT(*) AS total_patients,\n  SUM(glp1_first24h) AS count_first24h,\n  SUM(glp1_final48h) AS count_final48h,\n  ROUND(100 * SUM(glp1_first24h) / COUNT(*), 2) AS prevalence_first24h,\n  ROUND(100 * SUM(glp1_final48h) / COUNT(*), 2) AS prevalence_final48h,\n  ROUND(100 * (SUM(glp1_final48h) - SUM(glp1_first24h)) / COUNT(*), 2) AS absolute_change,\n  ROUND(100 * (SUM(glp1_final48h) - SUM(glp1_first24h)) / NULLIF(SUM(glp1_first24h), 0), 2) AS relative_change\nFROM combined;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

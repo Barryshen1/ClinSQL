@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 70\u2011year\u2011old female. Among female ICU patients 65\u201375 with pulmonary embolism, stratify first ICU\u2011stay diagnostic procedure counts within 72 hours into quartiles and report N, mean procedure count, mean ICU LOS (days), and hospital mortality (%) per quartile.",
+  "final_sql": "WITH pt_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    DATETIME(p.anchor_year, 1, 1, 0, 0, 0) AS anchor_year_dt\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  WHERE p.gender = 'F'\n),\nicu_with_age AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    pa.anchor_age + (EXTRACT(YEAR FROM i.intime) - pa.anchor_year) AS age_at_icu_adm\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays i\n  INNER JOIN pt_age pa ON i.subject_id = pa.subject_id\n  WHERE (pa.anchor_age + (EXTRACT(YEAR FROM i.intime) - pa.anchor_year)) BETWEEN 65 AND 75\n),\nfirst_icu_stay AS (\n  SELECT\n    *,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n  FROM icu_with_age\n),\npe_diagnosis AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%pulmonary embolism%'\n),\ncohort AS (\n  SELECT\n    f.*\n  FROM first_icu_stay f\n  INNER JOIN pe_diagnosis p ON f.hadm_id = p.hadm_id\n  WHERE f.rn = 1\n),\nprocedure_counts AS (\n  SELECT\n    c.stay_id,\n    c.subject_id,\n    c.hadm_id,\n    c.intime,\n    c.los,\n    COUNT(pv.itemid) AS procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pv\n    ON c.stay_id = pv.stay_id\n    AND pv.starttime >= c.intime\n    AND pv.starttime <= DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n  GROUP BY c.stay_id, c.subject_id, c.hadm_id, c.intime, c.los\n),\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM procedure_counts\n)\nSELECT\n  q.quartile,\n  COUNT(*) AS N,\n  ROUND(AVG(q.procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(q.los), 2) AS mean_icu_los_days,\n  ROUND(100.0 * AVG(COALESCE(a.hospital_expire_flag, 0)), 2) AS hospital_mortality_pct\nFROM quartiles q\nLEFT JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n  ON q.hadm_id = a.hadm_id\nGROUP BY q.quartile\nORDER BY q.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 DATETIME_ADD does not support the YEAR date part when the argument is TIMESTAMP type at [7:5]; reason: invalidQuery, location: query, message: DATETIME_ADD does not support the YEAR date part when the argument is TIMESTAMP type at [7:5]\n\nLocation: US\nJob ID: f17a418a-523c-46ca-9a9d-f3436d4a56c8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

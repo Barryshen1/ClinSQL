@@ -1,0 +1,28 @@
+{
+  "query": "I have a 65\u2011year\u2011old female. Among 60\u201370\u2011year\u2011old females with T2DM and HF, report initiation % and absolute difference (pp) for antidiabetics, beta\u2011blockers, ACEi/ARB/ARNI, loop diuretics: first 48h vs final 24h.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 60 AND 70\n    AND icu.los >= 1\n    AND DATETIME_DIFF(icu.outtime, icu.intime, HOUR) >= 24\n),\n\ndiabetes_hf AS (\n  SELECT DISTINCT\n    hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON dx.icd_code = d.icd_code AND dx.icd_version = d.icd_version\n  WHERE\n    (d.icd_code LIKE 'E11%' OR d.icd_code LIKE '250.00')\n    OR\n    (d.icd_code LIKE 'I50%' OR d.icd_code LIKE '428%')\n  GROUP BY\n    hadm_id\n  HAVING\n    COUNT(DISTINCT CASE WHEN d.icd_code LIKE 'E11%' OR d.icd_code LIKE '250.00' THEN 1 END) > 0\n    AND\n    COUNT(DISTINCT CASE WHEN d.icd_code LIKE 'I50%' OR d.icd_code LIKE '428%' THEN 1 END) > 0\n),\n\neligible_stays AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN diabetes_hf dh ON c.hadm_id = dh.hadm_id\n),\n\nmeds_classified AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.starttime,\n    LOWER(p.drug) AS drug,\n    CASE\n      WHEN REGEXP_CONTAINS(LOWER(p.drug), r'insulin|metformin|glipizide|glyburide|sitagliptin|liraglutide') THEN 'Antidiabetic'\n      WHEN REGEXP_CONTAINS(LOWER(p.drug), r'metoprolol|carvedilol|bisoprolol|propranolol') THEN 'Beta-blocker'\n      WHEN REGEXP_CONTAINS(LOWER(p.drug), r'lisinopril|enalapril|losartan|telmisartan|sacubitril|valsartan') THEN 'ACEi/ARB/ARNI'\n      WHEN REGEXP_CONTAINS(LOWER(p.drug), r'furosemide|bumetanide|torsemide') THEN 'Loop diuretic'\n    END AS med_class\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN\n    eligible_stays es ON p.hadm_id = es.hadm_id\n  WHERE\n    p.starttime >= es.intime\n    AND p.starttime <= es.outtime\n),\n\nmed_window_flags AS (\n  SELECT\n    mc.subject_id,\n    es.stay_id,\n    mc.med_class,\n    CASE\n      WHEN mc.starttime BETWEEN es.intime AND DATETIME_ADD(es.intime, INTERVAL 48 HOUR) THEN 1\n      ELSE 0\n    END AS in_first_48h,\n    CASE\n      WHEN mc.starttime BETWEEN DATETIME_SUB(es.outtime, INTERVAL 24 HOUR) AND es.outtime THEN 1\n      ELSE 0\n    END AS in_final_24h\n  FROM\n    meds_classified mc\n  JOIN\n    eligible_stays es ON mc.hadm_id = es.hadm_id\n  WHERE\n    mc.med_class IS NOT NULL\n),\n\npatient_med_flags AS (\n  SELECT\n    stay_id,\n    med_class,\n    MAX(in_first_48h) AS started_first_48h,\n    MAX(in_final_24h) AS started_final_24h\n  FROM\n    med_window_flags\n  GROUP BY\n    stay_id,\n    med_class\n),\n\nsummary_stats AS (\n  SELECT\n    med_class,\n    COUNT(*) AS total_patients,\n    SUM(started_first_48h) AS started_48h,\n    SUM(started_final_24h) AS started_24h,\n    ROUND(SUM(started_first_48h) * 100.0 / COUNT(*), 2) AS pct_48h,\n    ROUND(SUM(started_final_24h) * 100.0 / COUNT(*), 2) AS pct_24h,\n    ROUND((SUM(started_final_24h) - SUM(started_first_48h)) * 100.0 / COUNT(*), 2) AS diff_pp\n  FROM\n    patient_med_flags\n  GROUP BY\n    med_class\n)\n\nSELECT\n  med_class,\n  pct_48h,\n  pct_24h,\n  diff_pp\nFROM\n  summary_stats\nORDER BY\n  med_class;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name stay_id not found inside p at [66:55]; reason: invalidQuery, location: query, message: Name stay_id not found inside p at [66:55]\n\nLocation: US\nJob ID: 8d49e80a-fa5a-4a2b-8abd-2f9b14e850cf\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [74:5]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [74:5]\n\nLocation: US\nJob ID: 967a9182-d030-40e3-8f67-352a06d229a4\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

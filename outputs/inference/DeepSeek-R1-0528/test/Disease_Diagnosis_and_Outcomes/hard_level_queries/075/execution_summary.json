@@ -1,0 +1,22 @@
+{
+  "query": "I have a 49\u2011year\u2011old female inpatient. Among female inpatients aged 44\u201354 with intracranial hemorrhage, what are median (IQR) risk score and 90\u2011day mortality? Compare major complication rate and median survivor LOS to female inpatients 44\u201354, and give matched risk percentile.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime, \n    adm.deathtime,\n    adm.hospital_expire_flag,\n    pat.gender,\n    pat.anchor_age,\n    pat.anchor_year,\n    pat.dod,\n    anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n),\n\nhemorrhage_admissions AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code IN ('430','431','432','4320','4321','4329'))\n    OR \n    (icd_version = 10 AND icd_code IN ('I60','I61','I62'))\n),\n\nwith_outcomes AS (\n  SELECT \n    ba.*,\n    CASE WHEN ha.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS hemorrhage_flag,\n    -- 90-day mortality flag\n    CASE \n      WHEN dod IS NOT NULL AND DATE_DIFF(CAST(dod AS DATE), CAST(admittime AS DATE), DAY) <= 90 THEN 1\n      WHEN deathtime IS NOT NULL AND DATE_DIFF(CAST(deathtime AS DATE), CAST(admittime AS DATE), DAY) <= 90 THEN 1\n      ELSE 0 \n    END AS mortality_90d,\n    -- LOS in days for survivors (NULL if died in hospital)\n    CASE \n      WHEN hospital_expire_flag = 0 THEN DATE_DIFF(CAST(dischtime AS DATE), CAST(admittime AS DATE), DAY)\n      ELSE NULL \n    END AS survivor_los\n  FROM base_admissions ba\n  LEFT JOIN hemorrhage_admissions ha \n    ON ba.hadm_id = ha.hadm_id\n  WHERE ba.age_at_admission BETWEEN 44 AND 54\n),\n\nhemorrhage_group AS (\n  SELECT \n    'Intracranial Hemorrhage' AS cohort,\n    COUNT(*) AS num_admissions,\n    AVG(mortality_90d) * 100 AS mortality_90d_rate,\n    APPROX_QUANTILES(survivor_los, 4) AS los_quantiles  -- Removed invalid IGNORE NULLS\n  FROM with_outcomes\n  WHERE hemorrhage_flag = 1\n),\n\nall_group AS (\n  SELECT \n    'All Female 44-54' AS cohort,\n    COUNT(*) AS num_admissions,\n    AVG(mortality_90d) * 100 AS mortality_90d_rate,\n    APPROX_QUANTILES(survivor_los, 4) AS los_quantiles  -- Removed invalid IGNORE NULLS\n  FROM with_outcomes\n)\n\nSELECT \n  cohort,\n  num_admissions,\n  ROUND(mortality_90d_rate, 2) AS mortality_90d_rate_percent,\n  los_quantiles[OFFSET(2)] AS median_survivor_los_days,\n  los_quantiles[OFFSET(1)] AS q1_survivor_los_days,\n  los_quantiles[OFFSET(3)] AS q3_survivor_los_days,\n  los_quantiles[OFFSET(3)] - los_quantiles[OFFSET(1)] AS iqr_survivor_los_days\nFROM hemorrhage_group\nUNION ALL\nSELECT \n  cohort,\n  num_admissions,\n  ROUND(mortality_90d_rate, 2) AS mortality_90d_rate_percent,\n  los_quantiles[OFFSET(2)] AS median_survivor_los_days,\n  los_quantiles[OFFSET(1)] AS q1_survivor_los_days,\n  los_quantiles[OFFSET(3)] AS q3_survivor_los_days,\n  los_quantiles[OFFSET(3)] - los_quantiles[OFFSET(1)] AS iqr_survivor_los_days\nFROM all_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [55:47]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [55:47]\n\nLocation: US\nJob ID: 5f62b9a3-49b8-4eb7-83a8-799dbe26295c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

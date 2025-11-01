@@ -1,0 +1,28 @@
+{
+  "query": "For my 50-year-old male inpatient, among 45\u201355-year-old males with type 2 diabetes and heart failure (\u226548 h stay), report percentages only for Insulin versus Oral agents in first 48 h and final 24 h.",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    DATETIME_DIFF(icu.outtime, icu.intime, HOUR) AS stay_duration_hours\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p ON icu.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND DATETIME_DIFF(icu.outtime, icu.intime, HOUR) >= 48\n),\n-- Step 2: Identify patients with type 2 diabetes and heart failure\ndiagnoses AS (\n  SELECT \n    hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE \n    (LOWER(d.long_title) LIKE '%type 2 diabetes%' OR LOWER(d.long_title) LIKE '%type ii diabetes%')\n    AND di.icd_version = 10\n  INTERSECT DISTINCT\n  SELECT \n    hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE \n    LOWER(d.long_title) LIKE '%heart failure%'\n    AND di.icd_version = 10\n),\n-- Step 3: Medication administration in the first 48 hours and last 24 hours\nmedication_use AS (\n  SELECT \n    c.stay_id,\n    c.intime,\n    c.outtime,\n    CASE \n      WHEN ie.starttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR) THEN 'First 48h'\n      WHEN ie.starttime BETWEEN DATETIME_SUB(c.outtime, INTERVAL 24 HOUR) AND c.outtime THEN 'Last 24h'\n    END AS time_frame,\n    CASE \n      WHEN LOWER(di.label) LIKE '%insulin%' THEN 'Insulin'\n      ELSE 'Other'\n    END AS medication_type\n  FROM \n    cohort c\n  JOIN \n    diagnoses d ON c.hadm_id = d.hadm_id\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_icu.inputevents` ie ON c.stay_id = ie.stay_id\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` di ON ie.itemid = di.itemid\n  WHERE \n    (ie.starttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n     OR ie.starttime BETWEEN DATETIME_SUB(c.outtime, INTERVAL 24 HOUR) AND c.outtime)\n  UNION ALL\n  SELECT \n    c.stay_id,\n    c.intime,\n    c.outtime,\n    CASE \n      WHEN p.starttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR) THEN 'First 48h'\n      WHEN p.starttime BETWEEN DATETIME_SUB(c.outtime, INTERVAL 24 HOUR) AND c.outtime THEN 'Last 24h'\n    END AS time_frame,\n    CASE \n      WHEN LOWER(p.drug) LIKE '%metformin%' OR LOWER(p.drug) LIKE '%sulfonylurea%' \n           OR LOWER(p.drug) LIKE '%glipizide%' OR LOWER(p.drug) LIKE '%glyburide%' THEN 'Oral'\n      ELSE 'Other'\n    END AS medication_type\n  FROM \n    cohort c\n  JOIN \n    diagnoses d ON c.hadm_id = d.hadm_id\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON c.hadm_id = p.hadm_id\n  WHERE \n    p.drug_type = 'RX'\n    AND (p.starttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n         OR p.starttime BETWEEN DATETIME_SUB(c.outtime, INTERVAL 24 HOUR) AND c.outtime)\n),\n-- Step 4: Calculate percentages\npercentages AS (\n  SELECT \n    time_frame,\n    medication_type,\n    COUNT(DISTINCT stay_id) AS num_patients\n  FROM \n    medication_use\n  WHERE \n    medication_type IN ('Insulin', 'Oral')\n  GROUP BY \n    time_frame, medication_type\n),\ntotal_counts AS (\n  SELECT \n    time_frame,\n    COUNT(DISTINCT stay_id) AS total_patients\n  FROM \n    medication_use\n  WHERE \n    medication_type IN ('Insulin', 'Oral')\n  GROUP BY \n    time_frame\n)\n\nSELECT \n  p.time_frame,\n  p.medication_type,\n  (p.num_patients * 100.0 / tc.total_patients) AS percentage\nFROM \n  percentages p\nJOIN \n  total_counts tc ON p.time_frame = tc.time_frame\nORDER BY \n  p.time_frame, p.medication_type;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: diagnoses_icd at [28:58]; reason: invalidQuery, location: query, message: Unrecognized name: diagnoses_icd at [28:58]\n\nLocation: US\nJob ID: 0bc1e028-005a-4956-921d-7a9de8c63570\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: 6e16616f-437c-4aaa-ac52-aa758d6c84a2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

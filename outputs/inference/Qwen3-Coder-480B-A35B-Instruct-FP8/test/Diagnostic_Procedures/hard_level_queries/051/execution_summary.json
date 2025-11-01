@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 95\u2011year\u2011old male ICU patient with sepsis. Among male ICU patients age 90\u2013100 with sepsis, what is the SD of diagnostic utilization in the first 24h? Also report p75, p95, in\u2011hospital mortality %, average LOS, and admissions versus overall ICU.",
+  "final_sql": "WITH sepsis_icu_cohort AS (\n  SELECT DISTINCT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    adm.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients pat\n    ON icu.subject_id = pat.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses ddx\n    ON dx.icd_code = ddx.icd_code AND dx.icd_version = ddx.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 90 AND 100\n    AND LOWER(ddx.long_title) LIKE '%sepsis%'\n),\n\nfirst24_labevents AS (\n  SELECT\n    sicu.stay_id,\n    COUNT(DISTINCT lab.labevent_id) AS lab_count\n  FROM\n    sepsis_icu_cohort sicu\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.labevents lab\n    ON sicu.hadm_id = lab.hadm_id\n  WHERE\n    lab.charttime >= sicu.intime\n    AND lab.charttime <= DATETIME_ADD(sicu.intime, INTERVAL 24 HOUR)\n  GROUP BY\n    sicu.stay_id\n),\n\nfirst24_microevents AS (\n  SELECT\n    sicu.stay_id,\n    COUNT(DISTINCT mic.microevent_id) AS micro_count\n  FROM\n    sepsis_icu_cohort sicu\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.microbiologyevents mic\n    ON sicu.hadm_id = mic.hadm_id\n  WHERE\n    mic.charttime >= sicu.intime\n    AND mic.charttime <= DATETIME_ADD(sicu.intime, INTERVAL 24 HOUR)\n  GROUP BY\n    sicu.stay_id\n),\n\ndiagnostic_counts AS (\n  SELECT\n    sicu.stay_id,\n    COALESCE(lab.lab_count, 0) + COALESCE(mic.micro_count, 0) AS diagnostic_utilization\n  FROM\n    sepsis_icu_cohort sicu\n  LEFT JOIN\n    first24_labevents lab\n    ON sicu.stay_id = lab.stay_id\n  LEFT JOIN\n    first24_microevents mic\n    ON sicu.stay_id = mic.stay_id\n)\n\nSELECT\n  STDDEV(diagnostic_utilization) AS sd_diagnostic_utilization,\n  APPROX_QUANTILES(diagnostic_utilization, 100)[OFFSET(75)] AS p75_diagnostic_utilization,\n  APPROX_QUANTILES(diagnostic_utilization, 100)[OFFSET(95)] AS p95_diagnostic_utilization,\n  AVG(sicu.los) AS avg_los,\n  AVG(sicu.hospital_expire_flag) * 100 AS in_hospital_mortality_percent,\n  COUNT(DISTINCT sicu.hadm_id) / COUNT(DISTINCT sicu.stay_id) AS admissions_per_icu_stay\nFROM\n  sepsis_icu_cohort sicu\nLEFT JOIN\n  diagnostic_counts dc\n  ON sicu.stay_id = dc.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

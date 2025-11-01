@@ -1,0 +1,22 @@
+{
+  "query": "I have a 57\u2011year\u2011old male inpatient. In males 52\u201362 with T2DM and heart failure, report prevalence (%) of injectable GLP\u20111s in first 24h versus final 48h, and absolute and relative change.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    -- T2DM (ICD-9: 250.x0/x2; ICD-10: E11.x)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE \n        di.subject_id = a.subject_id \n        AND di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 9 AND di.icd_code LIKE '250%' AND (SUBSTR(di.icd_code, -1) = '0' OR SUBSTR(di.icd_code, -1) = '2'))\n          OR \n          (di.icd_version = 10 AND di.icd_code LIKE 'E11%')\n        )\n    )\n    -- Heart Failure (ICD-9: 428.x, 402.x1, 404.x1/x3; ICD-10: I50.x, I11.0, I13.0/x2)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE \n        di.subject_id = a.subject_id \n        AND di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 9 AND (\n            di.icd_code LIKE '428%' \n            OR di.icd_code IN ('402.01','402.11','402.91','404.01','404.03','404.11','404.13','404.91','404.93')\n          )) \n          OR \n          (di.icd_version = 10 AND (\n            di.icd_code LIKE 'I50%' \n            OR di.icd_code IN ('I11.0','I13.0','I13.2')\n          ))\n        )\n    )\n),\n\nglp1_events AS (\n  SELECT \n    c.hadm_id,\n    MAX(CASE \n          WHEN e.scheduletime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 24 HOUR) \n          THEN 1 \n          ELSE 0 \n        END) AS in_first_24h,\n    MAX(CASE \n          WHEN e.scheduletime BETWEEN DATETIME_SUB(c.dischtime, INTERVAL 48 HOUR) AND c.dischtime \n          THEN 1 \n          ELSE 0 \n        END) AS in_final_48h\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar` e\n    ON c.subject_id = e.subject_id  -- Added subject_id join\n    AND c.hadm_id = e.hadm_id\n    AND e.event_txt = 'Given'\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar_detail` ed\n    ON e.emar_id = ed.emar_id\n    AND e.subject_id = ed.subject_id\n    AND (\n      CONTAINS_SUBSTR(ed.product_description, 'exenatide') OR  -- Replaced ILIKE\n      CONTAINS_SUBSTR(ed.product_description, 'liraglutide') OR\n      CONTAINS_SUBSTR(ed.product_description, 'dulaglutide') OR\n      CONTAINS_SUBSTR(ed.product_description, 'semaglutide') OR\n      CONTAINS_SUBSTR(ed.product_description, 'lixisenatide')\n    )\n    AND UPPER(ed.route) IN ('IV', 'SUBCUTANEOUS', 'SUBCUT', 'INJECTION')  -- Case-insensitive route\n  GROUP BY c.hadm_id\n)\n\nSELECT \n  COUNT(hadm_id) AS total_patients,\n  SUM(COALESCE(in_first_24h, 0)) AS count_first_24h,\n  SUM(COALESCE(in_final_48h, 0)) AS count_final_48h,\n  ROUND(SUM(COALESCE(in_first_24h, 0)) * 100.0 / COUNT(hadm_id), 2) AS prevalence_first_24h,\n  ROUND(SUM(COALESCE(in_final_48h, 0)) * 100.0 / COUNT(hadm_id), 2) AS prevalence_final_48h,\n  ROUND(\n    (SUM(COALESCE(in_final_48h, 0)) * 100.0 / COUNT(hadm_id)) - \n    (SUM(COALESCE(in_first_24h, 0)) * 100.0 / COUNT(hadm_id)), \n    2\n  ) AS absolute_change,\n  ROUND(\n    (\n      (SUM(COALESCE(in_final_48h, 0)) * 100.0 / COUNT(hadm_id)) - \n      (SUM(COALESCE(in_first_24h, 0)) * 100.0 / COUNT(hadm_id))\n    ) / \n    NULLIF(SUM(COALESCE(in_first_24h, 0)) * 100.0 / COUNT(hadm_id), 0) * 100, \n    2\n  ) AS relative_change\nFROM glp1_events;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got identifier \"ILIKE\" at [68:30]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got identifier \"ILIKE\" at [68:30]\n\nLocation: US\nJob ID: 664ecc3c-d151-448c-8ce0-7f56e3ba60b3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

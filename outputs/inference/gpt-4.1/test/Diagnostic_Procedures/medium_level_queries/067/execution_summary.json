@@ -1,0 +1,22 @@
+{
+  "query": "44-year-old male. In male patients 39\u201349 with ACS and LOS 1\u20137 days, report p25, p50, p75 of ultrasounds (incl. echo) per admission, stratified 1\u20134 vs 5\u20137 stays and primary vs secondary ACS.",
+  "final_sql": "WITH acs_icd_codes AS (\n  -- List of ACS ICD codes (ICD-9 and ICD-10)\n  SELECT '410' AS icd_code, 9 AS icd_version UNION ALL\n  SELECT '411', 9 UNION ALL\n  SELECT '413', 9 UNION ALL\n  SELECT 'I20', 10 UNION ALL\n  SELECT 'I21', 10 UNION ALL\n  SELECT 'I22', 10 UNION ALL\n  SELECT 'I23', 10 UNION ALL\n  SELECT 'I24', 10\n),\nultrasound_icd_codes AS (\n  -- List of ultrasound/echo ICD-9 procedure codes\n  SELECT '88.72' AS icd_code, 9 AS icd_version UNION ALL\n  SELECT '88.73', 9 UNION ALL\n  SELECT '88.74', 9 UNION ALL\n  SELECT '88.76', 9 UNION ALL\n  SELECT '88.77', 9 UNION ALL\n  SELECT '88.79', 9\n),\ncohort AS (\n  -- Step 1: Find admissions for male patients age 39\u201349 with ACS and LOS 1\u20137 days\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.anchor_age,\n    pat.gender,\n    adm.admittime,\n    adm.dischtime,\n    TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON adm.subject_id = pat.subject_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 39 AND 49\n    AND TIMESTAMP_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 7\n),\nacs_admissions AS (\n  -- Step 2: Find ACS admissions and ACS type (primary/secondary)\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    MIN(d.seq_num) AS min_seq_num\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON c.hadm_id = d.hadm_id\n    JOIN acs_icd_codes acs\n      ON d.icd_code = acs.icd_code AND d.icd_version = acs.icd_version\n  GROUP BY\n    c.subject_id, c.hadm_id\n),\nacs_type AS (\n  -- Step 3: Assign ACS type\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    CASE WHEN a.min_seq_num = 1 THEN 'primary' ELSE 'secondary' END AS acs_type\n  FROM\n    acs_admissions a\n),\nicu_stay_counts AS (\n  -- Step 4: Count ICU stays per admission\n  SELECT\n    icu.hadm_id,\n    COUNT(DISTINCT icu.stay_id) AS icu_stay_count\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  GROUP BY\n    icu.hadm_id\n),\nicu_strata AS (\n  -- Step 5: Bin ICU stay counts\n  SELECT\n    icu.hadm_id,\n    icu.icu_stay_count,\n    CASE\n      WHEN icu.icu_stay_count BETWEEN 1 AND 4 THEN '1-4'\n      WHEN icu.icu_stay_count BETWEEN 5 AND 7 THEN '5-7'\n      ELSE NULL\n    END AS icu_stay_bin\n  FROM\n    icu_stay_counts icu\n  WHERE\n    icu.icu_stay_count BETWEEN 1 AND 7\n),\nultrasound_counts AS (\n  -- Step 6: Count ultrasounds/echo per admission\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT p.icd_code) AS ultrasound_count\n  FROM\n    acs_type c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n      ON c.hadm_id = p.hadm_id\n    LEFT JOIN ultrasound_icd_codes uicd\n      ON p.icd_code = uicd.icd_code AND p.icd_version = uicd.icd_version\n  WHERE\n    uicd.icd_code IS NOT NULL\n  GROUP BY\n    c.subject_id, c.hadm_id\n),\nfinal AS (\n  -- Step 7: Combine all strata\n  SELECT\n    u.subject_id,\n    u.hadm_id,\n    u.ultrasound_count,\n    a.acs_type,\n    i.icu_stay_bin\n  FROM\n    ultrasound_counts u\n    JOIN acs_type a\n      ON u.hadm_id = a.hadm_id\n    JOIN icu_strata i\n      ON u.hadm_id = i.hadm_id\n  WHERE\n    i.icu_stay_bin IS NOT NULL\n)\n-- Step 8: Calculate percentiles per stratum\nSELECT\n  icu_stay_bin,\n  acs_type,\n  APPROX_QUANTILES(ultrasound_count, 4)[OFFSET(1)] AS p25,\n  APPROX_QUANTILES(ultrasound_count, 4)[OFFSET(2)] AS p50,\n  APPROX_QUANTILES(ultrasound_count, 4)[OFFSET(3)] AS p75,\n  COUNT(*) AS n_admissions\nFROM\n  final\nGROUP BY\n  icu_stay_bin, acs_type\nORDER BY\n  icu_stay_bin, acs_type;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 IN subquery is not supported inside join predicate.; reason: invalidQuery, location: query, message: IN subquery is not supported inside join predicate.\n\nLocation: US\nJob ID: 5f8ea4b0-ba62-4efd-8c5e-13af5f72d3b9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

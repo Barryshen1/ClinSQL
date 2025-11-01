@@ -1,0 +1,16 @@
+{
+  "query": "My patient is a 49\u2011year\u2011old woman with AMI. Among female ICU admissions aged 44\u201354 with AMI, stratify procedure burden during first ICU stay (72h) into quartiles and report n per quartile, mean procedure count, hospital LOS (days), and in\u2011hospital mortality%.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id, \n        p.gender, \n        p.anchor_age,\n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.hospital_expire_flag,\n        icu.stay_id,\n        icu.intime,\n        icu.outtime,\n        -- Calculate hospital LOS in days\n        DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS hosp_los_days\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON p.subject_id = adm.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON adm.hadm_id = icu.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n    WHERE p.gender = 'F'\n        AND p.anchor_age BETWEEN 44 AND 54\n        AND d.long_title LIKE 'Acute myocardial infarction%'\n    -- Get the first ICU stay per admission\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY adm.hadm_id ORDER BY icu.intime) = 1\n),\n\nprocedures_72h AS (\n    SELECT \n        c.stay_id,\n        COUNT(DISTINCT pe.itemid) AS procedure_count\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n        ON c.stay_id = pe.stay_id\n        AND pe.starttime >= c.intime\n        AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    GROUP BY c.stay_id\n),\n\ncohort_with_procedures AS (\n    SELECT \n        c.*,\n        COALESCE(p.procedure_count, 0) AS procedure_count\n    FROM cohort c\n    LEFT JOIN procedures_72h p\n        ON c.stay_id = p.stay_id\n),\n\nquartiles AS (\n    SELECT \n        *,\n        NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n    FROM cohort_with_procedures\n)\n\nSELECT \n    quartile,\n    COUNT(*) AS n,\n    ROUND(AVG(procedure_count), 2) AS mean_procedure_count,\n    ROUND(AVG(hosp_los_days), 2) AS mean_hosp_los_days,\n    ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_percentage\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "query": "For benchmarking my 70-year-old female ICU patient: among female ICU stays age 65\u201375, summarize per-measurement systolic BP in first 24h by categories (<140; 140\u2013159; \u2265160) giving mean, median, IQR.",
+  "final_sql": "WITH patient_birth AS (\n  SELECT \n    subject_id,\n    gender,\n    DATE_SUB(CAST(CONCAT(anchor_year, '-01-01') AS DATE), INTERVAL anchor_age YEAR) AS birth_date\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n),\neligible_icu AS (\n  SELECT \n    i.stay_id,\n    i.subject_id,\n    i.hadm_id,\n    i.intime,\n    p.birth_date,\n    TIMESTAMP_DIFF(i.intime, p.birth_date, YEAR) AS age_at_icu\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN patient_birth p\n    ON i.subject_id = p.subject_id\n  WHERE TIMESTAMP_DIFF(i.intime, p.birth_date, YEAR) BETWEEN 65 AND 75\n),\nsbp_itemids AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE category = 'Vital Signs'\n    AND (label LIKE '%Systolic BP%' OR label LIKE '%SBP%')\n    AND unitname = 'mm Hg'\n),\nmeasurements AS (\n  SELECT \n    e.stay_id,\n    e.charttime,\n    e.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` e\n  INNER JOIN eligible_icu i\n    ON e.subject_id = i.subject_id\n    AND e.hadm_id = i.hadm_id\n    AND e.stay_id = i.stay_id\n  WHERE e.itemid IN (SELECT itemid FROM sbp_itemids)\n    AND e.valuenum > 0\n    AND e.charttime BETWEEN i.intime AND DATETIME_ADD(i.intime, INTERVAL 24 HOUR)\n),\ncategorized AS (\n  SELECT \n    valuenum,\n    CASE \n      WHEN valuenum < 140 THEN '<140'\n      WHEN valuenum BETWEEN 140 AND 159 THEN '140-159'\n      ELSE '>=160'\n    END AS category\n  FROM measurements\n)\nSELECT \n  category,\n  mean_sbp,  -- Use the computed mean from the subquery\n  q_array[OFFSET(50)] AS median_sbp,\n  q_array[OFFSET(75)] - q_array[OFFSET(25)] AS iqr_sbp\nFROM (\n  SELECT \n    category,\n    AVG(valuenum) AS mean_sbp,\n    APPROX_QUANTILES(valuenum, 100) AS q_array\n  FROM categorized\n  GROUP BY category\n)\nORDER BY \n  CASE category\n    WHEN '<140' THEN 1\n    WHEN '140-159' THEN 2\n    WHEN '>=160' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: valuenum at [55:7]; reason: invalidQuery, location: query, message: Unrecognized name: valuenum at [55:7]\n\nLocation: US\nJob ID: 888a408e-96e3-4a8b-b7c9-495aca234d85\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

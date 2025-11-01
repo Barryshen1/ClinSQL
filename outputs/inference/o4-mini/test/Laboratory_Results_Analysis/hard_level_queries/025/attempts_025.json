@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH target_adm AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      ON a.hadm_id = di.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d\n      ON di.icd_code = d.icd_code\n      AND di.icd_version = d.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND LOWER(d.long_title) LIKE '%hemorrhag%'\n    AND LOWER(d.long_title) LIKE '%stroke%'\n  GROUP BY\n    a.subject_id, a.hadm_id, p.anchor_age, a.admittime, a.dischtime, a.hospital_expire_flag\n),\nlab_crit AS (\n  SELECT\n    t.hadm_id,\n    di.category\n  FROM\n    target_adm AS t\n    JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n      ON t.hadm_id = l.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS di\n      ON l.itemid = di.itemid\n  WHERE\n    l.charttime BETWEEN t.admittime\n      AND TIMESTAMP_ADD(t.admittime, INTERVAL 72 HOUR)\n    AND l.valuenum IS NOT NULL\n    AND (\n      l.valuenum < l.ref_range_lower\n      OR l.valuenum > l.ref_range_upper\n    )\n  GROUP BY\n    t.hadm_id,\n    di.category\n),\nscores AS (\n  SELECT\n    t.*,\n    COALESCE(c.crit_sys_count, 0) AS score\n  FROM\n    target_adm AS t\n    LEFT JOIN (\n      SELECT\n        hadm_id,\n        COUNT(DISTINCT category) AS crit_sys_count\n      FROM lab_crit\n      GROUP BY hadm_id\n    ) AS c\n      ON t.hadm_id = c.hadm_id\n),\np90 AS (\n  SELECT\n    APPROX_QUANTILES(score, 100)[OFFSET(90)] AS p90_score\n  FROM\n    scores\n),\nscored AS (\n  SELECT\n    s.*,\n    p.p90_score,\n    CASE\n      WHEN s.score >= p.p90_score THEN 'High (\u2265P90)'\n      ELSE 'Low (<P90)'\n    END AS instability_group\n  FROM\n    scores AS s\n    CROSS JOIN p90 AS p\n)\nSELECT\n  instability_group,\n  COUNT(*) AS n_patients,\n  100.0 * SUM(hospital_expire_flag) / COUNT(*) AS mortality_percent,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, SECOND) / 86400.0) AS mean_los_days,\n  AVG(score) AS avg_crit_lab_systems_per_patient\nFROM\n  scored\nGROUP BY\n  instability_group\nORDER BY\n  instability_group DESC;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 44-year-old female inpatient. Among female inpatients 39\u201349 with asthma exacerbation, what is the 75th\u2011percentile lab instability score in the first 48 hours? Compare critical\u2011lab events per admission to all inpatients and report cohort LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH cohort_admissions AS (\n    SELECT DISTINCT\n        p.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag,\n        DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n    WHERE\n        p.gender = 'F'\n        AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 39 AND 49\n        AND (\n            (di.icd_version = 9 AND di.icd_code IN ('49301', '49311', '49321', '49391'))\n            OR\n            (di.icd_version = 10 AND di.icd_code IN ('J4521', 'J4531', 'J4541', 'J4551', 'J45901', 'J45902'))\n        )\n),\n-- Calculate critical lab events per admission for the cohort, including those with 0 events\ncohort_critical_lab_events_per_adm AS (\n    SELECT\n        ca.hadm_id,\n        COUNT(DISTINCT le.labevent_id) AS critical_lab_events_count\n    FROM\n        cohort_admissions ca\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON ca.subject_id = le.subject_id\n        AND ca.hadm_id = le.hadm_id\n        AND le.charttime BETWEEN ca.admittime AND DATETIME_ADD(ca.admittime, INTERVAL 48 HOUR)\n        AND le.flag = 'abnormal'\n    GROUP BY\n        ca.hadm_id\n),\n-- Calculate critical lab events per admission for all inpatients, including those with 0 events\nall_inpatients_critical_lab_events_per_adm AS (\n    SELECT\n        a.hadm_id,\n        COUNT(DISTINCT le.labevent_id) AS critical_lab_events_count\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON a.subject_id = le.subject_id\n        AND a.hadm_id = le.hadm_id\n        AND le.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 48 HOUR)\n        AND le.flag = 'abnormal'\n    GROUP BY\n        a.hadm_id\n)\n-- Metric 1: Cohort 75th Percentile Lab Instability Score (first 48 hours)\nSELECT\n    'Cohort 75th Percentile Lab Instability Score (first 48 hours)' AS metric_description,\n    (SELECT APPROX_QUANTILES(critical_lab_events_count, 100)[OFFSET(75)] FROM cohort_critical_lab_events_per_adm) AS value\n\nUNION ALL\n\n-- Metric 2: Cohort Average Critical Lab Events per Admission (first 48 hours)\nSELECT\n    'Cohort Average Critical Lab Events per Admission (first 48 hours)' AS metric_description,\n    AVG(ccle.critical_lab_events_count) AS value\nFROM\n    cohort_critical_lab_events_per_adm ccle\n\nUNION ALL\n\n-- Metric 3: All Inpatients Average Critical Lab Events per Admission (first 48 hours)\nSELECT\n    'All Inpatients Average Critical Lab Events per Admission (first 48 hours)' AS metric_description,\n    AVG(aicle.critical_lab_events_count) AS value\nFROM\n    all_inpatients_critical_lab_events_per_adm aicle\n\nUNION ALL\n\n-- Metric 4: Cohort Average Length of Stay (Days)\nSELECT\n    'Cohort Average Length of Stay (Days)' AS metric_description,\n    AVG(ca.los_days) AS value\nFROM\n    cohort_admissions ca\n\nUNION ALL\n\n-- Metric 5: Cohort In-hospital Mortality Rate\nSELECT\n    'Cohort In-hospital Mortality Rate' AS metric_description,\n    SAFE_DIVIDE(SUM(ca.hospital_expire_flag), COUNT(ca.hadm_id)) AS value\nFROM\n    cohort_admissions ca;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [66:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [66:1]\n\nLocation: US\nJob ID: de9abbc5-699e-457a-952e-84c2e0fc8eb9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

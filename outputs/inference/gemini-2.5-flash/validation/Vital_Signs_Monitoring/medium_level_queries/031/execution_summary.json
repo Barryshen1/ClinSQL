@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 72-year-old man. Among male ICU stays aged 67\u201377, what percentile is a per-stay average temperature of 36.0\u00b0C measured over the first 24 hours?",
+  "final_sql": "WITH TargetICUStays AS (\n    -- Select eligible ICU stays based on patient demographics:\n    -- Male patients, aged 67-77, and their ICU admission time (intime).\n    SELECT\n        ie.stay_id,\n        ie.intime\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` ie\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ie.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 67 AND 77\n),\nStayAvgTemperature AS (\n    -- Calculate the average temperature for each eligible stay\n    -- within the first 24 hours of their ICU admission.\n    SELECT\n        tis.stay_id,\n        AVG(ce.valuenum) AS avg_temp_c\n    FROM\n        TargetICUStays tis\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON tis.stay_id = ce.stay_id\n    WHERE\n        -- Filter for specific item IDs corresponding to Celsius temperature measurements.\n        ce.itemid IN (\n            223762, -- Temperature C (likely general temperature)\n            224684  -- Temperature C (O) (likely oral temperature)\n            -- Referencing d_items table for definitive itemid labels:\n            -- SELECT itemid, label, unitname FROM `physionet-data.mimiciv_3_1_icu.d_items` WHERE label LIKE '%Temperature%' AND unitname = 'C'\n        )\n        AND ce.valuenum IS NOT NULL\n        -- Ensure measurements are within a reasonable physiological range for Celsius.\n        AND ce.valuenum BETWEEN 25.0 AND 45.0\n        -- Filter measurements to the first 24 hours of the ICU stay.\n        AND ce.charttime >= tis.intime\n        AND ce.charttime <= DATETIME_ADD(tis.intime, INTERVAL 24 HOUR)\n    GROUP BY\n        tis.stay_id\n    HAVING\n        -- Only include stays that have at least one valid temperature measurement\n        -- within the specified time window to calculate an average.\n        COUNT(ce.valuenum) > 0\n)\n-- Calculate the percentile of a 36.0\u00b0C average temperature.\n-- This is computed as the percentage of stays whose average temperature\n-- is less than or equal to 36.0\u00b0C, out of all eligible stays.\nSELECT\n    SAFE_DIVIDE(\n        CAST(COUNTIF(sat.avg_temp_c <= 36.0) AS BIGNUMERIC) * 100.0,\n        COUNT(sat.stay_id)\n    ) AS percentile_of_36_0_c\nFROM\n    StayAvgTemperature sat;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

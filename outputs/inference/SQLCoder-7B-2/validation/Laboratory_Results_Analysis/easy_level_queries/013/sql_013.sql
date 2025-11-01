@@ -1,0 +1,1 @@
+SELECT MAX(l.value) AS max_creatinine_level FROM labevents l JOIN patients p ON l.subject_id = p.subject_id WHERE p.gender = 'F' AND l.itemid = 11175550 AND l.charttime <= l.storetime;

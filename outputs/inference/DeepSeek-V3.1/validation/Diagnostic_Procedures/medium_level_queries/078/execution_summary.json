@@ -1,0 +1,22 @@
+{
+  "query": "For my 93\u2011yo female with TIA: among women 88\u201398 with TIA, what's the median (IQR) CT/MRI studies per admission for 1\u20133 vs 4\u20137 day stays, stratified by ICU use?",
+  "final_sql": "WITH tia_patients AS (\n    SELECT DISTINCT a.subject_id, a.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON a.hadm_id = diag.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n    WHERE p.gender = 'F'\n        AND p.anchor_age BETWEEN 88 AND 98\n        AND (d.icd_code LIKE '435%' OR d.icd_code LIKE 'G45%')\n),\nicu_flag AS (\n    SELECT tp.hadm_id,\n        MAX(CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END) AS had_icu\n    FROM tia_patients tp\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n        ON tp.hadm_id = i.hadm_id\n    GROUP BY tp.hadm_id\n),\nlos_data AS (\n    SELECT a.hadm_id,\n        DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n        CASE\n            WHEN DATE_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3'\n            WHEN DATE_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7'\n            ELSE 'Other'\n        END AS los_group\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN tia_patients tp ON a.hadm_id = tp.hadm_id\n),\nimaging AS (\n    SELECT hadm_id, COUNT(*) AS imaging_count\n    FROM (\n        -- ICD procedures for CT/MRI\n        SELECT proc.hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n        INNER JOIN tia_patients tp ON proc.hadm_id = tp.hadm_id\n        WHERE \n            (proc.icd_version = 9 AND (\n                proc.icd_code LIKE '87.0%' OR  -- CT scans\n                proc.icd_code LIKE '88.0%' OR  -- CT scans\n                proc.icd_code LIKE '88.3%' OR  -- MRI\n                proc.icd_code LIKE '88.4%'     -- MRI\n            )) OR\n            (proc.icd_version = 10 AND (\n                proc.icd_code LIKE 'BW2%' OR   -- CT scans\n                proc.icd_code LIKE 'BW3%' OR   -- CT scans  \n                proc.icd_code LIKE 'BW4%' OR   -- CT scans\n                proc.icd_code LIKE 'B11%'      -- MRI\n            ))\n        \n        UNION ALL\n        \n        -- HCPCS codes for CT/MRI\n        SELECT hcpc.hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` hcpc\n        INNER JOIN tia_patients tp ON hcpc.hadm_id = tp.hadm_id\n        WHERE \n            hcpc.hcpcs_cd LIKE '7%' AND (  -- Radiology codes\n                hcpc.hcpcs_cd LIKE '704%' OR  -- CT head\n                hcpc.hcpcs_cd LIKE '705%' OR  -- MRI\n                hcpc.hcpcs_cd LIKE '721%' OR  -- CT spine\n                hcpc.hcpcs_cd LIKE '741%'     -- CT abdomen\n            )\n    ) AS imaging_events\n    GROUP BY hadm_id\n),\ncombined AS (\n    SELECT \n        ld.hadm_id,\n        ld.los_group,\n        ifl.had_icu,\n        COALESCE(img.imaging_count, 0) AS imaging_count\n    FROM los_data ld\n    INNER JOIN icu_flag ifl ON ld.hadm_id = ifl.hadm_id\n    LEFT JOIN imaging img ON ld.hadm_id = img.hadm_id\n    WHERE ld.los_group IN ('1-3', '4-7')\n)\nSELECT \n    los_group,\n    had_icu,\n    COUNT(*) AS num_admissions,\n    APPROX_QUANTILES(imaging_count, 100)[OFFSET(50)] AS median_imaging,\n    APPROX_QUANTILES(imaging_count, 100)[OFFSET(25)] AS q1_imaging,\n    APPROX_QUANTILES(imaging_count, 100)[OFFSET(75)] AS q3_imaging\nFROM combined\nGROUP BY los_group, had_icu\nORDER BY los_group, had_icu;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [15:12]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [15:12]\n\nLocation: US\nJob ID: a37b15d0-d578-45e0-a9aa-b134f4aa2f6b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

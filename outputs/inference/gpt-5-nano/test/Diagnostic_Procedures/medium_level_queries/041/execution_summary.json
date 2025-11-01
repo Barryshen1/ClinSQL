@@ -1,0 +1,22 @@
+{
+  "query": "For a 56\u2011year\u2011old man with acute pancreatitis: among males 51\u201361, give patient counts and mean radiography/CTs per admission, stratified by LOS 1\u20133 vs 4\u20137 days and primary vs secondary diagnosis.",
+  "final_sql": "WITH pancreatitis_matches AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE\n      -- age at admission using anchor_age/anchor_year\n      WHEN p.anchor_year IS NOT NULL THEN p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)\n      ELSE NULL\n    END AS age_at_admit,\n    LOWER(p.gender) AS gender,\n    di.seq_num\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%pancreatitis%'\n),\n\npancreatitis_flags AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN seq_num = 1 THEN 1 ELSE 0 END) AS has_primary_pancreatitis,\n    MAX(CASE WHEN seq_num > 1 THEN 1 ELSE 0 END) AS has_secondary_pancreatitis,\n    age_at_admit,\n    gender\n  FROM pancreatitis_matches\n  GROUP BY hadm_id, age_at_admit, gender\n  HAVING age_at_admit BETWEEN 51 AND 61\n     AND gender = 'm'\n     AND (MAX(CASE WHEN seq_num = 1 THEN 1 ELSE 0 END) = 1\n          OR MAX(CASE WHEN seq_num > 1 THEN 1 ELSE 0 END) = 1)\n),\n\npancreatitis_adms AS (\n  -- per admission: determine pancreatitis_type (primary takes precedence)\n  SELECT\n    m.hadm_id,\n    m.subject_id,\n    m.admittime,\n    m.dischtime,\n    m.los_days,\n    m.age_at_admit,\n    CASE\n      WHEN pf.has_primary_pancreatitis = 1 THEN 'primary'\n      WHEN pf.has_secondary_pancreatitis = 1 THEN 'secondary'\n      ELSE NULL\n    END AS pancreatitis_type\n  FROM pancreatitis_matches AS m\n  JOIN pancreatitis_flags pf\n    ON m.hadm_id = pf.hadm_id\n  WHERE pf.has_primary_pancreatitis = 1 OR pf.has_secondary_pancreatitis = 1\n),\n\nimaging_counts AS (\n  SELECT st.hadm_id,\n         COUNT(DISTINCT ce.charttime) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON ce.itemid = di.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS st\n    ON ce.stay_id = st.stay_id\n  WHERE LOWER(di.label) LIKE '%x-ray%' OR LOWER(di.label) LIKE '%ct%'\n  GROUP BY st.hadm_id\n),\n\nfinal AS (\n  SELECT\n    pa.pancreatitis_type,\n    CASE\n      WHEN pa.los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN pa.los_days BETWEEN 4 AND 7 THEN '4-7'\n      ELSE NULL\n    END AS los_group,\n    COUNT(DISTINCT pa.subject_id) AS patient_count,\n    AVG(COALESCE(ic.imaging_count, 0)) AS mean_radiography_cts_per_admission\n  FROM pancreatitis_adms AS pa\n  LEFT JOIN imaging_counts AS ic\n    ON pa.hadm_id = ic.hadm_id\n  WHERE pa.los_days BETWEEN 1 AND 7\n  GROUP BY pa.pancreatitis_type, los_group\n)\n\nSELECT *\nFROM final\nORDER BY los_group, pancreatitis_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"/\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"/\" at [1:13]\n\nLocation: US\nJob ID: cbea3e96-201f-42b7-b224-d431d143cb0e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

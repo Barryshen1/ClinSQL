@@ -1,0 +1,28 @@
+{
+  "query": "For my 42-year-old male, among male inpatients age 37\u201347 who are transfer-ins, report n, mean LOS, p25/median/p75/p90/p95, and percentile rank of a 5\u2011day stay by discharge: home, SNF/rehab/LTACH, in-hospital mortality.",
+  "final_sql": "WITH PatientCohort AS (\n    SELECT\n        a.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.discharge_location,\n        a.hospital_expire_flag,\n        -- Calculate Length of Stay in days\n        DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON a.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 37 AND 47\n        -- Corrected: to identify \"transfer-ins\", use LIKE 'TRANSFER FROM%' for admission_type\n        AND a.admission_type LIKE 'TRANSFER FROM%'\n        -- Ensure valid LOS data: discharge time exists and is after admission time\n        AND a.dischtime IS NOT NULL\n        AND DATETIME_DIFF(a.dischtime, a.admittime, HOUR) >= 0\n),\nDischargeCategorized AS (\n    SELECT\n        los_days,\n        CASE\n            WHEN hospital_expire_flag = 1 THEN 'In-hospital mortality'\n            WHEN discharge_location = 'Home' THEN 'Home'\n            -- Group various discharge locations into 'SNF/rehab/LTACH'\n            WHEN discharge_location IN (\n                'Skilled Nursing Facility', 'Rehabilitation Hospital', 'Long Term Care Hospital',\n                'SNF', 'Rehab', 'LTACH', 'Nursing Home', 'Assisted Living',\n                'Hospice', 'Other Healthcare Facility', 'Chronic Hospital'\n            ) THEN 'SNF/rehab/LTACH'\n            ELSE 'Other/Exclude' -- Exclude discharge types not explicitly requested\n        END AS discharge_group\n    FROM\n        PatientCohort\n)\nSELECT\n    discharge_group,\n    COUNT(*) AS n,\n    ROUND(AVG(los_days), 2) AS mean_los,\n    -- Replaced PERCENTILE_CONT with APPROX_QUANTILES for BigQuery compatibility\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(25)], 2) AS p25_los,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS median_los, -- Median is p50\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(75)], 2) AS p75_los,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(90)], 2) AS p90_los,\n    ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(95)], 2) AS p95_los,\n    ROUND(\n        (COUNTIF(los_days <= 5.0) * 100.0 / COUNT(*)), 2\n    ) AS percentile_rank_of_5_day_stay -- Percentage of stays that are 5 days or shorter\nFROM\n    DischargeCategorized\nWHERE\n    discharge_group != 'Other/Exclude'\nGROUP BY\n    discharge_group\nORDER BY\n    discharge_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [45:11]; reason: invalidQuery, location: query, message: No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [45:11]\n\nLocation: US\nJob ID: 749b8ad0-7dd3-44c6-9375-e053c3e3bb6e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 076c7846-b9f1-462c-b8a8-ae13b370e80c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

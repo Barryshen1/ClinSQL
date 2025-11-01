@@ -1,0 +1,28 @@
+{
+  "query": "I have a 55-year-old female with intracranial hemorrhage. In female ICU patients aged 50\u201360 with ICH, what are the 25th, 50th, 90th percentiles and maximum procedure burden in initial 72 hours? Compare hospital LOS and in-hospital mortality to general ICU.",
+  "final_sql": "WITH ich_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  JOIN physionet-data.mimiciv_3_1_icu.icustays i\n    ON a.hadm_id = i.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND LOWER(dicd.long_title) LIKE '%intracranial hemorrhage%'\n),\n\nich_procedures AS (\n  SELECT\n    ip.subject_id,\n    ip.stay_id,\n    COUNT(pe.procedureitemid) AS procedure_count_72h\n  FROM ich_patients ip\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON ip.stay_id = pe.stay_id\n    AND pe.charttime >= ip.intime\n    AND pe.charttime <= TIMESTAMP_ADD(ip.intime, INTERVAL 72 HOUR)\n  GROUP BY ip.subject_id, ip.stay_id\n),\n\ngeneral_icu AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON p.subject_id = a.subject_id\n  JOIN physionet-data.mimiciv_3_1_icu.icustays i\n    ON a.hadm_id = i.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND NOT EXISTS (\n      SELECT 1\n      FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dicd\n        ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n      WHERE d.hadm_id = a.hadm_id\n        AND LOWER(dicd.long_title) LIKE '%intracranial hemorrhage%'\n    )\n),\n\ngeneral_procedures AS (\n  SELECT\n    gi.subject_id,\n    gi.stay_id,\n    COUNT(pe.procedureitemid) AS procedure_count_72h\n  FROM general_icu gi\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON gi.stay_id = pe.stay_id\n    AND pe.charttime >= gi.intime\n    AND pe.charttime <= TIMESTAMP_ADD(gi.intime, INTERVAL 72 HOUR)\n  GROUP BY gi.subject_id, gi.stay_id\n),\n\nich_summary AS (\n  SELECT\n    PERCENTILE_CONT(procedure_count_72h, 0.25) OVER() AS p25_procedures_ich,\n    PERCENTILE_CONT(procedure_count_72h, 0.50) OVER() AS p50_procedures_ich,\n    PERCENTILE_CONT(procedure_count_72h, 0.90) OVER() AS p90_procedures_ich,\n    MAX(procedure_count_72h) OVER() AS max_procedures_ich,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS avg_los_days_ich,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate_ich\n  FROM ich_patients ip\n  LEFT JOIN ich_procedures iproc ON ip.subject_id = iproc.subject_id\n),\n\ngeneral_summary AS (\n  SELECT\n    PERCENTILE_CONT(procedure_count_72h, 0.25) OVER() AS p25_procedures_general,\n    PERCENTILE_CONT(procedure_count_72h, 0.50) OVER() AS p50_procedures_general,\n    PERCENTILE_CONT(procedure_count_72h, 0.90) OVER() AS p90_procedures_general,\n    MAX(procedure_count_72h) OVER() AS max_procedures_general,\n    AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0) AS avg_los_days_general,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate_general\n  FROM general_icu gi\n  LEFT JOIN general_procedures giproc ON gi.subject_id = giproc.subject_id\n)\n\nSELECT\n  i.p25_procedures_ich,\n  i.p50_procedures_ich,\n  i.p90_procedures_ich,\n  i.max_procedures_ich,\n  i.avg_los_days_ich,\n  i.mortality_rate_ich,\n  g.p25_procedures_general,\n  g.p50_procedures_general,\n  g.p90_procedures_general,\n  g.max_procedures_general,\n  g.avg_los_days_general,\n  g.mortality_rate_general\nFROM ich_summary i\nCROSS JOIN general_summary g\nLIMIT 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name charttime not found inside pe at [34:12]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [34:12]\n\nLocation: US\nJob ID: a43d9312-076f-42a3-841f-d17d9ee3c1f3\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]\n\nLocation: US\nJob ID: 5a2bde3a-385a-44bb-aa14-9fde792939d3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"hemorrhage\" at [1:19]\n\nLocation: US\nJob ID: bf55dd05-0b5a-449b-9d85-3e97762b44eb\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [34:12]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [34:12]\n\nLocation: US\nJob ID: a43d9312-076f-42a3-841f-d17d9ee3c1f3\n"
+    }
+  ]
+}

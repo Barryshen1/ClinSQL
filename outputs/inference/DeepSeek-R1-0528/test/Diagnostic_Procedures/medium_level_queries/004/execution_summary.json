@@ -1,0 +1,16 @@
+{
+  "query": "For a 50\u2011year\u2011old woman: among female HF admissions aged 45\u201355, LOS 1\u20137 days, by primary vs secondary diagnosis and 1\u20133 vs 4\u20137 day stays, what are mean/min/max CT/MRI per admission?",
+  "final_sql": "WITH base_admissions AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 45 AND 55\n    AND DATETIME_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\nhf_admissions AS (\n  SELECT \n    d.hadm_id,\n    MIN(d.seq_num) AS min_hf_seq_num\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN base_admissions ba ON d.hadm_id = ba.hadm_id\n  WHERE \n    (d.icd_version = 9 AND d.icd_code LIKE '428%') \n    OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n  GROUP BY d.hadm_id\n),\nprocedures_icd_ct_mri AS (\n  SELECT \n    p.hadm_id,\n    COUNT(*) AS cnt\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d \n    ON p.icd_code = d.icd_code AND p.icd_version = d.icd_version\n  WHERE \n    LOWER(d.long_title) LIKE '%computed tomography%' \n    OR LOWER(d.long_title) LIKE '%ct%'\n    OR LOWER(d.long_title) LIKE '%magnetic resonance%'\n    OR LOWER(d.long_title) LIKE '%mri%'\n  GROUP BY p.hadm_id\n),\nhcpcs_ct_mri AS (\n  SELECT \n    h.hadm_id,\n    COUNT(*) AS cnt\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d \n    ON h.hcpcs_cd = d.code\n  WHERE \n    LOWER(d.long_description) LIKE '%computed tomography%' \n    OR LOWER(d.long_description) LIKE '%ct%'\n    OR LOWER(d.long_description) LIKE '%magnetic resonance%'\n    OR LOWER(d.long_description) LIKE '%mri%'\n  GROUP BY h.hadm_id\n),\nadmission_procedures AS (\n  SELECT \n    ha.hadm_id,\n    COALESCE(p.cnt, 0) + COALESCE(h.cnt, 0) AS total_ct_mri\n  FROM hf_admissions ha\n  LEFT JOIN procedures_icd_ct_mri p ON ha.hadm_id = p.hadm_id\n  LEFT JOIN hcpcs_ct_mri h ON ha.hadm_id = h.hadm_id\n),\nfinal_data AS (\n  SELECT \n    ba.hadm_id,\n    ba.los_days,\n    CASE \n      WHEN ha.min_hf_seq_num = 1 THEN 'Primary'\n      ELSE 'Secondary'\n    END AS diagnosis_group,\n    ap.total_ct_mri\n  FROM base_admissions ba\n  INNER JOIN hf_admissions ha ON ba.hadm_id = ha.hadm_id\n  LEFT JOIN admission_procedures ap ON ba.hadm_id = ap.hadm_id\n)\nSELECT \n  diagnosis_group,\n  CASE \n    WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n    WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n  END AS los_group,\n  AVG(total_ct_mri) AS mean_ct_mri,\n  MIN(total_ct_mri) AS min_ct_mri,\n  MAX(total_ct_mri) AS max_ct_mri,\n  COUNT(*) AS num_admissions\nFROM final_data\nGROUP BY diagnosis_group, los_group\nORDER BY diagnosis_group, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

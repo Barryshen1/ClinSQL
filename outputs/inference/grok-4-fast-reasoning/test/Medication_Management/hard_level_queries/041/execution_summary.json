@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 45\u2011year\u2011old man with heart failure. In male inpatients aged 40\u201350 with HF, stratified by quintiles of a 7\u2011day medication complexity score, report patient counts, score ranges, mean LOS (days), in\u2011hospital mortality, and 30\u2011day readmission.",
+  "final_sql": "WITH cohort_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M' AND anchor_age BETWEEN 40 AND 50\n),\nhf_admissions AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  JOIN cohort_patients USING (subject_id)\n  WHERE ((icd_version = 9 AND icd_code LIKE '428%') OR\n         (icd_version = 10 AND icd_code LIKE 'I50%'))\n),\nadmissions_data AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN hf_admissions ha USING (hadm_id)\n  WHERE a.dischtime IS NOT NULL\n),\nmed_scores AS (\n  SELECT \n    ad.subject_id,\n    ad.hadm_id,\n    ad.admittime,\n    COUNT(DISTINCT pres.drug) AS med_complexity_score\n  FROM admissions_data ad\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n    ON pres.subject_id = ad.subject_id\n    AND pres.hadm_id = ad.hadm_id\n    AND pres.starttime >= ad.admittime\n    AND (pres.starttime < TIMESTAMP_ADD(ad.admittime, INTERVAL 7 DAY) OR pres.stoptime > ad.admittime)\n    AND pres.drug IS NOT NULL\n    AND TRIM(pres.drug) != ''\n  GROUP BY ad.subject_id, ad.hadm_id, ad.admittime\n),\nscored_admissions AS (\n  SELECT \n    ms.subject_id,\n    ms.hadm_id,\n    ms.med_complexity_score,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    a.hospital_expire_flag\n  FROM med_scores ms\n  JOIN admissions_data a USING (subject_id, hadm_id)\n),\nquintiled AS (\n  SELECT *,\n    NTILE(5) OVER (ORDER BY med_complexity_score) AS quintile\n  FROM scored_admissions\n),\nall_admissions_for_cohort AS (\n  SELECT subject_id, hadm_id, admittime, dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  JOIN cohort_patients USING (subject_id)\n  WHERE dischtime IS NOT NULL\n),\nreadmission_flags AS (\n  SELECT \n    q.*,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM all_admissions_for_cohort ad2\n        WHERE ad2.subject_id = q.subject_id\n          AND ad2.hadm_id != q.hadm_id\n          AND ad2.admittime > q.dischtime\n          AND ad2.admittime <= TIMESTAMP_ADD(q.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 \n      ELSE 0 \n    END AS readmitted_30d\n  FROM quintiled q\n)\nSELECT \n  quintile,\n  COUNT(DISTINCT subject_id) AS patient_counts,\n  MIN(med_complexity_score) AS min_score,\n  MAX(med_complexity_score) AS max_score,\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS in_hospital_mortality_pct,\n  ROUND(AVG(readmitted_30d) * 100, 2) AS readmission_30d_pct\nFROM readmission_flags\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [10:11]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [10:11]\n\nLocation: US\nJob ID: 24457650-c2c0-43ca-a468-23331b090a4c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

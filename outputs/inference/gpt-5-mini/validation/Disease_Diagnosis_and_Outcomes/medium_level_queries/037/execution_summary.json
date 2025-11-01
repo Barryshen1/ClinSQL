@@ -1,0 +1,22 @@
+{
+  "query": "For my 57-year-old male, among men aged 52\u201362 with sepsis, report in-hospital mortality (%) and mean comorbidity count by sepsis severity (no shock vs septic shock), LOS (1\u20133, 4\u20137, \u22658), and admission type.",
+  "final_sql": "WITH diag AS (\n  SELECT\n    d.hadm_id,\n    d.icd_code,\n    LOWER(cd.long_title) AS long_title\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` cd\n      ON d.icd_code = cd.icd_code\n      AND d.icd_version = cd.icd_version\n),\n\nsepsis_flags AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN long_title LIKE '%septic shock%' THEN 1 ELSE 0 END) AS has_shock,\n    MAX(CASE WHEN long_title LIKE '%sepsis%' THEN 1 ELSE 0 END) AS has_sepsis\n  FROM diag\n  GROUP BY hadm_id\n),\n\ncomorb_count AS (\n  -- count distinct diagnosis codes per admission excluding sepsis-related diagnoses\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT icd_code) AS comorb_count\n  FROM diag\n  WHERE NOT (long_title LIKE '%sepsis%')\n  GROUP BY hadm_id\n)\n\nSELECT\n  severity,\n  los_category,\n  admission_type,\n  COUNT(*) AS n_admissions,\n  ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS in_hosp_mortality_pct,\n  ROUND(AVG(COALESCE(comorb_count, 0)), 2) AS mean_comorbidity_count\nFROM (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admission_type,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) + 1 AS los_days,\n    CASE\n      WHEN DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) + 1 BETWEEN 1 AND 3 THEN '1-3'\n      WHEN DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) + 1 BETWEEN 4 AND 7 THEN '4-7'\n      WHEN DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) + 1 >= 8 THEN '>=8'\n      ELSE '0 or <1'\n    END AS los_category,\n    a.hospital_expire_flag,\n    CASE WHEN s.has_shock = 1 THEN 'septic_shock' ELSE 'no_shock' END AS severity,\n    COALESCE(c.comorb_count, 0) AS comorb_count\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      USING(subject_id)\n    JOIN sepsis_flags s\n      ON a.hadm_id = s.hadm_id\n    LEFT JOIN comorb_count c\n      ON a.hadm_id = c.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND s.has_sepsis = 1\n) t\nGROUP BY\n  severity,\n  los_category,\n  admission_type\nORDER BY\n  severity,\n  admission_type,\n  CASE los_category WHEN '1-3' THEN 1 WHEN '4-7' THEN 2 WHEN '>=8' THEN 3 ELSE 0 END;",
+  "execution_success": true,
+  "row_count": 36,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"sepsis\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"sepsis\" at [1:8]\n\nLocation: US\nJob ID: fbf14318-0b75-45a7-8bc7-ff8660b7057e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 36,
+      "error": null
+    }
+  ]
+}

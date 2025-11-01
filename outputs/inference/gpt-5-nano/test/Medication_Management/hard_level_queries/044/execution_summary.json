@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 69-year-old woman inpatient with PE. Among women aged 64\u201374 with PE, medication complexity (distinct meds in first 24 hours) was stratified into tertiles. For each tertile report admissions, med score ranges, LOS, mortality%, and 30-day readmission%.",
+  "final_sql": "WITH base_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddi\n    ON di.icd_code = ddi.icd_code AND di.icd_version = ddi.icd_version\n  WHERE LOWER(p.gender) = 'f'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND LOWER(ddi.long_title) LIKE '%pulmonary embolism%'\n    AND a.dischtime IS NOT NULL\n),\n\nmeds_24h AS (\n  SELECT\n    b.subject_id,\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.deathtime,\n    b.hospital_expire_flag,\n    TIMESTAMP_DIFF(b.dischtime, b.admittime, SECOND) / 86400.0 AS los_days,\n    CASE WHEN b.deathtime IS NOT NULL OR b.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS mortality,\n    COUNT(DISTINCT pr.drug) AS med_count\n  FROM base_admissions AS b\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n    ON pr.subject_id = b.subject_id\n   AND pr.hadm_id = b.hadm_id\n   AND pr.starttime >= b.admittime\n   AND pr.starttime < TIMESTAMP_ADD(b.admittime, INTERVAL 24 HOUR)\n  GROUP BY\n    b.subject_id,\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.deathtime,\n    b.hospital_expire_flag\n),\n\ntertiles AS (\n  SELECT\n    m.*,\n    NTILE(3) OVER (ORDER BY m.med_count) AS med_tertile\n  FROM meds_24h AS m\n),\n\nwith_next AS (\n  SELECT\n    t.*,\n    LEAD(t.admittime) OVER (PARTITION BY t.subject_id ORDER BY t.admittime) AS next_admit\n  FROM tertiles AS t\n)\n\nSELECT\n  med_tertile,\n  MIN(med_count) AS med_count_min,\n  MAX(med_count) AS med_count_max,\n  COUNT(*) AS n_admissions,\n  AVG(los_days) AS avg_los_days,\n  SUM(mortality) / COUNT(*) * 100 AS mortality_percent,\n  SUM(\n      CASE\n        WHEN next_admit IS NOT NULL\n             AND next_admit <= TIMESTAMP_ADD(dischtime, INTERVAL 30 DAY)\n        THEN 1 ELSE 0\n      END\n  ) / COUNT(*) * 100 AS readmission_30d_percent\nFROM with_next\nGROUP BY med_tertile\nORDER BY med_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \";\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \";\" at [1:8]\n\nLocation: US\nJob ID: cb2d333b-e9b3-4a4d-ace9-7acd6a3bbc55\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

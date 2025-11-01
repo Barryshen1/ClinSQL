@@ -1,0 +1,17 @@
+{
+  "query": "For my 77\u2011yo male with heart failure: among males 72\u201382 with HF, compare ICU vs non\u2011ICU by LOS (\u22643, 4\u20136, 7\u201310, >10 days); report in\u2011hospital mortality, median LOS, average comorbidity count.",
+  "final_sql": "WITH PatientHF AS (\n  -- Identify patients with heart failure (HF) diagnosis\n  SELECT DISTINCT\n    p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON p.subject_id = d.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 72 AND 82\n    AND d.icd_code LIKE 'I50%' -- ICD-10 codes for heart failure\n    AND d.icd_version = 10\n),\nAdmissionsHF AS (\n  -- Filter admissions for patients identified with HF\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    a.admission_type,\n    a.admission_location,\n    a.discharge_location\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN PatientHF AS phf\n    ON a.subject_id = phf.subject_id\n),\nICUStays AS (\n  -- Identify ICU stays for the selected admissions\n  SELECT\n    a.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los\n  FROM AdmissionsHF AS a\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS i\n    ON a.hadm_id = i.hadm_id\n),\nComorbidityCount AS (\n  -- Calculate comorbidity count for each patient\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    COUNT(DISTINCT d.icd_code) AS comorbidity_count\n  FROM AdmissionsHF AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE\n    d.seq_num = 1 -- Consider only primary diagnoses for comorbidity count\n  GROUP BY\n    a.subject_id,\n    a.hadm_id\n),\nCombinedData AS (\n  -- Combine admission data, ICU stay data, and comorbidity count\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    a.admission_type,\n    a.admission_location,\n    a.discharge_location,\n    CASE\n      WHEN i.stay_id IS NOT NULL THEN 'ICU'\n      ELSE 'Non-ICU'\n    END AS icu_status,\n    i.los AS icu_los,\n    c.comorbidity_count\n  FROM AdmissionsHF AS a\n  LEFT JOIN ICUStays AS i\n    ON a.hadm_id = i.hadm_id\n  LEFT JOIN ComorbidityCount AS c\n    ON a.hadm_id = c.hadm_id\n)\nSELECT\n  icu_status,\n  CASE\n    WHEN icu_los <= 3 THEN '\u22643 days'\n    WHEN icu_los BETWEEN 4 AND 6 THEN '4\u20136 days'\n    WHEN icu_los BETWEEN 7 AND 10 THEN '7\u201310 days'\n    ELSE '>10 days'\n  END AS los_category,\n  AVG(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS in_hospital_mortality,\n  AVG(DATE_DIFF(dischtime, admittime, DAY)) AS median_los,\n  AVG(comorbidity_count) AS average_comorbidity_count\nFROM CombinedData\nGROUP BY\n  icu_status,\n  los_category\nORDER BY\n  icu_status,\n  los_category;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

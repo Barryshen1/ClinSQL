@@ -1,0 +1,16 @@
+{
+  "query": "I have an 81-year-old man. Among male Medicare patients 76\u201386 admitted from the ED with a principal ischemic stroke, what are the 30-day all-cause readmission rate, median index LOS for readmitted vs non-readmitted, and percent index stays >5 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year AS age_at_admit\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND a.admission_location = 'EMERGENCY ROOM'\n    AND a.insurance = 'Medicare'\n    AND p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year BETWEEN 76 AND 86\n),\n\nstroke_admits AS (\n  SELECT\n    c.*\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    c.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE\n    d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND dd.icd_code LIKE '434%')\n      OR\n      (d.icd_version = 10 AND dd.icd_code LIKE 'I63%')\n    )\n),\n\nindex_admits AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los_days\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n    FROM\n      stroke_admits\n  )\n  WHERE\n    rn = 1\n),\n\nreadmit_flags AS (\n  SELECT\n    ia.*,\n    CASE\n      WHEN readmit.hadm_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS readmitted_30d\n  FROM\n    index_admits ia\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` readmit\n  ON\n    ia.subject_id = readmit.subject_id\n    AND readmit.admittime > ia.dischtime\n    AND DATETIME_DIFF(readmit.admittime, ia.dischtime, DAY) <= 30\n    AND readmit.hadm_id != ia.hadm_id\n),\n\nreadmit_stats AS (\n  SELECT\n    readmitted_30d,\n    los_days,\n    CASE WHEN los_days > 5 THEN 1 ELSE 0 END AS los_gt_5\n  FROM\n    readmit_flags\n)\n\nSELECT\n  ROUND(AVG(readmitted_30d), 4) AS readmission_rate,\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los,\n  ROUND(AVG(los_gt_5), 4) AS pct_los_gt_5_days\nFROM\n  readmit_stats\n\nUNION ALL\n\nSELECT\n  NULL AS readmission_rate,\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los,\n  ROUND(AVG(los_gt_5), 4) AS pct_los_gt_5_days\nFROM\n  readmit_stats\nWHERE\n  readmitted_30d = 1\n\nUNION ALL\n\nSELECT\n  NULL AS readmission_rate,\n  APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_los,\n  ROUND(AVG(los_gt_5), 4) AS pct_los_gt_5_days\nFROM\n  readmit_stats\nWHERE\n  readmitted_30d = 0;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

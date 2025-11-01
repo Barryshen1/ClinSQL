@@ -1,0 +1,28 @@
+{
+  "query": "I have a 93-year-old man. Among male patients aged 88\u201398 on their first ICU stay with pneumonia, stratify first 72-hour diagnostic procedure counts into quintiles and report average procedure count, average ICU LOS (days), and in-hospital mortality% per quintile.",
+  "final_sql": "WITH \n  -- Filter and prepare patient data\n  patients AS (\n    SELECT \n      p.subject_id,\n      p.anchor_age,\n      p.gender,\n      a.hadm_id,\n      a.hospital_expire_flag\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON \n      p.subject_id = a.subject_id\n    WHERE \n      p.gender = 'M' AND\n      p.anchor_age BETWEEN 88 AND 98\n  ),\n  \n  -- Prepare ICU stay data\n  icu_stays AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      intime,\n      outtime,\n      los,\n      first_careunit,\n      last_careunit\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays`\n    WHERE \n      first_careunit = last_careunit  -- First ICU stay\n  ),\n  \n  -- Prepare procedure data\n  procedures AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      starttime,\n      endtime,\n      itemid\n    FROM \n      `physionet-data.mimiciv_3_1_icu.procedureevents`\n    WHERE \n      itemid IN (\n        SELECT itemid \n        FROM `physionet-data.mimiciv_3_1_icu.d_items` \n        WHERE category = 'DiagnosticProcedure'\n      )\n  ),\n  \n  -- Diagnose pneumonia\n  pneumonia AS (\n    SELECT \n      subject_id,\n      hadm_id\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n    ON \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`.icd_code = `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`.icd_code\n    AND \n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`.icd_version = `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`.icd_version\n    WHERE \n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`.long_title LIKE '%Pneumonia%'\n  ),\n  \n  -- Calculate procedure counts within first 72 hours of ICU stay\n  procedure_counts AS (\n    SELECT \n      p.subject_id,\n      p.hadm_id,\n      COUNT(DISTINCT pr.itemid) AS procedure_count\n    FROM \n      patients p\n    JOIN \n      icu_stays i\n    ON \n      p.subject_id = i.subject_id AND p.hadm_id = i.hadm_id\n    JOIN \n      procedures pr\n    ON \n      i.subject_id = pr.subject_id AND i.hadm_id = pr.hadm_id AND i.stay_id = pr.stay_id\n    WHERE \n      pr.starttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 72 HOUR)\n    GROUP BY \n      p.subject_id, p.hadm_id\n  ),\n  \n  -- Link with pneumonia and calculate LOS and mortality\n  outcomes AS (\n    SELECT \n      pc.subject_id,\n      pc.hadm_id,\n      pc.procedure_count,\n      i.los,\n      p.hospital_expire_flag\n    FROM \n      procedure_counts pc\n    JOIN \n      icu_stays i\n    ON \n      pc.subject_id = i.subject_id AND pc.hadm_id = i.hadm_id\n    JOIN \n      patients p\n    ON \n      pc.subject_id = p.subject_id AND pc.hadm_id = p.hadm_id\n    JOIN \n      pneumonia pn\n    ON \n      pc.subject_id = pn.subject_id AND pc.hadm_id = pn.hadm_id\n  )\n\n-- Final calculation\nSELECT \n  NTILE(5) OVER (ORDER BY procedure_count) AS quintile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(LOS / 24) AS avg_icu_los_days,\n  AVG(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS in_hospital_mortality_rate\nFROM \n  outcomes\nGROUP BY \n  quintile\nORDER BY \n  quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Column quintile contains an analytic function, which is not allowed in GROUP BY at [129:3]; reason: invalidQuery, location: query, message: Column quintile contains an analytic function, which is not allowed in GROUP BY at [129:3]\n\nLocation: US\nJob ID: 188c4e8d-f216-4e51-af3c-5bdbba930dcb\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: diagnoses_icd at [67:7]; reason: invalidQuery, location: query, message: Unrecognized name: diagnoses_icd at [67:7]\n\nLocation: US\nJob ID: 4d303ae8-3ab3-4e77-9cd6-bec37857bf98\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: diagnoses_icd at [67:7]; reason: invalidQuery, location: query, message: Unrecognized name: diagnoses_icd at [67:7]\n\nLocation: US\nJob ID: 62b290ac-a4e0-47eb-b357-2138bf39768e\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column quintile contains an analytic function, which is not allowed in GROUP BY at [129:3]; reason: invalidQuery, location: query, message: Column quintile contains an analytic function, which is not allowed in GROUP BY at [129:3]\n\nLocation: US\nJob ID: 188c4e8d-f216-4e51-af3c-5bdbba930dcb\n"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY value) AS seventy_fifth_percentile FROM labevents JOIN icustays ON labevents.subject_id = icustays.subject_id WHERE labevents.itemid = 1717561 AND icustays.first_careunit = 'ICU' AND labevents.charttime BETWEEN icustays.intime AND icustays.outtime AND patients.gender = 'M';

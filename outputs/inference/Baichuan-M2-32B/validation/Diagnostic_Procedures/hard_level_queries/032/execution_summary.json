@@ -1,0 +1,29 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS stay_seq\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nsepsis_diagnoses AS (\n  SELECT DISTINCT\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    d.icd_version = 10\n    AND (dd.icd_code LIKE 'A40%' OR dd.icd_code LIKE 'A41%' OR dd.icd_code LIKE 'R65%')\n),\nall_patients AS (\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    f.stay_id,\n    f.intime,\n    CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_sepsis\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN first_icu_stays f\n    ON p.subject_id = f.subject_id AND a.hadm_id = f.hadm_id\n  LEFT JOIN sepsis_diagnoses s\n    ON a.hadm_id = s.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 66 AND 76\n    AND f.stay_seq = 1\n),\nprocedures_48h AS (\n  SELECT\n    ap.subject_id,\n    ap.hadm_id,\n    ap.has_sepsis,\n    COUNT(DISTINCT pe.itemid) AS distinct_procedures\n  FROM all_patients ap\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON ap.subject_id = pe.subject_id\n    AND ap.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN ap.intime AND TIMESTAMP_ADD(ap.intime, INTERVAL 48 HOUR)\n  WHERE ap.has_sepsis = 1\n  GROUP BY ap.subject_id, ap.hadm_id, ap.has_sepsis  -- Fixed missing comma\n),\nsepsis_metrics AS (\n  SELECT\n    APPROX_QUANTILES(p.distinct_procedures, 100)[OFFSET(90)] AS p90_procedures,  -- Fixed column reference\n    AVG(los_days) AS avg_los_sepsis,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_sepsis\n  FROM all_patients\n  LEFT JOIN procedures_48h p\n    ON all_patients.subject_id = p.subject_id \n    AND all_patients.hadm_id = p.hadm_id\n  WHERE has_sepsis = 1\n),\ncontrol_metrics AS (\n  SELECT\n    AVG(los_days) AS avg_los_control,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_control\n  FROM all_patients\n  WHERE has_sepsis = 0\n)\nSELECT\n  '90th_percentile_procedures' AS metric,\n  'sepsis' AS group,\n  p90_procedures AS value\nFROM sepsis_metrics\nUNION ALL\nSELECT\n  'avg_los',\n  'sepsis',\n  avg_los_sepsis\nFROM sepsis_metrics\nUNION ALL\nSELECT\n  'mortality_rate',\n  'sepsis',\n  mortality_sepsis\nFROM sepsis_metrics\nUNION ALL\nSELECT\n  'avg_los',\n  'control',\n  avg_los_control\nFROM control_metrics\nUNION ALL\nSELECT\n  'mortality_rate',\n  'control',\n  mortality_control\nFROM control_metrics;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword GROUP at [78:15]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [78:15]\n\nLocation: US\nJob ID: e408ca18-bbd2-489e-9fe8-aa3534ee16af\n",
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [60:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [60:26]\n\nLocation: US\nJob ID: 185fba75-a648-49bc-b4bd-8144142c3e10\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [78:15]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [78:15]\n\nLocation: US\nJob ID: b79cff70-7c38-4863-b7e0-00723f584287\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [78:15]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [78:15]\n\nLocation: US\nJob ID: e408ca18-bbd2-489e-9fe8-aa3534ee16af\n"
+    }
+  ]
+}

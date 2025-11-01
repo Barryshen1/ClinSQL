@@ -1,0 +1,22 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH\n  -- 0) cohort: male patients aged 83-93\n  cohort_subjects AS (\n    SELECT subject_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE gender = 'M'\n      AND anchor_age BETWEEN 83 AND 93\n  ),\n\n  -- 1) first ICU stay per subject\n  first_icu AS (\n    SELECT\n      s.subject_id,\n      s.hadm_id,\n      s.stay_id,\n      s.intime,\n      s.outtime,\n      s.los,\n      ROW_NUMBER() OVER (PARTITION BY s.subject_id ORDER BY s.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS s\n  ),\n\n  -- 2) keep only the first ICU stay for each subject and restrict to our cohort\n  first_icu_one AS (\n    SELECT\n      fi.subject_id,\n      fi.hadm_id,\n      fi.stay_id,\n      fi.intime,\n      fi.outtime,\n      fi.los\n    FROM first_icu AS fi\n    JOIN cohort_subjects cs ON fi.subject_id = cs.subject_id\n    WHERE fi.rn = 1\n  ),\n\n  -- 3) identify sepsis on that first ICU stay\n  sepsis_first AS (\n    SELECT DISTINCT\n      fic.subject_id,\n      fic.hadm_id,\n      fic.stay_id,\n      fic.intime,\n      fic.los\n    FROM first_icu_one AS fic\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      ON di.subject_id = fic.subject_id\n     AND di.hadm_id = fic.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dcd\n      ON di.icd_code = dcd.icd_code\n     AND di.icd_version = dcd.icd_version\n    WHERE LOWER(dcd.long_title) LIKE '%sepsis%'\n  ),\n\n  -- 4) count distinct procedures within first 72 hours of ICU intime\n  proc_counts AS (\n    SELECT\n      sf.subject_id,\n      sf.hadm_id,\n      sf.stay_id,\n      sf.intime,\n      sf.los,\n      COUNT(DISTINCT pe.itemid) AS distinct_proc_count\n    FROM sepsis_first sf\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n      ON pe.subject_id = sf.subject_id\n     AND pe.hadm_id = sf.hadm_id\n     AND pe.stay_id = sf.stay_id\n     AND pe.starttime >= sf.intime\n     AND pe.starttime <= TIMESTAMP_ADD(sf.intime, INTERVAL 72 HOUR)\n    GROUP BY sf.subject_id, sf.hadm_id, sf.stay_id, sf.intime, sf.los\n  ),\n\n  -- 5) gather mortality and LOS data for quartile calculation\n  mortality_base AS (\n    SELECT\n      pc.subject_id,\n      pc.hadm_id,\n      pc.stay_id,\n      pc.intime,\n      pc.los,\n      pc.distinct_proc_count,\n      a.hospital_expire_flag,\n      a.deathtime\n    FROM proc_counts pc\n    JOIN sepsis_first sf\n      ON pc.subject_id = sf.subject_id\n     AND pc.hadm_id = sf.hadm_id\n     AND pc.stay_id = sf.stay_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n      ON pc.hadm_id = a.hadm_id\n  ),\n\n  -- 6) quartile assignment based on distinct_proc_count\n  quartile_assignment AS (\n    SELECT\n      mb.subject_id,\n      mb.hadm_id,\n      mb.stay_id,\n      mb.intime,\n      mb.los,\n      mb.distinct_proc_count,\n      mb.hospital_expire_flag,\n      mb.deathtime,\n      NTILE(4) OVER (ORDER BY mb.distinct_proc_count) AS quartile\n    FROM mortality_base mb\n  )\n\nSELECT\n  quartile,\n  AVG(distinct_proc_count) AS mean_proc_count,\n  AVG(los) AS mean_icu_los_days,\n  100.0 * AVG(CASE\n                WHEN hospital_expire_flag = 1 OR deathtime IS NOT NULL THEN 1\n                ELSE 0\n              END) / COUNT(*) AS mortality_percent\nFROM quartile_assignment\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hospital_expire_flag at [112:22]; reason: invalidQuery, location: query, message: Unrecognized name: hospital_expire_flag at [112:22]\n\nLocation: US\nJob ID: 1659368f-e1e7-4a25-ac27-1068d88bd158\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 62-year-old man. Among male non\u2011elective medicine inpatients aged 57\u201367, report mean, median (p50), p75, p90 LOS by discharged alive versus in\u2011hospital death, and percentile rank of 5\u2011day stay.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    CASE\n      WHEN a.hospital_expire_flag = 1 THEN 'Death'\n      ELSE 'Alive'\n    END AS discharge_status\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.services` s\n    ON s.subject_id = a.subject_id\n   AND s.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age IS NOT NULL\n    AND p.anchor_year IS NOT NULL\n    -- Age at admission: anchor_age + (admission_year - anchor_year)\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 57 AND 67\n    -- Non-elective: EMERGENCY or URGENT\n    AND a.admission_type IN ('EMERGENCY', 'URGENT')\n    -- Medicine service\n    AND LOWER(s.curr_service) LIKE '%medicine%'\n    -- Basic sanity: non-null times and valid interval\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.dischtime >= a.admittime\n),\nranked AS (\n  SELECT\n    discharge_status,\n    los_days,\n    ROW_NUMBER() OVER (PARTITION BY discharge_status ORDER BY los_days) AS rn,\n    COUNT(*) OVER (PARTITION BY discharge_status) AS total_per_status\n  FROM cohort\n)\nSELECT\n  discharge_status,\n  AVG(los_days) AS mean_los_days,\n  MAX(CASE WHEN rn = CAST(CEIL(total_per_status * 0.50) AS INT64) THEN los_days END) AS p50_los_days,\n  MAX(CASE WHEN rn = CAST(CEIL(total_per_status * 0.75) AS INT64) THEN los_days END) AS p75_los_days,\n  MAX(CASE WHEN rn = CAST(CEIL(total_per_status * 0.90) AS INT64) THEN los_days END) AS p90_los_days,\n  100.0 * SUM(CASE WHEN los_days <= 5 THEN 1 ELSE 0 END) / COUNT(*) AS percentile_5day\nFROM ranked\nGROUP BY discharge_status\nORDER BY discharge_status;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [36:19]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [36:19]\n\nLocation: US\nJob ID: 5ce9faf3-112a-4b1c-a803-3100faab907f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

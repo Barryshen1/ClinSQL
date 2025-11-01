@@ -1,0 +1,29 @@
+{
+  "query": "I\u2019m evaluating a 62-year-old male post\u2013solid-organ transplant in the ICU. Among male ICU patients aged 57\u201367, compare Transplant vs Non\u2011Transplant during the first 72 hours: median and percentiles of composite instability score (count of fever>38.5\u00b0C, SpO2<90%, RR>20 events), ICU LOS, and mortality.",
+  "final_sql": "WITH icu_stays_filtered AS (\n  SELECT \n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year) AS age,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = icu.hadm_id\n          AND d.icd_version = 10\n          AND (d.icd_code LIKE 'Z940%' OR d.icd_code LIKE 'Z941%' \n               OR d.icd_code LIKE 'Z942%' OR d.icd_code LIKE 'Z943%' \n               OR d.icd_code LIKE 'Z944%' OR d.icd_code LIKE 'Z948%')\n      ) THEN 1\n      ELSE 0\n    END AS is_transplant\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year)) BETWEEN 57 AND 67\n),\n\ninstability AS (\n  SELECT \n    icu.stay_id,\n    SUM(CASE WHEN ce.itemid = 223762 AND ce.valuenum > 38.5 THEN 1 ELSE 0 END) AS fever_count,\n    SUM(CASE WHEN ce.itemid = 220277 AND ce.valuenum < 90 THEN 1 ELSE 0 END) AS spo2_count,\n    SUM(CASE WHEN ce.itemid = 220210 AND ce.valuenum > 20 THEN 1 ELSE 0 END) AS rr_count,\n    (SUM(CASE WHEN ce.itemid = 223762 AND ce.valuenum > 38.5 THEN 1 ELSE 0 END) +\n     SUM(CASE WHEN ce.itemid = 220277 AND ce.valuenum < 90 THEN 1 ELSE 0 END) +\n     SUM(CASE WHEN ce.itemid = 220210 AND ce.valuenum > 20 THEN 1 ELSE 0 END)) AS instability_score\n  FROM icu_stays_filtered icu\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON icu.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN icu.intime AND DATETIME_ADD(icu.intime, INTERVAL 72 HOUR)\n    AND ce.itemid IN (223762, 220277, 220210)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY icu.stay_id\n),\n\noutcomes AS (\n  SELECT \n    icu.stay_id,\n    DATETIME_DIFF(icu.outtime, icu.intime, SECOND) / (24*60*60) AS icu_los_days,\n    adm.hospital_expire_flag AS mortality\n  FROM icu_stays_filtered icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n),\n\ncombined AS (\n  SELECT \n    icu.stay_id,\n    icu.is_transplant,\n    COALESCE(inst.instability_score, 0) AS instability_score,\n    out.icu_los_days,\n    out.mortality\n  FROM icu_stays_filtered icu\n  LEFT JOIN instability inst ON icu.stay_id = inst.stay_id\n  LEFT JOIN outcomes out ON icu.stay_id = out.stay_id\n)\n\nSELECT\n  is_transplant,\n  APPROX_QUANTILES(instability_score, 1000)[OFFSET(250)] AS instability_25,\n  APPROX_QUANTILES(instability_score, 1000)[OFFSET(500)] AS instability_median,\n  APPROX_QUANTILES(instability_score, 1000)[OFFSET(750)] AS instability_75,\n  APPROX_QUANTILES(icu_los_days, 1000)[OFFSET(250)] AS icu_los_25,\n  APPROX_QUANTILES(icu_los_days, 1000)[OFFSET(500)] AS icu_los_median,\n  APPROX_QUANTILES(icu_los_days, 1000)[OFFSET(750)] AS icu_los_75,\n  AVG(mortality) AS mortality_rate\nFROM combined\nGROUP BY is_transplant;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword ON at [1:17]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword ON at [1:17]\n\nLocation: US\nJob ID: b13b0054-add2-421e-a64c-390f4a5bcd4a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [70:44]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [70:44]\n\nLocation: US\nJob ID: b3c43644-9055-4817-a7b2-aabe9bd58aea\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

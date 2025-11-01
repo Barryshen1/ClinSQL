@@ -1,0 +1,28 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND (\n      d.icd_code = '431'\n      OR d.icd_code LIKE 'I61%'\n      OR d.icd_code LIKE 'I62%'\n      OR did.long_title LIKE '%hemorrhagic%'\n      OR did.long_title LIKE '%intracerebral hemorrhage%'\n      OR did.long_title LIKE '%intracranial hemorrhage%'\n    )\n),\n\ngeneral_cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.anchor_age,\n    a.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  WHERE p.anchor_age >= 18\n),\n\nlab_events_48h AS (\n  -- Chartevents: physiologic measurements with normal ranges in d_items\n  SELECT\n    ce.stay_id,\n    1 AS is_abnormal\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON ce.stay_id = i.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND di.lownormalvalue IS NOT NULL\n    AND di.highnormalvalue IS NOT NULL\n    AND ce.charttime >= i.intime\n    AND ce.charttime <= i.intime + INTERVAL '48 hours'\n    AND (ce.valuenum < di.lownormalvalue OR ce.valuenum > di.highnormalvalue)\n\n  UNION ALL\n\n  -- Labevents: lab tests with normal ranges in d_labitems\n  SELECT\n    i.stay_id,\n    1 AS is_abnormal\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON le.hadm_id = a.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON le.itemid = dl.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND dl.ref_range_lower IS NOT NULL\n    AND dl.ref_range_upper IS NOT NULL\n    AND le.charttime >= i.intime\n    AND le.charttime <= i.intime + INTERVAL '48 hours'\n    AND (le.valuenum < dl.ref_range_lower OR le.valuenum > dl.ref_range_upper)\n),\n\ninstability_scores AS (\n  SELECT\n    stay_id,\n    COUNT(*) AS instability_score\n  FROM lab_events_48h\n  GROUP BY stay_id\n),\n\ncohort_with_scores AS (\n  SELECT\n    c.stay_id,\n    COALESCE(is.instability_score, 0) AS instability_score,\n    c.los,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN instability_scores is ON c.stay_id = is.stay_id\n),\n\ngeneral_with_scores AS (\n  SELECT\n    c.stay_id,\n    COALESCE(is.instability_score, 0) AS instability_score,\n    c.los,\n    c.hospital_expire_flag\n  FROM general_cohort c\n  LEFT JOIN instability_scores is ON c.stay_id = is.stay_id\n)\n\nSELECT\n  PERCENTILE_CONT(cohort_with_scores.instability_score, 0.25) AS pct25_instability_score_cohort,\n  AVG(general_with_scores.instability_score) AS mean_instability_score_general,\n  AVG(cohort_with_scores.los) AS mean_los_cohort,\n  AVG(general_with_scores.los) AS mean_los_general,\n  AVG(CAST(cohort_with_scores.hospital_expire_flag AS FLOAT64)) AS mortality_rate_cohort,\n  AVG(CAST(general_with_scores.hospital_expire_flag AS FLOAT64)) AS mortality_rate_general\nFROM cohort_with_scores, general_with_scores;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword UNION at [65:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword UNION at [65:3]\n\nLocation: US\nJob ID: b1d4f49d-4dea-461e-95d1-71e3be6f8d1c\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"several\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"several\" at [1:16]\n\nLocation: US\nJob ID: 0f1e38c8-2bdc-4af1-b89c-e1ff654e7baf\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword UNION at [65:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword UNION at [65:3]\n\nLocation: US\nJob ID: 9eb8bae2-a385-4392-97fd-4cf5d9ed58a8\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword UNION at [65:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword UNION at [65:3]\n\nLocation: US\nJob ID: b1d4f49d-4dea-461e-95d1-71e3be6f8d1c\n"
+    }
+  ]
+}

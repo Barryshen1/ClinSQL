@@ -1,0 +1,16 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) AS age_at_admission,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND adm.admission_location = 'EMERGENCY ROOM'\n    AND adm.insurance = 'Medicare'\n    AND diag.seq_num = 1\n    AND (\n      (diag.icd_version = 9 AND diag.icd_code IN ('569.3','578.1','455.2','455.5','455.8','562.02','562.03','562.12','562.13','569.85','569.86'))\n      OR\n      (diag.icd_version = 10 AND diag.icd_code IN ('K62.2','K62.3','K62.5','K62.8','K62.81','K62.89','K62.9','K92.2'))\n    )\n),\nfiltered_cohort AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime\n  FROM cohort\n  WHERE \n    age_at_admission BETWEEN 50 AND 60\n    AND hospital_expire_flag = 0\n),\ncohort_with_readmission AS (\n  SELECT \n    fc.*,\n    TIMESTAMP_DIFF(fc.dischtime, fc.admittime, SECOND) / 86400.0 AS los_days,\n    CASE WHEN radm.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmission_flag\n  FROM filtered_cohort fc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` radm\n    ON fc.subject_id = radm.subject_id\n    AND radm.hadm_id <> fc.hadm_id\n    AND radm.admittime > fc.dischtime\n    AND radm.admittime <= TIMESTAMP_ADD(fc.dischtime, INTERVAL 30 DAY)\n),\nmetrics_by_group AS (\n  SELECT \n    readmission_flag,\n    COUNT(*) AS num_admissions,\n    PERCENTILE_CONT(los_days, 0.5) OVER (PARTITION BY readmission_flag) AS median_los_days,\n    AVG(CASE WHEN los_days > 6 THEN 1.0 ELSE 0.0 END) OVER (PARTITION BY readmission_flag) * 100 AS percent_los_above_6\n  FROM cohort_with_readmission\n  GROUP BY readmission_flag, los_days\n)\nSELECT \n  'Overall' AS measure,\n  COUNT(*) AS total_index_admissions,\n  AVG(readmission_flag) * 100 AS readmission_rate,\n  NULL AS median_los_days,\n  NULL AS percent_los_above_6\nFROM cohort_with_readmission\nUNION ALL\nSELECT \n  'Readmitted' AS measure,\n  NULL,\n  NULL,\n  median_los_days,\n  percent_los_above_6\nFROM metrics_by_group\nWHERE readmission_flag = 1\nGROUP BY readmission_flag, median_los_days, percent_los_above_6\nUNION ALL\nSELECT \n  'Not Readmitted' AS measure,\n  NULL,\n  NULL,\n  median_los_days,\n  percent_los_above_6\nFROM metrics_by_group\nWHERE readmission_flag = 0\nGROUP BY readmission_flag, median_los_days, percent_los_above_6;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

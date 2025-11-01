@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH ami_admissions AS (\n  -- Step 1: Identify male patients age 76-86 with AMI diagnosis\n  SELECT DISTINCT a.subject_id,\n                  a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n    ON d.icd_code = diag.icd_code\n   AND d.icd_version = diag.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND LOWER(diag.long_title) LIKE '%myocardial infarction%'\n),\n\ntroponin_items AS (\n  -- Step 2: Identify all itemids corresponding to Troponin I\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin i%'\n),\n\nfirst_troponin AS (\n  -- Step 3: Extract the first Troponin I measurement per admission\n  SELECT\n    la.subject_id,\n    la.hadm_id,\n    la.valuenum,\n    CASE\n      WHEN la.valuenum <= 0.04 THEN 'normal (<=0.04)'\n      WHEN la.valuenum > 0.04\n        AND la.valuenum <= 0.40 THEN 'borderline (0.04-0.40)'\n      WHEN la.valuenum > 0.40 THEN 'elevated (>0.40)'\n      ELSE 'unknown'\n    END AS category\n  FROM (\n    SELECT\n      le.subject_id,\n      le.hadm_id,\n      le.valuenum,\n      ROW_NUMBER() OVER (\n        PARTITION BY le.hadm_id\n        ORDER BY le.charttime\n      ) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    JOIN ami_admissions aa\n      ON le.hadm_id = aa.hadm_id\n    JOIN troponin_items ti\n      ON le.itemid = ti.itemid\n    WHERE le.valuenum IS NOT NULL\n  ) la\n  WHERE la.rn = 1\n)\n\n-- Step 4: Aggregate counts, percentages, mean, median, and IQR by category\nSELECT\n  category,\n  COUNT(*) AS count,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS percent,\n  ROUND(AVG(valuenum), 3) AS mean_value,\n  -- APPROX_QUANTILES(x, 4) returns [min, Q1, median, Q3, max]\n  ROUND( (APPROX_QUANTILES(valuenum, 4))[OFFSET(2)], 3 ) AS median_value,\n  ROUND(\n    ( (APPROX_QUANTILES(valuenum, 4))[OFFSET(3)]\n    - (APPROX_QUANTILES(valuenum, 4))[OFFSET(1)] ),\n    3\n  ) AS iqr_value\nFROM first_troponin\nGROUP BY category\nORDER BY\n  CASE\n    WHEN category LIKE 'normal%' THEN 1\n    WHEN category LIKE 'borderline%' THEN 2\n    WHEN category LIKE 'elevated%' THEN 3\n    ELSE 4\n  END;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

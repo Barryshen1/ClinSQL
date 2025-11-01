@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 86-year-old man. Among male ICU patients aged 81\u201391 receiving HFNC in the first 48h, what's the percentile for a composite instability score of 85 (first 48h)? Also report average ICU LOS (days) and hospital mortality (%) for the top decile.",
+  "final_sql": "WITH qualifying_stays AS (\n  -- Base cohort: male, 81-91, ICU stays with HFNC in first 48h\n  SELECT \n    p.subject_id,\n    i.stay_id,\n    i.hadm_id,\n    i.los,\n    a.hospital_expire_flag,\n    i.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON p.subject_id = i.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.subject_id = a.subject_id AND i.hadm_id = a.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 81 AND 91\n    AND EXISTS (\n      -- HFNC usage in first 48h (itemid 228351 for High Flow Nasal Cannula)\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      WHERE ce.subject_id = i.subject_id\n        AND ce.hadm_id = i.hadm_id\n        AND ce.stay_id = i.stay_id\n        AND ce.itemid = 228351\n        AND ce.charttime >= i.intime\n        AND ce.charttime <= i.intime + INTERVAL 2 DAY\n        AND ce.value IS NOT NULL  -- Ensure valid event\n    )\n),\n\nall_scores AS (\n  -- All qualifying scores for percentile calculation\n  SELECT \n    qs.*,\n    (COALESCE(AVG(CASE WHEN ce.itemid = 220045 THEN (ce.valuenum - 60)/20 END), 0) +\n     COALESCE(AVG(CASE WHEN ce.itemid = 220210 THEN (ce.valuenum - 12)/10 END), 0) +\n     COALESCE(AVG(CASE WHEN ce.itemid = 220277 THEN (100 - ce.valuenum)/10 END), 0)) * 10 AS instability_score\n  FROM qualifying_stays qs\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON qs.subject_id = ce.subject_id\n    AND qs.hadm_id = ce.hadm_id\n    AND qs.stay_id = ce.stay_id\n    AND ce.charttime >= qs.intime\n    AND ce.charttime <= qs.intime + INTERVAL 2 DAY\n    AND ce.itemid IN (220045, 220210, 220277)\n  GROUP BY qs.subject_id, qs.stay_id, qs.hadm_id, qs.los, qs.hospital_expire_flag, qs.intime\n),\n\nthresholds AS (\n  -- Compute 90th percentile threshold once\n  SELECT \n    PERCENTILE_CONT(instability_score, 0.9) AS top_decile_threshold\n  FROM all_scores\n)\n\n-- Percentile for score = 85 (proportion of scores <= 85)\nSELECT \n  'Percentile for score 85' AS metric,\n  ROUND(AVG(CASE WHEN instability_score <= 85 THEN 1.0 ELSE 0 END) * 100, 2) AS value\nFROM all_scores\n\nUNION ALL\n\n-- Top decile: avg LOS\nSELECT \n  'Avg ICU LOS top decile (days)' AS metric,\n  ROUND(AVG(los), 2) AS value\nFROM all_scores, thresholds\nWHERE instability_score >= thresholds.top_decile_threshold\n\nUNION ALL\n\n-- Top decile: mortality %\nSELECT \n  'Hospital mortality top decile (%)' AS metric,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS value\nFROM all_scores, thresholds\nWHERE instability_score >= thresholds.top_decile_threshold;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: b962a93d-24c6-4d3c-a229-da069735e271\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 2 to PERCENTILE_CONT must be between 0 and 1 at [85:31]; reason: invalidQuery, location: query, message: Argument 2 to PERCENTILE_CONT must be between 0 and 1 at [85:31]\n\nLocation: US\nJob ID: 37279399-86b3-4e27-b4f5-69005639155b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [52:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function PERCENTILE_CONT\n  Argument types: FLOAT64\n  Signature: PERCENTILE_CONT(FLOAT64, FLOAT64)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(NUMERIC, NUMERIC)\n    Signature requires at least 2 arguments, found 1 argument\n  Signature: PERCENTILE_CONT(BIGNUMERIC, BIGNUMERIC)\n    Signature requires at least 2 arguments, found 1 argument at [52:5]\n\nLocation: US\nJob ID: 39dcc3c8-f105-4279-b9b7-91ac0a33fee2\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: b962a93d-24c6-4d3c-a229-da069735e271\n"
+    }
+  ]
+}

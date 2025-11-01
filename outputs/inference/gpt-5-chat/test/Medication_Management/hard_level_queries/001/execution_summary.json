@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating an 81-year-old woman with cardiac arrest. Among female inpatients 76\u201386 with cardiac arrest, stratified by medication complexity quintiles (first 7 hospital days), report per quintile: patient count, avg/min/max score, LOS, in-hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cardiac_arrest_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON a.hadm_id = dx.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON dx.icd_code = d.icd_code AND dx.icd_version = d.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 76 AND 86\n    AND (\n      (dx.icd_version = 9 AND dx.icd_code = '4275') -- ICD-9 cardiac arrest\n      OR (dx.icd_version = 10 AND dx.icd_code LIKE 'I46%') -- ICD-10 cardiac arrest\n    )\n),\nmed_complexity AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT pr.drug) AS complexity_score\n  FROM cardiac_arrest_cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.hadm_id = pr.hadm_id\n    AND pr.starttime >= c.admittime\n    AND pr.starttime < DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.subject_id, c.hadm_id\n),\ncohort_with_score AS (\n  SELECT\n    c.*,\n    m.complexity_score,\n    DATETIME_DIFF(c.dischtime, c.admittime, DAY) AS los,\n    -- flag for 30-day readmission\n    IF((\n      SELECT COUNT(*)\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = c.subject_id\n        AND a2.admittime > c.dischtime\n        AND a2.admittime <= DATETIME_ADD(c.dischtime, INTERVAL 30 DAY)\n    ) > 0, 1, 0) AS readmit_30d\n  FROM cardiac_arrest_cohort c\n  LEFT JOIN med_complexity m\n    ON c.subject_id = m.subject_id AND c.hadm_id = m.hadm_id\n),\ncohort_with_quintile AS (\n  SELECT *,\n         NTILE(5) OVER (ORDER BY complexity_score) AS complexity_quintile\n  FROM cohort_with_score\n)\nSELECT\n  complexity_quintile,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  AVG(complexity_score) AS avg_score,\n  MIN(complexity_score) AS min_score,\n  MAX(complexity_score) AS max_score,\n  AVG(los) AS avg_los_days,\n  100 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS in_hosp_mortality_pct,\n  100 * SUM(readmit_30d) / COUNT(*) AS readmit_30d_pct\nFROM cohort_with_quintile\nGROUP BY complexity_quintile\nORDER BY complexity_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name medication not found inside pr at [28:23]; reason: invalidQuery, location: query, message: Name medication not found inside pr at [28:23]\n\nLocation: US\nJob ID: c901b51c-447e-4052-8155-94f3fbcf32c1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

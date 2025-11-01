@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY num_procedures) AS procedures_75th_percentile FROM male_icu_patients_72h_procedures;

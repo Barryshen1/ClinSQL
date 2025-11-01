@@ -1,0 +1,16 @@
+{
+  "query": "Concerned about my 75-year-old female ICU patient: among female ICU patients aged 70\u201380, based on maximum SBP in first 24h, report percent by SBP category (<130;130\u2013139;140\u2013159;\u2265160) and stroke rate.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    ie.subject_id, \n    ie.hadm_id, \n    ie.stay_id,\n    ie.intime,\n    EXTRACT(YEAR FROM ie.intime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON ie.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n), \nranked_icustays AS (\n  SELECT \n    *,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n  FROM cohort\n  WHERE age_at_admission BETWEEN 70 AND 80\n),\nfiltered_cohort AS (\n  SELECT subject_id, hadm_id, stay_id, intime\n  FROM ranked_icustays\n  WHERE rn = 1\n),\nsbp AS (\n  SELECT \n    ce.stay_id,\n    MAX(ce.valuenum) AS max_sbp\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN filtered_cohort fc \n    ON ce.stay_id = fc.stay_id\n  WHERE ce.itemid IN (220179, 220050, 225309)\n    AND ce.valuenum BETWEEN 1 AND 300\n    AND ce.charttime >= fc.intime\n    AND ce.charttime <= DATETIME_ADD(fc.intime, INTERVAL 24 HOUR)\n  GROUP BY ce.stay_id\n),\nstroke_flags AS (\n  SELECT \n    hadm_id,\n    1 AS stroke_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code IN ('43301','43311','43321','43331','43381','43391','43401','43411','43491','436'))\n    OR \n    (icd_version = 10 AND icd_code LIKE 'I60%' OR icd_code LIKE 'I61%' OR icd_code LIKE 'I62%' OR icd_code LIKE 'I63%' OR icd_code LIKE 'I64%')\n  GROUP BY hadm_id\n),\ncombined AS (\n  SELECT \n    fc.stay_id,\n    fc.hadm_id,\n    s.max_sbp,\n    CASE\n        WHEN s.max_sbp < 130 THEN '<130'\n        WHEN s.max_sbp >= 130 AND s.max_sbp < 140 THEN '130-139'\n        WHEN s.max_sbp >= 140 AND s.max_sbp < 160 THEN '140-159'\n        WHEN s.max_sbp >= 160 THEN '>=160'\n        ELSE NULL\n    END AS sbp_category,\n    COALESCE(sf.stroke_flag, 0) AS stroke_flag\n  FROM filtered_cohort fc\n  INNER JOIN sbp s \n    ON fc.stay_id = s.stay_id\n  LEFT JOIN stroke_flags sf \n    ON fc.hadm_id = sf.hadm_id\n)\nSELECT \n  sbp_category,\n  COUNT(*) AS patient_count,\n  ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM combined), 2) AS percentage,\n  ROUND(SUM(stroke_flag) * 100.0 / COUNT(*), 2) AS stroke_rate\nFROM combined\nGROUP BY sbp_category\nORDER BY \n  CASE sbp_category\n    WHEN '<130' THEN 1\n    WHEN '130-139' THEN 2\n    WHEN '140-159' THEN 3\n    WHEN '>=160' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 90\u2011year\u2011old male. Among male ICU patients aged 85\u201395 with acute respiratory failure, what is the percentile rank of a first\u201124\u2011hour vital\u2011sign instability score of 85? Also report average ICU length\u2011of\u2011stay and in\u2011hospital mortality for the most unstable quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    adm.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  ON\n    icu.hadm_id = adm.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n  ON\n    icu.subject_id = pat.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n  ON\n    icu.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_dx\n  ON\n    dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 85 AND 95\n    AND (\n      (dx.icd_version = 9 AND dx.icd_code = '51881')\n      OR\n      (dx.icd_version = 10 AND dx.icd_code = 'J9600')\n    )\n),\n\nvitals_first24 AS (\n  SELECT\n    ch.stay_id,\n    COUNT(*) AS instability_score\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ch\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di\n  ON\n    ch.itemid = di.itemid\n  JOIN\n    cohort co\n  ON\n    ch.stay_id = co.stay_id\n  WHERE\n    ch.charttime >= co.intime\n    AND ch.charttime <= DATETIME_ADD(co.intime, INTERVAL 24 HOUR)\n    AND ch.valuenum IS NOT NULL\n    AND (\n      (di.label IN ('Heart Rate') AND (ch.valuenum < 50 OR ch.valuenum > 130)) OR\n      (di.label IN ('SBP') AND (ch.valuenum < 90 OR ch.valuenum > 180)) OR\n      (di.label IN ('Temperature Celsius') AND (ch.valuenum < 36 OR ch.valuenum > 38.5)) OR\n      (di.label IN ('SpO2') AND ch.valuenum < 90) OR\n      (di.label IN ('Respiratory Rate') AND (ch.valuenum < 8 OR ch.valuenum > 30))\n    )\n  GROUP BY\n    ch.stay_id\n),\n\nscored_cohort AS (\n  SELECT\n    co.*,\n    COALESCE(v.instability_score, 0) AS instability_score\n  FROM\n    cohort co\n  LEFT JOIN\n    vitals_first24 v\n  ON\n    co.stay_id = v.stay_id\n),\n\nranked_scores AS (\n  SELECT\n    *,\n    PERCENT_RANK() OVER (ORDER BY instability_score) AS percentile_rank,\n    NTILE(4) OVER (ORDER BY instability_score DESC) AS quartile\n  FROM\n    scored_cohort\n)\n\nSELECT\n  (SELECT percentile_rank FROM ranked_scores WHERE instability_score = 85 LIMIT 1) AS percentile_rank_of_85,\n  AVG(CASE WHEN quartile = 1 THEN los ELSE NULL END) AS avg_los_top_quartile,\n  AVG(CASE WHEN quartile = 1 THEN hospital_expire_flag ELSE NULL END) AS mortality_top_quartile\nFROM\n  ranked_scores;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

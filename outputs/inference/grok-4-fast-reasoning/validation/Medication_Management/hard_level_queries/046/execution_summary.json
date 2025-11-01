@@ -1,0 +1,28 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH patients_adm AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.anchor_age + EXTRACT(YEAR FROM a.admittime) - 2008 AS age_at_adm\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n),\ntrauma_count AS (\n  SELECT \n    pa.*,\n    COUNT(DISTINCT CASE \n      WHEN (\n        (di.icd_version = 9 AND CAST(LEFT(di.icd_code, 3) AS INT64) BETWEEN 800 AND 959)\n        OR \n        (di.icd_version = 10 AND LEFT(di.icd_code, 1) IN ('S', 'T'))\n      ) THEN di.icd_code \n    END) AS num_trauma\n  FROM patients_adm pa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di \n    ON pa.hadm_id = di.hadm_id\n  GROUP BY \n    pa.subject_id, pa.gender, pa.hadm_id, pa.admittime, pa.dischtime, \n    pa.deathtime, pa.hospital_expire_flag, pa.age_at_adm\n),\ncohort AS (\n  SELECT *\n  FROM trauma_count\n  WHERE gender = 'F'\n    AND age_at_adm BETWEEN 45 AND 55\n    AND num_trauma >= 2\n),\nmeds AS (\n  SELECT \n    c.*,\n    COUNT(DISTINCT pres.drug) AS med_complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres \n    ON c.hadm_id = pres.hadm_id\n    AND pres.drug IS NOT NULL\n    AND pres.starttime >= c.admittime\n    AND pres.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY \n    c.subject_id, c.gender, c.hadm_id, c.admittime, c.dischtime, \n    c.deathtime, c.hospital_expire_flag, c.age_at_adm, c.num_trauma\n),\nwith_tertile AS (\n  SELECT *,\n    NTILE(3) OVER (ORDER BY med_complexity_score ASC) AS tertile\n  FROM meds\n),\nwith_readmission AS (\n  SELECT *,\n    CASE \n      WHEN hospital_expire_flag = 1 THEN 0\n      ELSE \n        CASE WHEN EXISTS (\n          SELECT 1 \n          FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n          WHERE a2.subject_id = with_tertile.subject_id\n            AND a2.hadm_id != with_tertile.hadm_id\n            AND a2.admittime > with_tertile.dischtime\n            AND a2.admittime <= TIMESTAMP_ADD(with_tertile.dischtime, INTERVAL 30 DAY)\n        ) THEN 1 ELSE 0 END\n    END AS has_readmission\n  FROM with_tertile\n)\nSELECT \n  tertile,\n  COUNT(*) AS num_admissions,\n  AVG(med_complexity_score) AS mean_score,\n  MIN(med_complexity_score) AS min_score,\n  MAX(med_complexity_score) AS max_score,\n  AVG(DATE_DIFF(dischtime, admittime, DAY)) AS mean_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_pct,\n  SAFE_DIVIDE(\n    SUM(CAST(CASE WHEN hospital_expire_flag = 0 AND has_readmission = 1 THEN 1 ELSE 0 END AS FLOAT64)),\n    SUM(CAST(CASE WHEN hospital_expire_flag = 0 THEN 1 ELSE 0 END AS FLOAT64))\n  ) * 100 AS readmission_30d_pct\nFROM with_readmission\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [20:10]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [20:10]\n\nLocation: US\nJob ID: bcb423f0-9a97-49df-9782-f04f717278c1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [81:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [81:36]\n\nLocation: US\nJob ID: 8a5e9f2e-e4d0-411e-892b-7e7509cca691\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

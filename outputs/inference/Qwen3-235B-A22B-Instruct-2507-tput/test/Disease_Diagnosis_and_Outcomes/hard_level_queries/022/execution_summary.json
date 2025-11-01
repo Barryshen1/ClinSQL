@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating a 45\u2011year\u2011old woman with AKI. Among female inpatients 40\u201350 with AKI, stratify by composite risk (5\u00d7comorbidities +50 if ARDS) into quintiles and report per quintile: N; 30\u2011day post\u2011discharge mortality %; ARDS co\u2011occurrence %; median survivor LOS (days).",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 40 AND 50\n),\nfirst_admission AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM patients_filtered p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE a.admission_type != 'AMBULATORY OBSERVATION'\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY a.admittime) = 1\n),\naki_ards_diagnoses AS (\n  SELECT \n    di.hadm_id,\n    MAX(CASE \n      WHEN (di.icd_code = 'N17' AND di.icd_version = 10) \n        OR (di.icd_code = '584' AND di.icd_version = 9) \n      THEN 1 ELSE 0 END) AS has_aki,\n    MAX(CASE \n      WHEN (di.icd_code = 'J80' AND di.icd_version = 10) \n        OR (di.icd_code = '518.82' AND di.icd_version = 9) \n      THEN 1 ELSE 0 END) AS has_ards\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  GROUP BY di.hadm_id\n),\ncomorbidity_count AS (\n  SELECT \n    di.hadm_id,\n    COUNT(DISTINCT di.icd_code) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE NOT (\n    (di.icd_code = 'N17' AND di.icd_version = 10) OR\n    (di.icd_code = '584' AND di.icd_version = 9) OR\n    (di.icd_code = 'J80' AND di.icd_version = 10) OR\n    (di.icd_code = '518.82' AND di.icd_version = 9)\n  )\n  GROUP BY di.hadm_id\n),\npatient_risk AS (\n  SELECT \n    fa.subject_id,\n    fa.hadm_id,\n    fa.admittime,\n    fa.dischtime,\n    fa.los_days,\n    fa.hospital_expire_flag,\n    COALESCE(cc.comorbidity_count, 0) AS comorbidity_count,\n    COALESCE(ad.has_ards, 0) AS has_ards,\n    COALESCE(ad.has_aki, 0) AS has_aki,\n    5 * COALESCE(cc.comorbidity_count, 0) + \n    CASE WHEN COALESCE(ad.has_ards, 0) = 1 THEN 50 ELSE 0 END AS risk_score\n  FROM first_admission fa\n  LEFT JOIN comorbidity_count cc ON fa.hadm_id = cc.hadm_id\n  LEFT JOIN aki_ards_diagnoses ad ON fa.hadm_id = ad.hadm_id\n),\naki_patients AS (\n  SELECT *\n  FROM patient_risk\n  WHERE has_aki = 1\n),\nquintiles AS (\n  SELECT\n    ap.*,\n    NTILE(5) OVER (ORDER BY ap.risk_score) AS risk_quintile\n  FROM aki_patients ap\n),\nmortality_and_los AS (\n  SELECT\n    q.risk_quintile,\n    q.subject_id,\n    q.hadm_id,\n    q.los_days,\n    q.has_ards,\n    -- 30-day post-discharge mortality: dod within 30 days of dischtime\n    CASE \n      WHEN p.dod IS NOT NULL \n       AND p.dod >= q.dischtime \n       AND p.dod <= DATETIME_ADD(q.dischtime, INTERVAL 30 DAY)\n      THEN 1 ELSE 0 \n    END AS died_within_30d,\n    -- Survival beyond 30 days post-discharge\n    CASE \n      WHEN p.dod IS NULL OR p.dod > DATETIME_ADD(q.dischtime, INTERVAL 30 DAY)\n      THEN 1 ELSE 0 \n    END AS survived_30d\n  FROM quintiles q\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON q.subject_id = p.subject_id\n)\nSELECT\n  risk_quintile,\n  COUNT(*) AS N,\n  ROUND(100 * AVG(CAST(died_within_30d AS FLOAT64)), 2) AS mortality_30d_pct,\n  ROUND(100 * AVG(CAST(has_ards AS FLOAT64)), 2) AS ards_cooccurrence_pct,\n  APPROX_QUANTILES(CASE WHEN survived_30d = 1 THEN los_days END, 100)[OFFSET(50)] AS median_survivor_los_days\nFROM mortality_and_los\nGROUP BY risk_quintile\nORDER BY risk_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword AT at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AT at [1:6]\n\nLocation: US\nJob ID: 02370aa9-c326-4025-a2f4-3ebb351f7431\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

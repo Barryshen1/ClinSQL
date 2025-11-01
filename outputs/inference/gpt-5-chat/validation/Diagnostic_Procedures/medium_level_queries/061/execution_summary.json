@@ -1,0 +1,16 @@
+{
+  "query": "For my 69-year-old female with AKI: among female patients 64\u201374 with AKI, median (IQR) diagnostic imaging studies per admission for 1\u20133 vs 4\u20137 days, stratified by primary vs secondary diagnosis?",
+  "final_sql": "WITH aki_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    MIN(CASE WHEN di.seq_num = 1 THEN 1 ELSE 2 END) AS diagnosis_type -- 1=primary, 2=secondary\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n    ON a.hadm_id = di.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    ON di.icd_code = dd.icd_code\n   AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND (\n      (di.icd_version = 10 AND di.icd_code LIKE 'N17%')\n      OR (di.icd_version = 9 AND di.icd_code LIKE '584%')\n    )\n  GROUP BY a.subject_id, a.hadm_id, p.gender, p.anchor_age\n),\nlos_group AS (\n  SELECT\n    c.*,\n    CASE\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 3 THEN '1-3 days'\n      WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 4 AND 7 THEN '4-7 days'\n      ELSE NULL\n    END AS los_bucket\n  FROM aki_cohort c\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a\n    ON c.hadm_id = a.hadm_id\n  WHERE TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) BETWEEN 1 AND 7\n),\nimaging_counts AS (\n  SELECT\n    lg.hadm_id,\n    lg.los_bucket,\n    lg.diagnosis_type,\n    COUNT(pic.icd_code) AS imaging_count\n  FROM los_group lg\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.procedures_icd pic\n    ON lg.hadm_id = pic.hadm_id\n  LEFT JOIN physionet-data.mimiciv_3_1_hosp.d_icd_procedures dp\n    ON pic.icd_code = dp.icd_code\n   AND pic.icd_version = dp.icd_version\n  WHERE dp.long_title IS NULL\n    OR REGEXP_CONTAINS(UPPER(dp.long_title), r'(XRAY|X-RAY|CT|MRI|ULTRASOUND|IMAGING)')\n  GROUP BY lg.hadm_id, lg.los_bucket, lg.diagnosis_type\n),\nstats AS (\n  SELECT\n    los_bucket,\n    diagnosis_type,\n    APPROX_QUANTILES(imaging_count, 4) AS quartiles\n  FROM imaging_counts\n  GROUP BY los_bucket, diagnosis_type\n)\nSELECT\n  los_bucket,\n  CASE diagnosis_type WHEN 1 THEN 'Primary' ELSE 'Secondary' END AS diagnosis_type,\n  quartiles[OFFSET(0)] AS q0,\n  quartiles[OFFSET(1)] AS q1, -- Q1\n  quartiles[OFFSET(2)] AS median,\n  quartiles[OFFSET(3)] AS q3,\n  quartiles[OFFSET(3)] - quartiles[OFFSET(1)] AS IQR\nFROM stats\nORDER BY los_bucket, diagnosis_type;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 43\u2011year\u2011old woman. Among female inpatients aged 38\u201348 with AMI, calculate a 72\u2011hour lab instability score, stratify AMI patients into quartiles, and report LOS and in\u2011hospital mortality for each quartile. Compare overall critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH amipatients AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n      OR (d.icd_version = 10 AND d.icd_code IN ('I21', 'I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4', 'I22', 'I22.0', 'I22.1', 'I22.2', 'I22.8', 'I22.9'))\n    )\n),\ncontrols AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n    AND a.hadm_id NOT IN (SELECT hadm_id FROM amipatients)\n),\nlab_abnormalities_fixed AS (\n  SELECT \n    le.subject_id,\n    le.hadm_id,\n    COUNT(*) AS abnormal_lab_count\n  FROM `physionet-data.mimiciv_3_1_hosp`.labevents le\n  JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON le.hadm_id = a.hadm_id\n  WHERE le.charttime >= a.admittime\n    AND le.charttime <= a.admittime + INTERVAL '72' HOUR\n    AND le.flag IS NOT NULL  -- Use flag as the only validated indicator of abnormality in MIMIC-IV\n  GROUP BY le.subject_id, le.hadm_id\n),\nami_with_score AS (\n  SELECT \n    ap.subject_id,\n    ap.hadm_id,\n    ap.admittime,\n    ap.dischtime,\n    ap.hospital_expire_flag,\n    COALESCE(lab.abnormal_lab_count, 0) AS lab_instability_score\n  FROM amipatients ap\n  LEFT JOIN lab_abnormalities_fixed lab ON ap.hadm_id = lab.hadm_id\n),\ncontrol_with_score AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    COALESCE(lab.abnormal_lab_count, 0) AS abnormal_lab_count\n  FROM controls c\n  LEFT JOIN lab_abnormalities_fixed lab ON c.hadm_id = lab.hadm_id\n),\nquartiles AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    lab_instability_score,\n    NTILE(4) OVER (ORDER BY lab_instability_score) AS quartile,\n    dischtime,\n    admittime,\n    hospital_expire_flag\n  FROM ami_with_score\n)\nSELECT \n  q.quartile,\n  AVG(TIMESTAMP_DIFF(q.dischtime, q.admittime, HOUR) / 24.0) AS avg_los_days,\n  SUM(q.hospital_expire_flag) * 1.0 / COUNT(*) AS in_hospital_mortality_rate\nFROM quartiles q\nGROUP BY q.quartile\nORDER BY q.quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"a\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"a\" at [1:18]\n\nLocation: US\nJob ID: 854fcc7e-8f6b-4a72-8b2d-3514128abfd1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dl at [33:12]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dl at [33:12]\n\nLocation: US\nJob ID: ca2e535c-5ea1-4b81-8cc7-7926bf06af73\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

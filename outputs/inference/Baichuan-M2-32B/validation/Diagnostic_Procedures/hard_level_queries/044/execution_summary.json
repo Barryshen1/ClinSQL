@@ -1,0 +1,29 @@
+{
+  "query": "I'm evaluating an 87\u2011year\u2011old man. Among male ICU patients aged 82\u201392 with cardiogenic shock, stratify first\u201124\u2011hour procedure burden into quintiles and report for each quintile mean procedure count, mean hospital LOS in days, and in\u2011hospital mortality percentage.",
+  "final_sql": "WITH patient_icu AS (\n  SELECT \n    i.stay_id,\n    i.hadm_id,\n    i.intime,\n    p.subject_id,\n    p.gender,\n    p.anchor_year,\n    p.anchor_age,\n    TIMESTAMP_DIFF(\n      i.intime,\n      DATE_SUB(CAST(CONCAT(p.anchor_year, '-01-01') AS DATE), \n      INTERVAL p.anchor_age YEAR),\n      YEAR\n    ) AS age_at_icu\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n),\ncardiogenic_shock_admissions AS (\n  SELECT DISTINCT\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code\n    AND d.icd_version = di.icd_version\n  WHERE di.long_title LIKE '%cardiogenic shock%'\n),\nicu_stays_with_diagnosis AS (\n  SELECT \n    p.*\n  FROM patient_icu p\n  INNER JOIN cardiogenic_shock_admissions c\n    ON p.hadm_id = c.hadm_id\n  WHERE p.age_at_icu BETWEEN 82 AND 92\n),\nprocedure_counts AS (\n  SELECT \n    i.stay_id,\n    i.hadm_id,\n    COUNT(*) AS procedure_count  -- Fixed: Count all events (no unique ID exists)\n  FROM icu_stays_with_diagnosis i\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON i.stay_id = pe.stay_id\n    AND pe.starttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 24 HOUR)\n  GROUP BY i.stay_id, i.hadm_id\n),\nhospital_admission_details AS (\n  SELECT \n    hadm_id,\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS hospital_los_days,\n    hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE dischtime IS NOT NULL\n),\ncombined AS (\n  SELECT \n    pc.stay_id,\n    pc.procedure_count,\n    had.hospital_los_days,\n    had.hospital_expire_flag\n  FROM procedure_counts pc\n  INNER JOIN hospital_admission_details had\n    ON pc.hadm_id = had.hadm_id\n),\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM combined\n)\nSELECT \n  quintile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(hospital_los_days) AS mean_hospital_los_days,\n  (SUM(hospital_expire_flag) * 100.0 / COUNT(*)) AS mortality_percentage\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"shock\" at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"shock\" at [1:18]\n\nLocation: US\nJob ID: 532ece8a-5e82-4c5a-bef7-22080a4fcdba\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name procedureevent_id not found inside pe at [42:23]; reason: invalidQuery, location: query, message: Name procedureevent_id not found inside pe at [42:23]\n\nLocation: US\nJob ID: b236cf58-324d-4a6c-ae4f-6a671ed50a08\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

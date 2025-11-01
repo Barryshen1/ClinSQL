@@ -1,0 +1,1 @@
+PERCENTILE_CONT(CASE WHEN is_top_quartile = 1 THEN instability_score END, 0.95);

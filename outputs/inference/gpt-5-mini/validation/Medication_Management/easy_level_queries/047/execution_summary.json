@@ -1,0 +1,28 @@
+{
+  "query": "I have a 65-year-old female patient. Among hospitalized women aged 60\u201370, what's the IQR (days) of atorvastatin 40\u201380 mg prescriptions?",
+  "final_sql": "WITH atorv_prescriptions AS (\n  SELECT\n    rx.subject_id,\n    rx.hadm_id,\n    rx.starttime,\n    rx.stoptime,\n    -- duration in days (integer)\n    TIMESTAMP_DIFF(rx.stoptime, rx.starttime, DAY) AS duration_days,\n    rx.drug,\n    rx.dose_val_rx,\n    rx.dose_unit_rx,\n    rx.prod_strength\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` rx\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON rx.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON rx.subject_id = p.subject_id\n  WHERE\n    -- female patients aged 60-70 (inclusive)\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 60 AND 70\n\n    -- drug name contains atorvastatin\n    AND LOWER(COALESCE(rx.drug, '')) LIKE '%atorvastatin%'\n\n    -- require valid start and stop times, and positive duration\n    AND rx.starttime IS NOT NULL\n    AND rx.stoptime IS NOT NULL\n    AND rx.stoptime > rx.starttime\n\n    -- dose between 40 and 80 mg, either from dose_val_rx + unit, or from prod_strength containing 'mg'\n    AND (\n      -- explicit numeric dose value with mg unit (cast to float)\n      (SAFE_CAST(rx.dose_val_rx AS FLOAT64) IS NOT NULL\n       AND LOWER(COALESCE(rx.dose_unit_rx, '')) IN ('mg', 'milligram', 'milligrams')\n       AND SAFE_CAST(rx.dose_val_rx AS FLOAT64) BETWEEN 40.0 AND 80.0)\n      OR\n      -- numeric in prod_strength like '40 mg'\n      (rx.prod_strength IS NOT NULL\n       AND REGEXP_CONTAINS(LOWER(rx.prod_strength), r'\\d+(\\.\\d+)?\\s*mg')\n       AND SAFE_CAST(REGEXP_EXTRACT(rx.prod_strength, r'(\\d+(\\.\\d+)?)') AS FLOAT64) BETWEEN 40.0 AND 80.0)\n      OR\n      -- fallback: dose_val_rx present without unit but numeric in the 40-80 range\n      (SAFE_CAST(rx.dose_val_rx AS FLOAT64) IS NOT NULL\n       AND (rx.dose_unit_rx IS NULL OR TRIM(rx.dose_unit_rx) = '')\n       AND SAFE_CAST(rx.dose_val_rx AS FLOAT64) BETWEEN 40.0 AND 80.0)\n    )\n),\n\nquantiles AS (\n  -- compute approximate percentiles (0..100). APPROX_QUANTILES returns array[0..100].\n  SELECT APPROX_QUANTILES(duration_days, 100) AS q_arr\n  FROM atorv_prescriptions\n),\n\nstats AS (\n  SELECT\n    COUNT(*) AS total_prescriptions,\n    COUNT(DISTINCT subject_id) AS unique_patients\n  FROM atorv_prescriptions\n)\n\nSELECT\n  q_arr[OFFSET(25)] AS p25_days,\n  q_arr[OFFSET(75)] AS p75_days,\n  SAFE_CAST(q_arr[OFFSET(75)] - q_arr[OFFSET(25)] AS FLOAT64) AS iqr_days,\n  stats.total_prescriptions,\n  stats.unique_patients\nFROM quantiles\nCROSS JOIN stats;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Regular expressions passed into extraction functions must not have more than 1 capturing group; reason: invalidQuery, location: query, message: Regular expressions passed into extraction functions must not have more than 1 capturing group\n\nLocation: US\nJob ID: 23331030-f09f-4836-ba41-576069f18c5e\n",
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column subject_id in USING clause is ambiguous on left side of join at [17:12]; reason: invalidQuery, location: query, message: Column subject_id in USING clause is ambiguous on left side of join at [17:12]\n\nLocation: US\nJob ID: 20d55778-77a8-4171-9aa9-c0bb88387012\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator BETWEEN\n  Argument types: STRING, INT64, INT64\n  Signature: (T1) BETWEEN (T1) AND (T1)\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [36:27]; reason: invalidQuery, location: query, message: No matching signature for operator BETWEEN\n  Argument types: STRING, INT64, INT64\n  Signature: (T1) BETWEEN (T1) AND (T1)\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [36:27]\n\nLocation: US\nJob ID: e2b75b42-c717-4469-bdde-9b4c1e60717a\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Regular expressions passed into extraction functions must not have more than 1 capturing group; reason: invalidQuery, location: query, message: Regular expressions passed into extraction functions must not have more than 1 capturing group\n\nLocation: US\nJob ID: 23331030-f09f-4836-ba41-576069f18c5e\n"
+    }
+  ]
+}

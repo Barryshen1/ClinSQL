@@ -1,0 +1,1 @@
+SELECT (SELECT MEDIAN(p.duration) FROM prescriptions p JOIN patients pt ON p.subject_id = pt.subject_id WHERE pt.gender = 'M' AND pt.age BETWEEN 58 AND 68 AND p.drug IN ('heparin', 'enoxaparin')) AS median_duration;

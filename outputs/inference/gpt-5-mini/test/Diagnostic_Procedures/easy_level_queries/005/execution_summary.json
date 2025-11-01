@@ -1,0 +1,22 @@
+{
+  "query": "For my 62-year-old male patient, among males aged 57\u201367, what is the 75th percentile of distinct echocardiography procedures per patient?",
+  "final_sql": "WITH cohort AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 57 AND 67\n),\n\n-- HCPCS/CPT-like events (hospital)\nhcpcs_echo AS (\n  SELECT\n    h.subject_id,\n    h.hadm_id,\n    COALESCE(h.hcpcs_cd, '') AS proc_code,\n    'hcpcs' AS source,\n    DATE(h.chartdate) AS proc_date\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n    ON h.hcpcs_cd = d.code\n  WHERE LOWER(COALESCE(d.long_description, d.short_description, h.short_description, '')) LIKE '%echo%'\n     OR LOWER(COALESCE(d.long_description, d.short_description, h.short_description, '')) LIKE '%echocardi%'\n     OR LOWER(COALESCE(d.long_description, d.short_description, h.short_description, '')) LIKE '%echocardiography%'\n),\n\n-- ICD procedure table (hospital)\nicd_proc_echo AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    COALESCE(p.icd_code, '') AS proc_code,\n    'icd_procedure' AS source,\n    DATE(p.chartdate) AS proc_date\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d\n    ON p.icd_code = d.icd_code\n   AND p.icd_version = d.icd_version\n  WHERE LOWER(COALESCE(d.long_title, '')) LIKE '%echo%'\n     OR LOWER(COALESCE(d.long_title, '')) LIKE '%echocardi%'\n     OR LOWER(COALESCE(d.long_title, '')) LIKE '%echocardiography%'\n),\n\n-- ICU procedureevents (item labels may mention echo)\nicu_proc_echo AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    CAST(p.itemid AS STRING) AS proc_code,\n    'icu_procedureevent' AS source,\n    DATE(p.starttime) AS proc_date\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` p\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` d\n    ON p.itemid = d.itemid\n  WHERE LOWER(COALESCE(d.label, CAST(p.value AS STRING), '')) LIKE '%echo%'\n     OR LOWER(COALESCE(d.label, CAST(p.value AS STRING), '')) LIKE '%echocardi%'\n     OR LOWER(COALESCE(d.label, CAST(p.value AS STRING), '')) LIKE '%echocardiography%'\n),\n\nall_echo AS (\n  SELECT * FROM hcpcs_echo\n  UNION ALL\n  SELECT * FROM icd_proc_echo\n  UNION ALL\n  SELECT * FROM icu_proc_echo\n),\n\n-- Count distinct echo procedures per patient (distinct by source|code|date)\nper_patient_counts AS (\n  SELECT\n    c.subject_id,\n    COALESCE(e.cnt, 0) AS num_distinct_echo_procs\n  FROM cohort c\n  LEFT JOIN (\n    SELECT\n      subject_id,\n      COUNT(DISTINCT CONCAT(source, '|' , proc_code, '|' , CAST(proc_date AS STRING))) AS cnt\n    FROM all_echo\n    WHERE proc_date IS NOT NULL\n    GROUP BY subject_id\n  ) e\n  ON c.subject_id = e.subject_id\n)\n\n-- 75th percentile across patients in the cohort (including zeros)\nSELECT\n  CAST(\n    (SELECT APPROX_QUANTILES(num_distinct_echo_procs, 100)[OFFSET(75)]\n     FROM per_patient_counts)\n  AS INT64) AS p75_distinct_echo_procedures_per_patient\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function COALESCE\n  Argument types: STRING, FLOAT64, STRING\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRING, STRING} at [52:15]; reason: invalidQuery, location: query, message: No matching signature for function COALESCE\n  Argument types: STRING, FLOAT64, STRING\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRING, STRING} at [52:15]\n\nLocation: US\nJob ID: 47db37bf-8ec5-411d-966d-8bc3eec9efb7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

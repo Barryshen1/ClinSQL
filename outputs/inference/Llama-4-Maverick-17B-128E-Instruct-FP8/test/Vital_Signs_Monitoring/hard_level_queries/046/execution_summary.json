@@ -1,0 +1,22 @@
+{
+  "query": "89-year-old male ICU patient with ischemic stroke: among male ICU patients aged 84\u201394 with ischemic stroke, what percentile is a first 72 hours vital-sign instability score of 80? Also report ICU LOS and mortality for the top instability quartile.",
+  "final_sql": "WITH ischemic_stroke_patients AS (\n  SELECT DISTINCT h.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` h\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n  ON h.icd_code = d.icd_code AND h.icd_version = d.icd_version\n  WHERE d.long_title LIKE '%Ischemic stroke%' AND h.icd_version = 10\n),\neligible_patients AS (\n  SELECT p.subject_id, p.anchor_age, icu.hadm_id, icu.stay_id, icu.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON p.subject_id = icu.subject_id\n  JOIN ischemic_stroke_patients isp ON icu.hadm_id = isp.hadm_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 84 AND 94\n),\nvital_signs AS (\n  SELECT ep.stay_id, ce.charttime, di.label, ce.valuenum\n  FROM eligible_patients ep\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON ep.stay_id = ce.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di ON ce.itemid = di.itemid\n  WHERE ce.charttime BETWEEN ep.intime AND TIMESTAMP_ADD(ep.intime, INTERVAL 72 HOUR)\n  AND di.label IN ('Heart Rate', 'Systolic Blood Pressure', 'Diastolic Blood Pressure', 'Respiratory Rate', 'Oxygen Saturation')\n),\ninstability_scores AS (\n  SELECT stay_id, \n         SUM(CASE WHEN label = 'Heart Rate' AND (valuenum < 40 OR valuenum > 130) THEN 1 ELSE 0 END) +\n         SUM(CASE WHEN label = 'Systolic Blood Pressure' AND (valuenum < 90 OR valuenum > 180) THEN 1 ELSE 0 END) +\n         SUM(CASE WHEN label = 'Diastolic Blood Pressure' AND (valuenum < 60 OR valuenum > 120) THEN 1 ELSE 0 END) +\n         SUM(CASE WHEN label = 'Respiratory Rate' AND (valuenum < 8 OR valuenum > 30) THEN 1 ELSE 0 END) +\n         SUM(CASE WHEN label = 'Oxygen Saturation' AND valuenum < 90 THEN 1 ELSE 0 END) AS score\n  FROM vital_signs\n  GROUP BY stay_id\n),\nicu_outcomes AS (\n  SELECT icu.stay_id, icu.los, adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm ON icu.hadm_id = adm.hadm_id\n),\npercentile_and_outcomes AS (\n  SELECT \n    PERCENT_RANK() OVER (ORDER BY isc.score) AS percentile,\n    isc.score,\n    icu.los,\n    icu.hospital_expire_flag AS mortality\n  FROM instability_scores isc\n  JOIN icu_outcomes icu ON isc.stay_id = icu.stay_id\n)\nSELECT \n  percentile,\n  score,\n  los,\n  mortality\nFROM percentile_and_outcomes\nWHERE score = 80 OR percentile >= 0.75;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: 237c5db3-edc3-4150-8d7a-e3d2c261c1a9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

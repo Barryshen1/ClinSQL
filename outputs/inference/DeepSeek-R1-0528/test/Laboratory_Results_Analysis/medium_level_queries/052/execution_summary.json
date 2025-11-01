@@ -1,0 +1,22 @@
+{
+  "query": "For an 81-year-old male, among male patients aged 76\u201386 admitted with AMI, what's the distribution of first Troponin I (\u22640.04 normal; 0.04\u20130.40 borderline; \u22650.40 elevated)? Provide counts, percentages, mean, median, IQR.",
+  "final_sql": "WITH ami_admissions AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE adm.hadm_id = diag.hadm_id\n        AND ( \n          (diag.icd_version = 10 AND (diag.icd_code LIKE 'I21%' OR diag.icd_code LIKE 'I22%'))\n          OR (diag.icd_version = 9 AND diag.icd_code LIKE '410%')\n        )\n    )\n),\nfiltered_admissions AS (\n  SELECT *\n  FROM ami_admissions\n  WHERE age_at_admission BETWEEN 76 AND 86\n),\ntroponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin i%'\n),\ntroponin_events AS (\n  SELECT \n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.valueuom,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  INNER JOIN troponin_items \n    ON le.itemid = troponin_items.itemid\n  WHERE \n    le.valuenum IS NOT NULL\n    AND le.valueuom = 'ng/mL'\n),\nfirst_troponin AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    valuenum AS troponin_value\n  FROM troponin_events\n  WHERE rn = 1\n),\neligible_troponin AS (\n  SELECT \n    ft.hadm_id,\n    ft.troponin_value,\n    CASE \n      WHEN ft.troponin_value <= 0.04 THEN 'Normal'\n      WHEN ft.troponin_value <= 0.40 THEN 'Borderline'\n      ELSE 'Elevated'\n    END AS category\n  FROM filtered_admissions fa\n  INNER JOIN first_troponin ft\n    ON fa.hadm_id = ft.hadm_id\n),\ntotal_count AS (\n  SELECT COUNT(*) AS total\n  FROM eligible_troponin  -- Fixed: Added FROM keyword\n),\ncategory_summary AS (\n  SELECT \n    category,\n    COUNT(*) AS count,\n    ROUND(COUNT(*) * 100.0 / (SELECT total FROM total_count), 2) AS percentage\n  FROM eligible_troponin\n  GROUP BY category\n),\noverall_stats AS (\n  SELECT \n    AVG(troponin_value) AS mean,\n    APPROX_QUANTILES(troponin_value, 100)[OFFSET(50)] AS median,\n    APPROX_QUANTILES(troponin_value, 100)[OFFSET(75)] - APPROX_QUANTILES(troponin_value, 100)[OFFSET(25)] AS iqr\n  FROM eligible_troponin\n)\nSELECT \n  category,\n  count,\n  percentage,\n  NULL AS mean,\n  NULL AS median,\n  NULL AS iqr\nFROM category_summary\nUNION ALL\nSELECT \n  'Overall' AS category,\n  NULL AS count,\n  NULL AS percentage,\n  mean,\n  median,\n  iqr\nFROM overall_stats\nORDER BY \n  CASE category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Elevated' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"eligible_troponin\" at [73:3]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"eligible_troponin\" at [73:3]\n\nLocation: US\nJob ID: 56f4a0e3-3aa4-4b41-9a91-5a5592cdab71\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

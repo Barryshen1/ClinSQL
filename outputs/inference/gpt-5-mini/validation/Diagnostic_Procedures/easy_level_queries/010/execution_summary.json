@@ -1,0 +1,22 @@
+{
+  "query": "For my 89-year-old male: among men 84\u201394, what's the maximum number of distinct echocardiography procedures per patient during hospitalization?",
+  "final_sql": "WITH male_84_94 AS (\n  -- male patients aged 84-94 (anchor_age provided in patients table)\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n    AND anchor_age BETWEEN 84 AND 94\n),\nadmissions_f AS (\n  -- admissions for the filtered patients, with admit/discharge dates\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    DATE(a.admittime) AS admit_date,\n    DATE(a.dischtime) AS discharge_date\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN male_84_94 p USING(subject_id)\n),\ncandidate_procs AS (\n  -- HCPCS/HCPCS-like billed procedures\n  SELECT\n    subject_id,\n    hadm_id,\n    COALESCE(hcpcs_cd, '') AS proc_code,\n    LOWER(COALESCE(short_description, '')) AS proc_desc,\n    DATE(chartdate) AS event_date,\n    'hcpcsevents' AS src\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n  WHERE LOWER(COALESCE(short_description, '')) LIKE '%echo%'\n     OR LOWER(COALESCE(short_description, '')) LIKE '%echocardi%'\n  \n  UNION ALL\n\n  -- ICD procedures (textual description from d_icd_procedures)\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    COALESCE(p.icd_code, '') AS proc_code,\n    LOWER(COALESCE(d.long_title, '')) AS proc_desc,\n    DATE(p.chartdate) AS event_date,\n    'procedures_icd' AS src\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d\n    ON p.icd_code = d.icd_code AND p.icd_version = d.icd_version\n  WHERE LOWER(COALESCE(d.long_title, '')) LIKE '%echo%'\n     OR LOWER(COALESCE(d.long_title, '')) LIKE '%echocardi%'\n\n  UNION ALL\n\n  -- ICU-charted procedure events (value text may describe the procedure)\n  SELECT\n    subject_id,\n    hadm_id,\n    CAST(itemid AS STRING) AS proc_code,\n    LOWER(COALESCE(CAST(value AS STRING), '')) AS proc_desc,\n    DATE(starttime) AS event_date,\n    'procedureevents' AS src\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents`\n  WHERE LOWER(COALESCE(CAST(value AS STRING), '')) LIKE '%echo%'\n     OR LOWER(COALESCE(CAST(value AS STRING), '')) LIKE '%echocardi%'\n),\nprocs_in_admission AS (\n  -- keep only candidate procedures that fall within the admission dates\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    c.src,\n    c.proc_code,\n    c.proc_desc,\n    c.event_date\n  FROM candidate_procs c\n  JOIN admissions_f a\n    ON c.subject_id = a.subject_id\n   AND c.hadm_id = a.hadm_id\n  WHERE c.event_date BETWEEN a.admit_date AND a.discharge_date\n),\ncounts_per_admission AS (\n  -- count distinct procedures per admission (use src+proc_code to distinguish codes across sources)\n  SELECT\n    subject_id,\n    hadm_id,\n    COUNT(DISTINCT CONCAT(src, '||', proc_code)) AS distinct_echo_proc_count\n  FROM procs_in_admission\n  GROUP BY subject_id, hadm_id\n)\n\n-- final: maximum distinct echocardiography procedures per hospitalization among males 84-94\nSELECT\n  MAX(distinct_echo_proc_count) AS max_distinct_echocardiography_procedures_per_hospitalization\nFROM counts_per_admission;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function COALESCE\n  Argument types: FLOAT64, STRING\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRING} at [58:15]; reason: invalidQuery, location: query, message: No matching signature for function COALESCE\n  Argument types: FLOAT64, STRING\n  Signature: COALESCE([T1, ...])\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {DOUBLE, STRING} at [58:15]\n\nLocation: US\nJob ID: ab0bb1b4-8bf8-4c5d-ad13-181bf53aaa44\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

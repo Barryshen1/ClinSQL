@@ -1,0 +1,1 @@
+SELECT stddev(icustays.los) AS standard_deviation FROM patients JOIN icustays ON patients.subject_id = icustays.subject_id WHERE patients.gender = 'M' AND patients.anchor_year = 95 AND icustays.los IS NOT NULL AND (patients.anchor_year_group BETWEEN 90 AND 100) AND (icustays.stay_id IN (SELECT stay_id FROM microbiologyevents WHERE diagnosis_code = 'S37.0'));

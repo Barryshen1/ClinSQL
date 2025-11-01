@@ -1,0 +1,1 @@
+SELECT AVG(ft.los) AS average_los, STDDEV(ft.los) AS standard_deviation_los, percent_rank() OVER (ORDER BY ft.los) AS percentile_rank FROM ft;

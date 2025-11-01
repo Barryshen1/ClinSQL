@@ -1,0 +1,16 @@
+{
+  "query": "For my 48\u2011year\u2011old male with heart failure, among male patients aged 43\u201353 with HF, what is in\u2011hospital mortality (%) stratified by LOS quartiles (Q1\u2013Q4) and comorbidity burden (low/medium/high)?",
+  "final_sql": "WITH hf_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND (\n         (d.icd_version = 9  AND d.icd_code LIKE '428%')\n      OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n    )\n),\ncomorbidities AS (\n  SELECT\n    hadm_id,\n    COUNT(DISTINCT CONCAT(icd_version, '-', icd_code)) AS comorb_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE NOT (\n         (icd_version = 9  AND icd_code LIKE '428%')\n      OR (icd_version = 10 AND icd_code LIKE 'I50%')\n  )\n  GROUP BY hadm_id\n),\nwith_los AS (\n  SELECT\n    hfp.subject_id,\n    hfp.hadm_id,\n    hfp.gender,\n    hfp.anchor_age,\n    DATETIME_DIFF(hfp.dischtime, hfp.admittime, HOUR)/24.0 AS los_days,\n    COALESCE(c.comorb_count,0) AS comorb_count,\n    hfp.hospital_expire_flag\n  FROM hf_patients hfp\n  LEFT JOIN comorbidities c\n    ON hfp.hadm_id = c.hadm_id\n),\nwith_categories AS (\n  SELECT\n    *,\n    CASE \n      WHEN comorb_count <= 2 THEN 'Low'\n      WHEN comorb_count BETWEEN 3 AND 5 THEN 'Medium'\n      ELSE 'High'\n    END AS comorbidity_category\n  FROM with_los\n),\nwith_quartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY los_days) AS los_quartile\n  FROM with_categories\n)\nSELECT\n  los_quartile,\n  comorbidity_category,\n  COUNT(*) AS total_patients,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS deaths,\n  ROUND(100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS mortality_percentage\nFROM with_quartiles\nGROUP BY los_quartile, comorbidity_category\nORDER BY los_quartile, comorbidity_category;",
+  "execution_success": true,
+  "row_count": 10,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 10,
+      "error": null
+    }
+  ]
+}

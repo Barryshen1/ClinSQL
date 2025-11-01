@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 57-year-old female. Among female medicine inpatients aged 52\u201362 (non\u2011elective), report mean, median (p50), p75, p90 LOS and percentile rank of 7 days by discharge: home, facility, in\u2011hospital death.",
+  "final_sql": "WITH patient_los AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admit,\n    -- Compute LOS in days (as fractional days)\n    DATETIME_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  -- Join with services to ensure medicine service\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.services s\n    ON a.hadm_id = s.hadm_id\n  WHERE p.gender = 'F'\n    -- Age filter: 52 to 62 inclusive\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 52 AND 62\n    -- Non-elective admission\n    AND a.admission_type IN ('EMERGENCY', 'URGENT')\n    -- Medicine service\n    AND s.curr_service = 'MED'\n    -- Valid admission and discharge times\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.dischtime >= a.admittime\n),\ncohort AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    los_days,\n    -- Define discharge group\n    CASE\n      WHEN hospital_expire_flag = 1 THEN 'In-hospital death'\n      WHEN discharge_location IN ('HOME', 'HOME WITH HOME IV PROVIDER') THEN 'Home'\n      ELSE 'Facility'\n    END AS discharge_group\n  FROM patient_los\n)\nSELECT\n  discharge_group,\n  AVG(los_days) AS mean_los,\n  APPROX_QUANTILES(los_days, 1000)[OFFSET(500)] AS median_los, -- p50\n  APPROX_QUANTILES(los_days, 1000)[OFFSET(750)] AS p75_los,\n  APPROX_QUANTILES(los_days, 1000)[OFFSET(900)] AS p90_los,\n  -- Percentile rank of 7 days: proportion with LOS <= 7\n  SAFE_DIVIDE(COUNTIF(los_days <= 7), COUNT(*)) * 100 AS percentile_rank_of_7_days\nFROM cohort\nGROUP BY discharge_group\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

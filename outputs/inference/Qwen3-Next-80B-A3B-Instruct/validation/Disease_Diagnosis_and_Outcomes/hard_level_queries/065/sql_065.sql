@@ -1,0 +1,1 @@
+WITH cte_name AS (SELECT ...);

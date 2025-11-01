@@ -1,0 +1,16 @@
+{
+  "query": "For a 64-year-old man, among males 59\u201369 with heart failure, give the 25th, 50th, and 75th percentiles of radiography/CT per admission for 1\u20134 vs 5\u20138 day stays, by ICU use.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los_hospital,\n        CASE \n            WHEN icu.stay_id IS NOT NULL THEN 'Yes' \n            ELSE 'No' \n        END AS icu_used,\n        COUNT(DISTINCT proc.icd_code) AS proc_count  -- Count distinct procedures per admission\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON adm.hadm_id = icu.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n        ON adm.hadm_id = proc.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dicd\n        ON proc.icd_code = dicd.icd_code AND proc.icd_version = dicd.icd_version\n    WHERE \n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 59 AND 69\n        AND (\n            (diag.icd_code LIKE 'I50%' AND diag.icd_version = 10) OR  -- ICD-10 heart failure\n            (diag.icd_code LIKE '428%' AND diag.icd_version = 9)       -- ICD-9 heart failure\n        )\n        AND (\n            -- ICD-10 codes for radiography/CT\n            (proc.icd_version = 10 AND (proc.icd_code LIKE 'BW%' OR proc.icd_code LIKE 'B%')) OR\n            -- ICD-9 codes for radiography/CT\n            (proc.icd_version = 9 AND (proc.icd_code LIKE '87.%' OR proc.icd_code IN ('87.03', '88.01', '88.38')))\n        )\n    GROUP BY adm.subject_id, adm.hadm_id, los_hospital, icu_used\n),\nlos_groups AS (\n    SELECT \n        hadm_id,\n        icu_used,\n        proc_count,\n        CASE \n            WHEN los_hospital BETWEEN 1 AND 4 THEN '1-4'\n            WHEN los_hospital BETWEEN 5 AND 8 THEN '5-8'\n            ELSE 'Other' \n        END AS los_group\n    FROM cohort\n    WHERE los_hospital BETWEEN 1 AND 8  -- Only include stays 1-8 days\n)\nSELECT \n    los_group,\n    icu_used,\n    APPROX_QUANTILES(proc_count, 4)[OFFSET(1)] AS p25,\n    APPROX_QUANTILES(proc_count, 4)[OFFSET(2)] AS p50,\n    APPROX_QUANTILES(proc_count, 4)[OFFSET(3)] AS p75\nFROM los_groups\nGROUP BY los_group, icu_used\nORDER BY los_group, icu_used;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

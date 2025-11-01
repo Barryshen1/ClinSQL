@@ -1,0 +1,22 @@
+{
+  "query": "For a 78\u2011year\u2011old man with ICH: among male inpatients 73\u201383 with ICH, compute 48\u2011hour instability score (count of abnormal lab types), stratify into quartiles, report count, mean LOS and mortality per quartile, and compare critical rates to all inpatients.",
+  "final_sql": "WITH ich_cohort AS (\n  -- Identify admissions with ICH\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE a.dischtime IS NOT NULL\n    AND (\n       LOWER(dd.long_title) LIKE '%intracerebral hemorrhage%' OR\n       LOWER(dd.long_title) LIKE '%intracranial hemorrhage%' OR\n       di.icd_code LIKE 'I61%' OR\n       di.icd_code LIKE '431%' OR\n       di.icd_code LIKE '432%'\n    )\n),\ncohort AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime, a.hospital_expire_flag,\n         p.anchor_age, p.gender\n  FROM ich_cohort ic\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON ic.subject_id = a.subject_id AND ic.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.anchor_age BETWEEN 73 AND 83\n    AND LOWER(p.gender) IN ('m','male')\n    AND a.dischtime IS NOT NULL\n),\nlabs_abnormal AS (\n  SELECT c.subject_id, c.hadm_id, l.itemid,\n         MAX(CASE \n               WHEN l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower THEN 1\n               WHEN l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper THEN 1\n               ELSE 0\n             END) AS abnormal\n  FROM cohort AS c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n    ON l.subject_id = c.subject_id AND l.hadm_id = c.hadm_id\n  WHERE l.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.valuenum IS NOT NULL\n  GROUP BY c.subject_id, c.hadm_id, l.itemid\n),\ninstability AS (\n  SELECT c.subject_id, c.hadm_id,\n         COUNT(DISTINCT CASE WHEN la.abnormal = 1 THEN la.itemid END) AS instability_count\n  FROM cohort c\n  LEFT JOIN labs_abnormal la\n    ON la.subject_id = c.subject_id AND la.hadm_id = c.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n),\nadmission_metrics AS (\n  SELECT c.subject_id, c.hadm_id,\n         TIMESTAMP_DIFF(c.dischtime, c.admittime, SECOND)/3600.0 AS los_hrs,\n         COALESCE(i.instability_count, 0) AS instability_count,\n         CASE WHEN c.deathtime IS NOT NULL THEN 1 ELSE 0 END AS mortality\n  FROM cohort c\n  LEFT JOIN instability i\n    ON i.subject_id = c.subject_id AND i.hadm_id = c.hadm_id\n),\nquartile_rank AS (\n  SELECT subject_id, hadm_id, los_hrs, instability_count, mortality,\n         NTILE(4) OVER (ORDER BY instability_count) AS quartile\n  FROM admission_metrics\n)\n, quartile_summary AS (\n  SELECT quartile, COUNT(*) AS count_in_quartile,\n         AVG(los_hrs) AS mean_los_hrs,\n         AVG(mortality) AS mortality_rate\n  FROM (\n    SELECT q.quartile, am.los_hrs, am.mortality\n    FROM quartile_rank q\n    JOIN admission_metrics am\n      ON am.subject_id = q.subject_id AND am.hadm_id = q.hadm_id\n  ) t\n  GROUP BY quartile\n)\n, all_inpatients AS (\n  SELECT 0 AS quartile, COUNT(*) AS count_in_quartile,\n         AVG(los_hrs) AS mean_los_hrs,\n         AVG(mortality) AS mortality_rate\n  FROM admission_metrics\n)\nSELECT *\nFROM (\n  SELECT * FROM quartile_summary\n  UNION ALL\n  SELECT * FROM all_inpatients\n)\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 A valid date part name is required but found H at [40:84]; reason: invalidQuery, location: query, message: A valid date part name is required but found H at [40:84]\n\nLocation: US\nJob ID: b661c404-95c6-49f7-b15c-67d6b4b892b5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

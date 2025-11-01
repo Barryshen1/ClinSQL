@@ -1,0 +1,28 @@
+{
+  "query": "For a 57-year-old female ICU patient: among female ICU patients aged 52\u201362 who received renal replacement therapy, what percentile is a first\u201172\u2011hour vital-sign instability score of 65? Also report mean ICU length of stay and mortality for the top decile.",
+  "final_sql": "WITH patients_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    -- Compute age at ICU admission\n    p.anchor_age + (EXTRACT(YEAR FROM ie.intime) - p.anchor_year) AS age_at_icu\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays ie\n    ON p.subject_id = ie.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM ie.intime) - p.anchor_year)) BETWEEN 52 AND 62\n),\ncohort AS (\n  SELECT DISTINCT\n    ie.stay_id,\n    ie.subject_id,\n    ie.hadm_id,\n    ie.intime,\n    ie.outtime,\n    ie.los\n  FROM patients_age pa\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays ie\n    ON pa.subject_id = ie.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.procedureevents pe\n    ON ie.stay_id = pe.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.d_items di\n    ON pe.itemid = di.itemid\n  WHERE LOWER(di.label) LIKE '%dialysis%'\n     OR LOWER(di.label) LIKE '%hemodialysis%'\n     OR LOWER(di.label) LIKE '%continuous renal replacement%'\n     OR LOWER(di.label) LIKE '%crrt%'\n),\nvital_labels AS (\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu`.d_items\n  WHERE LOWER(label) IN (\n    'heart rate',\n    'arterial blood pressure systolic',\n    'non invasive blood pressure systolic',\n    'respiratory rate',\n    'spo2',\n    'temperature'\n  )\n),\nvitals_first_72h AS (\n  SELECT\n    ce.stay_id,\n    ce.itemid,\n    ce.valuenum,\n    ce.charttime\n  FROM `physionet-data.mimiciv_3_1_icu`.chartevents ce\n  INNER JOIN vital_labels vl ON ce.itemid = vl.itemid\n  INNER JOIN cohort c ON ce.stay_id = c.stay_id\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime <= DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\nabnormal_vitals AS (\n  SELECT\n    stay_id,\n    SUM(\n      CASE\n        WHEN itemid IN (SELECT itemid FROM vital_labels WHERE LOWER(label) = 'heart rate') \n          AND (valuenum < 50 OR valuenum > 110) THEN 1\n        WHEN itemid IN (SELECT itemid FROM vital_labels WHERE LOWER(label) LIKE '%systolic%') \n          AND (valuenum < 90 OR valuenum > 180) THEN 1\n        WHEN itemid IN (SELECT itemid FROM vital_labels WHERE LOWER(label) = 'respiratory rate') \n          AND (valuenum < 10 OR valuenum > 25) THEN 1\n        WHEN itemid IN (SELECT itemid FROM vital_labels WHERE LOWER(label) = 'spo2') \n          AND valuenum < 92 THEN 1\n        WHEN itemid IN (SELECT itemid FROM vital_labels WHERE LOWER(label) = 'temperature') \n          AND (valuenum < 36.0 OR valuenum > 38.0) THEN 1\n        ELSE 0\n      END\n    ) AS abnormal_count\n  FROM vitals_first_72h\n  GROUP BY stay_id\n),\ninstability_scores AS (\n  SELECT\n    c.stay_id,\n    c.hadm_id,\n    COALESCE(av.abnormal_count, 0) AS instability_score,\n    c.los,\n    a.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN abnormal_vitals av ON c.stay_id = av.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON c.hadm_id = a.hadm_id\n),\npercentile_calcs AS (\n  SELECT\n    PERCENTILE_CONT(instability_score, 0.9) AS p90_cutoff,\n    COUNT(*) AS total_patients,\n    SUM(CASE WHEN instability_score <= 65 THEN 1 ELSE 0 END) AS count_le_65\n  FROM instability_scores\n),\nscore_stats AS (\n  SELECT\n    count_le_65 * 100.0 / total_patients AS percentile_of_65,\n    p90_cutoff\n  FROM percentile_calcs\n),\ntop_decile_stats AS (\n  SELECT\n    AVG(los) AS mean_los_top_decile,\n    AVG(hospital_expire_flag) AS mortality_top_decile\n  FROM instability_scores\n  CROSS JOIN percentile_calcs\n  WHERE instability_score >= percentile_calcs.p90_cutoff\n)\nSELECT\n  (SELECT percentile_of_65 FROM score_stats) AS percentile_of_65,\n  (SELECT mean_los_top_decile FROM top_decile_stats) AS mean_los_top_decile,\n  (SELECT mortality_top_decile FROM top_decile_stats) AS mortality_top_decile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f6e120ac-e822-4c2e-b0f6-3cc6b50b4c70\n",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"<=\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"<=\" at [1:12]\n\nLocation: US\nJob ID: 719989e4-5d97-4f56-bb4f-ae058b815bbc\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: p90_cutoff at [111:30]; reason: invalidQuery, location: query, message: Unrecognized name: p90_cutoff at [111:30]\n\nLocation: US\nJob ID: deb6aafb-ae57-4c27-87c4-d139d34cb1f7\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: f6e120ac-e822-4c2e-b0f6-3cc6b50b4c70\n"
+    }
+  ]
+}

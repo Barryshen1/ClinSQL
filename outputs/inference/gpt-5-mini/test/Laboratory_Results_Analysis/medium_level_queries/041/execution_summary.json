@@ -1,0 +1,22 @@
+{
+  "query": "I have a 48\u2011year\u2011old man. Among male patients aged 43\u201353 admitted with ACS and initial hs\u2011Troponin T >99th percentile (ULN), what are the median and IQR of initial values in ng/mL?",
+  "final_sql": "WITH hs_items AS (\n  -- Identify candidate high-sensitivity Troponin T lab itemids by label keywords\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n    AND (LOWER(label) LIKE '%hs%' OR LOWER(label) LIKE '%high%')\n),\n\nfirst_hs_lab AS (\n  -- earliest hs-TnT lab per hospital admission (hadm_id)\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum,\n    l.valueuom,\n    ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime ASC, l.labevent_id ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN hs_items h ON l.itemid = h.itemid\n  WHERE l.valuenum IS NOT NULL\n),\n\ninitial_hs AS (\n  -- keep only the first hs-TnT per admission and convert to ng/mL\n  SELECT\n    fh.subject_id,\n    fh.hadm_id,\n    fh.charttime,\n    fh.valuenum,\n    fh.valueuom,\n    CASE\n      WHEN fh.valueuom IS NULL THEN NULL\n      WHEN LOWER(fh.valueuom) LIKE '%ng/ml%' THEN fh.valuenum\n      WHEN LOWER(fh.valueuom) LIKE '%ng/l%' THEN fh.valuenum / 1000.0\n      WHEN LOWER(fh.valueuom) LIKE '%pg/ml%' THEN fh.valuenum / 1000.0\n      -- unknown or uncommon units => NULL\n      ELSE NULL\n    END AS initial_value_ng_ml\n  FROM first_hs_lab fh\n  WHERE fh.rn = 1\n),\n\nacs_admissions AS (\n  -- identify admissions with an ICD diagnosis consistent with ACS (text-based heuristic)\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE (\n      LOWER(COALESCE(dd.long_title, '')) LIKE '%myocardial infarction%'\n      OR LOWER(COALESCE(dd.long_title, '')) LIKE '%acute coronary%'\n      OR LOWER(COALESCE(dd.long_title, '')) LIKE '%unstable angina%'\n      OR LOWER(COALESCE(dd.long_title, '')) LIKE '%stemi%'\n      OR LOWER(COALESCE(dd.long_title, '')) LIKE '%nstemi%'\n      OR LOWER(COALESCE(dd.long_title, '')) LIKE '%acute myocardial%'\n    )\n),\n\ncohort AS (\n  -- join everything, restrict to male patients 43-53, ACS admissions, and initial value > ULN (0.014 ng/mL)\n  SELECT\n    ih.subject_id,\n    ih.hadm_id,\n    ih.charttime,\n    ih.initial_value_ng_ml\n  FROM initial_hs ih\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON ih.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN acs_admissions acs\n    ON ih.hadm_id = acs.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 43 AND 53\n    AND ih.initial_value_ng_ml IS NOT NULL\n    -- ULN assumed 14 ng/L == 0.014 ng/mL\n    AND ih.initial_value_ng_ml > 0.014\n)\n\n-- final aggregation: median and IQR using APPROX_QUANTILES (100 -> percentiles)\nSELECT\n  q[OFFSET(50)] AS median_ng_per_mL,\n  q[OFFSET(25)] AS p25_ng_per_mL,\n  q[OFFSET(75)] AS p75_ng_per_mL,\n  SAFE_CAST(q[OFFSET(75)] - q[OFFSET(25)] AS FLOAT64) AS iqr_ng_per_mL,\n  (SELECT COUNT(*) FROM cohort) AS sample_size\nFROM (\n  SELECT APPROX_QUANTILES(initial_value_ng_ml, 100) AS q\n  FROM cohort\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:10]\n\nLocation: US\nJob ID: 016a4dc7-8e45-48fe-9afd-878e63158c92\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

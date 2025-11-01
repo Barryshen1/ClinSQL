@@ -1,0 +1,16 @@
+{
+  "query": "I have an 85\u2011year\u2011old woman. Among females 80\u201390 with heart failure, stratified ICU vs non\u2011ICU and LOS <8 vs \u22658 days, report in\u2011hospital mortality (%) and CKD and diabetes prevalence.",
+  "final_sql": "WITH diag_flags AS (\n  -- For each admission (hadm_id) compute flags for HF, CKD, and diabetes based on diagnosis descriptions\n  SELECT\n    di.hadm_id,\n    MAX(CASE WHEN LOWER(d.long_title) LIKE '%heart failure%' THEN 1 ELSE 0 END) AS has_hf,\n    MAX(CASE\n          WHEN LOWER(d.long_title) LIKE '%chronic kidney%' THEN 1\n          WHEN LOWER(d.long_title) LIKE '%ckd%' THEN 1\n          WHEN LOWER(d.long_title) LIKE '%kidney failure%' THEN 1\n          WHEN LOWER(d.long_title) LIKE '%renal failure%' THEN 1\n          ELSE 0\n        END) AS has_ckd,\n    MAX(CASE WHEN LOWER(d.long_title) LIKE '%diabetes%' THEN 1 ELSE 0 END) AS has_dm\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n      ON di.icd_code = d.icd_code\n      AND di.icd_version = d.icd_version\n  GROUP BY\n    di.hadm_id\n),\n\ncohort AS (\n  -- Admissions for female patients age 80-90 that have heart failure (per diag_flags)\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    df.has_hf,\n    df.has_ckd,\n    df.has_dm,\n    -- compute hospital LOS in days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- ICU flag if any icustay exists for this hadm_id\n    CASE WHEN icu.hadm_id IS NOT NULL THEN 'ICU' ELSE 'Non-ICU' END AS icu_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN diag_flags df\n      ON a.hadm_id = df.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n      ON a.hadm_id = icu.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 80 AND 90\n    AND df.has_hf = 1\n    -- require discharge time to compute LOS\n    AND a.dischtime IS NOT NULL\n)\n\nSELECT\n  icu_flag,\n  CASE WHEN los_days < 8 THEN '<8 days' ELSE '>=8 days' END AS los_group,\n  COUNT(*) AS n_admissions,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS n_inhospital_deaths,\n  ROUND(100 * SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)), 1) AS pct_inhospital_mortality,\n  SUM(has_ckd) AS n_with_ckd,\n  ROUND(100 * SAFE_DIVIDE(SUM(has_ckd), COUNT(*)), 1) AS pct_ckd,\n  SUM(has_dm) AS n_with_diabetes,\n  ROUND(100 * SAFE_DIVIDE(SUM(has_dm), COUNT(*)), 1) AS pct_diabetes\nFROM\n  cohort\nGROUP BY\n  icu_flag,\n  los_group\nORDER BY\n  icu_flag DESC, -- show ICU first\n  los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

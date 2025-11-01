@@ -1,0 +1,16 @@
+{
+  "query": "Patient is a 67-year-old man. Among male ICU patients aged 62\u201372, report counts per ICU-stay mean heart\u2011rate category (<60; 60\u201399; 100\u2013119; \u2265120 bpm) and percent with acute MI.",
+  "final_sql": "WITH icu_cohort AS (\n    -- Step 1: Identify male ICU patients aged 62-72\n    SELECT\n        p.subject_id,\n        icu.hadm_id,\n        icu.stay_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n        ON p.subject_id = icu.subject_id\n    WHERE\n        p.gender = 'M'\n        -- Calculate age at the time of ICU admission and filter\n        AND (DATETIME_DIFF(icu.intime, DATETIME(p.anchor_year, 1, 1, 0, 0, 0), YEAR) + p.anchor_age) BETWEEN 62 AND 72\n),\n\nmean_hr_per_stay AS (\n    -- Step 2: Calculate mean heart rate for each ICU stay\n    SELECT\n        stay_id,\n        AVG(valuenum) AS mean_hr\n    FROM\n        `physionet-data.mimiciv_3_1_icu.chartevents`\n    WHERE\n        itemid = 220045 -- Heart Rate\n        AND valuenum > 0 AND valuenum < 300 -- Filter for plausible values\n    GROUP BY\n        stay_id\n),\n\nami_admissions AS (\n    -- Step 3: Identify hospital admissions with a diagnosis of Acute MI\n    SELECT DISTINCT\n        hadm_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n        -- ICD-9 codes for Acute Myocardial Infarction\n        (icd_version = 9 AND SUBSTR(icd_code, 1, 3) = '410')\n        -- ICD-10 codes for Acute Myocardial Infarction\n        OR (icd_version = 10 AND (SUBSTR(icd_code, 1, 3) = 'I21' OR SUBSTR(icd_code, 1, 3) = 'I22'))\n)\n\n-- Step 4 & 5: Combine data, categorize, and aggregate results\nSELECT\n    hr_category,\n    COUNT(stays.stay_id) AS number_of_icu_stays,\n    AVG(CASE WHEN ami.hadm_id IS NOT NULL THEN 1 ELSE 0 END) * 100 AS percent_with_acute_mi\nFROM (\n    -- Create a subquery to join cohort with HR and categorize\n    SELECT\n        cohort.stay_id,\n        cohort.hadm_id,\n        CASE\n            WHEN hr.mean_hr < 60 THEN '<60'\n            WHEN hr.mean_hr >= 60 AND hr.mean_hr < 100 THEN '60-99'\n            WHEN hr.mean_hr >= 100 AND hr.mean_hr < 120 THEN '100-119'\n            WHEN hr.mean_hr >= 120 THEN '>=120'\n        END AS hr_category\n    FROM\n        icu_cohort AS cohort\n    INNER JOIN\n        mean_hr_per_stay AS hr\n        ON cohort.stay_id = hr.stay_id\n) AS stays\nLEFT JOIN\n    ami_admissions AS ami\n    ON stays.hadm_id = ami.hadm_id\nGROUP BY\n    hr_category\nORDER BY\n    -- Order the results logically by HR category\n    CASE hr_category\n        WHEN '<60' THEN 1\n        WHEN '60-99' THEN 2\n        WHEN '100-119' THEN 3\n        WHEN '>=120' THEN 4\n    END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

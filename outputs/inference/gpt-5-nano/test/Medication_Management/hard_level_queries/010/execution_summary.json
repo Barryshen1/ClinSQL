@@ -1,0 +1,16 @@
+{
+  "query": "I'm managing a 66\u2011year\u2011old man hospitalized with hemorrhagic stroke. For male inpatients aged 61\u201371, stratified into quintiles by first\u201124\u2011hour medication complexity score, report per quintile: number of patients, mean complexity score, average LOS, in\u2011hospital mortality, and 30\u2011day readmission rate.",
+  "final_sql": "WITH base AS (\n  -- Cohort: male, age 61-71, hemorrhagic stroke\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 61 AND 71\n    AND dd.long_title LIKE '%hemorrhagic stroke%'\n),\nmcs AS (\n  -- First-24-hour medication complexity score proxy: distinct drugs prescribed in first 24 hours\n  SELECT\n    b.hadm_id,\n    COUNT(DISTINCT pr.drug) AS mcs24\n  FROM base AS b\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n    ON pr.subject_id = b.subject_id\n   AND pr.hadm_id = b.hadm_id\n   AND pr.starttime BETWEEN b.admittime AND TIMESTAMP_ADD(b.admittime, INTERVAL 24 HOUR)\n  GROUP BY b.hadm_id\n),\nreadmit AS (\n  -- 30-day readmission flag using next admission per patient\n  SELECT b.*,\n         LEAD(b.admittime) OVER (PARTITION BY b.subject_id ORDER BY b.admittime) AS next_admit\n  FROM base AS b\n),\nfinal AS (\n  SELECT\n    r.hadm_id,\n    COALESCE(m.mcs24, 0) AS mcs24,\n    CAST(TIMESTAMP_DIFF(r.dischtime, r.admittime, SECOND) AS FLOAT64) / 86400.0 AS los_days,\n    CASE WHEN r.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS in_hosp_mortality,\n    CASE WHEN r.next_admit IS NOT NULL\n           AND r.next_admit <= TIMESTAMP_ADD(r.dischtime, INTERVAL 30 DAY) THEN 1 ELSE 0 END AS readmit_30,\n    NTILE(5) OVER (ORDER BY COALESCE(m.mcs24, 0)) AS quintile\n  FROM readmit AS r\n  LEFT JOIN mcs AS m\n    ON m.hadm_id = r.hadm_id\n)\nSELECT\n  quintile,\n  COUNT(*) AS num_patients,\n  AVG(mcs24) AS mean_complexity,\n  AVG(los_days) AS avg_los_days,\n  AVG(in_hosp_mortality) AS in_hosp_mortality_rate,\n  AVG(readmit_30) AS thirty_day_readmission_rate\nFROM final\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH icu_base AS (\n  -- ICU stays joined to patient demographics and admission-level mortality flag\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    p.gender,\n    p.anchor_age,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n),\ncopd_hadm AS (\n  -- Admissions that have a diagnosis matching COPD exacerbation (lookup by diagnosis text)\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE LOWER(dicd.long_title) LIKE '%copd%'\n    AND LOWER(dicd.long_title) LIKE '%exacerb%'\n),\nproc_counts AS (\n  -- Count distinct procedure itemids per ICU stay within the first 72 hours after ICU intime\n  SELECT\n    pe.stay_id,\n    COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON pe.stay_id = icu.stay_id\n  WHERE pe.starttime IS NOT NULL\n    AND pe.starttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 72 HOUR)\n  GROUP BY pe.stay_id\n),\nicu_cohort AS (\n  -- Combine ICU base info, COPD flag and procedure counts; restrict to male, age 88-98\n  SELECT\n    ib.*,\n    CASE WHEN ch.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS copd_exacerbation,\n    COALESCE(pc.proc_count, 0) AS proc_count\n  FROM icu_base ib\n  LEFT JOIN copd_hadm ch\n    ON ib.hadm_id = ch.hadm_id\n  LEFT JOIN proc_counts pc\n    ON ib.stay_id = pc.stay_id\n  WHERE ib.gender = 'M'\n    AND ib.anchor_age BETWEEN 88 AND 98\n)\n\n-- Aggregate results for COPD cohort and the age-matched comparator\nSELECT\n  'COPD_exacerbation' AS cohort,\n  COUNT(*) AS n_stays,\n  -- 75th percentile (approx) of distinct procedures in first 72 hours\n  APPROX_QUANTILES(proc_count, 100)[OFFSET(75)] AS p75_distinct_procedures_first_72h,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) AS in_hospital_mortality_rate\nFROM icu_cohort\nWHERE copd_exacerbation = 1\n\nUNION ALL\n\nSELECT\n  'Age_matched_all' AS cohort,\n  COUNT(*) AS n_stays,\n  APPROX_QUANTILES(proc_count, 100)[OFFSET(75)] AS p75_distinct_procedures_first_72h,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) AS in_hospital_mortality_rate\nFROM icu_cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

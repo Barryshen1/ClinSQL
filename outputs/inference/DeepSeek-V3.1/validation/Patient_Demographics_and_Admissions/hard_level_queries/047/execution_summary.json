@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old female Medicare patient. Among female Medicare patients aged 68\u201378 admitted from the ED with a principal hemorrhagic stroke, what are the 30-day readmission rate, median index LOS for readmitted vs non-readmitted, and % with LOS >4 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) AS los,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS age_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND adm.insurance = 'Medicare'\n    AND adm.admission_location = 'EMERGENCY ROOM'\n    AND diag.seq_num = 1\n    AND (\n      (diag.icd_version = 10 AND diag.icd_code IN ('I60', 'I61', 'I62')) \n      OR \n      (diag.icd_version = 9 AND diag.icd_code IN ('430', '431', '432'))\n    )\n    -- Filter age at admission: 68 to 78\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 68 AND 78\n    -- Exclude index admissions where the patient died\n    AND adm.deathtime IS NULL\n),\n\n-- Identify readmissions within 30 days\nreadmissions AS (\n  SELECT \n    c1.subject_id,\n    c1.hadm_id AS index_hadm,\n    c1.admittime AS index_admittime,\n    c1.dischtime AS index_dischtime,\n    c1.los AS index_los,\n    MIN(c2.admittime) AS readmit_time\n  FROM cohort c1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` c2\n    ON c1.subject_id = c2.subject_id\n    AND c2.admittime > c1.dischtime\n    AND c2.admittime <= DATE_ADD(c1.dischtime, INTERVAL 30 DAY)\n  GROUP BY c1.subject_id, c1.hadm_id, c1.admittime, c1.dischtime, c1.los\n),\n\n-- Add readmission flag\ncohort_with_readmit_flag AS (\n  SELECT \n    subject_id,\n    index_hadm,\n    index_los,\n    CASE WHEN readmit_time IS NOT NULL THEN 1 ELSE 0 END AS readmitted\n  FROM readmissions\n)\n\n-- Calculate metrics\nSELECT\n  COUNT(*) AS total_index_admissions,\n  SUM(readmitted) AS readmitted_count,\n  ROUND(SUM(readmitted) * 100.0 / COUNT(*), 2) AS readmission_rate_percent,\n  -- Median LOS for readmitted: use approx_quantiles and take the 50th percentile\n  APPROX_QUANTILES(CASE WHEN readmitted=1 THEN index_los END, 100)[OFFSET(50)] AS median_los_readmitted,\n  -- Median LOS for non-readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted=0 THEN index_los END, 100)[OFFSET(50)] AS median_los_not_readmitted,\n  -- % with LOS >4 days for readmitted\n  ROUND(SUM(CASE WHEN readmitted=1 AND index_los > 4 THEN 1 ELSE 0 END) * 100.0 / SUM(readmitted), 2) AS percent_readmitted_los_gt_4,\n  -- % with LOS >4 days for non-readmitted\n  ROUND(SUM(CASE WHEN readmitted=0 AND index_los > 4 THEN 1 ELSE 0 END) * 100.0 / (COUNT(*) - SUM(readmitted)), 2) AS percent_not_readmitted_los_gt_4\nFROM cohort_with_readmit_flag;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function DATE\n  Argument types: INT64\n  Signature: DATE(TIMESTAMP, [STRING])\n    Argument 1: Unable to coerce type INT64 to expected type TIMESTAMP\n  Signature: DATE(DATETIME)\n    Argument 1: Unable to coerce type INT64 to expected type DATETIME\n  Signature: DATE(INT64, INT64, INT64)\n    Signature requires at least 3 arguments, found 1 argument\n  Signature: DATE(DATE)\n    Argument 1: Unable to coerce type INT64 to expected type DATE\n  Signature: DATE(STRING)\n    Argument 1: Unable to coerce type INT64 to expected type STRING at [26:49]; reason: invalidQuery, location: query, message: No matching signature for function DATE\n  Argument types: INT64\n  Signature: DATE(TIMESTAMP, [STRING])\n    Argument 1: Unable to coerce type INT64 to expected type TIMESTAMP\n  Signature: DATE(DATETIME)\n    Argument 1: Unable to coerce type INT64 to expected type DATETIME\n  Signature: DATE(INT64, INT64, INT64)\n    Signature requires at least 3 arguments, found 1 argument\n  Signature: DATE(DATE)\n    Argument 1: Unable to coerce type INT64 to expected type DATE\n  Signature: DATE(STRING)\n    Argument 1: Unable to coerce type INT64 to expected type STRING at [26:49]\n\nLocation: US\nJob ID: ed89b0e2-7273-4a4a-8021-7ad1133c9794\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [64:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [64:3]\n\nLocation: US\nJob ID: 3b236ee8-969a-477b-8e9a-5e5d65c18a4f\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

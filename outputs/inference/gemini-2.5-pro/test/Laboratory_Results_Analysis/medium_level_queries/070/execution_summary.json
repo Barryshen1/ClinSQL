@@ -1,0 +1,16 @@
+{
+  "query": "I have a 95-year-old man admitted with chest pain. Among male patients aged 90\u2013100 with chest pain and an initially elevated Troponin I, report p25, p50, p75 and range.",
+  "final_sql": "WITH PatientCohort AS (\n  -- First, define the cohort: Male patients, aged 90-100, admitted with a diagnosis of chest pain.\n  SELECT DISTINCT\n    adm.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON pat.subject_id = adm.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    ON adm.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx\n    ON dx.icd_code = d_dx.icd_code\n    AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 90 AND 100\n    AND LOWER(d_dx.long_title) LIKE '%chest pain%'\n),\n\nInitialTroponin AS (\n  -- Second, find the first Troponin I measurement for each hospital admission.\n  SELECT\n    hadm_id,\n    valuenum,\n    ref_range_upper,\n    -- Use ROW_NUMBER to find the first measurement per admission based on chart time\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents`\n  WHERE\n    itemid = 51003 -- itemid for Troponin I\n    AND valuenum IS NOT NULL -- Ensure the value is numeric\n)\n\n-- Finally, join the cohort with their initial, elevated troponin levels and calculate statistics.\nSELECT\n  APPROX_QUANTILES(it.valuenum, 100)[OFFSET(25)] AS troponin_i_p25,\n  APPROX_QUANTILES(it.valuenum, 100)[OFFSET(50)] AS troponin_i_p50,\n  APPROX_QUANTILES(it.valuenum, 100)[OFFSET(75)] AS troponin_i_p75,\n  MIN(it.valuenum) AS troponin_i_min,\n  MAX(it.valuenum) AS troponin_i_max\nFROM\n  InitialTroponin AS it\nJOIN\n  PatientCohort AS pc\n  ON it.hadm_id = pc.hadm_id\nWHERE\n  it.rn = 1 -- Filter for the initial measurement only\n  AND it.valuenum > it.ref_range_upper; -- Filter for elevated values;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

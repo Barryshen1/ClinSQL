@@ -1,0 +1,16 @@
+{
+  "query": "I have a 91-year-old man. Among male patients aged 86\u201396 with sepsis (excluding septic shock), report in-hospital mortality (%) by LOS (\u22643/4\u20136/7\u201310/>10 days) and day\u20111 ICU status, plus median days-to-death.",
+  "final_sql": "WITH \n-- Step 1: Identify sepsis patients (excluding septic shock)\nsepsis_patients AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n    ON d.icd_code = diag.icd_code AND d.icd_version = diag.icd_version\n  WHERE diag.long_title LIKE '%Sepsis%' AND d.icd_version = 9 AND diag.long_title NOT LIKE '%Shock%'\n  UNION DISTINCT\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n    ON d.icd_code = diag.icd_code AND d.icd_version = diag.icd_version\n  WHERE diag.long_title LIKE '%Septic%' AND d.icd_version = 10 AND diag.long_title NOT LIKE '%Shock%'\n),\n\n-- Step 2 & 3: Filter patients, determine in-hospital mortality, and days-to-death\npatient_data AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.deathtime,\n    a.dischtime,\n    p.dod,\n    a.hospital_expire_flag,\n    DATE_DIFF(COALESCE(a.deathtime, a.dischtime), a.admittime, DAY) AS los,\n    DATE_DIFF(COALESCE(p.dod, a.dischtime), a.admittime, DAY) AS days_to_death\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE a.hadm_id IN (SELECT hadm_id FROM sepsis_patients)\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 86 AND 96\n),\n\n-- Step 4 & 5: Determine LOS category and day-1 ICU status\nicu_status AS (\n  SELECT \n    i.hadm_id,\n    i.intime,\n    i.outtime,\n    icu.first_careunit,\n    ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS icu_seq\n  FROM `physionet-data.mimiciv_3_1_hosp.transfers` i\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu ON i.hadm_id = icu.hadm_id AND i.intime = icu.intime\n),\n\n-- Aggregate data\nfinal_data AS (\n  SELECT \n    pd.hadm_id,\n    pd.los,\n    pd.hospital_expire_flag,\n    pd.days_to_death,\n    CASE \n      WHEN pd.los <= 3 THEN '\u22643'\n      WHEN pd.los BETWEEN 4 AND 6 THEN '4\u20136'\n      WHEN pd.los BETWEEN 7 AND 10 THEN '7\u201310'\n      ELSE '>10'\n    END AS los_category,\n    icu.first_careunit AS day1_icu_status\n  FROM patient_data pd\n  LEFT JOIN icu_status icu ON pd.hadm_id = icu.hadm_id AND icu.icu_seq = 1\n)\n\n-- Report in-hospital mortality (%) by LOS and day-1 ICU status, plus median days-to-death\nSELECT \n  los_category,\n  day1_icu_status,\n  COUNT(*) AS total_patients,\n  SUM(hospital_expire_flag) AS in_hospital_deaths,\n  SUM(hospital_expire_flag) / COUNT(*) * 100 AS in_hospital_mortality_pct,\n  APPROX_QUANTILES(days_to_death, 100)[OFFSET(50)] AS median_days_to_death\nFROM final_data\nGROUP BY los_category, day1_icu_status\nORDER BY los_category, day1_icu_status;",
+  "execution_success": true,
+  "row_count": 20,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 20,
+      "error": null
+    }
+  ]
+}

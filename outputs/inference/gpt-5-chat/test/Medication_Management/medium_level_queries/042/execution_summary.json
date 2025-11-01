@@ -1,0 +1,22 @@
+{
+  "query": "For a 56\u2011year\u2011old female with diabetes and acute HF, among female inpatients ages 51\u201361: report percent on insulin vs oral agents in first 48h vs final 24h, and continued/initiated/discontinued counts.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    pat.gender,\n    pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) AS age_at_admit,\n    adm.admittime,\n    adm.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) BETWEEN 51 AND 61\n    AND adm.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n        AND d.icd_version = dd.icd_version\n      WHERE LOWER(dd.long_title) LIKE '%diabetes%'\n    )\n    AND adm.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n        AND d.icd_version = dd.icd_version\n      WHERE LOWER(dd.long_title) LIKE '%acute%'\n        AND LOWER(dd.long_title) LIKE '%heart failure%'\n    )\n),\ndrug_flags AS (\n  SELECT\n    c.hadm_id,\n    CASE\n      WHEN UPPER(pres.drug) LIKE '%INSULIN%' THEN 'insulin'\n      WHEN UPPER(pres.drug) LIKE '%METFORMIN%' THEN 'oral'\n      WHEN UPPER(pres.drug) LIKE '%GLIPIZIDE%' THEN 'oral'\n      WHEN UPPER(pres.drug) LIKE '%GLYBURIDE%' THEN 'oral'\n      WHEN UPPER(pres.drug) LIKE '%PIOGLITAZONE%' THEN 'oral'\n      WHEN UPPER(pres.drug) LIKE '%SITAGLIPTIN%' THEN 'oral'\n      WHEN UPPER(pres.drug) LIKE '%LINAGLIPTIN%' THEN 'oral'\n      WHEN UPPER(pres.drug) LIKE '%REPAGLINIDE%' THEN 'oral'\n      ELSE NULL\n    END AS drug_category,\n    -- Flags for time windows\n    MAX( CASE\n      WHEN pres.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n           AND pres.stoptime > c.admittime THEN 1 ELSE 0 END ) AS first48h_flag,\n    MAX( CASE\n      WHEN pres.starttime < c.dischtime\n           AND pres.stoptime > TIMESTAMP_SUB(c.dischtime, INTERVAL 24 HOUR) THEN 1 ELSE 0 END ) AS last24h_flag\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pres\n    ON c.hadm_id = pres.hadm_id\n  WHERE pres.starttime IS NOT NULL\n    AND pres.stoptime IS NOT NULL\n  GROUP BY c.hadm_id, drug_category\n),\nsummary AS (\n  SELECT\n    drug_category,\n    COUNT(DISTINCT hadm_id) AS n_with_category,\n    SUM(first48h_flag) AS had_first48h,\n    SUM(last24h_flag) AS had_last24h,\n    SUM(CASE WHEN first48h_flag=1 AND last24h_flag=1 THEN 1 ELSE 0 END) AS continued,\n    SUM(CASE WHEN first48h_flag=0 AND last24h_flag=1 THEN 1 ELSE 0 END) AS initiated,\n    SUM(CASE WHEN first48h_flag=1 AND last24h_flag=0 THEN 1 ELSE 0 END) AS discontinued\n  FROM drug_flags\n  WHERE drug_category IS NOT NULL\n  GROUP BY drug_category\n)\nSELECT\n  s.drug_category,\n  s.n_with_category,\n  s.had_first48h,\n  ROUND(100 * s.had_first48h / c.hadm_count, 1) AS pct_first48h,\n  s.had_last24h,\n  ROUND(100 * s.had_last24h / c.hadm_count, 1) AS pct_last24h,\n  s.continued,\n  s.initiated,\n  s.discontinued\nFROM summary s\nCROSS JOIN (SELECT COUNT(DISTINCT hadm_id) AS hadm_count FROM cohort) c\nORDER BY drug_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside c at [77:49]; reason: invalidQuery, location: query, message: Name hadm_id not found inside c at [77:49]\n\nLocation: US\nJob ID: f71e5384-a6b5-43af-a04b-610d486e5d0e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

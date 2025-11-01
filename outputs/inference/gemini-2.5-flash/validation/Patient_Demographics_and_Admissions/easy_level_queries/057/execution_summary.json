@@ -1,0 +1,16 @@
+{
+  "query": "I have a 51-year-old man with stroke. Among male stroke patients 46\u201356, what's the IQR of first-admission ICU LOS in days?",
+  "final_sql": "WITH PatientsCohort AS (\n    -- Step 1: Identify male patients aged 46-56\n    SELECT\n        p.subject_id,\n        p.gender,\n        p.anchor_age\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 46 AND 56\n),\nStrokeDiagnoses AS (\n    -- Step 2: Identify definite stroke diagnoses (ICD-9 and ICD-10) for any admission\n    SELECT DISTINCT\n        d.subject_id,\n        d.hadm_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE\n        (d.icd_version = 9 AND d.icd_code BETWEEN '430' AND '43899') -- ICD-9 stroke ranges\n        OR (d.icd_version = 10 AND d.icd_code BETWEEN 'I60' AND 'I6999') -- ICD-10 stroke ranges\n),\nFirstAdmissionStrokePatients AS (\n    -- Step 3: Filter for the first hospital admission for each patient in the cohort who also had a stroke.\n    SELECT\n        pc.subject_id,\n        a.hadm_id,\n        a.admittime,\n        ROW_NUMBER() OVER (PARTITION BY pc.subject_id ORDER BY a.admittime) AS rn_adm\n    FROM\n        PatientsCohort pc\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON pc.subject_id = a.subject_id\n    INNER JOIN\n        StrokeDiagnoses sd\n        ON a.subject_id = sd.subject_id AND a.hadm_id = sd.hadm_id\n    WHERE\n        a.deathtime IS NULL OR a.deathtime > a.admittime -- Ensure admission was not just a death record,\n                                                           -- or that the patient didn't die before admission\n),\nICU_LOS_Data AS (\n    -- Step 4 & 5: For these first admissions, find their first ICU stay and calculate LOS in days.\n    SELECT\n        fas.subject_id,\n        fas.hadm_id,\n        icu.stay_id,\n        TIMESTAMP_DIFF(icu.outtime, icu.intime, DAY) AS los_days, -- Direct calculation in days\n        ROW_NUMBER() OVER (PARTITION BY fas.subject_id, fas.hadm_id ORDER BY icu.intime) AS rn_icu\n    FROM\n        FirstAdmissionStrokePatients fas\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON fas.subject_id = icu.subject_id AND fas.hadm_id = icu.hadm_id\n    WHERE\n        fas.rn_adm = 1 -- Only consider the first hospital admission\n        AND icu.los >= 0 -- Ensure positive or zero LOS for valid stays, although TIMESTAMP_DIFF would usually yield positive\n)\n-- Step 6: Calculate Q1, Q3, and IQR from the LOS values of the first ICU stay during the first admission.\nSELECT\n    PERCENTILE_CONT(los_days, 0.25) OVER () AS q1_los_days,\n    PERCENTILE_CONT(los_days, 0.75) OVER () AS q3_los_days,\n    (PERCENTILE_CONT(los_days, 0.75) OVER () - PERCENTILE_CONT(los_days, 0.25) OVER ()) AS iqr_los_days\nFROM\n    ICU_LOS_Data\nWHERE\n    rn_icu = 1 -- Only consider the first ICU stay within that first admission\nQUALIFY ROW_NUMBER() OVER (ORDER BY 1) = 1 -- Ensure only one row for the final result\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

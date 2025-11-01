@@ -1,0 +1,28 @@
+{
+  "query": "I have a 68\u2011year\u2011old male post\u2011op ICU patient. Among male post\u2011op ICU patients aged 63\u201373 in the top quartile of instability, what is the 95th\u2011percentile instability score and how do fever (>38.5\u00b0C), SpO2<90%, RR>20 episodes, ICU LOS, and in\u2011hospital mortality compare to other post\u2011op patients?",
+  "final_sql": "WITH surgical_hadms AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  WHERE admission_type = 'SURGICAL'\n),\nicu_hadms AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\npostop_icu_hadms AS (\n  SELECT s.hadm_id\n  FROM surgical_hadms s\n  INNER JOIN icu_hadms i ON s.hadm_id = i.hadm_id\n),\nlos_per_hadm AS (\n  SELECT hadm_id, SUM(los) AS icu_los\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  WHERE hadm_id IN (SELECT hadm_id FROM postop_icu_hadms)\n  GROUP BY hadm_id\n),\nall_adverse_events AS (\n  SELECT \n    ce.hadm_id,\n    COUNTIF(ce.itemid IN (676, 677, 678) AND ce.valuenum > 38.5) AS fever_events,\n    COUNTIF(ce.itemid = 220277 AND ce.valuenum < 90) AS hypoxia_events,\n    COUNTIF(ce.itemid IN (618, 220210) AND ce.valuenum > 20) AS tachypnea_events\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  INNER JOIN postop_icu_hadms pi ON ce.hadm_id = pi.hadm_id\n  WHERE ce.itemid IN (676, 677, 678, 220277, 618, 220210)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY ce.hadm_id\n),\nall_patients_data AS (\n  SELECT p.subject_id, p.gender, p.anchor_age, a.hadm_id, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  INNER JOIN postop_icu_hadms pi ON a.hadm_id = pi.hadm_id\n  WHERE p.anchor_age > 18\n),\nall_cohort_with_metrics AS (\n  SELECT \n    apd.*,\n    COALESCE(ae.fever_events, 0) > 0 AS had_fever,\n    COALESCE(ae.hypoxia_events, 0) > 0 AS had_hypoxia,\n    COALESCE(ae.tachypnea_events, 0) AS tachypnea_events,\n    COALESCE(l.icu_los, 0) AS icu_los,\n    (COALESCE(ae.fever_events, 0) + COALESCE(ae.hypoxia_events, 0) + COALESCE(ae.tachypnea_events, 0)) AS instability_score\n  FROM all_patients_data apd\n  LEFT JOIN all_adverse_events ae ON apd.hadm_id = ae.hadm_id\n  LEFT JOIN los_per_hadm l ON apd.hadm_id = l.hadm_id\n),\nspecific_cohort AS (\n  SELECT *\n  FROM all_cohort_with_metrics\n  WHERE gender = 'M' AND anchor_age BETWEEN 63 AND 73\n),\nq75 AS (\n  SELECT APPROX_QUANTILES(instability_score, 4)[OFFSET(3)] AS q75_score\n  FROM specific_cohort\n),\ntop_quartile AS (\n  SELECT sc.*\n  FROM specific_cohort sc\n  CROSS JOIN q75 q\n  WHERE sc.instability_score >= q.q75_score\n),\np95_val AS (\n  SELECT APPROX_QUANTILES(instability_score, 20)[OFFSET(19)] AS p95_instability\n  FROM top_quartile\n),\ncomparison AS (\n  SELECT 'top_quartile' AS patient_group,\n         AVG(CAST(had_fever AS INT64)) AS fever_rate,\n         AVG(CAST(had_hypoxia AS INT64)) AS spo2_low_rate,\n         AVG(tachypnea_events) AS mean_rr_episodes,\n         AVG(icu_los) AS mean_icu_los,\n         AVG(CAST(hospital_expire_flag AS INT64)) AS mortality_rate\n  FROM top_quartile\n  UNION ALL\n  SELECT 'baseline_cohort' AS patient_group,\n         AVG(CAST(had_fever AS INT64)) AS fever_rate,\n         AVG(CAST(had_hypoxia AS INT64)) AS spo2_low_rate,\n         AVG(tachypnea_events) AS mean_rr_episodes,\n         AVG(icu_los) AS mean_icu_los,\n         AVG(CAST(hospital_expire_flag AS INT64)) AS mortality_rate\n  FROM specific_cohort\n)\nSELECT \n  c.*,\n  p.p95_instability\nFROM comparison c\nCROSS JOIN p95_val p\nORDER BY patient_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [58:10]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [58:10]\n\nLocation: US\nJob ID: b3867697-c01a-42a8-baf8-2c32d5409dbe\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [73:19]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [73:19]\n\nLocation: US\nJob ID: fe32f69d-f3c3-400d-ac38-b36adf44747e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

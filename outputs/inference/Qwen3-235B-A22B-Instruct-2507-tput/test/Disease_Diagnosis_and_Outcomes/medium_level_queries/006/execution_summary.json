@@ -1,0 +1,22 @@
+{
+  "query": "I have a 69\u2011year\u2011old man. In male patients aged 64\u201374 with sepsis (excluding septic shock), what are in\u2011hospital mortality rates by LOS quartile (Q1\u2013Q4), and CKD and diabetes prevalence per quartile?",
+  "final_sql": "WITH sepsis_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS adm_seq\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.hadm_id = diag.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 64 AND 74\n    AND (\n      (d.icd_code = 'A419' AND d.icd_version = 10) OR\n      (d.icd_code = 'R6520' AND d.icd_version = 10)\n    )\n    AND a.subject_id NOT IN (\n      -- Exclude patients with septic shock diagnosis\n      SELECT DISTINCT a2.subject_id\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag2\n        ON a2.hadm_id = diag2.hadm_id\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d2\n        ON diag2.icd_code = d2.icd_code AND diag2.icd_version = d2.icd_version\n      WHERE (d2.icd_code = 'R6521' AND d2.icd_version = 10)\n         OR LOWER(d2.long_title) LIKE '%septic shock%'\n    )\n),\nfirst_sepsis_adm AS (\n  SELECT *\n  FROM sepsis_admissions\n  WHERE adm_seq = 1\n),\ncomorbidity_flags AS (\n  SELECT\n    fsa.*,\n    -- Check if patient has CKD in any admission\n    MAX(CASE WHEN d.long_title LIKE '%chronic kidney disease%' OR d.icd_code LIKE 'N18%' THEN 1 ELSE 0 END) AS has_ckd,\n    -- Check if patient has diabetes in any admission\n    MAX(CASE WHEN d.long_title LIKE '%diabetes%' \n              AND (d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E13%') THEN 1 ELSE 0 END) AS has_diabetes\n  FROM first_sepsis_adm fsa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag_all\n    ON fsa.subject_id = diag_all.subject_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON diag_all.icd_code = d.icd_code AND diag_all.icd_version = d.icd_version\n  GROUP BY fsa.subject_id, fsa.hadm_id, fsa.admittime, fsa.dischtime, fsa.hospital_expire_flag, fsa.los_days, fsa.adm_seq\n),\nquartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY los_days) AS los_quartile\n  FROM comorbidity_flags\n)\nSELECT\n  los_quartile,\n  AVG(hospital_expire_flag) AS in_hospital_mortality_rate,\n  AVG(has_ckd) AS ckd_prevalence,\n  AVG(has_diabetes) AS diabetes_prevalence\nFROM quartiles\nGROUP BY los_quartile\nORDER BY los_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Star expansion expression references column adm_seq which is neither grouped nor aggregated at [42:5]; reason: invalidQuery, location: query, message: Star expansion expression references column adm_seq which is neither grouped nor aggregated at [42:5]\n\nLocation: US\nJob ID: ec1d2e4a-9536-482b-aacb-c9e7669b8e9d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

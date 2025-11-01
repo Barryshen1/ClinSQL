@@ -1,0 +1,22 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "WITH\n-- Define trauma ICD-10 codes (S00-T88)\ntrauma_codes AS (\n  SELECT DISTINCT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code BETWEEN 'S000' AND 'T889'\n),\n\n-- Get female patients aged 45-55 with multi-trauma\nqualifying_patients AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN trauma_codes t ON d.icd_code = t.icd_code\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND a.admission_type != 'NEWBORN'\n),\n\n-- Calculate medication complexity for first 7 days\nmed_complexity AS (\n  SELECT\n    q.subject_id,\n    q.hadm_id,\n    a.admittime,\n    -- Count unique medications\n    COUNT(DISTINCT p.medication) AS unique_meds,\n    -- Count unique routes\n    COUNT(DISTINCT p.route) AS unique_routes,\n    -- Count unique frequencies\n    COUNT(DISTINCT p.frequency) AS unique_frequencies,\n    -- Total medication complexity score\n    COUNT(DISTINCT p.medication) + COUNT(DISTINCT p.route) + COUNT(DISTINCT p.frequency) AS complexity_score\n  FROM qualifying_patients q\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON q.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.pharmacy` p ON q.hadm_id = p.hadm_id\n    AND p.starttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 7 DAY)\n  GROUP BY q.subject_id, q.hadm_id, a.admittime\n),\n\n-- Add tertiles\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY complexity_score) AS tertile\n  FROM med_complexity\n),\n\n-- Calculate outcomes\noutcomes AS (\n  SELECT\n    t.tertile,\n    COUNT(DISTINCT t.hadm_id) AS admission_count,\n    AVG(t.complexity_score) AS mean_complexity,\n    MIN(t.complexity_score) AS min_complexity,\n    MAX(t.complexity_score) AS max_complexity,\n    AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY)) AS mean_los,\n    SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(DISTINCT t.hadm_id) AS mortality_rate,\n    -- 30-day readmission calculation\n    SUM(CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = t.subject_id\n        AND a2.hadm_id != t.hadm_id\n        AND a2.admittime BETWEEN a.dischtime AND DATETIME_ADD(a.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END) / COUNT(DISTINCT t.hadm_id) AS readmission_rate\n  FROM tertiles t\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON t.hadm_id = a.hadm_id\n  GROUP BY t.tertile\n)\n\n-- Final output\nSELECT\n  tertile,\n  admission_count,\n  mean_complexity,\n  min_complexity,\n  max_complexity,\n  mean_los,\n  ROUND(mortality_rate * 100, 2) AS mortality_percent,\n  ROUND(readmission_rate * 100, 2) AS readmission_percent\nFROM outcomes\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name frequency not found inside p at [32:22]; reason: invalidQuery, location: query, message: Name frequency not found inside p at [32:22]\n\nLocation: US\nJob ID: 8d263f90-37ac-455f-ba21-b1bfe2fc1ea3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

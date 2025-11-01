@@ -1,0 +1,20 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON adm.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      ON adm.subject_id = d.subject_id\n      AND adm.hadm_id    = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n      ON d.icd_code    = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 51 AND 61\n    AND adm.admission_type = 'EMERGENCY'\n    AND adm.insurance LIKE '%MEDICARE%'\n    AND d.seq_num = 1\n    AND LOWER(dd.long_title) LIKE '%acute pancreatitis%'\n    -- ensure valid dates\n    AND adm.admittime IS NOT NULL\n    AND adm.dischtime IS NOT NULL\n),\nindexed AS (\n  SELECT\n    c.*,\n    DATE_DIFF(c.dischtime, c.admittime, DAY) AS los,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n      WHERE a2.subject_id = c.subject_id\n        AND a2.admittime   > c.dischtime\n        AND a2.admittime   <= c.dischtime + INTERVAL 30 DAY\n    ) AS readmitted\n  FROM cohort AS c\n)\nSELECT\n  readmitted,\n  COUNT(*) AS num_stays,\n  ROUND(100.0 * COUNTIF(readmitted) / COUNT(*), 2) AS pct_readmission_overall,\n  -- median LOS\n  (SELECT APPROX_QUANTILES(los, 2)[OFFSET(1)]) AS median_los,\n  -- percent stays with LOS > 9 days\n  ROUND(100.0 * COUNTIF(los > 9) / COUNT(*), 2) AS pct_los_over_9_days\nFROM indexed\nGROUP BY readmitted\nORDER BY readmitted DESC;",
+      "success": false,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in SELECT without FROM clause at [46:11]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in SELECT without FROM clause at [46:11]\n\nLocation: US\nJob ID: 71b04306-e111-4950-9532-44303fdd44ab\n",
+      "row_count": 0
+    },
+    {
+      "attempt": 2,
+      "sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON adm.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      ON adm.subject_id = d.subject_id\n      AND adm.hadm_id    = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n      ON d.icd_code    = dd.icd_code\n      AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 51 AND 61\n    AND adm.admission_type = 'EMERGENCY'\n    AND adm.insurance LIKE '%MEDICARE%'\n    AND d.seq_num = 1\n    AND LOWER(dd.long_title) LIKE '%acute pancreatitis%'\n    AND adm.admittime IS NOT NULL\n    AND adm.dischtime IS NOT NULL\n),\nindexed AS (\n  SELECT\n    c.*,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY) AS los,\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n      WHERE a2.subject_id = c.subject_id\n        AND a2.admittime   > c.dischtime\n        AND a2.admittime   <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n    ) AS readmitted\n  FROM cohort AS c\n)\nSELECT\n  readmitted,\n  COUNT(*) AS num_stays,\n  ROUND(\n    100.0 * COUNTIF(readmitted) / SUM(COUNT(*)) OVER (),\n    2\n  ) AS pct_readmission_overall,\n  APPROX_QUANTILES(los, 2)[OFFSET(1)] AS median_los,\n  ROUND(\n    100.0 * COUNTIF(los > 9) / COUNT(*),\n    2\n  ) AS pct_los_over_9_days\nFROM indexed\nGROUP BY readmitted\nORDER BY readmitted DESC;",
+      "success": true,
+      "error": null,
+      "row_count": 0
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 0
+}

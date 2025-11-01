@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 80\u2011year\u2011old female on invasive mechanical ventilation. In female ICU patients age 75\u201385 on ventilation, what's the 90th percentile of the 48\u2011hour composite instability score, and what are hypotension, tachycardia, ICU LOS, and mortality in the top 25%?",
+  "final_sql": "WITH cohort AS (\n  -- Step 1: Identify female ICU patients aged 75\u201385\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los AS icu_los,\n    pat.gender,\n    pat.anchor_age,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 75 AND 85\n),\n\n-- Step 2: Identify patients on invasive mechanical ventilation in first 48h\nventilated AS (\n  SELECT DISTINCT\n    ce.stay_id\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON ce.stay_id = icu.stay_id\n  WHERE LOWER(di.label) IN ('mech vent', 'ventilator', 'ventilator mode')\n    AND ce.charttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 48 HOUR)\n),\n\n-- Step 3: Extract vital signs in first 48h\nvitals AS (\n  SELECT\n    ce.stay_id,\n    MAX(CASE WHEN LOWER(di.label) LIKE '%heart rate%' THEN ce.valuenum END) AS heart_rate,\n    MAX(CASE WHEN LOWER(di.label) LIKE '%mean%' AND LOWER(di.label) LIKE '%arterial%' THEN ce.valuenum END) AS map,\n    MAX(CASE WHEN LOWER(di.label) LIKE '%gcs%' THEN ce.valuenum END) AS gcs,\n    MAX(CASE WHEN LOWER(di.label) LIKE '%respiratory rate%' THEN ce.valuenum END) AS rr\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON ce.stay_id = icu.stay_id\n  WHERE ce.charttime BETWEEN icu.intime AND TIMESTAMP_ADD(icu.intime, INTERVAL 48 HOUR)\n    AND ce.valuenum IS NOT NULL\n    AND LOWER(di.label) IN ('heart rate', 'mean arterial pressure', 'gcs total', 'respiratory rate')\n  GROUP BY ce.stay_id\n),\n\n-- Step 4: Compute instability score\ninstability_scores AS (\n  SELECT\n    v.stay_id,\n    v.heart_rate,\n    v.map,\n    v.gcs,\n    v.rr,\n    (\n      IF(v.heart_rate > 120, 1, 0) +\n      IF(v.map < 65, 1, 0) +\n      IF(v.gcs < 8, 1, 0) +\n      IF(v.rr > 25 OR v.rr < 10, 1, 0)\n    ) AS instability_score\n  FROM vitals v\n  JOIN ventilated ven\n    ON v.stay_id = ven.stay_id\n),\n\n-- Step 5: Join with cohort\ncohort_with_scores AS (\n  SELECT\n    c.*,\n    i.instability_score,\n    i.heart_rate,\n    i.map\n  FROM cohort c\n  JOIN instability_scores i\n    ON c.stay_id = i.stay_id\n),\n\n-- Step 6: Compute 90th percentile\npercentile_90 AS (\n  SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS score_90th\n  FROM cohort_with_scores\n),\n\n-- Step 7: Top 25% of scores\ntop_quartile AS (\n  SELECT *\n  FROM cohort_with_scores\n  WHERE instability_score >= (\n    SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(75)]\n    FROM cohort_with_scores\n  )\n)\n\n-- Final output\nSELECT\n  (SELECT score_90th FROM percentile_90) AS instability_score_90th_percentile,\n  AVG(CASE WHEN heart_rate > 120 THEN 1 ELSE 0 END) AS prop_tachycardia,\n  AVG(CASE WHEN map < 65 THEN 1 ELSE 0 END) AS prop_hypotension,\n  AVG(icu_los) AS avg_icu_los,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM top_quartile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Cannot access field intime on a value with type INT64 at [30:41]; reason: invalidQuery, location: query, message: Cannot access field intime on a value with type INT64 at [30:41]\n\nLocation: US\nJob ID: 1832b4c1-a8ac-4f56-a991-aae9565c96c7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: heart_rate at [98:17]; reason: invalidQuery, location: query, message: Unrecognized name: heart_rate at [98:17]\n\nLocation: US\nJob ID: e3f1d7bc-85d3-49f3-b9cf-f0fc0d0ff573\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

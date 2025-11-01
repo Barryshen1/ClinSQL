@@ -1,0 +1,16 @@
+{
+  "query": "I have a 73-year-old man with heart failure. Among males 68\u201378, report in-hospital mortality (%) and CKD and diabetes prevalence (%) stratified by LOS <8 vs \u22658 days.",
+  "final_sql": "WITH cohort AS (\n  -- Select male patients aged 68-78 with heart failure\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND (\n      -- Heart failure ICD-10: I50.x; ICD-9: 428.x\n      (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^I50'))\n      OR\n      (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^428'))\n    )\n),\nckd_flags AS (\n  -- Flag CKD per admission\n  SELECT\n    hadm_id,\n    MAX(\n      CASE\n        WHEN (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^N18'))\n          OR (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^585'))\n        THEN 1 ELSE 0\n      END\n    ) AS has_ckd\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\ndm_flags AS (\n  -- Flag diabetes per admission\n  SELECT\n    hadm_id,\n    MAX(\n      CASE\n        WHEN (icd_version = 10 AND REGEXP_CONTAINS(icd_code, r'^E1[0-4]'))\n          OR (icd_version = 9 AND REGEXP_CONTAINS(icd_code, r'^250'))\n        THEN 1 ELSE 0\n      END\n    ) AS has_dm\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nfinal AS (\n  SELECT\n    c.hadm_id,\n    c.subject_id,\n    c.anchor_age,\n    c.gender,\n    c.los,\n    c.hospital_expire_flag,\n    CASE\n      WHEN c.los < 8 THEN '<8 days'\n      ELSE '\u22658 days'\n    END AS los_group,\n    IFNULL(ckd.has_ckd, 0) AS has_ckd,\n    IFNULL(dm.has_dm, 0) AS has_dm\n  FROM\n    cohort c\n    LEFT JOIN ckd_flags ckd ON c.hadm_id = ckd.hadm_id\n    LEFT JOIN dm_flags dm ON c.hadm_id = dm.hadm_id\n)\nSELECT\n  los_group,\n  COUNT(*) AS n_admissions,\n  ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(*), 1) AS mortality_percent,\n  ROUND(SUM(has_ckd) * 100.0 / COUNT(*), 1) AS ckd_percent,\n  ROUND(SUM(has_dm) * 100.0 / COUNT(*), 1) AS diabetes_percent\nFROM\n  final\nGROUP BY\n  los_group\nORDER BY\n  los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 73-year-old female Medicare patient. Among female Medicare patients aged 68\u201378 admitted from the ED with a principal hemorrhagic stroke, what are the 30-day readmission rate, median index LOS for readmitted vs non-readmitted, and % with LOS >4 days?",
+  "final_sql": "WITH principal_stroke AS (\n  SELECT\n    di.subject_id,\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  WHERE di.seq_num = 1\n    AND (\n      (di.icd_version = 9 AND (\n          di.icd_code LIKE '430%' OR\n          di.icd_code LIKE '431%' OR\n          di.icd_code LIKE '432%'))\n      OR\n      (di.icd_version = 10 AND (\n          di.icd_code LIKE 'I60%' OR\n          di.icd_code LIKE 'I61%' OR\n          di.icd_code LIKE 'I62%'))\n    )\n),\nindex_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR)/24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN principal_stroke ps\n    ON a.subject_id = ps.subject_id AND a.hadm_id = ps.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 68 AND 78\n    AND LOWER(a.insurance) LIKE '%medicare%'\n    AND (\n      LOWER(a.admission_location) LIKE '%emergency%' OR a.edregtime IS NOT NULL\n    )\n),\nreadmission_flags AS (\n  SELECT\n    idx.subject_id,\n    idx.hadm_id,\n    idx.admittime,\n    idx.dischtime,\n    idx.los_days,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = idx.subject_id\n        AND a2.admittime > idx.dischtime\n        AND a2.admittime <= DATETIME_ADD(idx.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmit_flag\n  FROM index_admissions idx\n),\nsummary AS (\n  SELECT\n    readmit_flag,\n    COUNT(*) AS n_admissions,\n    COUNTIF(readmit_flag=1) / COUNT(*) OVER() AS readmission_rate_overall, -- overall rate\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days,\n    100.0 * COUNTIF(los_days > 4) / COUNT(*) AS pct_los_gt4\n  FROM readmission_flags\n  GROUP BY readmit_flag\n)\nSELECT * FROM summary\nORDER BY readmit_flag DESC;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

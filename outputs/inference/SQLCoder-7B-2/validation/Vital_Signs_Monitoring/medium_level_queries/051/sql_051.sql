@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY max_heart_rate) - percentile_cont(0.25) within GROUP (ORDER BY max_heart_rate)) AS interquartile_range FROM male_icu_patients;

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 42-year-old female. Among female ICU patients aged 37\u201347, what's the 75th percentile of mean temperature per stay?",
+  "final_sql": "WITH female_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F'\n    AND anchor_age BETWEEN 37 AND 47\n),\n\ntemp_measurements AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    ce.valuenum,\n    ce.valueuom,\n    di.unitname,\n    LOWER(COALESCE(ce.valueuom, di.unitname, '')) AS unit_lower,\n    CASE\n      WHEN REGEXP_CONTAINS(LOWER(COALESCE(ce.valueuom, di.unitname, '')),\n                           r'(^|[^a-z])(f|\u00b0f|fahrenheit)($|[^a-z])')\n        THEN (ce.valuenum - 32.0) * 5.0 / 9.0\n      WHEN REGEXP_CONTAINS(LOWER(COALESCE(ce.valueuom, di.unitname, '')),\n                           r'(\u00b0c|celsius|centigrade|(^|[^a-z])c($|[^a-z]))')\n        THEN ce.valuenum\n      ELSE NULL\n    END AS temp_c\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON icu.stay_id = ce.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE icu.subject_id IN (SELECT subject_id FROM female_patients)\n    AND ce.valuenum IS NOT NULL\n    -- restrict to items labeled as temperature to avoid non-temperature numeric items\n    AND di.label IS NOT NULL\n    AND LOWER(di.label) LIKE '%temp%'\n),\n\nstay_mean_temps AS (\n  SELECT\n    stay_id,\n    subject_id,\n    AVG(temp_c) AS mean_temp_c,\n    COUNT(*) AS n_temp_measurements\n  FROM temp_measurements\n  WHERE temp_c BETWEEN 30.0 AND 45.0    -- plausibility filter in Celsius\n  GROUP BY stay_id, subject_id\n)\n\nSELECT\n  APPROX_QUANTILES(mean_temp_c, 100)[OFFSET(75)] AS p75_mean_temp_c,\n  COUNT(*) AS n_stays_included\nFROM stay_mean_temps;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

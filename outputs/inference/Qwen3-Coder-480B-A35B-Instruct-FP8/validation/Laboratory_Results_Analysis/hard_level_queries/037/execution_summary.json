@@ -1,0 +1,28 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n  ON\n    d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND (\n      (d.icd_version = 10 AND d.icd_code LIKE 'I61%') OR\n      (d.icd_version = 10 AND d.icd_code LIKE 'I62%')\n    )\n),\n\nfirst_48h_labs AS (\n  SELECT\n    l.hadm_id,\n    l.itemid,\n    l.flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    cohort c\n  ON\n    l.hadm_id = c.hadm_id\n  WHERE\n    l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.flag = 'abnormal'\n    AND l.itemid IN (\n      SELECT itemid\n      FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n      WHERE LOWER(label) IN (\n        'creatinine', 'white blood cell count', 'platelet count',\n        'lactate', 'bicarbonate', 'potassium', 'sodium'\n      )\n    )\n),\n\ninstability_score AS (\n  SELECT\n    hadm_id,\n    COUNT(*) AS instability_score\n  FROM\n    first_48h_labs\n  GROUP BY\n    hadm_id\n),\n\npercentile_25 AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(25)] AS score_25th_percentile\n  FROM\n    instability_score\n),\n\ngeneral_labs AS (\n  SELECT\n    l.hadm_id,\n    l.flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    l.hadm_id = a.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  ON\n    a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND l.flag = 'abnormal'\n    AND l.itemid IN (\n      SELECT itemid\n      FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n      WHERE LOWER(label) IN (\n        'creatinine', 'white blood cell count', 'platelet count',\n        'lactate', 'bicarbonate', 'potassium', 'sodium'\n      )\n    )\n),\n\ngeneral_abnormal_rate AS (\n  SELECT\n    COUNT(*) AS total_flagged_labs,\n    COUNT(DISTINCT l.hadm_id) AS total_admissions\n  FROM\n    general_labs l\n),\n\ncohort_stats AS (\n  SELECT\n    AVG(c.los_days) AS mean_los,\n    AVG(CAST(c.hospital_expire_flag AS FLOAT64)) AS mortality_rate\n  FROM\n    cohort c\n)\n\nSELECT\n  p.score_25th_percentile,\n  g.total_flagged_labs,\n  g.total_admissions,\n  ROUND(SAFE_DIVIDE(g.total_flagged_labs, g.total_admissions), 4) AS avg_critical_labs_per_admission,\n  s.mean_los,\n  s.mortality_rate\nFROM\n  percentile_25 p,\n  general_abnormal_rate g,\n  cohort_stats s;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, instability_score INT64> does not at [68:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, instability_score INT64> does not at [68:22]\n\nLocation: US\nJob ID: 04ee8dab-1f54-41e2-8452-56df8470641e\n",
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, instability_score INT64> does not at [68:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, instability_score INT64> does not at [68:22]\n\nLocation: US\nJob ID: 002f274c-77c3-41a1-90c9-ad68d3a24e67\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, instability_score INT64> does not at [68:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, instability_score INT64> does not at [68:22]\n\nLocation: US\nJob ID: c101996a-f1af-48bc-9e04-f0b2dd2a6163\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, instability_score INT64> does not at [68:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<hadm_id INT64, instability_score INT64> does not at [68:22]\n\nLocation: US\nJob ID: 04ee8dab-1f54-41e2-8452-56df8470641e\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH hepatic_patients AS (\n  -- Identify patients with hepatic failure diagnosis\n  SELECT DISTINCT\n    di.subject_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    LOWER(d.long_title) LIKE '%hepatic failure%'\n),\nfirst_icu_stays AS (\n  -- Get first ICU stay for each patient using ROW_NUMBER\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    a.hospital_expire_flag\n  FROM (\n    SELECT\n      *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n    FROM\n      physionet-data.mimiciv_3_1_icu.icustays\n  ) i\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions a\n    ON i.hadm_id = a.hadm_id\n  WHERE\n    i.rn = 1\n),\neligible_patients AS (\n  -- Filter for male patients aged 90\u2013100 with hepatic failure and first ICU stay\n  SELECT\n    p.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.outtime,\n    f.los,\n    f.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN\n    first_icu_stays f\n    ON p.subject_id = f.subject_id\n  JOIN\n    hepatic_patients h\n    ON p.subject_id = h.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 90 AND 100\n),\nprocedures_in_window AS (\n  -- Get diagnostic procedures within 72 hours of ICU intime\n  SELECT\n    ep.subject_id,\n    ep.stay_id,\n    ep.los,\n    ep.hospital_expire_flag,\n    COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM\n    eligible_patients ep\n  JOIN\n    physionet-data.mimiciv_3_1_icu.procedureevents pe\n    ON ep.stay_id = pe.stay_id\n  JOIN\n    physionet-data.mimiciv_3_1_icu.d_items di\n    ON pe.itemid = di.itemid\n  WHERE\n    di.category = 'Diagnostic'\n    AND pe.starttime >= ep.intime\n    AND pe.starttime <= ep.intime + INTERVAL 72 HOUR\n  GROUP BY\n    ep.subject_id, ep.stay_id, ep.los, ep.hospital_expire_flag\n),\nquartiled_data AS (\n  -- Stratify patients into quartiles by procedure count\n  SELECT\n    subject_id,\n    stay_id,\n    proc_count,\n    NTILE(4) OVER (ORDER BY proc_count) AS quartile,\n    los,\n    hospital_expire_flag\n  FROM\n    procedures_in_window\n)\n-- Final aggregation by quartile\nSELECT\n  quartile,\n  COUNT(*) AS num_patients,\n  MIN(proc_count) AS min_procedures,\n  MAX(proc_count) AS max_procedures,\n  AVG(proc_count) AS mean_procedures,\n  AVG(los) AS mean_los_days,\n  100 * AVG(hospital_expire_flag) AS in_hospital_mortality_percent\nFROM\n  quartiled_data\nGROUP BY\n  quartile\nORDER BY\n  quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Subquery of type IN must have only one output column at [30:7]; reason: invalidQuery, location: query, message: Subquery of type IN must have only one output column at [30:7]\n\nLocation: US\nJob ID: 9c2d3fa5-54dc-4485-a129-94a338a5d09b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los at [86:5]; reason: invalidQuery, location: query, message: Unrecognized name: los at [86:5]\n\nLocation: US\nJob ID: 7abdd826-12dd-4d90-b183-090974b66948\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

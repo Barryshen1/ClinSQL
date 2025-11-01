@@ -1,0 +1,29 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH male_patients AS (\n    SELECT subject_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE gender = 'M' AND anchor_age BETWEEN 83 AND 93\n),\nsepsis_patients AS (\n    SELECT d.subject_id, d.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n        ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n    WHERE (LOWER(di.long_title) LIKE '%sepsis%' OR LOWER(di.long_title) LIKE '%septicemia%')\n      AND d.subject_id IN (SELECT subject_id FROM male_patients)\n),\nfirst_icu_stay AS (\n    SELECT \n        i.subject_id, \n        i.hadm_id, \n        i.stay_id, \n        i.intime, \n        i.los,\n        ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN sepsis_patients s ON i.subject_id = s.subject_id AND i.hadm_id = s.hadm_id\n),\nfirst_icu_stay_filtered AS (\n    SELECT * FROM first_icu_stay WHERE rn = 1\n),\nprocedure_counts AS (\n    SELECT \n        f.stay_id,\n        COUNT(DISTINCT p.itemid) AS distinct_procedures\n    FROM first_icu_stay_filtered f\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n        ON f.stay_id = p.stay_id\n        AND p.starttime >= f.intime\n        AND p.starttime <= f.intime + INTERVAL 72 HOUR\n    GROUP BY f.stay_id\n),\nmortality_data AS (\n    SELECT \n        a.hadm_id,\n        a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN first_icu_stay_filtered f ON a.hadm_id = f.hadm_id\n),\ncombined_data AS (\n    SELECT \n        f.stay_id,\n        f.hadm_id,\n        f.los,\n        p.distinct_procedures,\n        m.hospital_expire_flag\n    FROM first_icu_stay_filtered f\n    LEFT JOIN procedure_counts p ON f.stay_id = p.stay_id\n    LEFT JOIN mortality_data m ON f.hadm_id = m.hadm_id\n),\nquartile_data AS (\n    SELECT \n        *,\n        NTILE(4) OVER (ORDER BY distinct_procedures) AS quartile\n    FROM combined_data\n)\nSELECT \n    quartile,\n    AVG(distinct_procedures) AS mean_procedure_count,\n    AVG(los) AS mean_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent\nFROM quartile_data\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \",\" but got identifier \"ILIKE\" at [11:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \",\" but got identifier \"ILIKE\" at [11:26]\n\nLocation: US\nJob ID: 2eecec19-829b-4533-9d3c-4a06c5967c87\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [67:38]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [67:38]\n\nLocation: US\nJob ID: 09189a90-575b-45b5-9f3d-6523642a8cb0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

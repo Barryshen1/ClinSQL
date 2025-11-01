@@ -1,0 +1,16 @@
+{
+  "query": "I have an 85-year-old woman with hemorrhagic stroke. Among women aged 80-90 with hemorrhagic stroke, what are mean, min and max ultrasounds per admission for 1-4 versus 5-7 day stays?",
+  "final_sql": "WITH\n  HemorrhagicStrokeAdmissions AS (\n    SELECT DISTINCT\n      adm.hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n      ON adm.hadm_id = dx.hadm_id\n    WHERE\n      pat.gender = 'F'\n      AND pat.anchor_age BETWEEN 80 AND 90\n      AND (\n        -- ICD-9 codes for hemorrhagic stroke\n        dx.icd_code IN ('430', '431', '432')\n        -- ICD-10 codes for hemorrhagic stroke\n        OR dx.icd_code LIKE 'I60%'\n        OR dx.icd_code LIKE 'I61%'\n        OR dx.icd_code LIKE 'I62%'\n      )\n  ),\n  UltrasoundCounts AS (\n    SELECT\n      proc.hadm_id,\n      COUNT(*) AS ultrasound_count\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` AS d_proc\n      ON proc.icd_code = d_proc.icd_code AND proc.icd_version = d_proc.icd_version\n    WHERE\n      LOWER(d_proc.long_title) LIKE '%ultrasound%'\n    GROUP BY\n      proc.hadm_id\n  ),\n  AdmissionsWithLOS AS (\n    SELECT\n      hsa.hadm_id,\n      -- Calculate length of stay in days, rounding up. A stay of <24 hours is 1 day.\n      CEIL(DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0) AS los_days,\n      COALESCE(uc.ultrasound_count, 0) AS ultrasound_count\n    FROM\n      HemorrhagicStrokeAdmissions AS hsa\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      ON hsa.hadm_id = adm.hadm_id\n    LEFT JOIN\n      UltrasoundCounts AS uc\n      ON hsa.hadm_id = uc.hadm_id\n    WHERE\n      adm.dischtime IS NOT NULL AND adm.admittime IS NOT NULL\n  )\nSELECT\n  los_category,\n  AVG(ultrasound_count) AS mean_ultrasounds,\n  MIN(ultrasound_count) AS min_ultrasounds,\n  MAX(ultrasound_count) AS max_ultrasounds\nFROM\n  (\n    SELECT\n      los_days,\n      ultrasound_count,\n      CASE\n        WHEN los_days BETWEEN 1 AND 4\n        THEN '1-4 day stay'\n        WHEN los_days BETWEEN 5 AND 7\n        THEN '5-7 day stay'\n        ELSE 'Other'\n      END AS los_category\n    FROM\n      AdmissionsWithLOS\n  ) AS CategorizedAdmissions\nWHERE\n  los_category IN ('1-4 day stay', '5-7 day stay')\nGROUP BY\n  los_category\nORDER BY\n  los_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 58\u2011year\u2011old woman. Among female inpatients aged 53\u201363 with pulmonary embolism, what is the 75th percentile of the 72\u2011hour lab instability score? For patients \u2265that threshold, report mortality (%), mean LOS (days), and compare critical\u2011lab rates to inpatients.",
+  "final_sql": "WITH pe_cohort AS (\n  SELECT DISTINCT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = a.subject_id \n        AND d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '415.1%') \n          OR (d.icd_version = 10 AND d.icd_code LIKE 'I26%')\n        )\n    )\n),\npe_scores AS (\n  SELECT \n    pc.*,\n    COUNTIF(le.flag IS NOT NULL) * 1.0 / NULLIF(COUNT(le.labevent_id), 0) AS instability_score\n  FROM pe_cohort pc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.subject_id = pc.subject_id \n    AND le.hadm_id = pc.hadm_id\n    AND le.charttime >= pc.admittime\n    AND le.charttime < TIMESTAMP_ADD(pc.admittime, INTERVAL 72 HOUR)\n  GROUP BY \n    pc.subject_id, pc.hadm_id, pc.admittime, pc.dischtime, pc.hospital_expire_flag\n),\nthreshold AS (\n  SELECT APPROX_QUANTILES(instability_score, 4)[OFFSET(3)] AS thresh\n  FROM pe_scores\n),\nhigh_risk_pe AS (\n  SELECT ps.*\n  FROM pe_scores ps\n  CROSS JOIN threshold t\n  WHERE ps.instability_score >= t.thresh\n),\ngeneral_cohort AS (\n  SELECT DISTINCT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n),\ngeneral_scores AS (\n  SELECT \n    gc.*,\n    COUNTIF(le.flag IS NOT NULL) * 1.0 / NULLIF(COUNT(le.labevent_id), 0) AS instability_score\n  FROM general_cohort gc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.subject_id = gc.subject_id \n    AND le.hadm_id = gc.hadm_id\n    AND le.charttime >= gc.admittime\n    AND le.charttime < TIMESTAMP_ADD(gc.admittime, INTERVAL 72 HOUR)\n  GROUP BY \n    gc.subject_id, gc.hadm_id, gc.admittime, gc.dischtime\n)\nSELECT \n  (SELECT thresh FROM threshold) AS percentile_75,\n  ROUND(100.0 * AVG(CAST(hospital_expire_flag AS FLOAT64)), 2) AS mortality_pct,\n  ROUND(AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0), 2) AS mean_los_days,\n  ROUND(AVG(instability_score), 4) AS pe_high_critical_rate,\n  ROUND((SELECT AVG(instability_score) FROM general_scores), 4) AS general_inpatient_critical_rate\nFROM high_risk_pe;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 72b18057-8427-4a3c-9303-23ab141caae4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

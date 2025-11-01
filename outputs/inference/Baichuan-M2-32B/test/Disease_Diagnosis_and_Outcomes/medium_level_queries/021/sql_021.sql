@@ -1,0 +1,1 @@
+DATE_DIFF(dischtime, admittime, DAY) AS los;

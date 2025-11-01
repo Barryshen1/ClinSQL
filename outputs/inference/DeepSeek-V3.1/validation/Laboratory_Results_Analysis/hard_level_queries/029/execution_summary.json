@@ -1,0 +1,28 @@
+{
+  "query": "Patient: female, 55. Among female inpatients aged 50\u201360 with hyperosmolar hyperglycemic state, what is the 75th percentile of the first\u201148\u2011hour laboratory instability score? For admissions \u2265 this threshold, give mortality, mean LOS (days), and compare critical\u2011lab rates versus general inpatients.",
+  "final_sql": "WITH hhs_cohort AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age,\n    a.hadm_id,\n    a.hospital_expire_flag,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code AND di.icd_version = dd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND (dd.long_title LIKE '%hyperosmolar hyperglycemic state%' \n         OR dd.long_title LIKE '%hyperosmolar hyperglycemic syndrome%'\n         OR dd.long_title LIKE '%hyperosmolarity with hyperglycemia%')\n    AND i.intime = (SELECT MIN(i2.intime) \n                    FROM `physionet-data.mimiciv_3_1_icu.icustays` i2 \n                    WHERE i2.hadm_id = a.hadm_id) -- first ICU stay per admission\n),\n\ncritical_labs AS (\n  SELECT \n    h.subject_id,\n    h.hadm_id,\n    COUNT(DISTINCT CONCAT(CAST(l.itemid AS STRING), '-', CAST(l.charttime AS STRING))) AS num_critical_labs\n  FROM hhs_cohort h\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON h.hadm_id = l.hadm_id\n  WHERE l.charttime BETWEEN h.intime AND TIMESTAMP_ADD(h.intime, INTERVAL 48 HOUR)\n    AND l.flag IS NOT NULL\n  GROUP BY h.subject_id, h.hadm_id\n),\n\npercentile_calc AS (\n  SELECT \n    PERCENTILE_CONT(num_critical_labs, 0.75) AS p75\n  FROM critical_labs\n),\n\nhigh_instability_hhs AS (\n  SELECT \n    cl.*,\n    h.los,\n    h.hospital_expire_flag\n  FROM critical_labs cl\n  INNER JOIN hhs_cohort h\n    ON cl.hadm_id = h.hadm_id\n  CROSS JOIN percentile_calc p\n  WHERE cl.num_critical_labs >= p.p75\n),\n\ngeneral_inpatients AS (\n  SELECT \n    p.subject_id, \n    p.hadm_id,\n    i.stay_id,\n    i.intime,\n    COUNT(DISTINCT CONCAT(CAST(l.itemid AS STRING), '-', CAST(l.charttime AS STRING))) AS num_critical_labs\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n      AND l.charttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 48 HOUR)\n      AND l.flag IS NOT NULL\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND a.hadm_id NOT IN (SELECT hadm_id FROM hhs_cohort) -- exclude HHS patients\n    AND i.intime = (SELECT MIN(i2.intime) \n                    FROM `physionet-data.mimiciv_3_1_icu.icustays` i2 \n                    WHERE i2.hadm_id = a.hadm_id)\n  GROUP BY p.subject_id, p.hadm_id, i.stay_id, i.intime\n)\n\nSELECT \n  (SELECT p75 FROM percentile_calc) AS threshold_75th_percentile,\n  (SELECT COUNT(*) FROM high_instability_hhs) AS num_high_instability_admissions,\n  (SELECT AVG(hospital_expire_flag) FROM high_instability_hhs) AS mortality_rate,\n  (SELECT AVG(los) FROM high_instability_hhs) AS mean_los_days,\n  (SELECT AVG(num_critical_labs) FROM high_instability_hhs) AS avg_critical_labs_high_instability,\n  (SELECT AVG(num_critical_labs) FROM general_inpatients) AS avg_critical_labs_general_inpatients;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name hadm_id not found inside p at [65:7]; reason: invalidQuery, location: query, message: Name hadm_id not found inside p at [65:7]\n\nLocation: US\nJob ID: 28b6eda2-95e3-49ec-ba6f-4d718001f929\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"i2\" at [25:63]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"i2\" at [25:63]\n\nLocation: US\nJob ID: 73fa04cb-e176-4285-9d66-f3e8a4d842d9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function COUNT\n  Argument types: INT64, DATETIME\n  Signature: COUNT(T1)\n    Signature accepts at most 1 argument, found 2 arguments at [35:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function COUNT\n  Argument types: INT64, DATETIME\n  Signature: COUNT(T1)\n    Signature accepts at most 1 argument, found 2 arguments at [35:5]\n\nLocation: US\nJob ID: 9a0837d7-1d10-4d20-988d-6e503c376717\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name hadm_id not found inside p at [65:7]; reason: invalidQuery, location: query, message: Name hadm_id not found inside p at [65:7]\n\nLocation: US\nJob ID: 28b6eda2-95e3-49ec-ba6f-4d718001f929\n"
+    }
+  ]
+}

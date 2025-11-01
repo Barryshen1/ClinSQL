@@ -1,0 +1,16 @@
+{
+  "query": "I have a 51-year-old man with stroke. Among male stroke patients 46\u201356, what's the IQR of first-admission ICU LOS in days?",
+  "final_sql": "WITH\n\n-- Step 1: Identify all hospital admissions with a stroke-related diagnosis.\nstroke_hadm AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE\n    -- ICD-9 codes for cerebrovascular diseases\n    SUBSTR(icd_code, 1, 3) IN ('430', '431', '432', '433', '434', '436', '437') OR\n    -- ICD-10 codes for cerebrovascular diseases\n    SUBSTR(icd_code, 1, 3) IN ('I60', 'I61', 'I62', 'I63', 'I64', 'I65', 'I66', 'I67')\n),\n\n-- Step 2: Identify the first hospital admission for each patient.\nfirst_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      admittime,\n      ROW_NUMBER() OVER(PARTITION BY subject_id ORDER BY admittime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  )\n  WHERE rn = 1\n),\n\n-- Step 3: Get the Length of Stay (LOS) for the first ICU stay within each hospital admission.\nfirst_icu_stays AS (\n  SELECT\n    hadm_id,\n    los\n  FROM (\n    SELECT\n      hadm_id,\n      los,\n      ROW_NUMBER() OVER(PARTITION BY hadm_id ORDER BY intime ASC) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  )\n  WHERE rn = 1\n),\n\n-- Step 4: Construct the final cohort by joining the above and applying demographic filters.\ncohort_los AS (\n  SELECT\n    ficu.los\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  -- Join to the first admission of the patient\n  INNER JOIN first_admissions AS fa\n    ON p.subject_id = fa.subject_id\n  -- Ensure that first admission was for a stroke\n  INNER JOIN stroke_hadm AS sh\n    ON fa.hadm_id = sh.hadm_id\n  -- Get the LOS from the first ICU stay of that admission\n  INNER JOIN first_icu_stays AS ficu\n    ON fa.hadm_id = ficu.hadm_id\n  WHERE\n    -- Filter for male patients\n    p.gender = 'M'\n    -- Filter for patients aged 46-56 at the time of their first admission\n    AND (p.anchor_age + EXTRACT(YEAR FROM fa.admittime) - p.anchor_year) BETWEEN 46 AND 56\n)\n\n-- Step 5: Calculate the Interquartile Range (IQR) of ICU LOS for the final cohort.\nSELECT\n  quantiles[OFFSET(3)] - quantiles[OFFSET(1)] AS iqr_icu_los_days\nFROM (\n  SELECT APPROX_QUANTILES(los, 4) AS quantiles\n  FROM cohort_los\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

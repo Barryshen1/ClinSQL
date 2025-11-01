@@ -1,0 +1,16 @@
+{
+  "query": "I have an 80-year-old female transferred from another hospital. Among female inpatients 75\u201385 transferred, give proportion with LOS \u22657 days by discharge (home, hospice, in-hospital death) and the 7-day percentile.",
+  "final_sql": "WITH eligible AS (\n  -- Population: female, aged 75-85 at admission, transferred from another hospital\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    a.hospital_expire_flag,\n    a.deathtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.transfers` AS t\n    ON t.subject_id = a.subject_id AND t.hadm_id = a.hadm_id\n  WHERE UPPER(TRIM(p.gender)) = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 75 AND 85\n    AND a.dischtime IS NOT NULL\n    AND a.admittime IS NOT NULL\n    AND a.admission_type = 'TRANSFER'  -- transferred admissions\n),\n\ncategorized AS (\n  SELECT\n    CASE\n      WHEN hospital_expire_flag = 1 OR deathtime IS NOT NULL THEN 'In-hospital death'\n      WHEN LOWER(discharge_location) LIKE '%home%' THEN 'Home'\n      WHEN LOWER(discharge_location) LIKE '%hospice%' THEN 'Hospice'\n      ELSE 'Other'\n    END AS discharge_category,\n    los_days\n  FROM eligible\n  WHERE CASE\n          WHEN hospital_expire_flag = 1 OR deathtime IS NOT NULL THEN 'In-hospital death'\n          WHEN LOWER(discharge_location) LIKE '%home%' THEN 'Home'\n          WHEN LOWER(discharge_location) LIKE '%hospice%' THEN 'Hospice'\n          ELSE 'Other'\n        END IN ('Home','Hospice','In-hospital death')\n),\n\nstats AS (\n  SELECT\n    discharge_category,\n    COUNT(*) AS total_patients,\n    SUM(CASE WHEN los_days >= 7 THEN 1 ELSE 0 END) AS n_ge7,\n    SAFE_DIVIDE(SUM(CASE WHEN los_days >= 7 THEN 1 ELSE 0 END), COUNT(*)) AS prop_ge7\n  FROM categorized\n  GROUP BY discharge_category\n),\n\n-- Determine the 7th percentile of LOS days across all eligible admissions\napprox_quant AS (\n  SELECT APPROX_QUANTILES(los_days, 100) AS quant_arr\n  FROM eligible\n),\n\nseven_pctl AS (\n  SELECT quant_arr[OFFSET(6)] AS seven_pctl\n  FROM approx_quant\n)\n\nSELECT\n  s.discharge_category,\n  s.total_patients,\n  s.n_ge7,\n  s.prop_ge7,\n  seven_pctl.seven_pctl AS seven_day_percentile\nFROM stats AS s\nCROSS JOIN seven_pctl\nORDER BY s.discharge_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

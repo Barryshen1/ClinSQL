@@ -1,0 +1,16 @@
+{
+  "query": "Patient is a 67-year-old man. Among male ICU patients aged 62\u201372, report counts per ICU-stay mean heart\u2011rate category (<60; 60\u201399; 100\u2013119; \u2265120 bpm) and percent with acute MI.",
+  "final_sql": "WITH patient_stays AS (\n  SELECT \n    p.subject_id,\n    s.stay_id,\n    s.hadm_id,\n    s.intime,\n    s.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays s\n    ON p.subject_id = s.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age >= 62\n    AND p.anchor_age <= 72\n),\nheart_rate_data AS (\n  SELECT \n    ce.stay_id,\n    AVG(ce.valuenum) AS mean_hr\n  FROM `physionet-data.mimiciv_3_1_icu`.chartevents ce\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.d_items di\n    ON ce.itemid = di.itemid\n  WHERE UPPER(di.label) = 'HEART RATE'\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum > 0  -- exclude erroneous values\n  GROUP BY ce.stay_id\n),\nmi_diagnoses AS (\n  SELECT DISTINCT\n    di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE di.icd_version = 10\n    AND d.icd_code LIKE 'I21%'\n    OR d.icd_code LIKE 'I22%'\n),\nstay_with_hr_mi AS (\n  SELECT \n    ps.stay_id,\n    ps.hadm_id,\n    hrd.mean_hr,\n    CASE\n      WHEN hrd.mean_hr < 60 THEN '<60'\n      WHEN hrd.mean_hr BETWEEN 60 AND 99 THEN '60-99'\n      WHEN hrd.mean_hr BETWEEN 100 AND 119 THEN '100-119'\n      WHEN hrd.mean_hr >= 120 THEN '>=120'\n      ELSE NULL\n    END AS hr_category,\n    CASE WHEN mi.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_mi\n  FROM patient_stays ps\n  INNER JOIN heart_rate_data hrd\n    ON ps.stay_id = hrd.stay_id\n  LEFT JOIN mi_diagnoses mi\n    ON ps.hadm_id = mi.hadm_id\n  WHERE hrd.mean_hr IS NOT NULL\n)\nSELECT\n  hr_category,\n  COUNT(*) AS stay_count,\n  ROUND(100.0 * SUM(has_mi) / COUNT(*), 2) AS percent_with_acute_mi\nFROM stay_with_hr_mi\nWHERE hr_category IS NOT NULL\nGROUP BY hr_category\nORDER BY MIN(CASE hr_category\n  WHEN '<60' THEN 1\n  WHEN '60-99' THEN 2\n  WHEN '100-119' THEN 3\n  WHEN '>=120' THEN 4\nEND);",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

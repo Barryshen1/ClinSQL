@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 54-year-old man. For male inpatients on medicine service aged 49\u201359, report proportions with LOS \u22657 and \u226514 days and 7-day LOS percentile by discharge (home, hospice, in-hospital death).",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id, \n        p.gender, \n        p.anchor_age,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        a.discharge_location,\n        a.hospital_expire_flag,\n        DATE_DIFF(a.dischtime, a.admittime, DAY) AS los,\n        -- Define discharge groups\n        CASE \n            WHEN a.hospital_expire_flag = 1 THEN 'DIED'\n            WHEN a.discharge_location LIKE '%HOSPICE%' THEN 'HOSPICE'\n            WHEN a.discharge_location LIKE '%HOME%' THEN 'HOME'\n            ELSE 'OTHER' \n        END AS discharge_group\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    -- Get the first service for the admission to determine medicine service\n    INNER JOIN (\n        SELECT \n            subject_id, \n            hadm_id, \n            curr_service,\n            ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY transfertime ASC) as rn\n        FROM `physionet-data.mimiciv_3_1_hosp.services`\n    ) s\n        ON a.hadm_id = s.hadm_id AND s.rn = 1\n    WHERE \n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 49 AND 59\n        AND s.curr_service = 'MEDICINE'\n        AND a.dischtime IS NOT NULL  -- Ensure valid LOS calculation\n),\n\ndischarge_groups AS (\n    SELECT \n        discharge_group,\n        COUNT(*) AS total_patients,\n        COUNTIF(los >= 7) AS los_ge_7,\n        COUNTIF(los >= 14) AS los_ge_14,\n        APPROX_QUANTILES(los, 100)[OFFSET(7)] AS los_7th_percentile\n    FROM cohort\n    WHERE discharge_group IN ('HOME', 'HOSPICE', 'DIED')  -- Filter to relevant groups\n    GROUP BY discharge_group\n)\n\nSELECT \n    discharge_group,\n    total_patients,\n    los_ge_7,\n    ROUND(los_ge_7 / total_patients * 100, 2) AS proportion_los_ge_7,\n    los_ge_14,\n    ROUND(los_ge_14 / total_patients * 100, 2) AS proportion_los_ge_14,\n    los_7th_percentile\nFROM discharge_groups\nORDER BY discharge_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

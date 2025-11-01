@@ -1,0 +1,23 @@
+{
+  "query": "I have a 67-year-old female ICU patient. Among female ICU patients aged 62\u201372, show first-24h per-measurement temperature categories (<36.0 / 36.0\u201337.9 / \u226538.0\u00b0C) with mean, median, IQR and AKI rate.",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT \n    p.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age) AS age_at_icu_admission\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_year IS NOT NULL\n    AND p.anchor_age IS NOT NULL\n    AND EXTRACT(YEAR FROM i.intime) - (p.anchor_year - p.anchor_age) BETWEEN 62 AND 72\n),\ntemperature_data AS (\n  SELECT \n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ep.intime,\n    CASE \n      WHEN ce.itemid = 682 THEN (ce.valuenum - 32) * 5.0/9\n      ELSE ce.valuenum\n    END AS temperature_c\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN eligible_patients ep \n    ON ce.subject_id = ep.subject_id \n    AND ce.hadm_id = ep.hadm_id \n    AND ce.stay_id = ep.stay_id\n  WHERE ce.itemid IN (223761, 676, 678, 682, 223835)\n    AND ce.valuenum IS NOT NULL\n),\ntemperature_categories AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    charttime,\n    temperature_c,\n    intime,\n    CASE \n      WHEN temperature_c < 36.0 THEN 'Hypothermia'\n      WHEN temperature_c BETWEEN 36.0 AND 37.9 THEN 'Normal'\n      WHEN temperature_c >= 38.0 THEN 'Hyperthermia'\n    END AS temp_category\n  FROM temperature_data\n  WHERE charttime BETWEEN intime AND intime + INTERVAL 24 HOUR\n),\naki_patients AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_code IN ('N17.0', 'N17.1', 'N17.8', 'N17.9')\n    AND icd_version = 10\n),\ncategory_measurements AS (\n  SELECT \n    temp_category,\n    temperature_c,\n    subject_id,\n    hadm_id\n  FROM temperature_categories\n),\ncategory_stats AS (\n  SELECT \n    temp_category,\n    COUNT(*) AS measurement_count,\n    AVG(temperature_c) AS mean_temp,\n    APPROX_QUANTILES(temperature_c, 100)[OFFSET(50)] AS median_temp,\n    APPROX_QUANTILES(temperature_c, 100)[SAFE_OFFSET(25)] AS q1_temp,\n    APPROX_QUANTILES(temperature_c, 100)[SAFE_OFFSET(75)] AS q3_temp,\n    COUNT(DISTINCT subject_id) AS patient_count_in_category\n  FROM category_measurements\n  GROUP BY temp_category\n),\naki_in_category AS (\n  SELECT \n    cm.temp_category,\n    COUNT(DISTINCT aki.subject_id) AS aki_patient_count\n  FROM category_measurements cm\n  JOIN aki_patients aki \n    ON cm.subject_id = aki.subject_id \n    AND cm.hadm_id = aki.hadm_id\n  GROUP BY cm.temp_category\n)\nSELECT \n  cs.temp_category,\n  cs.measurement_count,\n  cs.mean_temp,\n  cs.median_temp,\n  cs.q1_temp,\n  cs.q3_temp,\n  cs.q3_temp - cs.q1_temp AS iqr_temp,\n  IFNULL(aki.aki_patient_count, 0) * 1.0 / cs.patient_count_in_category AS aki_rate\nFROM category_stats cs\nLEFT JOIN aki_in_category aki \n  ON cs.temp_category = aki.temp_category\nORDER BY \n  CASE temp_category \n    WHEN 'Hypothermia' THEN 1 \n    WHEN 'Normal' THEN 2 \n    WHEN 'Hyperthermia' THEN 3 \n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected identifier \"The\" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected identifier \"The\" at [1:1]\n\nLocation: US\nJob ID: 96f7e4ae-ba8c-4337-9779-3e3022b43768\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

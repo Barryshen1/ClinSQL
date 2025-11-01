@@ -1,0 +1,17 @@
+{
+  "query": "I have a 63\u2011year\u2011old man admitted for COPD exacerbation. Among male patients 58\u201368, stratified into tertiles by medication complexity during the first 72h, report for each tertile: n, min/max and mean complexity score, mean LOS, mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.anchor_year,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_diag \n    ON d.icd_code = d_diag.icd_code AND d.icd_version = d_diag.icd_version\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 58 AND 68\n    AND d.icd_code = 'J44.0'\n    AND d.icd_version = 10\n),\nmed_complexity AS (\n  SELECT\n    c.hadm_id,\n    COUNT(DISTINCT p.drug) AS complexity_score\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n    AND p.starttime >= c.admittime\n    AND p.starttime <= c.admittime + INTERVAL 72 HOUR\n  GROUP BY c.hadm_id\n),\nreadmissions AS (\n  SELECT\n    a.hadm_id,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = a.subject_id\n        AND a2.admittime > a.dischtime\n        AND a2.admittime <= a.dischtime + INTERVAL 30 DAY\n    ) THEN 1 ELSE 0 END AS readmitted_30d\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n),\ncomplexity_tertiles AS (\n  SELECT\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    mc.complexity_score,\n    NTILE(3) OVER (ORDER BY mc.complexity_score) AS tertile,\n    r.readmitted_30d\n  FROM cohort c\n  LEFT JOIN med_complexity mc ON c.hadm_id = mc.hadm_id\n  LEFT JOIN readmissions r ON c.hadm_id = r.hadm_id\n)\nSELECT\n  tertile,\n  COUNT(*) AS n,\n  MIN(complexity_score) AS min_complexity,\n  MAX(complexity_score) AS max_complexity,\n  AVG(complexity_score) AS mean_complexity,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS mean_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_pct,\n  AVG(CAST(readmitted_30d AS FLOAT64)) * 100 AS readmission_30d_pct\nFROM complexity_tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

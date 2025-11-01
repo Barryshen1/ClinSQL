@@ -1,0 +1,16 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH copd_diagnoses AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd \n    ON di.icd_code = dd.icd_code \n    AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%chronic obstructive pulmonary disease%' \n    AND LOWER(dd.long_title) LIKE '%exacerbation%'\n),\nall_stays AS (\n  SELECT \n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.los,\n    p.gender,\n    p.anchor_age,\n    a.hospital_expire_flag,\n    CASE WHEN cd.subject_id IS NOT NULL THEN 1 ELSE 0 END AS is_copd\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON s.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON s.hadm_id = a.hadm_id\n  LEFT JOIN copd_diagnoses cd \n    ON s.subject_id = cd.subject_id \n    AND s.hadm_id = cd.hadm_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age BETWEEN 88 AND 98\n),\nproc_counts AS (\n  SELECT \n    s.stay_id,\n    COUNT(DISTINCT pe.itemid) AS num_distinct_procs\n  FROM all_stays s\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe \n    ON pe.stay_id = s.stay_id\n    AND pe.starttime >= s.intime \n    AND pe.starttime <= TIMESTAMP_ADD(s.intime, INTERVAL 72 HOUR)\n  GROUP BY s.stay_id\n)\nSELECT \n  'COPD Exacerbation' AS cohort,\n  APPROX_QUANTILES(COALESCE(pc.num_distinct_procs, 0), 100)[OFFSET(75)] AS p75_distinct_procs,\n  AVG(s.los) AS mean_icu_los_days,\n  AVG(s.hospital_expire_flag * 1.0) AS in_hospital_mortality_rate\nFROM all_stays s\nLEFT JOIN proc_counts pc ON s.stay_id = pc.stay_id\nWHERE s.is_copd = 1\nGROUP BY cohort\n\nUNION ALL\n\nSELECT \n  'Age-Matched (All)' AS cohort,\n  NULL AS p75_distinct_procs,\n  AVG(s.los) AS mean_icu_los_days,\n  AVG(s.hospital_expire_flag * 1.0) AS in_hospital_mortality_rate\nFROM all_stays s\nLEFT JOIN proc_counts pc ON s.stay_id = pc.stay_id\nGROUP BY cohort;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

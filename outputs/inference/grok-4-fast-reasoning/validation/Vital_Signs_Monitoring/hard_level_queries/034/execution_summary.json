@@ -1,0 +1,28 @@
+{
+  "query": "I have a 65-year-old woman in ICU with mixed shock. In female ICU patients 60\u201370 with mixed shock, what is the cohort 95th\u2011percentile instability score (first 48 h)? Compare top decile versus cohort for hypotension (MAP<65), tachycardia, ICU LOS, and mortality.",
+  "final_sql": "WITH septic AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code = '785.52')\n     OR (icd_version = 10 AND icd_code = 'R65.21')\n),\ncardio AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code = '785.51')\n     OR (icd_version = 10 AND icd_code = 'R57.0')\n),\ncohort AS (\n  SELECT \n    icu.stay_id, icu.subject_id, icu.hadm_id, icu.intime, icu.los,\n    pat.gender, pat.anchor_age,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  INNER JOIN septic s \n    ON icu.subject_id = s.subject_id AND icu.hadm_id = s.hadm_id\n  INNER JOIN cardio ca \n    ON icu.subject_id = ca.subject_id AND icu.hadm_id = ca.hadm_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age >= 60 \n    AND pat.anchor_age <= 70\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY icu.hadm_id ORDER BY icu.intime ASC) = 1\n),\nmap_obs AS (\n  SELECT \n    c.stay_id,\n    COUNT(*) AS total_map,\n    COUNTIF(ce.valuenum < 65) AS low_map\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = c.stay_id\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime <= c.intime + INTERVAL 48 HOUR\n    AND ce.itemid IN (456, 5524)\n    AND ce.valuenum IS NOT NULL\n  GROUP BY c.stay_id\n),\nhr_obs AS (\n  SELECT \n    c.stay_id,\n    COUNT(*) AS total_hr,\n    COUNTIF(ce.valuenum > 100) AS high_hr\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = c.stay_id\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime <= c.intime + INTERVAL 48 HOUR\n    AND ce.itemid = 220045\n    AND ce.valuenum IS NOT NULL\n  GROUP BY c.stay_id\n),\nscores AS (\n  SELECT \n    co.stay_id, co.los, co.hospital_expire_flag,\n    COALESCE(m.total_map, 0) AS total_map,\n    COALESCE(m.low_map, 0) AS low_map,\n    COALESCE(h.total_hr, 0) AS total_hr,\n    COALESCE(h.high_hr, 0) AS high_hr\n  FROM cohort co\n  LEFT JOIN map_obs m ON co.stay_id = m.stay_id\n  LEFT JOIN hr_obs h ON co.stay_id = h.stay_id\n),\ninstability AS (\n  SELECT *,\n    SAFE_DIVIDE(low_map, total_map) AS hypo_frac,\n    SAFE_DIVIDE(high_hr, total_hr) AS tachy_frac,\n    (SAFE_DIVIDE(low_map, total_map) + SAFE_DIVIDE(high_hr, total_hr)) / 2 AS instability_score\n  FROM scores\n),\nstats AS (\n  SELECT \n    'Cohort' AS group_type,\n    ROUND(APPROX_QUANTILES(instability_score, 100)[OFFSET(95)], 4) AS instability_95th,\n    ROUND(AVG(hypo_frac) * 100, 2) AS mean_hypotension_pct,\n    ROUND(AVG(tachy_frac) * 100, 2) AS mean_tachycardia_pct,\n    ROUND(AVG(los), 2) AS mean_icu_los_days,\n    ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct\n  FROM instability\n  \n  UNION ALL\n  \n  SELECT \n    'Top Decile' AS group_type,\n    NULL AS instability_95th,\n    ROUND(AVG(hypo_frac) * 100, 2) AS mean_hypotension_pct,\n    ROUND(AVG(tachy_frac) * 100, 2) AS mean_tachycardia_pct,\n    ROUND(AVG(los), 2) AS mean_icu_los_days,\n    ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct\n  FROM instability i\n  CROSS JOIN (SELECT APPROX_QUANTILES(instability_score, 100)[OFFSET(90)] AS p90 FROM instability) p\n  WHERE i.instability_score >= p.p90\n)\nSELECT * FROM stats\nORDER BY CASE WHEN group_type = 'Cohort' THEN 1 ELSE 2 END;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [4:10]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [4:10]\n\nLocation: US\nJob ID: 7020ccb2-37c1-4911-a171-e5d7ff107036\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: d86fcf76-6d4e-40e7-8887-4fbead7db429\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

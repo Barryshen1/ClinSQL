@@ -1,0 +1,28 @@
+{
+  "query": "For my 55-year-old male patient: among male Medicare patients aged 50\u201360 admitted from the ED with principal lower GI bleeding, what is the 30-day readmission rate? Also give median LOS for readmitted vs not readmitted and percent with LOS>6 days.",
+  "final_sql": "WITH index_adms AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id AND di.seq_num = 1\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON di.icd_code = did.icd_code AND di.icd_version = did.icd_version\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 50 AND 60\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'EMERGENCY ROOM'\n    AND a.hospital_expire_flag = 0\n    AND LOWER(did.long_title) LIKE '%gastrointestinal hemorrhage%'\n    AND NOT (LOWER(did.long_title) LIKE '%upper%')\n),\nreadmitted_flags AS (\n  SELECT \n    ia.*,\n    EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` r\n      WHERE \n        r.subject_id = ia.subject_id\n        AND r.hadm_id != ia.hadm_id\n        AND r.admittime > ia.dischtime\n        AND r.admittime <= TIMESTAMP_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) AS has_readmission\n  FROM index_adms ia\n)\nSELECT \n  COUNT(*) AS total_index_admissions,\n  SUM(CASE WHEN has_readmission THEN 1 ELSE 0 END) AS num_readmitted,\n  ROUND(SUM(CASE WHEN has_readmission THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS readmission_rate_pct,\n  (SELECT APPROX_QUANTILES(los_days, 2)[OFFSET(1)] FROM readmitted_flags WHERE has_readmission) AS median_los_readmitted_days,\n  (SELECT APPROX_QUANTILES(los_days, 2)[OFFSET(1)] FROM readmitted_flags WHERE NOT has_readmission) AS median_los_not_readmitted_days,\n  ROUND(SUM(CASE WHEN los_days > 6 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS pct_los_gt6_overall\nFROM readmitted_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [25:24]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [25:24]\n\nLocation: US\nJob ID: edc7ef6c-41f6-4b3d-90b5-a3c07de88b93\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: bd2f982e-044e-4d69-be20-57a57d8d0855\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

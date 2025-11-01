@@ -1,0 +1,16 @@
+{
+  "query": "I have an 87-year-old male. Among male ICU patients aged 82\u201392, what percentile is a per\u2011stay average temperature of 37.5\u00b0C during the first 24 hours of ICU stay?",
+  "final_sql": "WITH first_24hr_temps AS (\n  -- Step 1: Select temperature measurements from the first 24 hours of each ICU stay\n  -- and standardize all values to Celsius.\n  SELECT\n    ie.stay_id,\n    ie.subject_id,\n    ie.intime,\n    CASE\n      WHEN ce.itemid = 223761 -- Temperature Fahrenheit\n      THEN (ce.valuenum - 32) * 5 / 9\n      ELSE ce.valuenum -- Assumes others are Celsius, primarily itemid 223762\n    END AS temp_celsius\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` AS ie\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ie.stay_id = ce.stay_id\n  WHERE\n    ce.itemid IN (\n      223762, -- Temperature Celsius\n      223761  -- Temperature Fahrenheit\n    )\n    AND ce.charttime >= ie.intime\n    AND ce.charttime <= DATETIME_ADD(ie.intime, INTERVAL 24 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\navg_temp_per_stay AS (\n  -- Step 2: Calculate the average temperature for each stay, filtering for plausible values.\n  SELECT\n    stay_id,\n    subject_id,\n    intime,\n    AVG(temp_celsius) AS avg_temp_c\n  FROM\n    first_24hr_temps\n  WHERE\n    temp_celsius BETWEEN 32 AND 43 -- Filter for physiologically plausible temperatures\n  GROUP BY\n    stay_id,\n    subject_id,\n    intime\n),\npopulation_avg_temps AS (\n  -- Step 3: Filter for the target population: male patients aged 82-92 at admission.\n  SELECT\n    atps.avg_temp_c\n  FROM\n    avg_temp_per_stay AS atps\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON atps.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    -- Calculate age at the time of ICU admission\n    AND (p.anchor_age + EXTRACT(YEAR FROM atps.intime) - p.anchor_year) BETWEEN 82 AND 92\n)\n-- Step 4: Calculate the percentile rank of 37.5\u00b0C for the target population.\n-- This is the cumulative distribution: the proportion of stays with an average temp <= 37.5\u00b0C.\nSELECT\n  100.0 * (\n    (\n      SELECT\n        COUNT(*)\n      FROM\n        population_avg_temps\n      WHERE\n        avg_temp_c <= 37.5\n    ) / (\n      SELECT\n        COUNT(*)\n      FROM\n        population_avg_temps\n    )\n  ) AS percentile_of_37_5_celsius;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

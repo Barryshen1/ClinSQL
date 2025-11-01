@@ -1,0 +1,16 @@
+{
+  "query": "I have an 87-year-old male. Among male ICU patients aged 82\u201392, what percentile is a per\u2011stay average temperature of 37.5\u00b0C during the first 24 hours of ICU stay?",
+  "final_sql": "WITH temperature_itemids AS (\n  -- Find itemids for temperature in Celsius\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%temp%' AND (\n    LOWER(unitname) LIKE '%c%' OR LOWER(label) LIKE '%celsius%'\n  )\n),\nmale_icu_patients AS (\n  -- Get male ICU stays for patients aged 82-92\n  SELECT\n    icu.stay_id,\n    icu.subject_id,\n    icu.intime,\n    icu.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 82 AND 92\n),\nfirst24hr_temps AS (\n  -- Get temperature measurements in first 24h of ICU stay\n  SELECT\n    temp.stay_id,\n    temp.charttime,\n    temp.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` temp\n  JOIN male_icu_patients icu\n    ON temp.stay_id = icu.stay_id\n  WHERE temp.itemid IN (SELECT itemid FROM temperature_itemids)\n    AND temp.valuenum IS NOT NULL\n    AND temp.charttime >= icu.intime\n    AND temp.charttime < DATETIME_ADD(icu.intime, INTERVAL 24 HOUR)\n    -- Optionally, filter by valueuom if needed:\n    -- AND (LOWER(temp.valueuom) LIKE '%c%' OR temp.valueuom IS NULL)\n),\navg_temp_per_stay AS (\n  -- Compute average temperature per stay\n  SELECT\n    stay_id,\n    AVG(valuenum) AS avg_temp\n  FROM first24hr_temps\n  GROUP BY stay_id\n),\npercentile_calc AS (\n  -- Calculate percentile for 37.5\u00b0C\n  SELECT\n    COUNTIF(avg_temp <= 37.5) AS num_leq_375,\n    COUNT(*) AS total_stays\n  FROM avg_temp_per_stay\n)\nSELECT\n  SAFE_DIVIDE(num_leq_375, total_stays) * 100 AS percentile_37_5_c\nFROM percentile_calc;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

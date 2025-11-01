@@ -1,0 +1,22 @@
+{
+  "query": "Asking for my 95\u2011year\u2011old female ICU patient: among female ICU patients aged 90\u2013100, by first\u201124h per\u2011stay average SpO2 (<90, 90\u201392, 93\u201395, >95), give N, mean, median, IQR and AKI rate.",
+  "final_sql": "WITH spo2_itemids AS (\n  -- identify likely SpO2 / oxygen saturation itemids by text matching\n  SELECT DISTINCT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE (\n    LOWER(label) LIKE '%spo2%'\n    OR LOWER(label) LIKE '%oxygen saturation%'\n    OR LOWER(label) LIKE '%oxygen sat%'\n    OR LOWER(label) LIKE '%o2 sat%'\n    OR LOWER(abbreviation) LIKE '%spo2%'\n    OR LOWER(abbreviation) LIKE '%o2sat%'\n  )\n),\nspo2_first24 AS (\n  -- all SpO2 numeric measurements in the first 24 hours of each ICU stay\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    ce.itemid,\n    ce.valuenum,\n    icu.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.subject_id = icu.subject_id\n   AND ce.hadm_id = icu.hadm_id\n   AND ce.stay_id = icu.stay_id\n  JOIN spo2_itemids di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n    -- first 24 hours window (inclusive of intime, exclusive of intime + 24h)\n    AND ce.charttime >= icu.intime\n    AND ce.charttime < TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR)\n    -- restrict to plausible SpO2 range to reduce obvious measurement errors\n    AND ce.valuenum BETWEEN 50 AND 100\n),\nstay_avg AS (\n  -- per-stay average SpO2 using first-24h measurements\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    AVG(valuenum) AS avg_spo2\n  FROM spo2_first24\n  GROUP BY subject_id, hadm_id, stay_id\n),\naki_per_hadm AS (\n  -- flag admissions with an AKI diagnosis by searching diagnosis long_title text\n  SELECT DISTINCT d.hadm_id, TRUE AS has_aki\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dic\n    ON d.icd_code = dic.icd_code\n   AND d.icd_version = dic.icd_version\n  WHERE LOWER(COALESCE(dic.long_title, '')) LIKE '%acute kidney%'\n     OR LOWER(COALESCE(dic.long_title, '')) LIKE '%acute renal%'\n),\ncohort AS (\n  -- restrict to female patients age 90-100 and attach AKI flag\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.avg_spo2,\n    p.gender,\n    p.anchor_age,\n    IF(a.has_aki IS TRUE, 1, 0) AS aki_flag\n  FROM stay_avg s\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON s.subject_id = p.subject_id\n  LEFT JOIN aki_per_hadm a\n    ON s.hadm_id = a.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 90 AND 100\n)\n-- aggregate by SpO2 bins\nSELECT\n  bin,\n  COUNT(*) AS n_stays,\n  ROUND(AVG(avg_spo2), 2) AS mean_avg_spo2,\n  ROUND(APPROX_QUANTILES(avg_spo2, 100)[OFFSET(50)], 2) AS median_avg_spo2,\n  ROUND(APPROX_QUANTILES(avg_spo2, 100)[OFFSET(25)], 2) AS q1_avg_spo2,\n  ROUND(APPROX_QUANTILES(avg_spo2, 100)[OFFSET(75)], 2) AS q3_avg_spo2,\n  ROUND(\n    (APPROX_QUANTILES(avg_spo2, 100)[OFFSET(75)] - APPROX_QUANTILES(avg_spo2, 100)[OFFSET(25)]),\n    2\n  ) AS iqr_avg_spo2,\n  ROUND(SUM(aki_flag) / COUNT(*), 3) AS aki_rate\nFROM (\n  SELECT\n    *,\n    CASE\n      WHEN avg_spo2 < 90 THEN '<90'\n      WHEN avg_spo2 >= 90 AND avg_spo2 <= 92 THEN '90-92'\n      WHEN avg_spo2 >= 93 AND avg_spo2 <= 95 THEN '93-95'\n      WHEN avg_spo2 > 95 THEN '>95'\n      ELSE 'unknown'\n    END AS bin\n  FROM cohort\n)\nGROUP BY bin\nORDER BY\n  -- order bins meaningfully\n  CASE bin\n    WHEN '<90' THEN 1\n    WHEN '90-92' THEN 2\n    WHEN '93-95' THEN 3\n    WHEN '>95' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [81:40]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [81:40]\n\nLocation: US\nJob ID: a898048b-51c4-4ced-8490-c87aabe48be9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

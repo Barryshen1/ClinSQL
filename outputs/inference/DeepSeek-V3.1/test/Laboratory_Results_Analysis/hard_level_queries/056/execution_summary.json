@@ -1,0 +1,22 @@
+{
+  "query": "I have a 60\u2011year\u2011old female with asthma exacerbation. Among female inpatients aged 55\u201365, what is the 95th percentile of the lab instability score in the first 48 hours? For that top tier, report LOS, mortality, and critical lab rate versus general inpatients.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 55 AND 65\n),\n\nlabs_abnormal AS (\n  SELECT \n    l.subject_id, \n    l.hadm_id,\n    l.labevent_id,\n    CASE \n      WHEN l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper THEN 1\n      ELSE 0\n    END AS is_abnormal\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN cohort c\n    ON l.hadm_id = c.hadm_id\n  WHERE l.charttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.valuenum IS NOT NULL\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n),\n\ninstability_scores AS (\n  SELECT \n    hadm_id,\n    COUNT(DISTINCT labevent_id) AS instability_score\n  FROM labs_abnormal\n  WHERE is_abnormal = 1\n  GROUP BY hadm_id\n),\n\npercentile_calc AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 100) AS percentiles\n  FROM instability_scores\n),\n\ntop_tier_threshold AS (\n  SELECT percentiles[OFFSET(95)] AS p95\n  FROM percentile_calc\n),\n\ncohort_with_instability AS (\n  SELECT \n    c.*,\n    COALESCE(i.instability_score, 0) AS instability_score\n  FROM cohort c\n  LEFT JOIN instability_scores i\n    ON c.hadm_id = i.hadm_id\n),\n\ntop_tier AS (\n  SELECT \n    hadm.*,\n    1 AS is_top_tier\n  FROM cohort_with_instability hadm\n  CROSS JOIN top_tier_threshold t\n  WHERE hadm.instability_score >= t.p95\n),\n\ngeneral_cohort AS (\n  SELECT \n    hadm.*,\n    0 AS is_top_tier\n  FROM cohort_with_instability hadm\n),\n\ncombined_cohorts AS (\n  SELECT * FROM top_tier\n  UNION ALL\n  SELECT * FROM general_cohort\n),\n\ncritical_labs AS (\n  SELECT \n    l.hadm_id,\n    COUNT(*) AS critical_labs_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN combined_cohorts c\n    ON l.hadm_id = c.hadm_id\n  WHERE l.charttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.flag = 'panic'\n  GROUP BY l.hadm_id\n),\n\ntotal_labs AS (\n  SELECT \n    l.hadm_id,\n    COUNT(*) AS total_labs_count\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  INNER JOIN combined_cohorts c\n    ON l.hadm_id = c.hadm_id\n  WHERE l.charttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.valuenum IS NOT NULL\n  GROUP BY l.hadm_id\n),\n\ncohort_with_lab_rates AS (\n  SELECT \n    c.*,\n    COALESCE(cl.critical_labs_count, 0) AS critical_labs_count,\n    COALESCE(tl.total_labs_count, 0) AS total_labs_count\n  FROM combined_cohorts c\n  LEFT JOIN critical_labs cl\n    ON c.hadm_id = cl.hadm_id\n  LEFT JOIN total_labs tl\n    ON c.hadm_id = tl.hadm_id\n)\n\nSELECT \n  CASE WHEN is_top_tier = 1 THEN 'Top Tier' ELSE 'General' END AS cohort_group,\n  COUNT(*) AS num_patients,\n  AVG(los_days) AS avg_los_days,\n  SUM(hospital_expire_flag) AS mortality_count,\n  AVG(hospital_expire_flag) AS mortality_rate,\n  SUM(critical_labs_count) AS total_critical_labs,\n  SUM(total_labs_count) AS total_labs,\n  SAFE_DIVIDE(SUM(critical_labs_count), SUM(total_labs_count)) AS critical_lab_rate\nFROM cohort_with_lab_rates\nGROUP BY is_top_tier\nORDER BY is_top_tier DESC;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside d at [32:11]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside d at [32:11]\n\nLocation: US\nJob ID: 157d23c8-4024-4509-a47d-32748d6962da\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

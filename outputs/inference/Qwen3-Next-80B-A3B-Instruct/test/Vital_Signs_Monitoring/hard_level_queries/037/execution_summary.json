@@ -1,0 +1,28 @@
+{
+  "query": "My 50\u2011yr\u2011old male patient: in male ICU patients 45\u201355 with heart failure, what's the 99th percentile of the 72h composite instability score? For the most unstable quartile, compare average tachycardia (>100 bpm), MAP<65, tachypnea (>20), ICU LOS and mortality to ICU population.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, p.gender, d.hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.patients p\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON p.subject_id = d.subject_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_diag ON d.icd_code = d_diag.icd_code AND d.icd_version = d_diag.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 45 AND 55\n    AND LOWER(d_diag.long_title) LIKE '%heart failure%'\n),\n\nicu_stays AS (\n  SELECT i.stay_id, i.subject_id, i.hadm_id, i.intime, i.outtime, i.los,\n         a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  JOIN cohort c ON i.subject_id = c.subject_id AND i.hadm_id = c.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions a ON i.hadm_id = a.hadm_id\n),\n\nvitals_72h AS (\n  SELECT \n    i.stay_id,\n    SUM(CASE WHEN d.label = 'Heart Rate' AND c.valuenum > 100 THEN 1 ELSE 0 END) AS tachycardia_count,\n    SUM(CASE WHEN d.label = 'Mean Arterial Pressure' AND c.valuenum < 65 THEN 1 ELSE 0 END) AS map_low_count,\n    SUM(CASE WHEN d.label = 'Respiratory Rate' AND c.valuenum > 20 THEN 1 ELSE 0 END) AS tachypnea_count\n  FROM icu_stays i\n  JOIN physionet-data.mimiciv_3_1_icu.chartevents c ON i.stay_id = c.stay_id\n  JOIN physionet-data.mimiciv_3_1_icu.d_items d ON c.itemid = d.itemid\n  WHERE c.charttime >= i.intime \n    AND c.charttime < i.intime + INTERVAL 72 HOUR\n  GROUP BY i.stay_id\n),\n\ncomposite_score AS (\n  SELECT \n    i.stay_id,\n    i.los,\n    i.hospital_expire_flag,\n    COALESCE(v.tachycardia_count, 0) + COALESCE(v.map_low_count, 0) + COALESCE(v.tachypnea_count, 0) AS composite_instability_score,\n    v.tachycardia_count,\n    v.map_low_count,\n    v.tachypnea_count\n  FROM icu_stays i\n  LEFT JOIN vitals_72h v ON i.stay_id = v.stay_id\n),\n\nquartiles AS (\n  SELECT *,\n    NTILE(4) OVER (ORDER BY composite_instability_score) AS quartile\n  FROM composite_score\n)\n\nSELECT\n  PERCENTILE_CONT(composite_instability_score, 0.99) OVER () AS p99_composite_score,\n  AVG(CASE WHEN quartile = 4 THEN tachycardia_count END) AS avg_tachycardia_top_quartile,\n  AVG(CASE WHEN quartile = 4 THEN map_low_count END) AS avg_map_low_top_quartile,\n  AVG(CASE WHEN quartile = 4 THEN tachypnea_count END) AS avg_tachypnea_top_quartile,\n  AVG(CASE WHEN quartile = 4 THEN los END) AS avg_los_top_quartile,\n  AVG(CASE WHEN quartile = 4 THEN CAST(hospital_expire_flag AS FLOAT64) END) AS avg_mortality_top_quartile,\n  AVG(tachycardia_count) AS avg_tachycardia_all,\n  AVG(map_low_count) AS avg_map_low_all,\n  AVG(tachypnea_count) AS avg_tachypnea_all,\n  AVG(los) AS avg_los_all,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS avg_mortality_all\nFROM quartiles;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references column composite_instability_score which is neither grouped nor aggregated at [53:19]; reason: invalidQuery, location: query, message: SELECT list expression references column composite_instability_score which is neither grouped nor aggregated at [53:19]\n\nLocation: US\nJob ID: fa71b155-c1d8-4dff-8636-c32e803467cb\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]\n\nLocation: US\nJob ID: 5f870edd-a539-4f3a-95d2-6b2d82a47d1f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [30:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [30:3]\n\nLocation: US\nJob ID: 62091517-ddf7-4112-9428-e0ad9921b125\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column composite_instability_score which is neither grouped nor aggregated at [53:19]; reason: invalidQuery, location: query, message: SELECT list expression references column composite_instability_score which is neither grouped nor aggregated at [53:19]\n\nLocation: US\nJob ID: fa71b155-c1d8-4dff-8636-c32e803467cb\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 48\u2011year\u2011old man. Among male inpatients aged 43\u201353 with hepatic failure, compute medication complexity score over the first 72 hours, stratify into quintiles, and report per quintile: n, min/max/mean score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    adm.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND adm.hadm_id IN (\n      SELECT DISTINCT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON diag.icd_code = d.icd_code \n        AND diag.icd_version = d.icd_version\n      WHERE LOWER(d.long_title) LIKE '%hepatic failure%'\n    )\n),\n\ncohort_age_filtered AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag,\n    anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) AS age_at_admission\n  FROM cohort\n  WHERE anchor_age + (EXTRACT(YEAR FROM admittime) - anchor_year) BETWEEN 43 AND 53\n),\n\nmedications AS (\n  SELECT \n    cf.hadm_id,  -- Explicitly use cf.hadm_id to avoid ambiguity\n    COUNT(DISTINCT em.medication) AS med_complexity_score\n  FROM cohort_age_filtered cf\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.emar` em\n    ON cf.hadm_id = em.hadm_id\n  WHERE em.charttime BETWEEN cf.admittime AND DATETIME_ADD(cf.admittime, INTERVAL 72 HOUR)\n  GROUP BY cf.hadm_id\n),\n\ncohort_with_score AS (\n  SELECT \n    cf.subject_id,\n    cf.hadm_id,\n    cf.admittime,\n    cf.dischtime,\n    cf.hospital_expire_flag,\n    cf.age_at_admission,\n    COALESCE(m.med_complexity_score, 0) AS med_complexity_score\n  FROM cohort_age_filtered cf\n  LEFT JOIN medications m\n    ON cf.hadm_id = m.hadm_id\n),\n\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY med_complexity_score) AS quintile\n  FROM cohort_with_score\n),\n\nreadmissions AS (\n  SELECT \n    q.hadm_id,\n    MIN(a.admittime) AS next_admittime\n  FROM quintiles q\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON q.subject_id = a.subject_id\n    AND a.admittime > q.dischtime\n  WHERE q.hospital_expire_flag = 0  -- Only survivors can be readmitted\n  GROUP BY q.hadm_id  -- Qualify with q.hadm_id\n),\n\ncohort_outcomes AS (\n  SELECT \n    q.subject_id,\n    q.hadm_id,\n    q.admittime,\n    q.dischtime,\n    q.hospital_expire_flag,\n    q.age_at_admission,\n    q.med_complexity_score,\n    q.quintile,\n    DATETIME_DIFF(q.dischtime, q.admittime, DAY) AS los_days,\n    CASE \n      WHEN q.hospital_expire_flag = 1 THEN NULL  -- Exclude deceased\n      WHEN DATETIME_DIFF(r.next_admittime, q.dischtime, DAY) <= 30 THEN 1\n      ELSE 0 \n    END AS readmission_30d\n  FROM quintiles q\n  LEFT JOIN readmissions r\n    ON q.hadm_id = r.hadm_id\n)\n\nSELECT \n  quintile,\n  COUNT(*) AS n,\n  MIN(med_complexity_score) AS min_score,\n  MAX(med_complexity_score) AS max_score,\n  ROUND(AVG(med_complexity_score), 2) AS mean_score,\n  ROUND(AVG(los_days), 2) AS mean_los,\n  ROUND(100 * AVG(hospital_expire_flag), 2) AS in_hospital_mortality_pct,\n  ROUND(100 * AVG(readmission_30d), 2) AS readmission_30d_pct  -- NULLs (deceased) ignored in AVG\nFROM cohort_outcomes\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [39:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [39:5]\n\nLocation: US\nJob ID: 5423ec30-9103-471e-a17a-43242c2fc28b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [39:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [39:5]\n\nLocation: US\nJob ID: 1280dfb9-6b54-4ff6-9975-a0cf6d8a36ed\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

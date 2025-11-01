@@ -1,0 +1,16 @@
+{
+  "query": "I have a 71\u2011year\u2011old male ICU patient. For male ICU patients aged 66\u201376 with HHS, stratify 48\u2011hour procedure burden into quintiles and report per quintile: number of ICU stays, mean procedures, min/max, hospital mortality %, mean hospital LOS, and 30\u2011day readmission %.",
+  "final_sql": "WITH hhs_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    LOWER(long_title) LIKE '%hyperosmolar%' \n    AND LOWER(long_title) LIKE '%hyperglycemic%'\n),\n\ncohort AS (\n  SELECT \n    p.subject_id, \n    p.anchor_age,\n    adm.hadm_id,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag,\n    icu.stay_id,\n    icu.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON p.subject_id = adm.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON adm.hadm_id = icu.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 66 AND 76\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      INNER JOIN hhs_codes \n        ON diag.icd_code = hhs_codes.icd_code \n        AND diag.icd_version = hhs_codes.icd_version\n      WHERE diag.hadm_id = adm.hadm_id\n    )\n),\n\nprocedure_counts AS (\n  SELECT \n    c.stay_id,\n    COUNT(pe.itemid) AS procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.stay_id = pe.stay_id\n    AND pe.starttime >= c.intime\n    AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 48 HOUR)\n  GROUP BY c.stay_id\n),\n\ncohort_with_procedures AS (\n  SELECT \n    c.*,\n    COALESCE(pc.procedure_count, 0) AS procedure_count\n  FROM cohort c\n  LEFT JOIN procedure_counts pc\n    ON c.stay_id = pc.stay_id\n),\n\nreadmissions AS (\n  SELECT \n    a1.hadm_id,\n    MAX(CASE \n        WHEN a2.hadm_id IS NOT NULL THEN 1 \n        ELSE 0 \n    END) AS readmission_30d\n  FROM cohort_with_procedures c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a1\n    ON c.hadm_id = a1.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND a2.admittime <= DATETIME_ADD(a1.dischtime, INTERVAL 30 DAY)\n  GROUP BY a1.hadm_id\n),\n\nfinal_cohort AS (\n  SELECT \n    cwp.*,\n    COALESCE(r.readmission_30d, 0) AS readmission_30d,\n    NTILE(5) OVER (ORDER BY cwp.procedure_count) AS quintile\n  FROM cohort_with_procedures cwp\n  LEFT JOIN readmissions r\n    ON cwp.hadm_id = r.hadm_id\n)\n\nSELECT \n  quintile,\n  COUNT(stay_id) AS num_icu_stays,\n  AVG(procedure_count) AS mean_procedures,\n  MIN(procedure_count) AS min_procedures,\n  MAX(procedure_count) AS max_procedures,\n  AVG(hospital_expire_flag) * 100 AS hospital_mortality_percent,\n  AVG(DATETIME_DIFF(dischtime, admittime, DAY)) AS mean_hospital_los,\n  AVG(readmission_30d) * 100 AS readmission_30d_percent\nFROM final_cohort\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

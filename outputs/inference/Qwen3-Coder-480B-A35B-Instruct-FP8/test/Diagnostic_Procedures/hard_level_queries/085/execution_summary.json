@@ -1,0 +1,16 @@
+{
+  "query": "For a 92-year-old woman: among female ICU patients aged 87\u201397 with lower GI bleeding (first ICU stay), stratify by quintiles of distinct procedures in the first 48 hours and report mean procedure count, mean ICU LOS (days), and in-hospital mortality%.",
+  "final_sql": "WITH lower_gi_bleed_admissions AS (\n  SELECT DISTINCT di.hadm_id\n  FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd di\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_code IN ('5693', 'K922') -- Lower GI bleeding ICD-9 and ICD-10\n),\nfirst_icu_stays AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    adm.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN (\n    SELECT subject_id, MIN(intime) AS first_intime\n    FROM physionet-data.mimiciv_3_1_icu.icustays\n    GROUP BY subject_id\n  ) first ON icu.subject_id = first.subject_id AND icu.intime = first.first_intime\n  JOIN physionet-data.mimiciv_3_1_hosp.admissions adm ON icu.hadm_id = adm.hadm_id\n  WHERE icu.hadm_id IN (SELECT hadm_id FROM lower_gi_bleed_admissions)\n),\nfemale_patients AS (\n  SELECT subject_id, anchor_age\n  FROM physionet-data.mimiciv_3_1_hosp.patients\n  WHERE gender = 'F' AND anchor_age BETWEEN 87 AND 97\n),\nprocedures_in_48h AS (\n  SELECT\n    ficu.stay_id,\n    COUNT(DISTINCT proc.icd_code) AS distinct_procedures\n  FROM first_icu_stays ficu\n  JOIN physionet-data.mimiciv_3_1_hosp.procedures_icd proc\n    ON ficu.hadm_id = proc.hadm_id\n  WHERE proc.chartdate <= ficu.intime + INTERVAL 48 HOUR\n  GROUP BY ficu.stay_id\n),\nquintile_data AS (\n  SELECT\n    p.stay_id,\n    p.distinct_procedures,\n    ficu.los,\n    ficu.hospital_expire_flag,\n    NTILE(5) OVER (ORDER BY p.distinct_procedures) AS procedure_quintile\n  FROM procedures_in_48h p\n  JOIN first_icu_stays ficu ON p.stay_id = ficu.stay_id\n)\nSELECT\n  procedure_quintile,\n  AVG(distinct_procedures) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) * 100 AS in_hospital_mortality_percent\nFROM quintile_data\nGROUP BY procedure_quintile\nORDER BY procedure_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

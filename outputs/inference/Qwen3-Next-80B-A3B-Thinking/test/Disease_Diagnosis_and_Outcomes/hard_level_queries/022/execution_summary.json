@@ -1,0 +1,23 @@
+{
+  "query": "I am evaluating a 45\u2011year\u2011old woman with AKI. Among female inpatients 40\u201350 with AKI, stratify by composite risk (5\u00d7comorbidities +50 if ARDS) into quintiles and report per quintile: N; 30\u2011day post\u2011discharge mortality %; ARDS co\u2011occurrence %; median survivor LOS (days).",
+  "final_sql": "WITH aki_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE long_title LIKE '%acute kidney injury%'\n     OR long_title LIKE '%acute renal failure%'\n     OR icd_code LIKE 'N17%'\n),\n\nards_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE long_title LIKE '%acute respiratory distress syndrome%'\n     OR icd_code LIKE 'J80%'\n),\n\naki_patients AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    p.dod,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.hadm_id = d.hadm_id\n  JOIN aki_codes ac \n    ON d.icd_code = ac.icd_code\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n),\n\ncomorbidities AS (\n  SELECT \n    d.hadm_id,\n    COUNT(*) AS comorbidity_count\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN aki_patients ap \n    ON d.hadm_id = ap.hadm_id\n  LEFT JOIN aki_codes ac \n    ON d.icd_code = ac.icd_code\n  WHERE ac.icd_code IS NULL\n  GROUP BY d.hadm_id\n),\n\nards_presence AS (\n  SELECT \n    d.hadm_id,\n    MAX(CASE WHEN ac.icd_code IS NOT NULL THEN 1 ELSE 0 END) AS has_ards\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN aki_patients ap \n    ON d.hadm_id = ap.hadm_id\n  LEFT JOIN ards_codes ac \n    ON d.icd_code = ac.icd_code\n  GROUP BY d.hadm_id\n),\n\npatient_data AS (\n  SELECT \n    ap.subject_id,\n    ap.hadm_id,\n    ap.admittime,\n    ap.dischtime,\n    ap.hospital_expire_flag,\n    COALESCE(c.comorbidity_count, 0) AS comorbidity_count,\n    COALESCE(a.has_ards, 0) AS has_ards,\n    (5 * COALESCE(c.comorbidity_count, 0) + 50 * COALESCE(a.has_ards, 0)) AS composite_risk,\n    CASE\n      WHEN ap.hospital_expire_flag = 1 THEN 0\n      WHEN ap.dod IS NOT NULL AND ap.dod <= DATE_ADD(ap.dischtime, INTERVAL 30 DAY) THEN 1\n      ELSE 0\n    END AS thirty_day_mortality,\n    DATE_DIFF(ap.dischtime, ap.admittime, DAY) AS los\n  FROM aki_patients ap\n  LEFT JOIN comorbidities c \n    ON ap.hadm_id = c.hadm_id\n  LEFT JOIN ards_presence a \n    ON ap.hadm_id = a.hadm_id\n),\n\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY composite_risk) AS risk_quintile,\n    CASE WHEN thirty_day_mortality = 0 THEN los ELSE NULL END AS survivor_los\n  FROM patient_data\n)\n\nSELECT\n  risk_quintile,\n  COUNT(*) AS N,\n  AVG(thirty_day_mortality) * 100 AS thirty_day_mortality_percent,\n  AVG(has_ards) * 100 AS ards_co_occurrence_percent,\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY survivor_los) AS median_survivor_los\nFROM quintiles\nGROUP BY risk_quintile\nORDER BY risk_quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got keyword WITHIN at [98:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [98:24]\n\nLocation: US\nJob ID: 0b7d678a-12a1-4fda-9156-f71adc0fcfe3\n",
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [98:38]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [98:38]\n\nLocation: US\nJob ID: 7cbbbd6e-cb9f-4d84-87f5-75c302b23ee5\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [98:24]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [98:24]\n\nLocation: US\nJob ID: 0b7d678a-12a1-4fda-9156-f71adc0fcfe3\n"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 63-year-old female. Among female Medicare patients aged 58\u201368 admitted via the ED with a principal femoral neck fracture, what is the 30-day readmission rate, median index LOS for readmitted versus non\u2011readmitted, and percent of initial stays >8 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.subject_id = di.subject_id AND a.hadm_id = di.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND a.insurance = 'Medicare'\n    AND UPPER(a.admission_location) LIKE '%EMERGENCY%'\n    AND di.seq_num = 1\n    AND (\n      (di.icd_version = 9 AND di.icd_code LIKE '8200%') OR\n      (di.icd_version = 10 AND di.icd_code LIKE 'S720%')\n    )\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\nindex_admissions AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    los\n  FROM (\n    SELECT\n      c.*,\n      ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n    FROM cohort c\n  )\n  WHERE rn = 1\n),\nreadmission_flags AS (\n  SELECT\n    ia.subject_id,\n    ia.hadm_id,\n    ia.admittime,\n    ia.dischtime,\n    ia.los,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = ia.subject_id\n        AND a2.hadm_id != ia.hadm_id\n        AND a2.admittime > ia.dischtime\n        AND a2.admittime <= DATETIME_ADD(ia.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmitted\n  FROM index_admissions ia\n)\nSELECT\n  COUNTIF(readmitted = 1) / COUNT(*) AS readmission_rate,\n  APPROX_QUANTILES(IF(readmitted = 1, los, NULL), 2)[OFFSET(1)] AS median_los_readmitted,\n  APPROX_QUANTILES(IF(readmitted = 0, los, NULL), 2)[OFFSET(1)] AS median_los_non_readmitted,\n  COUNTIF(los > 8) / COUNT(*) AS pct_los_gt8days\nFROM readmission_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [64:45]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [64:45]\n\nLocation: US\nJob ID: 03c9197d-4efe-49b2-a64f-3b015c5ec9b6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

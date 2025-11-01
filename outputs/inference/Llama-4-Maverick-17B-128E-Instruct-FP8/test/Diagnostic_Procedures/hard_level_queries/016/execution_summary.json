@@ -1,0 +1,16 @@
+{
+  "query": "I have a 93-year-old man. Among male patients aged 88\u201398 on their first ICU stay with pneumonia, stratify first 72-hour diagnostic procedure counts into quintiles and report average procedure count, average ICU LOS (days), and in-hospital mortality% per quintile.",
+  "final_sql": "WITH \nfirst_icu_stay AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    ie.hadm_id,\n    ie.stay_id,\n    ie.intime,\n    ie.outtime,\n    ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY ie.intime) AS icu_stay_num\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` ie ON p.subject_id = ie.subject_id\n  WHERE \n    p.gender = 'M' AND p.anchor_age BETWEEN 88 AND 98\n),\npneumonia_patients AS (\n  SELECT DISTINCT \n    hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE \n    d.long_title LIKE '%Pneumonia%'\n),\nprocedure_counts AS (\n  SELECT \n    fis.stay_id,\n    COUNT(pe.itemid) AS procedure_count\n  FROM \n    first_icu_stay fis\n  JOIN \n    pneumonia_patients pp ON fis.hadm_id = pp.hadm_id\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe ON fis.stay_id = pe.stay_id\n  WHERE \n    fis.icu_stay_num = 1 AND pe.starttime BETWEEN fis.intime AND TIMESTAMP_ADD(fis.intime, INTERVAL 72 HOUR)\n  GROUP BY \n    fis.stay_id\n),\nquintiles AS (\n  SELECT \n    stay_id,\n    procedure_count,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM \n    procedure_counts\n),\nstats AS (\n  SELECT \n    q.quintile,\n    AVG(q.procedure_count) AS avg_procedure_count,\n    AVG(TIMESTAMP_DIFF(fis.outtime, fis.intime, HOUR) / 24) AS avg_icu_los,\n    SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(fis.stay_id) * 100 AS in_hospital_mortality_pct\n  FROM \n    quintiles q\n  JOIN \n    first_icu_stay fis ON q.stay_id = fis.stay_id\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON fis.hadm_id = a.hadm_id\n  WHERE \n    fis.icu_stay_num = 1\n  GROUP BY \n    q.quintile\n)\nSELECT \n  quintile,\n  avg_procedure_count,\n  avg_icu_los,\n  in_hospital_mortality_pct\nFROM \n  stats\nORDER BY \n  quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

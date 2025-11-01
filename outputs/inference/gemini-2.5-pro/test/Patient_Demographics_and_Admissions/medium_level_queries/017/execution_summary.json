@@ -1,0 +1,16 @@
+{
+  "query": "I\u2019m evaluating a 43-year-old man. Among male inpatients aged 38\u201348 with ICU admission, report LOS (mean, median/p50, p75, p90 in days) by discharge: home vs facility vs in\u2011hospital death.",
+  "final_sql": "WITH admission_cohort AS (\n  -- First, select the unique hospital admissions that match the cohort criteria\n  SELECT DISTINCT\n    adm.hadm_id,\n    -- Calculate LOS in fractional days for higher precision\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days,\n    -- Categorize discharge destination based on flags and location descriptions\n    CASE\n      WHEN adm.hospital_expire_flag = 1\n        THEN 'In-hospital Death'\n      WHEN adm.discharge_location LIKE 'HOME%'\n        THEN 'Home'\n      WHEN adm.discharge_location IN (\n        'SKILLED NURSING FACILITY',\n        'REHAB/DISTINCT PART HOSP',\n        'CHRONIC/LONG TERM CARE',\n        'HOSPICE',\n        'LONG TERM CARE HOSPITAL'\n      )\n        THEN 'Facility'\n      ELSE 'Other'\n    END AS discharge_group\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  -- Use an INNER JOIN to ensure that the admission has at least one ICU stay\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    ON adm.hadm_id = icu.hadm_id\n  WHERE\n    pat.gender = 'M'\n    -- Calculate age at admission and filter\n    AND (\n      DATETIME_DIFF(adm.admittime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR) + pat.anchor_age\n    ) BETWEEN 38 AND 48\n    -- Ensure dischtime is after admittime to avoid negative LOS\n    AND adm.dischtime > adm.admittime\n)\n-- Aggregate the LOS data by the defined discharge groups\nSELECT\n  discharge_group,\n  COUNT(hadm_id) AS number_of_admissions,\n  AVG(los_days) AS mean_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS p75_los_days,\n  APPROX_QUANTILES(los_days, 100)[OFFSET(90)] AS p90_los_days\nFROM\n  admission_cohort\nWHERE\n  discharge_group IN ('Home', 'Facility', 'In-hospital Death')\nGROUP BY\n  discharge_group\nORDER BY\n  -- Custom sort order for readability\n  CASE\n    WHEN discharge_group = 'Home' THEN 1\n    WHEN discharge_group = 'Facility' THEN 2\n    WHEN discharge_group = 'In-hospital Death' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

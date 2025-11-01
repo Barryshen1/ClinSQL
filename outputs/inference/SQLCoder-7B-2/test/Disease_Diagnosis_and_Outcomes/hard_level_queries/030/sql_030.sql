@@ -1,0 +1,1 @@
+SELECT 17f54ccc-7772-4f0b-9324-139885728711 AS job_id, 'Location: US' AS location, 'Job ID: 17f54ccc-7772-4f0b-9324-139885728711' AS reason, 'Syntax error: Unexpected integer literal "1" at [1:1]; reason: invalidQuery, location: query, message: Syntax error: Unexpected integer literal "1" at [1:1]' AS message;

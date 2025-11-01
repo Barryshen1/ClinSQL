@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old woman with PE. Among female inpatients aged 74\u201384, within the first 24 hours report medication complexity distribution (mean, min, max, SD), prevalence of QT\u2011prolonging and bleeding\u2011risk drugs, mean complexity percentiles, ICU comparison, and top\u2011quartile LOS and mortality.",
+  "final_sql": "WITH cohort AS (\n  -- Female patients aged 74-84 with PE (ICD-10 I26%), first PE admission only\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    p.anchor_age,\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_icu.icustays` i \n        WHERE i.subject_id = p.subject_id AND i.hadm_id = a.hadm_id\n      ) THEN 1 ELSE 0 \n    END AS in_icu\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 74 AND 84\n    AND a.admittime = (\n      -- First PE admission per subject to avoid duplicates\n      SELECT MIN(a2.admittime) \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2 \n      JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2 ON a2.hadm_id = d2.hadm_id\n      WHERE a2.subject_id = a.subject_id\n        AND d2.icd_version = 10\n        AND d2.icd_code LIKE 'I26%'\n    )\n),\nmeds AS (\n  -- Medications in first 24 hours of admission\n  SELECT \n    c.*,\n    LOWER(pr.drug) AS drug_lower\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr ON c.hadm_id = pr.hadm_id\n  WHERE pr.starttime >= c.admittime\n    AND pr.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 1 DAY)\n    AND pr.drug IS NOT NULL\n),\ncomplexity AS (\n  -- Medication complexity (distinct drug count) with flags for QT/bleeding\n  SELECT \n    hadm_id,\n    COUNT(DISTINCT drug_lower) AS med_count,\n    MAX(CASE WHEN drug_lower LIKE '%amiodarone%' OR drug_lower LIKE '%sotalol%' OR drug_lower LIKE '%haloperidol%' \n                  OR drug_lower LIKE '%methadone%' OR drug_lower LIKE '%ondansetron%' \n             THEN 1 ELSE 0 END) AS has_qt,\n    MAX(CASE WHEN drug_lower LIKE '%aspirin%' OR drug_lower LIKE '%clopidogrel%' OR drug_lower LIKE '%warfarin%' \n                  OR drug_lower LIKE '%heparin%' OR drug_lower LIKE '%enoxaparin%'\n             THEN 1 ELSE 0 END) AS has_bleeding_risk\n  FROM meds\n  GROUP BY hadm_id\n),\ncomplexity_with_percentile AS (\n  SELECT \n    *,\n    PERCENT_RANK() OVER (ORDER BY med_count) AS complexity_percentile\n  FROM complexity\n),\nlos_stats AS (\n  -- LOS in days\n  SELECT \n    c.hadm_id,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY) AS los_days,\n    c.in_icu,\n    COALESCE(x.med_count, 0) AS med_count,  -- Handle no meds\n    COALESCE(x.has_qt, 0) AS has_qt,\n    COALESCE(x.has_bleeding_risk, 0) AS has_bleeding_risk,\n    COALESCE(x.complexity_percentile, 0) AS complexity_percentile,\n    c.hospital_expire_flag\n  FROM cohort c\n  LEFT JOIN complexity_with_percentile x ON c.hadm_id = x.hadm_id\n),\nq75_cte AS (\n  SELECT APPROX_QUANTILES(los_days, 4)[OFFSET(3)] AS q75_los\n  FROM los_stats\n)\n-- Final aggregates: distribution, prevalence, percentiles, ICU comparison, top-quartile LOS/mortality\nSELECT \n  in_icu,\n  COUNT(*) AS n_patients,\n  -- Medication complexity distribution\n  AVG(med_count) AS mean_complexity,\n  MIN(med_count) AS min_complexity,\n  MAX(med_count) AS max_complexity,\n  STDDEV(med_count) AS sd_complexity,\n  -- Prevalence (% with at least one)\n  AVG(has_qt) * 100 AS pct_qt_prolonging,\n  AVG(has_bleeding_risk) * 100 AS pct_bleeding_risk,\n  -- Mean complexity percentile\n  AVG(complexity_percentile) * 100 AS mean_complexity_percentile,\n  -- LOS and mortality overall\n  AVG(los_days) AS mean_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_pct,\n  -- Top-quartile LOS: compute Q75, then % above it and mortality for those\n  (SELECT q75_los FROM q75_cte) AS q75_los,\n  AVG(CASE WHEN los_days > (SELECT q75_los FROM q75_cte) THEN 1.0 ELSE 0 END) * 100 AS pct_top_quartile_los,\n  SAFE_DIVIDE(\n    SUM(CASE WHEN los_days > (SELECT q75_los FROM q75_cte) THEN hospital_expire_flag ELSE 0 END) * 100.0,\n    SUM(CASE WHEN los_days > (SELECT q75_los FROM q75_cte) THEN 1 ELSE 0 END)\n  ) AS top_quartile_mortality_pct\nFROM los_stats\nGROUP BY in_icu\nORDER BY in_icu;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"top\" at [1:14]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"top\" at [1:14]\n\nLocation: US\nJob ID: aa4d5502-c334-4924-bfc9-bb2583866fe3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [22:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [22:9]\n\nLocation: US\nJob ID: 7246b34d-99f3-47c2-966a-9f98b0456ae5\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

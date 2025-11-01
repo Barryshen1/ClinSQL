@@ -1,0 +1,1 @@
+SELECT stddev(p.stoptime - p.starttime) AS sd FROM prescriptions p JOIN patients pt ON p.subject_id = pt.subject_id JOIN admissions a ON p.subject_id = a.subject_id WHERE pt.gender = 'F' AND pt.anchor_age = 83 AND EXTRACT(YEAR FROM a.admittime) BETWEEN 2018 AND 2020 AND p.drug = 'ACE-inhibitor';

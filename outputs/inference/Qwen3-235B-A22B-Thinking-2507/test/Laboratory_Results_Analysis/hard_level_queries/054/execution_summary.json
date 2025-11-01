@@ -1,0 +1,17 @@
+{
+  "query": "I have a 43\u2011year\u2011old woman. Among female inpatients aged 38\u201348 with AMI, calculate a 72\u2011hour lab instability score, stratify AMI patients into quartiles, and report LOS and in\u2011hospital mortality for each quartile. Compare overall critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH ami_admissions AS (\n  SELECT \n    a.hadm_id,\n    p.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.patients p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd d\n    ON a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND d.icd_version = 10\n    AND d.icd_code IN (\n      'I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4', 'I21.9',\n      'I22.0', 'I22.1', 'I22.2', 'I22.8', 'I22.9'\n    )\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 38 AND 48\n),\nami_admissions_dedup AS (\n  SELECT DISTINCT \n    hadm_id,\n    subject_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag\n  FROM ami_admissions\n  WHERE dischtime IS NOT NULL  -- Ensure valid inpatient stays\n),\nlab_counts AS (\n  SELECT \n    a.hadm_id,\n    COUNT(*) AS critical_lab_count\n  FROM ami_admissions_dedup a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.labevents l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime >= a.admittime\n    AND l.charttime < a.admittime + INTERVAL '72' HOUR\n    AND l.flag = 'critical'\n  GROUP BY a.hadm_id\n),\nwith_quartile AS (\n  SELECT \n    a.hadm_id,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    l.critical_lab_count,\n    NTILE(4) OVER (ORDER BY l.critical_lab_count ASC) AS quartile\n  FROM ami_admissions_dedup a\n  LEFT JOIN lab_counts l\n    ON a.hadm_id = l.hadm_id\n)\nSELECT \n  quartile,\n  COUNT(*) AS patient_count,\n  AVG(los_days) AS avg_los_days,\n  AVG(hospital_expire_flag) AS mortality_rate\nFROM with_quartile\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

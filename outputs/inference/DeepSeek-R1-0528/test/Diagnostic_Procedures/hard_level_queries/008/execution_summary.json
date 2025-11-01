@@ -1,0 +1,16 @@
+{
+  "query": "I have a 53-year-old man with upper GI bleeding. Among male ICU patients aged 48\u201358 with UGIB, stratify first 24\u2011hour diagnostic procedure counts into quintiles and report average procedures, hospital LOS (days), and in\u2011hospital mortality (%) per quintile.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    ie.stay_id,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_adm,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    ie.intime,\n    ie.outtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` ie\n    ON a.hadm_id = ie.hadm_id\n  WHERE p.gender = 'M'\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      WHERE a.hadm_id = diag.hadm_id\n        AND diag.icd_code IN ('5780', '5781', '5789', 'K920', 'K921', 'K922')\n    )\n),\n-- Filter age 48-58\ncohort_filtered AS (\n  SELECT *\n  FROM cohort\n  WHERE age_adm BETWEEN 48 AND 58\n),\n-- Count procedures in first 24h of ICU stay\nprocedure_counts AS (\n  SELECT \n    c.stay_id,\n    COUNT(pe.itemid) AS num_procedures\n  FROM cohort_filtered c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.stay_id = pe.stay_id\n    AND pe.starttime >= c.intime\n    AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY c.stay_id\n),\n-- Combine with admission outcomes\nstay_data AS (\n  SELECT \n    c.*,\n    COALESCE(pc.num_procedures, 0) AS num_procedures,\n    DATETIME_DIFF(c.dischtime, c.admittime, DAY) AS los_hospital\n  FROM cohort_filtered c\n  LEFT JOIN procedure_counts pc\n    ON c.stay_id = pc.stay_id\n),\n-- Assign quintiles\nwith_quintile AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY num_procedures) AS quintile\n  FROM stay_data\n)\n-- Aggregate results by quintile\nSELECT \n  quintile,\n  AVG(num_procedures) AS avg_procedures,\n  AVG(los_hospital) AS avg_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_rate_percent\nFROM with_quintile\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

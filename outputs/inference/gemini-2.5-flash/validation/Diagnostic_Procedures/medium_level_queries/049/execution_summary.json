@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m evaluating a 92\u2011year\u2011old man with sepsis without shock. Among male patients 87\u201397 (sepsis, no septic shock), what is mean diagnostic procedures for admissions lasting 1\u20133 vs 4\u20137 days?",
+  "final_sql": "WITH admissions_filtered_cohort AS (\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        DATETIME_DIFF(ad.dischtime, ad.admittime, DAY) AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON ad.subject_id = p.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 87 AND 97\n        AND ad.dischtime IS NOT NULL -- Ensure admission is complete\n        AND DATETIME_DIFF(ad.dischtime, ad.admittime, DAY) BETWEEN 1 AND 7 -- Pre-filter for relevant LOS\n),\nsepsis_hadm AS (\n    -- Identify admissions with any sepsis-related ICD code\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n        (\n            icd_version = 9 AND (icd_code LIKE '038%' OR icd_code IN ('99591', '99592'))\n            OR icd_version = 10 AND (icd_code LIKE 'A40%' OR icd_code LIKE 'A41%' OR icd_code = 'R6520')\n        )\n),\nshock_hadm AS (\n    -- Identify admissions with any septic shock-related ICD code\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n        (\n            icd_version = 9 AND icd_code = '78552'\n            OR icd_version = 10 AND icd_code = 'R6521'\n        )\n),\nqualified_admissions AS (\n    -- Select admissions that meet age, gender, LOS, and \"sepsis without shock\" criteria\n    SELECT\n        afc.subject_id,\n        afc.hadm_id,\n        afc.los_days\n    FROM\n        admissions_filtered_cohort AS afc\n    WHERE\n        afc.hadm_id IN (SELECT hadm_id FROM sepsis_hadm)\n        AND afc.hadm_id NOT IN (SELECT hadm_id FROM shock_hadm)\n),\nadmissions_with_procedure_counts AS (\n    -- Count diagnostic procedures for each qualified admission\n    SELECT\n        qa.hadm_id,\n        qa.los_days,\n        COUNT(pi.icd_code) AS num_procedures -- Count all procedures for the admission, 0 if no procedures\n    FROM\n        qualified_admissions AS qa\n    LEFT JOIN -- Use LEFT JOIN to include admissions with 0 procedures\n        `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS pi\n        ON qa.subject_id = pi.subject_id AND qa.hadm_id = pi.hadm_id\n    GROUP BY\n        qa.hadm_id, qa.los_days\n)\n-- Final aggregation to calculate mean procedures by LOS category\nSELECT\n    CASE\n        WHEN awpc.los_days BETWEEN 1 AND 3 THEN '1-3 days'\n        WHEN awpc.los_days BETWEEN 4 AND 7 THEN '4-7 days'\n        ELSE 'Other' -- Should not be reached given initial LOS filter, but good practice\n    END AS los_category,\n    AVG(awpc.num_procedures) AS mean_diagnostic_procedures\nFROM\n    admissions_with_procedure_counts AS awpc\nGROUP BY\n    los_category\nORDER BY\n    los_category;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [62:5]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [62:5]\n\nLocation: US\nJob ID: 1ad5cc64-ce4e-4465-9d7d-a058467cc8ac\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

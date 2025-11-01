@@ -1,0 +1,17 @@
+{
+  "query": "I have an 89\u2011year\u2011old female inpatient with AKI. Among female admissions aged 84\u201394 with AKI, stratified into quintiles by medication complexity score over the entire admission, report per quintile: LOS, inpatient mortality %, 30\u2011day readmission %, and anticoagulant\u2013opioid coadministration counts.",
+  "final_sql": "WITH filtered_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 84 AND 94\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '584%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'N17%')\n        )\n    )\n),\nmedication_counts AS (\n  SELECT\n    f.hadm_id,\n    COUNT(DISTINCT p.drug) AS med_count\n  FROM filtered_admissions f\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON f.hadm_id = p.hadm_id\n  GROUP BY f.hadm_id\n),\nquintiles AS (\n  SELECT\n    f.hadm_id,\n    f.subject_id,\n    f.admittime,\n    f.dischtime,\n    f.hospital_expire_flag,\n    m.med_count,\n    NTILE(5) OVER (ORDER BY m.med_count) AS quintile,\n    DATE_DIFF(f.dischtime, f.admittime, DAY) AS los,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n      WHERE a2.subject_id = f.subject_id\n        AND a2.admittime > f.dischtime\n        AND a2.admittime <= DATE_ADD(f.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmitted_30d,\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p1\n      WHERE p1.hadm_id = f.hadm_id\n        AND p1.drug IN ('warfarin', 'heparin', 'enoxaparin', 'apixaban', 'rivaroxaban', 'dabigatran', 'edoxaban')\n    ) AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p2\n      WHERE p2.hadm_id = f.hadm_id\n        AND p2.drug IN ('morphine', 'fentanyl', 'oxycodone', 'hydromorphone', 'codeine', 'hydrocodone', 'meperidine', 'methadone', 'buprenorphine')\n    ) THEN 1 ELSE 0 END AS coadmin\n  FROM filtered_admissions f\n  JOIN medication_counts m ON f.hadm_id = m.hadm_id\n)\nSELECT\n  quintile,\n  AVG(los) AS avg_los,\n  SUM(hospital_expire_flag) * 100.0 / COUNT(*) AS mortality_pct,\n  SUM(readmitted_30d) * 100.0 / COUNT(*) AS readmission_30d_pct,\n  SUM(coadmin) AS coadministration_count\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

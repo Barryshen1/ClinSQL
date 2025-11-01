@@ -1,0 +1,17 @@
+{
+  "query": "I have a 71\u2011year\u2011old male ICU patient. For male ICU patients aged 66\u201376 with HHS, stratify 48\u2011hour procedure burden into quintiles and report per quintile: number of ICU stays, mean procedures, min/max, hospital mortality %, mean hospital LOS, and 30\u2011day readmission %.",
+  "final_sql": "WITH readmission_flag AS (\n  SELECT \n    hadm_id,\n    CASE \n      WHEN next_admittime <= dischtime + INTERVAL '30' DAY THEN 1 \n      ELSE 0 \n    END AS readmitted_30d\n  FROM (\n    SELECT \n      hadm_id,\n      dischtime,\n      LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n  )\n),\nhhs_patients AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE icd_code IN ('E1101', 'E0801', 'E0901', 'E1301') \n    AND icd_version = 10\n),\nicu_stays_filtered AS (\n  SELECT \n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year) AS age\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  INNER JOIN hhs_patients hhs\n    ON icu.subject_id = hhs.subject_id AND icu.hadm_id = hhs.hadm_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year)) BETWEEN 66 AND 76\n),\nprocedure_counts AS (\n  SELECT \n    icu.stay_id,\n    COUNT(proc.stay_id) AS procedure_count\n  FROM icu_stays_filtered icu\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` proc\n    ON icu.stay_id = proc.stay_id\n    AND proc.starttime >= icu.intime\n    AND proc.starttime < icu.intime + INTERVAL '48' HOUR\n  GROUP BY icu.stay_id\n),\nstays_with_info AS (\n  SELECT \n    icu.stay_id,\n    icu.hadm_id,\n    pc.procedure_count,\n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS hospital_los,\n    COALESCE(rf.readmitted_30d, 0) AS readmitted_30d\n  FROM icu_stays_filtered icu\n  INNER JOIN procedure_counts pc\n    ON icu.stay_id = pc.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  LEFT JOIN readmission_flag rf\n    ON icu.hadm_id = rf.hadm_id\n),\nstays_with_quintile AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM stays_with_info\n)\nSELECT \n  quintile,\n  COUNT(*) AS num_stays,\n  AVG(procedure_count) AS mean_procedures,\n  MIN(procedure_count) AS min_procedures,\n  MAX(procedure_count) AS max_procedures,\n  AVG(hospital_expire_flag) * 100 AS hospital_mortality_pct,\n  AVG(hospital_los) AS mean_hospital_los,\n  AVG(readmitted_30d) * 100 AS readmission_30d_pct\nFROM stays_with_quintile\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

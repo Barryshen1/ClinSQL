@@ -1,0 +1,29 @@
+{
+  "query": "I have a 65-year-old male. Among male Medicare patients 60\u201370 admitted via the ED with a principal UTI, what is the 30-day readmission rate? Report median index LOS for readmitted vs non\u2011readmitted and percent with LOS>9 days.",
+  "final_sql": "WITH index_adms AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.insurance,\n    a.admission_type,\n    TIMESTAMP_DIFF(a.admittime, birth_date, YEAR) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n  CROSS JOIN UNNEST([DATE_SUB(DATE(p.anchor_year, 1, 1), INTERVAL p.anchor_age YEAR)]) AS birth_date\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d_icd \n    ON a.subject_id = d_icd.subject_id AND a.hadm_id = d_icd.hadm_id AND d_icd.seq_num = 1\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d \n    ON d_icd.icd_code = d.icd_code AND d_icd.icd_version = d.icd_version\n  WHERE \n    p.gender = 'M'\n    AND a.insurance = 'Medicare'\n    AND a.admission_type = 'Emergency'\n    AND (LOWER(d.long_title) LIKE '%urinary tract infection%' OR LOWER(d.long_title) LIKE '%uti%')\n    AND TIMESTAMP_DIFF(a.admittime, birth_date, YEAR) BETWEEN 60 AND 70\n),\nnext_adm AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    admittime,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\nindex_adms_with_readmission AS (\n  SELECT \n    i.*,\n    TIMESTAMP_DIFF(i.dischtime, i.admittime, DAY) AS los,\n    CASE \n      WHEN n.next_admit IS NOT NULL AND n.next_admit <= TIMESTAMP_ADD(i.dischtime, INTERVAL 30 DAY) THEN 1\n      ELSE 0\n    END AS readmitted\n  FROM index_adms i\n  LEFT JOIN next_adm n \n    ON i.subject_id = n.subject_id AND i.hadm_id = n.hadm_id\n),\nreadmission_rate AS (\n  SELECT \n    (SELECT COUNT(*) FROM index_adms_with_readmission WHERE readmitted = 1) * 100.0 / \n    NULLIF((SELECT COUNT(*) FROM index_adms_with_readmission), 0) AS rate\n),\nstats AS (\n  SELECT \n    readmitted,\n    APPROX_QUANTILES(los, 100)[OFFSET(50)] AS median_los,\n    (SUM(IF(los > 9, 1, 0)) * 100.0 / COUNT(*)) AS percent_los_gt9\n  FROM index_adms_with_readmission\n  GROUP BY readmitted\n)\nSELECT \n  r.rate AS readmission_rate,\n  s.readmitted,\n  s.median_los,\n  s.percent_los_gt9\nFROM stats s, readmission_rate r;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"principal\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"principal\" at [1:8]\n\nLocation: US\nJob ID: 15956f1c-7b71-4901-b4a5-f771e42846e4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 52c62fbf-437d-414a-b5b7-c66010ead528\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 41\u2011year\u2011old male inpatient: among males 36\u201346 with diabetes + heart failure, report prevalence (%) of antidiabetic and cardiac drug classes in first 48h versus last 12h, and absolute difference (pp).",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  ON\n    a.hadm_id = i.hadm_id\n  JOIN\n    (\n      SELECT hadm_id, MIN(intime) AS first_intime\n      FROM `physionet-data.mimiciv_3_1_icu.icustays`\n      GROUP BY hadm_id\n    ) first_icu\n  ON\n    i.hadm_id = first_icu.hadm_id AND i.intime = first_icu.first_intime\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 36 AND 46\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE\n        LOWER(dd.long_title) LIKE '%diabetes%'\n    )\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE\n        LOWER(dd.long_title) LIKE '%heart failure%'\n    )\n),\n\ndrug_flags AS (\n  SELECT\n    c.hadm_id,\n    c.intime,\n    c.outtime,\n    pr.starttime,\n    CASE\n      WHEN LOWER(pr.drug) LIKE '%insulin%' OR LOWER(pr.drug) LIKE '%metformin%' OR LOWER(pr.drug) LIKE '%glipizide%' THEN 1\n      ELSE 0\n    END AS is_antidiabetic,\n    CASE\n      WHEN LOWER(pr.drug) LIKE '%furosemide%' OR LOWER(pr.drug) LIKE '%digoxin%' OR LOWER(pr.drug) LIKE '%carvedilol%' THEN 1\n      ELSE 0\n    END AS is_cardiac\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  ON\n    c.hadm_id = pr.hadm_id\n),\n\ntime_window_flags AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN starttime >= intime AND starttime <= DATETIME_ADD(intime, INTERVAL 48 HOUR) THEN is_antidiabetic ELSE 0 END) AS anti_48h,\n    MAX(CASE WHEN starttime >= intime AND starttime <= DATETIME_ADD(intime, INTERVAL 48 HOUR) THEN is_cardiac ELSE 0 END) AS cardio_48h,\n    MAX(CASE WHEN starttime >= DATETIME_SUB(outtime, INTERVAL 12 HOUR) AND starttime <= outtime THEN is_antidiabetic ELSE 0 END) AS anti_last12h,\n    MAX(CASE WHEN starttime >= DATETIME_SUB(outtime, INTERVAL 12 HOUR) AND starttime <= outtime THEN is_cardiac ELSE 0 END) AS cardio_last12h\n  FROM\n    drug_flags\n  GROUP BY\n    hadm_id, intime, outtime\n),\n\nprevalence AS (\n  SELECT\n    'Antidiabetic' AS drug_class,\n    100 * AVG(anti_48h) AS prevalence_48h,\n    100 * AVG(anti_last12h) AS prevalence_last12h,\n    100 * (AVG(anti_48h) - AVG(anti_last12h)) AS diff_pp\n  FROM\n    time_window_flags\n\n  UNION ALL\n\n  SELECT\n    'Cardiac' AS drug_class,\n    100 * AVG(cardio_48h) AS prevalence_48h,\n    100 * AVG(cardio_last12h) AS prevalence_last12h,\n    100 * (AVG(cardio_48h) - AVG(cardio_last12h)) AS diff_pp\n  FROM\n    time_window_flags\n)\n\nSELECT * FROM prevalence\nORDER BY drug_class;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: first_intu; Did you mean first_icu? at [27:50]; reason: invalidQuery, location: query, message: Unrecognized name: first_intu; Did you mean first_icu? at [27:50]\n\nLocation: US\nJob ID: c1597cff-b828-4b4e-8f31-c0887d8b0a20\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

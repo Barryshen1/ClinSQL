@@ -1,0 +1,22 @@
+{
+  "query": "Patient is a 67-year-old man. Among male ICU patients aged 62\u201372, report counts per ICU-stay mean heart\u2011rate category (<60; 60\u201399; 100\u2013119; \u2265120 bpm) and percent with acute MI.",
+  "final_sql": "WITH\n  -- 1. Identify the target cohort: Male ICU patients aged 62-72\n  cohort_patients AS (\n    SELECT\n      p.subject_id,\n      a.hadm_id,\n      icu.stay_id,\n      -- Calculate the patient's age at the time of admission\n      p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n    FROM\n      `physionet-data.mimiciv_3_1_hosp`.patients AS p\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp`.admissions AS a\n      ON p.subject_id = a.subject_id\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_icu`.icustays AS icu\n      ON a.hadm_id = icu.hadm_id\n    WHERE\n      p.gender = 'M'\n      AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 62 AND 72\n  ),\n\n  -- 2. Calculate the mean heart rate for each ICU stay within the cohort\n  mean_heart_rates AS (\n    SELECT\n      ce.stay_id,\n      AVG(ce.valuenum) AS mean_hr\n    FROM\n      `physionet-data.mimiciv_3_1_icu`.chartevents AS ce\n    WHERE\n      ce.itemid = 220045 -- ItemID for Heart Rate (from d_items)\n      AND ce.valuenum IS NOT NULL\n      AND ce.valuenum > 0 -- Exclude non-positive values for meaningful average\n    GROUP BY\n      ce.stay_id\n  ),\n\n  -- 3. Identify admissions with an Acute Myocardial Infarction (MI) diagnosis\n  acute_mi_admissions AS (\n    SELECT DISTINCT\n      hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd\n    WHERE\n      (icd_version = 9 AND icd_code LIKE '410%') -- ICD-9 codes for Acute MI (e.g., 410.0-410.9)\n      OR (icd_version = 10 AND icd_code LIKE 'I21%') -- ICD-10 codes for Acute MI (e.g., I21.0-I21.9)\n  ),\n\n  -- 4. Combine cohort details with mean heart rates and MI status, and categorize HR\n  combined_cohort_data AS (\n    SELECT\n      cp.subject_id,\n      cp.hadm_id,\n      cp.stay_id,\n      mhr.mean_hr,\n      CASE\n        WHEN mhr.mean_hr IS NULL THEN 'No HR Data'\n        WHEN mhr.mean_hr < 60 THEN '<60 bpm'\n        WHEN mhr.mean_hr BETWEEN 60 AND 99 THEN '60-99 bpm'\n        WHEN mhr.mean_hr BETWEEN 100 AND 119 THEN '100-119 bpm'\n        WHEN mhr.mean_hr >= 120 THEN '>=120 bpm'\n        ELSE 'No HR Data' -- Fallback for any unexpected cases, though mhr.mean_hr IS NULL should catch most\n      END AS heart_rate_category,\n      CASE\n        WHEN ami.hadm_id IS NOT NULL THEN 1\n        ELSE 0\n      END AS has_acute_mi_flag -- Flag indicates if the admission (and thus the stay) had an acute MI\n    FROM\n      cohort_patients AS cp\n    LEFT JOIN\n      mean_heart_rates AS mhr\n      ON cp.stay_id = mhr.stay_id\n    LEFT JOIN\n      acute_mi_admissions AS ami\n      ON cp.hadm_id = ami.hadm_id\n  )\n\n-- 5. Final aggregation based on heart rate category\nSELECT\n  cd.heart_rate_category,\n  COUNT(cd.stay_id) AS num_icu_stays, -- Count of ICU stays in each category\n  ROUND(SUM(cd.has_acute_mi_flag) * 100.0 / COUNT(cd.stay_id), 2) AS percent_with_acute_mi\nFROM\n  combined_cohort_data AS cd\nGROUP BY\n  cd.heart_rate_category\nORDER BY\n  -- Custom order to ensure categories are displayed logically\n  CASE\n    WHEN cd.heart_rate_category = '<60 bpm' THEN 1\n    WHEN cd.heart_rate_category = '60-99 bpm' THEN 2\n    WHEN cd.heart_rate_category = '100-119 bpm' THEN 3\n    WHEN cd.heart_rate_category = '>=120 bpm' THEN 4\n    WHEN cd.heart_rate_category = 'No HR Data' THEN 5\n    ELSE 99 -- For any 'Other' categories\n  END;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"Myocardial\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"Myocardial\" at [1:12]\n\nLocation: US\nJob ID: 6b4e683c-4a9e-4b9f-b40b-1d22854c8acc\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

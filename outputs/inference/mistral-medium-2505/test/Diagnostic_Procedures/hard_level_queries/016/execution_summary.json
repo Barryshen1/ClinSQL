@@ -1,0 +1,22 @@
+{
+  "query": "I have a 93-year-old man. Among male patients aged 88\u201398 on their first ICU stay with pneumonia, stratify first 72-hour diagnostic procedure counts into quintiles and report average procedure count, average ICU LOS (days), and in-hospital mortality% per quintile.",
+  "final_sql": "WITH\n-- Get male patients aged 88-98\neligible_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 88 AND 98\n),\n\n-- Get first ICU stays with pneumonia diagnosis\nfirst_icu_stays_with_pneumonia AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.intime AS icu_intime,\n    i.outtime AS icu_outtime,\n    i.los AS icu_los_hours,\n    a.hospital_expire_flag\n  FROM\n    eligible_patients p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    -- First ICU stay per admission\n    i.intime = (\n      SELECT MIN(intime)\n      FROM `physionet-data.mimiciv_3_1_icu.icustays` i2\n      WHERE i2.subject_id = i.subject_id AND i2.hadm_id = i.hadm_id\n    )\n    -- Pneumonia diagnosis (using common pneumonia ICD codes)\n    AND (di.icd_code LIKE 'J18.%' OR di.icd_code LIKE 'J13.%' OR di.icd_code LIKE 'J15.%')\n),\n\n-- Count diagnostic procedures in first 72 hours of ICU stay\nprocedure_counts AS (\n  SELECT\n    f.subject_id,\n    f.stay_id,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM\n    first_icu_stays_with_pneumonia f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON f.subject_id = pe.subject_id AND f.stay_id = pe.stay_id\n  WHERE\n    -- Procedures within first 72 hours of ICU admission\n    TIMESTAMP_DIFF(pe.starttime, f.icu_intime, HOUR) <= 72\n    -- Filter for diagnostic procedures (example itemids, adjust as needed)\n    AND pe.itemid IN (\n      SELECT itemid\n      FROM `physionet-data.mimiciv_3_1_icu.d_items`\n      WHERE category LIKE '%diagnostic%'\n    )\n  GROUP BY\n    f.subject_id, f.stay_id\n),\n\n-- Calculate quintiles\nquintiles AS (\n  SELECT\n    subject_id,\n    stay_id,\n    procedure_count,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM\n    procedure_counts\n)\n\n-- Final aggregation by quintile\nSELECT\n  q.quintile,\n  AVG(q.procedure_count) AS avg_procedure_count,\n  AVG(f.icu_los_hours / 24) AS avg_icu_los_days,\n  AVG(CAST(f.hospital_expire_flag AS INT64)) * 100 AS mortality_percentage\nFROM\n  quintiles q\nJOIN\n  first_icu_stays_with_pneumonia f\n  ON q.subject_id = f.subject_id AND q.stay_id = f.stay_id\nGROUP BY\n  q.quintile\nORDER BY\n  q.quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [61:23]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [61:23]\n\nLocation: US\nJob ID: de1fc6a5-73c4-485e-b087-09606de1316a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

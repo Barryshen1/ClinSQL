@@ -1,0 +1,22 @@
+{
+  "query": "I have a 54-year-old female with ACS. Among female ICU patients aged 49\u201359, what percentile is a first-24h composite vital instability score of 70? Also report ICU length of stay (mean days) and hospital mortality (%) for the top decile.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        ie.subject_id,\n        ie.hadm_id,\n        ie.stay_id,\n        ie.los AS icu_los,\n        a.hospital_expire_flag,\n        -- Calculate a composite vital instability score from first 24h vitals\n        -- This is a simplified example using common vital signs\n        AVG(\n            CASE \n                WHEN ce.itemid IN (220045, 220050) THEN -- Heart rate\n                    CASE WHEN ce.valuenum BETWEEN 60 AND 100 THEN 0 \n                         WHEN ce.valuenum BETWEEN 40 AND 59 OR ce.valuenum BETWEEN 101 AND 120 THEN 25\n                         WHEN ce.valuenum < 40 OR ce.valuenum > 120 THEN 50\n                         ELSE 0 END\n                WHEN ce.itemid IN (220179, 220180) THEN -- Systolic BP\n                    CASE WHEN ce.valuenum BETWEEN 90 AND 140 THEN 0\n                         WHEN ce.valuenum BETWEEN 70 AND 89 OR ce.valuenum BETWEEN 141 AND 180 THEN 25\n                         WHEN ce.valuenum < 70 OR ce.valuenum > 180 THEN 50\n                         ELSE 0 END\n                WHEN ce.itemid IN (220210, 220277) THEN -- Respiratory rate\n                    CASE WHEN ce.valuenum BETWEEN 12 AND 20 THEN 0\n                         WHEN ce.valuenum BETWEEN 8 AND 11 OR ce.valuenum BETWEEN 21 AND 25 THEN 25\n                         WHEN ce.valuenum < 8 OR ce.valuenum > 25 THEN 50\n                         ELSE 0 END\n                WHEN ce.itemid IN (223761, 223762) THEN -- Temperature\n                    CASE WHEN ce.valuenum BETWEEN 36.0 AND 38.0 THEN 0\n                         WHEN ce.valuenum BETWEEN 35.0 AND 35.9 OR ce.valuenum BETWEEN 38.1 AND 39.0 THEN 25\n                         WHEN ce.valuenum < 35.0 OR ce.valuenum > 39.0 THEN 50\n                         ELSE 0 END\n                ELSE 0\n            END\n        ) AS composite_score\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ie.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON ie.hadm_id = a.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON ie.stay_id = ce.stay_id\n        AND ce.charttime BETWEEN ie.intime AND DATETIME_ADD(ie.intime, INTERVAL 24 HOUR)\n        AND ce.itemid IN (220045, 220050, 220179, 220180, 220210, 220277, 223761, 223762)\n    WHERE p.gender = 'F'\n        AND p.anchor_age BETWEEN 49 AND 59\n    GROUP BY ie.subject_id, ie.hadm_id, ie.stay_id, ie.los, a.hospital_expire_flag\n    HAVING composite_score IS NOT NULL\n),\n\npercentile_calc AS (\n    SELECT\n        composite_score,\n        PERCENT_RANK() OVER (ORDER BY composite_score) AS percentile_rank,\n        PERCENTILE_CONT(composite_score, 0.9) OVER() AS p90_score\n    FROM cohort\n),\n\npercentile_of_70 AS (\n    SELECT \n        MIN(percentile_rank) AS percentile_value\n    FROM percentile_calc\n    WHERE composite_score >= 70\n),\n\ntop_decile AS (\n    SELECT\n        c.subject_id,\n        c.hadm_id,\n        c.stay_id,\n        c.icu_los,\n        c.hospital_expire_flag\n    FROM cohort c\n    INNER JOIN percentile_calc pc\n        ON c.composite_score = pc.composite_score\n    WHERE c.composite_score >= pc.p90_score\n)\n\nSELECT\n    (SELECT percentile_value FROM percentile_of_70) AS percentile_of_70,\n    AVG(icu_los) AS mean_icu_los_top_decile,\n    ROUND(100 * AVG(hospital_expire_flag), 2) AS mortality_percent_top_decile\nFROM top_decile;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [31:30]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [31:30]\n\nLocation: US\nJob ID: a45ec212-bed6-4a16-af62-42d93628e48b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "Evaluating a 59-year-old male inpatient: among male inpatients aged 54\u201364 with heart failure, what is the 95th\u2011percentile laboratory instability score in first 48h? For patients \u2265that threshold, report in\u2011hospital mortality, mean LOS, and compare critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE di.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '428%')\n          OR\n          (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n        )\n    )\n),\n\nlab_scores AS (\n  SELECT\n    c.hadm_id,\n    COUNT(*) AS instability_score\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  ON\n    c.hadm_id = l.hadm_id\n  WHERE\n    l.charttime >= c.admittime\n    AND l.charttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND (l.flag = 'abnormal' OR l.flag = 'high' OR l.flag = 'low')\n  GROUP BY\n    c.hadm_id\n),\n\nscore_percentiles AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(95)] AS p95_score\n  FROM\n    lab_scores\n),\n\nhigh_risk_admissions AS (\n  SELECT\n    ls.hadm_id,\n    c.hospital_expire_flag,\n    c.los_days\n  FROM\n    lab_scores ls\n  CROSS JOIN\n    score_percentiles sp\n  JOIN\n    cohort c\n  ON\n    ls.hadm_id = c.hadm_id\n  WHERE\n    ls.instability_score >= sp.p95_score\n),\n\nhigh_risk_metrics AS (\n  SELECT\n    'High Instability' AS group_name,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(los_days) AS mean_los,\n    AVG(CASE WHEN l.flag IN ('abnormal', 'high', 'low') THEN 1 ELSE 0 END) AS critical_lab_rate\n  FROM\n    high_risk_admissions hra\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  ON\n    hra.hadm_id = l.hadm_id\n  WHERE\n    l.charttime >= (\n      SELECT admittime FROM cohort c WHERE c.hadm_id = l.hadm_id\n    )\n    AND l.charttime <= DATETIME_ADD(\n      (SELECT admittime FROM cohort c WHERE c.hadm_id = l.hadm_id), INTERVAL 48 HOUR\n    )\n),\n\ncontrol_cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 54 AND 64\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE di.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '428%')\n          OR\n          (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n        )\n    )\n),\n\ncontrol_metrics AS (\n  SELECT\n    'Control' AS group_name,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(los_days) AS mean_los,\n    AVG(CASE WHEN l.flag IN ('abnormal', 'high', 'low') THEN 1 ELSE 0 END) AS critical_lab_rate\n  FROM\n    control_cohort cc\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  ON\n    cc.hadm_id = l.hadm_id\n  WHERE\n    l.charttime >= cc.admittime\n    AND l.charttime <= DATETIME_ADD(cc.admittime, INTERVAL 48 HOUR)\n)\n\nSELECT * FROM high_risk_metrics\nUNION ALL\nSELECT * FROM control_metrics;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 INNER JOIN must have an immediately following ON or USING clause at [64:3]; reason: invalidQuery, location: query, message: INNER JOIN must have an immediately following ON or USING clause at [64:3]\n\nLocation: US\nJob ID: b3b296bc-f390-4440-a738-28dec856af8c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 INNER JOIN must have an immediately following ON or USING clause at [82:3]; reason: invalidQuery, location: query, message: INNER JOIN must have an immediately following ON or USING clause at [82:3]\n\nLocation: US\nJob ID: 697798ca-6acd-41fc-8a88-b611b0dc64be\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

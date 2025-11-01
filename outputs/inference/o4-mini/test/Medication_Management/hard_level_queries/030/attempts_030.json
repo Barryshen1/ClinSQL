@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  -- 1. Identify female inpatients aged 71\u201381 with acute pancreatitis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n      ON a.hadm_id = dx.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n      ON dx.icd_code = dd.icd_code\n      AND dx.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 71 AND 81\n    AND LOWER(dd.long_title) LIKE '%acute pancreatitis%'\n),\nmed_complexity AS (\n  -- 2. Compute the medication complexity score for each admission over the first 72 hours\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    COUNT(DISTINCT pres.drug) AS complexity_score\n  FROM\n    cohort AS c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pres\n      ON c.hadm_id = pres.hadm_id\n      AND pres.starttime >= c.admittime\n      AND pres.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR)\n  GROUP BY\n    c.subject_id,\n    c.hadm_id\n),\nadm_info AS (\n  -- 3. Compute LOS, mortality, and 30-day readmission flag\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    TIMESTAMP_DIFF(c.dischtime, c.admittime, DAY) AS los,\n    c.hospital_expire_flag AS mortality_flag,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n        WHERE\n          a2.subject_id = c.subject_id\n          AND a2.admittime > c.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmit_30d\n  FROM\n    cohort AS c\n),\nscored AS (\n  -- 4. Combine complexity with admission info and assign tertiles\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.complexity_score,\n    ai.los,\n    ai.mortality_flag,\n    ai.readmit_30d,\n    NTILE(3) OVER (ORDER BY m.complexity_score) AS complexity_tertile\n  FROM\n    med_complexity AS m\n    JOIN adm_info AS ai\n      ON m.hadm_id = ai.hadm_id\n)\n-- 5. Aggregate results by tertile\nSELECT\n  complexity_tertile,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(los), 2) AS avg_los_days,\n  ROUND(AVG(mortality_flag) * 100, 1) AS pct_inhospital_mortality,\n  ROUND(AVG(readmit_30d) * 100, 1) AS pct_30d_readmission\nFROM\n  scored\nGROUP BY\n  complexity_tertile\nORDER BY\n  complexity_tertile;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

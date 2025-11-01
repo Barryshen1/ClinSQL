@@ -1,0 +1,16 @@
+{
+  "query": "I have a 90-year-old male ICU patient. Among male ICU patients aged 85\u201395, what is the percentile rank of a per-stay average temperature of 36.0\u00b0C during the ICU stay?",
+  "final_sql": "WITH temp_chart AS (\n  -- Select temperature chart events for male patients aged 85-95, convert to Celsius\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    ce.valuenum AS raw_valuenum,\n    LOWER(COALESCE(ce.valueuom, di.unitname, '')) AS unit_norm,\n    CASE\n      WHEN LOWER(COALESCE(ce.valueuom, di.unitname, '')) LIKE '%f%' THEN (ce.valuenum - 32.0) * 5.0/9.0\n      ELSE ce.valuenum\n    END AS temp_c\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON ce.subject_id = icu.subject_id\n    AND ce.hadm_id = icu.hadm_id\n    AND ce.stay_id = icu.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE\n    -- identify temperature-related items by label/abbreviation\n    (LOWER(di.label) LIKE '%temperature%' OR LOWER(di.abbreviation) LIKE '%temp%')\n    AND ce.valuenum IS NOT NULL\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 85 AND 95\n),\n\nper_stay_avg AS (\n  -- Compute per-stay average temperature in Celsius, only keeping plausible temps\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    AVG(temp_c) AS avg_temp_c,\n    COUNT(*) AS n_temps\n  FROM temp_chart\n  WHERE temp_c BETWEEN 25.0 AND 45.0\n  GROUP BY subject_id, hadm_id, stay_id\n)\n\nSELECT\n  (SELECT COUNT(*) FROM per_stay_avg WHERE avg_temp_c <= 36.0) AS n_stays_leq_36_0,\n  (SELECT COUNT(*) FROM per_stay_avg) AS total_stays_considered,\n  ROUND(\n    100.0 * (SELECT COUNT(*) FROM per_stay_avg WHERE avg_temp_c <= 36.0)\n    / NULLIF((SELECT COUNT(*) FROM per_stay_avg), 0),\n    2\n  ) AS percentile_rank_pct_of_36_0\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 95\u2011year\u2011old man. Among male patients aged 90\u2013100 admitted with ACS, what are counts, percentages, and mean length of stay for index Troponin T categorized as normal/borderline/elevated?",
+  "final_sql": "WITH troponin_first AS (\n  -- Get first (index) Troponin T per admission\n  SELECT\n    l.hadm_id,\n    l.valuenum AS troponin_value,\n    ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime ASC) AS rn\n  FROM\n    physionet-data.mimiciv_3_1_hosp.labevents AS l\n  INNER JOIN\n    physionet-data.mimiciv_3_1_hosp.d_labitems AS d\n    ON l.itemid = d.itemid\n  WHERE\n    LOWER(d.label) = 'troponin t'\n    AND l.valuenum IS NOT NULL\n),\ntroponin_index AS (\n  -- Keep only first Troponin T per admission\n  SELECT\n    hadm_id,\n    troponin_value\n  FROM\n    troponin_first\n  WHERE\n    rn = 1\n),\nacs_admissions AS (\n  -- Identify admissions with ACS diagnosis\n  SELECT\n    di.hadm_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd AS di\n  INNER JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses AS d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE\n    (d.icd_version = 9 AND di.icd_code LIKE '410%')\n    OR\n    (d.icd_version = 10 AND REGEXP_CONTAINS(di.icd_code, r'^(I21|I22|I23|I24\\.0|I24\\.8|I24\\.9)'))\n),\neligible_patients AS (\n  -- Filter patients: male, age 90\u2013100\n  SELECT\n    subject_id\n  FROM\n    physionet-data.mimiciv_3_1_hosp.patients\n  WHERE\n    gender = 'M'\n    AND anchor_age BETWEEN 90 AND 100\n),\neligible_admissions AS (\n  -- Admissions for eligible patients with ACS\n  SELECT\n    a.hadm_id,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions AS a\n  INNER JOIN\n    eligible_patients AS p\n    ON a.subject_id = p.subject_id\n  INNER JOIN\n    acs_admissions AS acs\n    ON a.hadm_id = acs.hadm_id\n),\ntroponin_with_category AS (\n  -- Assign Troponin T category\n  SELECT\n    e.hadm_id,\n    e.los,\n    t.troponin_value,\n    CASE\n      WHEN t.troponin_value <= 0.01 THEN 'Normal'\n      WHEN t.troponin_value <= 0.04 THEN 'Borderline'\n      ELSE 'Elevated'\n    END AS troponin_category\n  FROM\n    eligible_admissions AS e\n  INNER JOIN\n    troponin_index AS t\n    ON e.hadm_id = t.hadm_id\n),\ngrouped_stats AS (\n  -- Aggregate stats by category\n  SELECT\n    troponin_category,\n    COUNT(*) AS count,\n    AVG(los) AS mean_los\n  FROM\n    troponin_with_category\n  GROUP BY\n    troponin_category\n),\ntotal_count AS (\n  -- Total number of admissions for percentage\n  SELECT\n    COUNT(*) AS total\n  FROM\n    troponin_with_category\n)\nSELECT\n  g.troponin_category,\n  g.count,\n  ROUND(g.count * 100.0 / t.total, 2) AS percentage,\n  ROUND(g.mean_los, 2) AS mean_los\nFROM\n  grouped_stats AS g\nCROSS JOIN\n  total_count AS t\nORDER BY\n  CASE\n    WHEN troponin_category = 'Normal' THEN 1\n    WHEN troponin_category = 'Borderline' THEN 2\n    WHEN troponin_category = 'Elevated' THEN 3\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los not found inside a at [54:7]; reason: invalidQuery, location: query, message: Name los not found inside a at [54:7]\n\nLocation: US\nJob ID: 30a0fa73-414f-432b-b871-65572592f698\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

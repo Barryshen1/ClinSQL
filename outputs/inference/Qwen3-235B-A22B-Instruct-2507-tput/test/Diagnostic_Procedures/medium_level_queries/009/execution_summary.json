@@ -1,0 +1,22 @@
+{
+  "query": "For a 49-year-old woman with TIA: among female patients 44\u201354, what are p25, p50, p75 of diagnostic imaging per admission by LOS (1\u20134 vs 5\u20137 days) and ICU use?",
+  "final_sql": "WITH patient_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    p.gender,\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 44 AND 54\n),\ntia_admissions AS (\n  SELECT DISTINCT pa.hadm_id\n  FROM patient_admissions pa\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON pa.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE LOWER(d.long_title) LIKE '%transient ischemic attack%'\n     OR LOWER(d.long_title) LIKE '%tia%'\n     OR d.icd_code IN ('G45.9', 'G45.8', 'G45.0', 'G45.1', 'G45.2', 'G45.3', 'G45.4')\n),\nimaging_procs AS (\n  SELECT\n    h.hadm_id,\n    COUNT(*) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n    ON h.hcpcs_cd = d.code\n  WHERE d.category = 2  -- Corrected: category is INT64, 2 = Diagnostic Imaging\n    OR LOWER(d.short_description) LIKE '%ct%'\n    OR LOWER(d.short_description) LIKE '%mri%'\n    OR LOWER(d.short_description) LIKE '%angiogram%'\n    OR LOWER(d.short_description) LIKE '%ultrasound%'\n    OR LOWER(d.short_description) LIKE '%echo%'\n  GROUP BY h.hadm_id\n),\nadmission_groups AS (\n  SELECT\n    pa.hadm_id,\n    pa.los_days,\n    CASE\n      WHEN i.stay_id IS NOT NULL THEN 1\n      ELSE 0\n    END AS icu_used,\n    COALESCE(ip.imaging_count, 0) AS imaging_count\n  FROM patient_admissions pa\n  JOIN tia_admissions tia ON pa.hadm_id = tia.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON pa.hadm_id = i.hadm_id\n  LEFT JOIN imaging_procs ip\n    ON pa.hadm_id = ip.hadm_id\n  WHERE pa.los_days BETWEEN 1 AND 7\n),\ngrouped_stats AS (\n  SELECT\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7 days'\n    END AS los_group,\n    CASE WHEN icu_used = 1 THEN 'Yes' ELSE 'No' END AS icu_use,\n    imaging_count\n  FROM admission_groups\n)\nSELECT\n  los_group,\n  icu_use,\n  APPROX_QUANTILES(imaging_count, 100)[OFFSET(25)] AS p25_imaging,\n  APPROX_QUANTILES(imaging_count, 100)[OFFSET(50)] AS p50_imaging,\n  APPROX_QUANTILES(imaging_count, 100)[OFFSET(75)] AS p75_imaging\nFROM grouped_stats\nGROUP BY los_group, icu_use\nORDER BY los_group, icu_use;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [34:9]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [34:9]\n\nLocation: US\nJob ID: 7b7553f3-339e-4b61-b6c1-a99e37b8712e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

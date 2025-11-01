@@ -1,0 +1,23 @@
+{
+  "query": "I have a 49-year-old male with pulmonary embolism. Among male ICU patients 44\u201354 with PE, stratify diagnostic intensity during first ICU stay (distinct procedures in first 72 ICU hours) into quintiles and report average procedure count, hospital LOS and mortality%.",
+  "final_sql": "WITH base_population AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) BETWEEN 44 AND 54\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      WHERE di.hadm_id = a.hadm_id\n        AND (\n          (di.icd_version = 9 AND di.icd_code = '4151')\n          OR (di.icd_version = 10 AND di.icd_code LIKE 'I26%')\n        )\n    )\n),\nfirst_icu_stay AS (\n  SELECT \n    bp.*,\n    i.stay_id,\n    i.intime,\n    ROW_NUMBER() OVER (PARTITION BY bp.hadm_id ORDER BY i.intime) AS icu_stay_order\n  FROM base_population bp\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON bp.hadm_id = i.hadm_id\n),\nfirst_stay AS (\n  SELECT *\n  FROM first_icu_stay\n  WHERE icu_stay_order = 1\n),\nprocedure_counts AS (\n  SELECT \n    fs.subject_id,\n    fs.hadm_id,\n    fs.admittime,\n    fs.dischtime,\n    fs.hospital_expire_flag,\n    COUNT(DISTINCT p.itemid) AS procedure_count\n  FROM first_stay fs\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON fs.stay_id = p.stay_id\n    AND p.starttime >= fs.intime\n    AND p.starttime < DATETIME_ADD(fs.intime, INTERVAL 72 HOUR)\n  GROUP BY fs.subject_id, fs.hadm_id, fs.admittime, fs.dischtime, fs.hospital_expire_flag\n),\nquintile_data AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM procedure_counts\n)\nSELECT \n  quintile,\n  AVG(procedure_count) AS avg_procedure_count,\n  AVG(DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0) AS avg_hospital_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_pct\nFROM quintile_data\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"embolism\" at [1:16]\n\nLocation: US\nJob ID: 6adfda80-f5ea-43c2-ad61-8add29c96d28\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

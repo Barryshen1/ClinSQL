@@ -1,0 +1,22 @@
+{
+  "query": "My 53\u2011year\u2011old female inpatient has T2DM and HF. Among inpatients 48\u201358 with both, give initiation rates (%) of injectable GLP\u20111s first 72h vs last 48h and absolute difference (pp).",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime,\n    p.gender, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n),\nhas_t2dm AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND icd_code LIKE '250.%' \n     AND icd_code NOT LIKE '250.1%' AND icd_code NOT LIKE '250.3%')\n    OR (icd_version = 10 AND icd_code LIKE 'E11.%')\n  )\n  GROUP BY hadm_id\n),\nhas_hf AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND icd_code LIKE '428.%')\n    OR (icd_version = 10 AND icd_code LIKE 'I50.%')\n  )\n  GROUP BY hadm_id\n),\npatient_cohort AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN has_t2dm t ON c.hadm_id = t.hadm_id\n  JOIN has_hf h ON c.hadm_id = h.hadm_id\n),\nglp1_admin AS (\n  SELECT e.subject_id, e.hadm_id, e.charttime\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` e\n  JOIN `physionet-data.mimiciv_3_1_hosp.emar_detail` ed \n    ON e.subject_id = ed.subject_id \n    AND e.emar_id = ed.emar_id \n    AND e.emar_seq = ed.emar_seq\n  WHERE (\n    LOWER(e.medication) LIKE '%liraglutide%'\n    OR LOWER(e.medication) LIKE '%exenatide%'\n    OR LOWER(e.medication) LIKE '%dulaglutide%'\n    OR LOWER(e.medication) LIKE '%semaglutide%'\n    OR LOWER(e.medication) LIKE '%albiglutide%'\n    OR LOWER(e.medication) LIKE '%lixisenatide%'\n  )\n    AND LOWER(ed.route) IN ('subcutaneous', 'intravenous', 'intramuscular')\n    AND e.hadm_id IS NOT NULL\n),\nglp1_first AS (\n  SELECT subject_id, hadm_id, MIN(charttime) AS first_time\n  FROM glp1_admin\n  GROUP BY subject_id, hadm_id\n),\nanalysis AS (\n  SELECT pc.*,\n    gf.first_time,\n    CASE \n      WHEN gf.first_time >= pc.admittime \n        AND gf.first_time < pc.dischtime \n        AND gf.first_time < pc.admittime + INTERVAL 72 HOUR \n      THEN 1 \n      ELSE 0 \n    END AS init_first72,\n    CASE \n      WHEN gf.first_time >= pc.admittime \n        AND gf.first_time < pc.dischtime \n        AND gf.first_time >= pc.dischtime - INTERVAL 48 HOUR \n      THEN 1 \n      ELSE 0 \n    END AS init_last48\n  FROM patient_cohort pc\n  LEFT JOIN glp1_first gf \n    ON pc.subject_id = gf.subject_id AND pc.hadm_id = gf.hadm_id\n)\nSELECT \n  ROUND(AVG(init_first72) * 100, 2) AS first72_rate_pct,\n  ROUND(AVG(init_last48) * 100, 2) AS last48_rate_pct,\n  ROUND(ABS(AVG(init_first72) - AVG(init_last48)) * 100, 2) AS abs_diff_pp\nFROM analysis;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [14:6]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [14:6]\n\nLocation: US\nJob ID: 4d0f20dd-ab24-4f33-82cc-639484a2deba\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

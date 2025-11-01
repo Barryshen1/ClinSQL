@@ -1,0 +1,28 @@
+{
+  "query": "I have a 71\u2011year\u2011old male ICU patient. For male ICU patients aged 66\u201376 with HHS, stratify 48\u2011hour procedure burden into quintiles and report per quintile: number of ICU stays, mean procedures, min/max, hospital mortality %, mean hospital LOS, and 30\u2011day readmission %.",
+  "final_sql": "WITH\n-- CTE 1: Find hospital admissions (hadm_id) with a diagnosis of HHS\nhhs_hadms AS (\n    SELECT DISTINCT dx.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx\n        ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n    WHERE\n        -- Find diagnoses related to Hyperglycemic Hyperosmolar State (HHS)\n        LOWER(d_dx.long_title) LIKE '%hyperosmolar%'\n),\n\n-- CTE 2: Identify the cohort of ICU stays for male patients aged 66-76 with HHS\ncohort_stays AS (\n    SELECT\n        icu.subject_id,\n        icu.hadm_id,\n        icu.stay_id,\n        icu.intime\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n        ON icu.subject_id = p.subject_id\n    -- Filter for hospital admissions with an HHS diagnosis\n    INNER JOIN hhs_hadms\n        ON icu.hadm_id = hhs_hadms.hadm_id\n    WHERE\n        p.gender = 'M'\n        -- Calculate age at ICU admission and filter for the 66-76 age range\n        AND ((EXTRACT(YEAR FROM icu.intime) - p.anchor_year) + p.anchor_age) BETWEEN 66 AND 76\n),\n\n-- CTE 3: Count procedures within the first 48 hours of each ICU stay for the cohort\nproc_counts AS (\n    SELECT\n        cs.subject_id,\n        cs.hadm_id,\n        cs.stay_id,\n        -- Count procedures that start within the first 48 hours of the ICU stay\n        COUNT(pe.itemid) AS procedure_count\n    FROM cohort_stays AS cs\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n        ON cs.stay_id = pe.stay_id\n        AND pe.starttime BETWEEN cs.intime AND DATETIME_ADD(cs.intime, INTERVAL 48 HOUR)\n    GROUP BY\n        cs.subject_id, cs.hadm_id, cs.stay_id\n),\n\n-- CTE 4: Augment admissions data with LOS and 30-day readmission flag for cohort patients\nadmissions_augmented AS (\n    SELECT\n        hadm_id,\n        subject_id,\n        admittime,\n        dischtime,\n        hospital_expire_flag,\n        -- Calculate hospital length of stay in days\n        DATETIME_DIFF(dischtime, admittime, DAY) AS hospital_los_days,\n        -- Determine if a readmission occurred within 30 days of discharge\n        CASE\n            WHEN\n                DATETIME_DIFF(\n                    LEAD(admittime, 1) OVER (PARTITION BY subject_id ORDER BY admittime),\n                    dischtime,\n                    DAY\n                ) <= 30\n                THEN 1\n            ELSE 0\n        END AS is_readmitted_30_days\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n    -- Optimization: Only process admissions for patients in our cohort\n    WHERE subject_id IN (SELECT DISTINCT subject_id FROM cohort_stays)\n),\n\n-- CTE 5: Combine stay-level procedure counts with admission-level outcomes\n-- and assign quintiles based on procedure count\ndata_with_quintiles AS (\n    SELECT\n        pc.stay_id,\n        pc.procedure_count,\n        adm.hospital_expire_flag,\n        adm.hospital_los_days,\n        adm.is_readmitted_30_days,\n        -- Stratify by procedure count into 5 groups (quintiles)\n        NTILE(5) OVER (ORDER BY pc.procedure_count) AS procedure_quintile\n    FROM proc_counts AS pc\n    INNER JOIN admissions_augmented AS adm\n        ON pc.hadm_id = adm.hadm_id\n)\n\n-- Final step: Group by quintile and calculate the requested metrics\nSELECT\n    procedure_quintile,\n    COUNT(stay_id) AS number_of_icu_stays,\n    ROUND(AVG(procedure_count), 2) AS mean_procedures,\n    MIN(procedure_count) AS min_procedures,\n    MAX(procedure_count) AS max_procedures,\n    ROUND(AVG(CAST(hospital_expire_flag AS BIGNUMERIC)) * 100, 2) AS hospital_mortality_pct,\n    ROUND(AVG(hospital_los_days), 2) AS mean_hospital_los_days,\n    ROUND(AVG(CAST(is_readmitted_30_days AS BIGNUMERIC)) * 100, 2) AS readmission_30_day_pct\nFROM data_with_quintiles\nGROUP BY\n    procedure_quintile\nORDER BY\n    procedure_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: f27d165a-6bea-4b99-8d54-dc76fadaa1e1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: d81c661b-4dea-4c98-844d-6ed84126ea4a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

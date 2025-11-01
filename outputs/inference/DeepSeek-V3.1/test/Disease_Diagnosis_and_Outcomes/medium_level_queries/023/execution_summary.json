@@ -1,0 +1,28 @@
+{
+  "query": "Female patient, 57: among female patients aged 52\u201362 with ischemic versus hemorrhagic stroke, report in\u2011hospital mortality (%), median LOS (<8 vs \u22658 days) and CKD/diabetes prevalence by comorbidity tertile",
+  "final_sql": "WITH stroke_patients AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Use MAX aggregation instead of window functions\n    MAX(CASE \n        WHEN (diag.icd_version = 10 AND diag.icd_code LIKE 'I63%') \n          OR (diag.icd_version = 9 AND (diag.icd_code LIKE '433%' OR diag.icd_code LIKE '434%' OR diag.icd_code = '436'))\n        THEN 1 ELSE 0 END) AS ischemic_flag,\n    MAX(CASE \n        WHEN (diag.icd_version = 10 AND (diag.icd_code LIKE 'I60%' OR diag.icd_code LIKE 'I61%' OR diag.icd_code LIKE 'I62%'))\n          OR (diag.icd_version = 9 AND (diag.icd_code LIKE '430%' OR diag.icd_code LIKE '431%' OR diag.icd_code LIKE '432%'))\n        THEN 1 ELSE 0 END) AS hemorrhagic_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON a.hadm_id = diag.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 52 AND 62\n  GROUP BY p.subject_id, p.gender, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  -- Filter for stroke patients after aggregation\n  HAVING ischemic_flag = 1 OR hemorrhagic_flag = 1\n),\n\nstroke_types AS (\n  SELECT \n    *,\n    CASE \n      WHEN ischemic_flag = 1 AND hemorrhagic_flag = 0 THEN 'Ischemic'\n      WHEN hemorrhagic_flag = 1 AND ischemic_flag = 0 THEN 'Hemorrhagic'\n      ELSE 'Both' \n    END AS stroke_type\n  FROM stroke_patients\n),\n\ncomorbidities AS (\n  SELECT \n    hadm_id,\n    MAX(CASE WHEN (\n        (icd_version = 10 AND icd_code LIKE 'N18%') OR\n        (icd_version = 9 AND icd_code LIKE '585%')\n      ) THEN 1 ELSE 0 END) AS ckd,\n    MAX(CASE WHEN (\n        (icd_version = 10 AND (icd_code LIKE 'E10%' OR icd_code LIKE 'E11%')) OR\n        (icd_version = 9 AND icd_code LIKE '250%')\n      ) THEN 1 ELSE 0 END) AS diabetes\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\n\ncomorbidity_burden AS (\n  SELECT \n    hadm_id,\n    COUNT(DISTINCT icd_code) AS num_diagnoses\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE hadm_id IN (SELECT hadm_id FROM stroke_types)\n  GROUP BY hadm_id\n),\n\ntertiles AS (\n  SELECT \n    st.*,\n    c.ckd,\n    c.diabetes,\n    cb.num_diagnoses,\n    NTILE(3) OVER (PARTITION BY st.stroke_type ORDER BY cb.num_diagnoses) AS comorbidity_tertile\n  FROM stroke_types st\n  LEFT JOIN comorbidities c ON st.hadm_id = c.hadm_id\n  LEFT JOIN comorbidity_burden cb ON st.hadm_id = cb.hadm_id\n),\n\nlos_data AS (\n  SELECT \n    *,\n    DATE_DIFF(dischtime, admittime, DAY) AS los\n  FROM tertiles\n),\n\n-- Calculate median LOS per group\nmedian_los_per_group AS (\n  SELECT\n    stroke_type,\n    comorbidity_tertile,\n    PERCENTILE_CONT(los, 0.5) OVER (PARTITION BY stroke_type, comorbidity_tertile) AS median_los\n  FROM los_data\n  GROUP BY stroke_type, comorbidity_tertile, los\n),\n\n-- Aggregate other metrics\naggregated_metrics AS (\n  SELECT\n    stroke_type,\n    comorbidity_tertile,\n    COUNT(*) AS num_admissions,\n    ROUND(100 * AVG(hospital_expire_flag), 2) AS in_hospital_mortality_percent,\n    ROUND(100 * AVG(ckd), 2) AS ckd_prevalence_percent,\n    ROUND(100 * AVG(diabetes), 2) AS diabetes_prevalence_percent\n  FROM los_data\n  GROUP BY stroke_type, comorbidity_tertile\n)\n\n-- Join median LOS to aggregated results\nSELECT\n  a.stroke_type,\n  a.comorbidity_tertile,\n  a.num_admissions,\n  a.in_hospital_mortality_percent,\n  m.median_los,\n  a.ckd_prevalence_percent,\n  a.diabetes_prevalence_percent\nFROM aggregated_metrics a\nLEFT JOIN (\n  SELECT DISTINCT stroke_type, comorbidity_tertile, median_los\n  FROM median_los_per_group\n) m\n  ON a.stroke_type = m.stroke_type AND a.comorbidity_tertile = m.comorbidity_tertile\nORDER BY a.stroke_type, a.comorbidity_tertile;",
+  "execution_success": true,
+  "row_count": 9,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Double function call parentheses at [13:13]; reason: invalidQuery, location: query, message: Syntax error: Double function call parentheses at [13:13]\n\nLocation: US\nJob ID: 57446d54-dd6e-458c-a9ce-55cfeacaef9e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column median_los contains an analytic function, which is not allowed in GROUP BY at [98:44]; reason: invalidQuery, location: query, message: Column median_los contains an analytic function, which is not allowed in GROUP BY at [98:44]\n\nLocation: US\nJob ID: 8afa3e60-27e4-420d-b406-7ebf6d85f58e\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 9,
+      "error": null
+    }
+  ]
+}

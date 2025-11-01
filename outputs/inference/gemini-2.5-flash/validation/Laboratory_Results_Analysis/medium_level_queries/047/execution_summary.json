@@ -1,0 +1,28 @@
+{
+  "query": "I have a 72-year-old woman admitted with ACS. For females aged 67\u201377 with ACS and initial Troponin T above the 99th percentile, report patient/admission counts and initial troponin mean, median, IQR.",
+  "final_sql": "WITH admissions_filtered AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 67 AND 77\n),\nacs_admissions AS (\n    SELECT DISTINCT\n        af.subject_id,\n        af.hadm_id,\n        af.admittime\n    FROM\n        admissions_filtered AS af\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n        ON af.hadm_id = diag.hadm_id\n    WHERE\n        (\n            diag.icd_version = 9 AND (\n                diag.icd_code LIKE '410%'   -- Acute myocardial infarction (e.g., 410.0-410.9)\n                OR diag.icd_code = '4111'   -- Unstable angina\n                OR diag.icd_code = '4118'   -- Other specified forms of acute ischemic heart disease (e.g., intermediate coronary syndrome)\n                OR diag.icd_code LIKE '413%' -- Angina Pectoris (e.g., 413.0-413.9)\n            )\n        ) OR (\n            diag.icd_version = 10 AND (\n                diag.icd_code = 'I200'      -- Unstable angina\n                OR diag.icd_code LIKE 'I21%'   -- Myocardial infarction (e.g., I21.0-I21.9)\n                OR diag.icd_code LIKE 'I22%'   -- Subsequent myocardial infarction (e.g., I22.0-I22.9)\n                OR diag.icd_code LIKE 'I24%'   -- Other acute ischemic heart diseases (e.g., I24.0-I24.9)\n            )\n        )\n),\ntroponin_t_measurements AS (\n    SELECT\n        le.subject_id,\n        le.hadm_id,\n        le.charttime,\n        le.valuenum\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    INNER JOIN\n        acs_admissions AS acs\n        ON le.hadm_id = acs.hadm_id\n    WHERE\n        le.itemid = 51002 -- Itemid for Troponin T\n        AND le.valuenum IS NOT NULL\n        AND le.valuenum >= 0 -- Exclude erroneous negative values\n        AND le.charttime >= acs.admittime -- Ensure measurement is during or after admission\n),\ninitial_troponin_raw AS ( -- Identifies the first troponin measurement for each admission\n    SELECT\n        t.subject_id,\n        t.hadm_id,\n        t.valuenum,\n        ROW_NUMBER() OVER (PARTITION BY t.hadm_id ORDER BY t.charttime ASC) AS rn\n    FROM\n        troponin_t_measurements AS t\n),\nfiltered_initial_troponin AS ( -- Filters to only include the first measurement above the 99th percentile threshold\n    SELECT\n        it.subject_id,\n        it.hadm_id,\n        it.valuenum AS initial_troponin_t_value\n    FROM\n        initial_troponin_raw AS it\n    WHERE\n        it.rn = 1 -- Select the first measurement for each admission\n        AND it.valuenum > 0.03 -- Apply the 99th percentile cutoff (common clinical threshold in ng/mL or ug/L)\n)\n-- Final aggregation to report patient/admission counts, mean, median, and IQR\nSELECT\n    COUNT(DISTINCT fit.subject_id) AS patient_count,\n    COUNT(DISTINCT fit.hadm_id) AS admission_count,\n    AVG(fit.initial_troponin_t_value) AS initial_troponin_mean,\n    APPROX_QUANTILES(fit.initial_troponin_t_value, 100)[OFFSET(50)] AS initial_troponin_median,\n    (APPROX_QUANTILES(fit.initial_troponin_t_value, 100)[OFFSET(75)] - APPROX_QUANTILES(fit.initial_troponin_t_value, 100)[OFFSET(25)]) AS initial_troponin_iqr\nFROM\n    filtered_initial_troponin AS fit;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [77:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [77:1]\n\nLocation: US\nJob ID: 198dc0dd-d911-4e92-b876-1866578e7de5\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: b3dfbdd2-b5f2-4228-8683-e153092e14e1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

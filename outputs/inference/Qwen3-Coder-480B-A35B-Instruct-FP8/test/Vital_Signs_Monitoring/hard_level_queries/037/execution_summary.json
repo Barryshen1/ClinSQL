@@ -1,0 +1,28 @@
+{
+  "query": "My 50\u2011yr\u2011old male patient: in male ICU patients 45\u201355 with heart failure, what's the 99th percentile of the 72h composite instability score? For the most unstable quartile, compare average tachycardia (>100 bpm), MAP<65, tachypnea (>20), ICU LOS and mortality to ICU population.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los,\n    CASE WHEN adm.deathtime IS NOT NULL OR (icu.outtime IS NOT NULL AND adm.discharge_location = 'DEAD/EXPIRED') THEN 1 ELSE 0 END AS mortality\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d_dx\n    ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 45 AND 55\n    AND LOWER(d_dx.long_title) LIKE '%heart failure%'\n),\n\nvitals AS (\n  SELECT\n    itemid,\n    label\n  FROM\n    `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE\n    LOWER(label) IN ('heart rate', 'map', 'respiratory rate')\n),\n\nvitals_72h AS (\n  SELECT\n    c.stay_id,\n    c.los,\n    c.mortality,\n    ce.itemid,\n    ce.valuenum,\n    vit.label\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c.stay_id = ce.stay_id\n  JOIN\n    vitals vit\n    ON ce.itemid = vit.itemid\n  WHERE\n    ce.charttime >= c.intime\n    AND ce.charttime <= DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\n\ninstability_score AS (\n  SELECT\n    stay_id,\n    los,\n    mortality,\n    SUM(\n      CASE WHEN label = 'Heart Rate' AND valuenum > 100 THEN 1 ELSE 0 END +\n      CASE WHEN label = 'MAP' AND valuenum < 65 THEN 1 ELSE 0 END +\n      CASE WHEN label = 'Respiratory Rate' AND valuenum > 20 THEN 1 ELSE 0 END\n    ) AS instability_score\n  FROM\n    vitals_72h\n  GROUP BY\n    stay_id, los, mortality\n),\n\npercentile_99 AS (\n  SELECT\n    APPROX_QUANTILES(instability_score, 100)[OFFSET(99)] AS score_99th\n  FROM\n    instability_score\n),\n\nunstable_quartile AS (\n  SELECT\n    *,\n    CASE WHEN instability_score >= (SELECT score_99th FROM percentile_99) THEN 1 ELSE 0 END AS in_top_quartile\n  FROM\n    instability_score\n),\n\nunstable_stats AS (\n  SELECT\n    AVG(CASE WHEN instability_score > 0 THEN 1.0 ELSE 0 END) AS avg_any_instability,\n    AVG(CASE WHEN instability_score >= (SELECT score_99th FROM percentile_99) THEN 1.0 ELSE 0 END) AS pct_in_top_quartile,\n    AVG(los) AS avg_icu_los,\n    AVG(mortality) AS mortality_rate\n  FROM\n    unstable_quartile\n  WHERE\n    in_top_quartile = 1\n),\n\noverall_stats AS (\n  SELECT\n    AVG(CASE WHEN instability_score > 0 THEN 1.0 ELSE 0 END) AS avg_any_instability,\n    AVG(los) AS avg_icu_los,\n    AVG(mortality) AS mortality_rate\n  FROM\n    instability_score\n)\n\nSELECT\n  (SELECT score_99th FROM percentile_99) AS instability_score_99th_percentile,\n  u.avg_any_instability AS unstable_avg_any_instability,\n  u.avg_icu_los AS unstable_avg_icu_los,\n  u.mortality_rate AS unstable_mortality_rate,\n  o.avg_any_instability AS overall_avg_any_instability,\n  o.avg_icu_los AS overall_avg_icu_los,\n  o.mortality_rate AS overall_mortality_rate\nFROM\n  unstable_stats u,\n  overall_stats o;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, los FLOAT64, mortality INT64, ...> does not at [80:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, los FLOAT64, mortality INT64, ...> does not at [80:22]\n\nLocation: US\nJob ID: a78b8c43-0bd7-48b2-a60f-d495826d2e94\n",
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, los FLOAT64, mortality INT64, ...> does not at [84:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, los FLOAT64, mortality INT64, ...> does not at [84:22]\n\nLocation: US\nJob ID: 713d18dc-06c8-4090-8c54-9d553357c641\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, los FLOAT64, mortality INT64, ...> does not at [80:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, los FLOAT64, mortality INT64, ...> does not at [80:22]\n\nLocation: US\nJob ID: c8b63db0-572f-4c1d-ad77-22316b5a7ffd\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, los FLOAT64, mortality INT64, ...> does not at [80:22]; reason: invalidQuery, location: query, message: Argument 1 to APPROX_QUANTILES must support ordering; Type STRUCT<stay_id INT64, los FLOAT64, mortality INT64, ...> does not at [80:22]\n\nLocation: US\nJob ID: a78b8c43-0bd7-48b2-a60f-d495826d2e94\n"
+    }
+  ]
+}

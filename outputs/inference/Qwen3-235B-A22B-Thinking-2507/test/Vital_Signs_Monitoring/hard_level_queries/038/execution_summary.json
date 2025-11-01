@@ -1,0 +1,29 @@
+{
+  "query": "I have a 68\u2011year\u2011old woman with status epilepticus. For female ICU patients aged 63\u201373 with status epilepticus during the first 72 hours, report mean and P25/50/75/90 vital\u2011instability index, and compare tachycardia, MAP<65 burden, ICU LOS and mortality to general ICU.",
+  "final_sql": "WITH status_epilepticus AS (\n  SELECT \n    hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code = '3453')  -- ICD-9 code for status epilepticus\n     OR (icd_version = 10 AND icd_code = 'R561') -- ICD-10 code for status epilepticus\n  GROUP BY hadm_id\n),\n\nicu_patients AS (\n  SELECT \n    i.stay_id,\n    i.hadm_id,\n    i.subject_id,\n    i.intime,\n    i.outtime,\n    i.los,  -- ADDED: ICU length of stay from icustays table\n    p.gender,\n    -- Calculate age at ICU admission\n    p.anchor_age + (EXTRACT(YEAR FROM i.intime) - p.anchor_year) AS age_at_admission,\n    -- Flag if they have status epilepticus\n    CASE WHEN se.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_status_epilepticus,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON i.hadm_id = a.hadm_id\n  LEFT JOIN status_epilepticus se\n    ON i.hadm_id = se.hadm_id\n),\n\ncohort1 AS (\n  SELECT *\n  FROM icu_patients\n  WHERE gender = 'F'\n    AND age_at_admission BETWEEN 63 AND 73\n    AND has_status_epilepticus = 1\n),\n\ncohort2 AS (\n  SELECT *\n  FROM icu_patients\n),\n\nvitals_cohort1 AS (\n  SELECT \n    c1.stay_id,\n    ce.charttime,\n    MAX(CASE WHEN ce.itemid = 220045 THEN ce.valuenum END) AS hr,  -- Heart Rate\n    MAX(CASE WHEN ce.itemid = 220052 THEN ce.valuenum END) AS map  -- MAP\n  FROM cohort1 c1\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON c1.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN c1.intime AND c1.intime + INTERVAL '72' HOUR\n    AND ce.itemid IN (220045, 220052)\n  GROUP BY c1.stay_id, ce.charttime\n),\n\ninstability_index_cohort1 AS (\n  SELECT \n    stay_id,\n    AVG(CASE WHEN hr > 100 OR map < 65 THEN 1 ELSE 0 END) AS vital_instability_index\n  FROM vitals_cohort1\n  GROUP BY stay_id\n),\n\nvitals_all AS (\n  SELECT \n    icu.stay_id,\n    'cohort1' AS cohort_type,\n    ce.charttime,\n    MAX(CASE WHEN ce.itemid = 220045 THEN ce.valuenum END) AS hr,\n    MAX(CASE WHEN ce.itemid = 220052 THEN ce.valuenum END) AS map\n  FROM cohort1 icu\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON icu.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN icu.intime AND icu.intime + INTERVAL '72' HOUR\n    AND ce.itemid IN (220045, 220052)\n  GROUP BY icu.stay_id, ce.charttime\n  \n  UNION ALL\n  \n  SELECT \n    icu.stay_id,\n    'cohort2' AS cohort_type,\n    ce.charttime,\n    MAX(CASE WHEN ce.itemid = 220045 THEN ce.valuenum END) AS hr,\n    MAX(CASE WHEN ce.itemid = 220052 THEN ce.valuenum END) AS map\n  FROM cohort2 icu\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON icu.stay_id = ce.stay_id\n    AND ce.charttime BETWEEN icu.intime AND icu.intime + INTERVAL '72' HOUR\n    AND ce.itemid IN (220045, 220052)\n  GROUP BY icu.stay_id, ce.charttime\n),\n\nburden_metrics AS (\n  SELECT\n    cohort_type,\n    AVG(CASE WHEN hr > 100 THEN 1 ELSE 0 END) AS tachycardia_burden,\n    AVG(CASE WHEN map < 65 THEN 1 ELSE 0 END) AS map65_burden\n  FROM vitals_all\n  GROUP BY cohort_type\n),\n\nlos_mortality AS (\n  SELECT\n    'cohort1' AS cohort_type,\n    AVG(los) AS icu_los_mean,\n    APPROX_QUANTILES(los, 100)[OFFSET(50)] AS icu_los_median,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM cohort1\n  GROUP BY cohort_type\n  \n  UNION ALL\n  \n  SELECT\n    'cohort2' AS cohort_type,\n    AVG(los) AS icu_los_mean,\n    APPROX_QUANTILES(los, 100)[OFFSET(50)] AS icu_los_median,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM cohort2\n  GROUP BY cohort_type\n)\n\n-- Final result: vital-instability index statistics for cohort1\nSELECT\n  'cohort1' AS cohort,\n  AVG(vital_instability_index) AS mean_vital_instability,\n  APPROX_QUANTILES(vital_instability_index, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(vital_instability_index, 100)[OFFSET(50)] AS p50,\n  APPROX_QUANTILES(vital_instability_index, 100)[OFFSET(75)] AS p75,\n  APPROX_QUANTILES(vital_instability_index, 100)[OFFSET(90)] AS p90\nFROM instability_index_cohort1\n\nUNION ALL\n\n-- Comparison metrics for both cohorts\nSELECT\n  bm.cohort_type AS cohort,\n  bm.tachycardia_burden,\n  bm.map65_burden,\n  lm.icu_los_mean,\n  lm.icu_los_median,\n  lm.mortality_rate\nFROM burden_metrics bm\nJOIN los_mortality lm\n  ON bm.cohort_type = lm.cohort_type;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"epilepticus\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"epilepticus\" at [1:13]\n\nLocation: US\nJob ID: d1842872-5c0f-4180-903c-15db4fd88ae8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: los at [109:9]; reason: invalidQuery, location: query, message: Unrecognized name: los at [109:9]\n\nLocation: US\nJob ID: 6cda9378-b0ec-47bf-8804-8199a5ffa122\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

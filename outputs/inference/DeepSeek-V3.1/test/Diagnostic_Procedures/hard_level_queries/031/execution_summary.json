@@ -1,0 +1,22 @@
+{
+  "query": "I have a 71\u2011year\u2011old male ICU patient. For male ICU patients aged 66\u201376 with HHS, stratify 48\u2011hour procedure burden into quintiles and report per quintile: number of ICU stays, mean procedures, min/max, hospital mortality %, mean hospital LOS, and 30\u2011day readmission %.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        p.subject_id, \n        p.gender, \n        p.anchor_age,\n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.hospital_expire_flag,\n        icu.stay_id,\n        icu.intime,\n        icu.outtime\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON p.subject_id = adm.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON adm.hadm_id = icu.hadm_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON adm.hadm_id = diag.hadm_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 66 AND 76\n        AND (\n            (diag.icd_version = 10 AND diag.icd_code LIKE 'E11.00%') OR\n            (diag.icd_version = 9 AND diag.icd_code LIKE '250.2%')\n        )\n),\n\nprocedures_48h AS (\n    -- Procedures from procedures_icd (using chartdate, so we use date range)\n    SELECT \n        coh.stay_id,\n        proc.chartdate,\n        COUNT(*) AS cnt\n    FROM cohort coh\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n        ON coh.hadm_id = proc.hadm_id\n    WHERE proc.chartdate BETWEEN DATE(coh.intime) AND DATE(TIMESTAMP_ADD(coh.intime, INTERVAL 48 HOUR))\n    GROUP BY coh.stay_id, proc.chartdate\n\n    UNION ALL\n\n    -- Procedures from procedureevents (using charttime)\n    SELECT \n        coh.stay_id,\n        DATE(proc.starttime) AS chartdate,\n        COUNT(*) AS cnt\n    FROM cohort coh\n    INNER JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` proc\n        ON coh.stay_id = proc.stay_id\n    WHERE proc.starttime BETWEEN coh.intime AND TIMESTAMP_ADD(coh.intime, INTERVAL 48 HOUR)\n    GROUP BY coh.stay_id, chartdate\n),\n\nstay_procedure_count AS (\n    SELECT \n        stay_id,\n        SUM(cnt) AS procedure_count\n    FROM procedures_48h\n    GROUP BY stay_id\n),\n\ncohort_with_procedures AS (\n    SELECT \n        coh.*,\n        COALESCE(spc.procedure_count, 0) AS procedure_count\n    FROM cohort coh\n    LEFT JOIN stay_procedure_count spc\n        ON coh.stay_id = spc.stay_id\n),\n\nreadmission_flag AS (\n    SELECT \n        c.*,\n        -- Check if there is a next admission within 30 days of discharge\n        CASE \n            WHEN LEAD(admittime) OVER (PARTITION BY c.subject_id ORDER BY c.admittime) \n                <= DATE_ADD(c.dischtime, INTERVAL 30 DAY) \n            THEN 1 \n            ELSE 0 \n        END AS readmit_30d\n    FROM cohort_with_procedures c\n),\n\nquintiles AS (\n    SELECT \n        *,\n        NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n    FROM readmission_flag\n)\n\nSELECT \n    quintile,\n    COUNT(*) AS num_icu_stays,\n    AVG(procedure_count) AS mean_procedures,\n    MIN(procedure_count) AS min_procedures,\n    MAX(procedure_count) AS max_procedures,\n    AVG(hospital_expire_flag) * 100 AS hospital_mortality_percent,\n    AVG(DATETIME_DIFF(dischtime, admittime, HOUR)) / 24.0 AS mean_hospital_los_days,\n    AVG(readmit_30d) * 100 AS readmission_30d_percent\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword WHEN but got keyword THEN at [77:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword WHEN but got keyword THEN at [77:13]\n\nLocation: US\nJob ID: ced9f14d-2d5d-4a02-8960-07fdfa4bd8d9\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

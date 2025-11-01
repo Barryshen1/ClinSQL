@@ -1,0 +1,16 @@
+{
+  "query": "I have a 41-year-old woman; among female patients aged 36\u201346 admitted with ischemic heart disease whose initial high-sensitivity Troponin T was >ULN, what are p25, p50, p75 and min\u2013max?",
+  "final_sql": "WITH hs_tnt_items AS (\n  -- Find itemids for high-sensitivity Troponin T\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%' AND LOWER(label) LIKE '%sens%'\n),\n\nihd_admissions AS (\n  -- Identify admissions with ischemic heart disease (ICD-10: I20-I25, ICD-9: 410-414)\n  SELECT DISTINCT adm.subject_id, adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n    ON adm.hadm_id = dx.hadm_id\n  WHERE (\n    (dx.icd_version = 9 AND SAFE_CAST(SUBSTR(dx.icd_code, 1, 3) AS INT64) BETWEEN 410 AND 414)\n    OR\n    (dx.icd_version = 10 AND SAFE_CAST(SUBSTR(dx.icd_code, 2, 2) AS INT64) BETWEEN 20 AND 25)\n  )\n),\n\ncohort AS (\n  -- Female, age 36-46, admitted with IHD\n  SELECT adm.subject_id, adm.hadm_id\n  FROM ihd_admissions adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 36 AND 46\n),\n\ninitial_hs_tnt AS (\n  -- For each admission, get the first hs-TnT lab value\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum,\n    l.valueuom,\n    l.ref_range_upper\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN hs_tnt_items i ON l.itemid = i.itemid\n  JOIN cohort c ON l.subject_id = c.subject_id AND l.hadm_id = c.hadm_id\n  WHERE l.valuenum IS NOT NULL AND l.ref_range_upper IS NOT NULL\n    -- Only keep values with numeric upper limit\n    AND SAFE_CAST(l.ref_range_upper AS FLOAT64) IS NOT NULL\n),\n\nfirst_hs_tnt_per_admission AS (\n  -- Get the earliest hs-TnT per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    valuenum,\n    valueuom,\n    SAFE_CAST(ref_range_upper AS FLOAT64) AS ref_range_upper\n  FROM (\n    SELECT *,\n      ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n    FROM initial_hs_tnt\n  )\n  WHERE rn = 1\n),\n\nabove_uln AS (\n  -- Only keep those above upper limit of normal\n  SELECT *\n  FROM first_hs_tnt_per_admission\n  WHERE valuenum > ref_range_upper\n)\n\nSELECT\n  MIN(valuenum) AS min_hs_tnt,\n  MAX(valuenum) AS max_hs_tnt,\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(1)] AS p25_hs_tnt,\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(2)] AS p50_hs_tnt,\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(3)] AS p75_hs_tnt,\n  COUNT(*) AS n_patients\nFROM above_uln\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

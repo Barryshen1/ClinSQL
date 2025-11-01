@@ -1,0 +1,22 @@
+{
+  "query": "For my 53-year-old male patient: among men aged 48\u201358 undergoing CABG, what's the 25th percentile in-hospital mortality (first admission)?",
+  "final_sql": "WITH first_admissions AS (\n  -- get each patient's first hospital admission (by admittime)\n  SELECT a.*\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN (\n    SELECT subject_id, MIN(admittime) AS first_admittime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n    GROUP BY subject_id\n  ) fa\n  ON a.subject_id = fa.subject_id\n  AND a.admittime = fa.first_admittime\n),\n\ncabg_hadm AS (\n  -- identify hadm_ids where a CABG procedure appears (text-based match on procedure description)\n  SELECT DISTINCT p.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` d\n    ON p.icd_code = d.icd_code\n   AND p.icd_version = d.icd_version\n  WHERE (\n        LOWER(d.long_title) LIKE '%coronary%' AND LOWER(d.long_title) LIKE '%bypass%'\n      )\n      OR LOWER(d.long_title) LIKE '%cabg%'\n),\n\ncohort AS (\n  -- join first admissions to patients, restrict by gender and age, and to CABG first admissions\n  SELECT\n    fa.subject_id,\n    fa.hadm_id,\n    fa.admittime,\n    fa.deathtime,\n    fa.hospital_expire_flag,\n    p.anchor_age\n  FROM first_admissions fa\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON fa.subject_id = p.subject_id\n  JOIN cabg_hadm c\n    ON fa.hadm_id = c.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n)\n\nSELECT\n  COUNT(*) AS cohort_n,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS deaths,\n  SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)) AS mortality_proportion,\n  (\n    SELECT\n      CASE\n        WHEN qs IS NOT NULL AND ARRAY_LENGTH(qs) >= 26 THEN qs[OFFSET(25)]\n        ELSE NULL\n      END\n    FROM (\n      SELECT APPROX_QUANTILES(days_to_death_days, 100) AS qs\n      FROM (\n        SELECT\n          TIMESTAMP_DIFF(deathtime, admittime, SECOND) / 86400.0 AS days_to_death_days\n        FROM cohort\n        WHERE hospital_expire_flag = 1\n          AND deathtime IS NOT NULL\n          AND admittime IS NOT NULL\n          AND TIMESTAMP_DIFF(deathtime, admittime, SECOND) > 0\n      )\n    )\n  ) AS days_to_death_25th_percentile_days\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator AND\n  Argument types: BOOL, FLOAT64\n  Signature: BOOL AND ([BOOL, ...])\n    Argument 2: Unable to coerce type FLOAT64 to expected type BOOL at [55:7]; reason: invalidQuery, location: query, message: No matching signature for operator AND\n  Argument types: BOOL, FLOAT64\n  Signature: BOOL AND ([BOOL, ...])\n    Argument 2: Unable to coerce type FLOAT64 to expected type BOOL at [55:7]\n\nLocation: US\nJob ID: 8cddade5-f5f8-4899-b0d2-bb19e41aa0c5\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

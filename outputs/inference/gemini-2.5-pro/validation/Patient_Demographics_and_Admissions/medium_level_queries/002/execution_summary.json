@@ -1,0 +1,16 @@
+{
+  "query": "For my 64-year-old male inpatient, among male medicine-service admissions aged 59\u201369, provide LOS distribution (mean, 25th/50th/75th/90th percentiles) by discharge home, facility, and in-hospital death, and percent \u226410 days.",
+  "final_sql": "WITH first_service AS (\n  -- First, find the initial service for each hospital admission\n  SELECT\n    hadm_id,\n    curr_service\n  FROM (\n    SELECT\n      hadm_id,\n      curr_service,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY transfertime ASC) AS rn\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.services`\n  )\n  WHERE\n    rn = 1\n),\nlos_and_discharge AS (\n  -- Next, build the cohort of patients and calculate LOS and discharge category\n  SELECT\n    -- Calculate Length of Stay in days\n    DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS los_days,\n    -- Categorize discharge location\n    CASE\n      WHEN adm.hospital_expire_flag = 1\n        THEN 'In-Hospital Death'\n      WHEN adm.discharge_location IN ('HOME', 'HOME HEALTH CARE', 'AGAINST MEDICAL ADVICE')\n        THEN 'Home'\n      WHEN adm.discharge_location IN (\n        'SKILLED NURSING FACILITY',\n        'REHAB/DISTINCT PART HOSP',\n        'CHRONIC/LONG TERM CARE',\n        'HOSPICE',\n        'OTHER FACILITY',\n        'ACUTE HOSPITAL'\n      )\n        THEN 'Facility'\n      ELSE 'Other'\n    END AS discharge_group\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN\n    first_service AS fs\n    ON adm.hadm_id = fs.hadm_id\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 59 AND 69\n    AND fs.curr_service = 'MED'\n    -- Ensure dischtime is not null for LOS calculation\n    AND adm.dischtime IS NOT NULL\n)\n-- Final step: Aggregate the data to compute the requested statistics\nSELECT\n  discharge_group,\n  ROUND(AVG(los_days), 2) AS mean_los,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(25)], 2) AS los_p25,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(50)], 2) AS los_p50,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(75)], 2) AS los_p75,\n  ROUND(APPROX_QUANTILES(los_days, 100)[OFFSET(90)], 2) AS los_p90,\n  ROUND(COUNTIF(los_days <= 10) * 100.0 / COUNT(*), 1) AS percent_los_lte_10\nFROM\n  los_and_discharge\nWHERE\n  discharge_group IN ('Home', 'Facility', 'In-Hospital Death')\nGROUP BY\n  discharge_group\nORDER BY\n  discharge_group;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

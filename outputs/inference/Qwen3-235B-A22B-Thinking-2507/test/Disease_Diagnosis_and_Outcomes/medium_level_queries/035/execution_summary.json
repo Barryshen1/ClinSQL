@@ -1,0 +1,23 @@
+{
+  "query": "For a 74-year-old woman: among women 69\u201379 with upper vs lower GI bleed, report in-hospital mortality (%) by LOS (1\u20132, 3\u20135, 6\u20139, \u226510 days) and day\u20111 ICU status, and ICU admission rates.",
+  "final_sql": "WITH patients_of_interest AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    -- Calculate age at admission\n    p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year BETWEEN 69 AND 79\n),\n\ngi_bleed_diagnoses AS (\n  SELECT\n    d.hadm_id,\n    d.icd_code,\n    d.seq_num,\n    CASE\n      WHEN d.icd_code LIKE 'I85.0%' OR\n           d.icd_code LIKE 'K25.%' OR\n           d.icd_code LIKE 'K26.%' OR\n           d.icd_code LIKE 'K27.%' OR\n           d.icd_code LIKE 'K28.%'\n        THEN 'upper'\n      WHEN d.icd_code LIKE 'K55.2%' OR\n           d.icd_code LIKE 'K57.%' OR\n           d.icd_code = 'K62.5' OR\n           d.icd_code = 'K63.5' OR\n           d.icd_code LIKE 'K64%' OR\n           d.icd_code LIKE 'I84%'\n        THEN 'lower'\n      ELSE NULL\n    END AS bleed_type\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE d.icd_version = 10\n    AND (\n      d.icd_code LIKE 'I85.0%' OR\n      d.icd_code LIKE 'K25.%' OR\n      d.icd_code LIKE 'K26.%' OR\n      d.icd_code LIKE 'K27.%' OR\n      d.icd_code LIKE 'K28.%' OR\n      d.icd_code LIKE 'K55.2%' OR\n      d.icd_code LIKE 'K57.%' OR\n      d.icd_code = 'K62.5' OR\n      d.icd_code = 'K63.5' OR\n      d.icd_code LIKE 'K64%' OR\n      d.icd_code LIKE 'I84%'\n    )\n),\n\nprimary_bleed_type AS (\n  SELECT\n    hadm_id,\n    bleed_type\n  FROM (\n    SELECT\n      hadm_id,\n      bleed_type,\n      ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY seq_num) AS rn\n    FROM gi_bleed_diagnoses\n    WHERE bleed_type IS NOT NULL\n  )\n  WHERE rn = 1\n),\n\nadmission_metrics AS (\n  SELECT\n    poi.hadm_id,\n    poi.gender,\n    poi.age_at_admission,\n    poi.hospital_expire_flag,\n    -- Calculate LOS in days\n    TIMESTAMP_DIFF(poi.dischtime, poi.admittime, DAY) AS los_days,\n    -- Determine day-1 ICU status\n    CASE WHEN EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_icu.icustays` i \n      WHERE i.hadm_id = poi.hadm_id\n        AND i.intime < TIMESTAMP_ADD(poi.admittime, INTERVAL 1 DAY)\n    ) THEN 1 ELSE 0 END AS day1_icu,\n    -- Determine any ICU admission during stay\n    CASE WHEN EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_icu.icustays` i \n      WHERE i.hadm_id = poi.hadm_id\n    ) THEN 1 ELSE 0 END AS any_icu\n  FROM patients_of_interest poi\n  INNER JOIN primary_bleed_type pbt\n    ON poi.hadm_id = pbt.hadm_id\n  WHERE pbt.bleed_type IN ('upper', 'lower')\n    AND TIMESTAMP_DIFF(poi.dischtime, poi.admittime, DAY) >= 1  -- Only include LOS >=1 day\n)\n\nSELECT\n  pbt.bleed_type,\n  CASE\n    WHEN am.los_days BETWEEN 1 AND 2 THEN '1-2'\n    WHEN am.los_days BETWEEN 3 AND 5 THEN '3-5'\n    WHEN am.los_days BETWEEN 6 AND 9 THEN '6-9'\n    WHEN am.los_days >= 10 THEN '>=10'\n  END AS los_group,\n  CASE am.day1_icu\n    WHEN 1 THEN 'ICU on day 1'\n    ELSE 'No ICU on day 1'\n  END AS day1_icu_status,\n  COUNT(*) AS patient_count,\n  ROUND(100.0 * SUM(am.hospital_expire_flag) / COUNT(*), 2) AS mortality_rate,\n  ROUND(100.0 * SUM(am.any_icu) / COUNT(*), 2) AS icu_admission_rate\nFROM admission_metrics am\nINNER JOIN primary_bleed_type pbt\n  ON am.hadm_id = pbt.hadm_id\nGROUP BY 1, 2, 3\nORDER BY \n  pbt.bleed_type,\n  CASE los_group\n    WHEN '1-2' THEN 1\n    WHEN '3-5' THEN 2\n    WHEN '6-9' THEN 3\n    WHEN '>=10' THEN 4\n  END,\n  day1_icu_status;",
+  "execution_success": true,
+  "row_count": 8,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"vs\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"vs\" at [1:12]\n\nLocation: US\nJob ID: 6e51ea78-3be1-4f0f-a599-0c40bc980f13\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 8,
+      "error": null
+    }
+  ]
+}

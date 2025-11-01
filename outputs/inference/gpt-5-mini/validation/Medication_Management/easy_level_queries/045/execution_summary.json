@@ -1,0 +1,28 @@
+{
+  "query": "For my 62-year-old male inpatient, among male patients aged 57\u201367, what is the IQR of single inpatient DAPT prescription durations?",
+  "final_sql": "WITH male_adm AS (\n  -- male patients aged 57-67 and their admissions\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 57 AND 67\n),\n\naspirin_pres AS (\n  -- aspirin-related inpatient prescription intervals clipped to admission window\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    GREATEST(p.starttime, a.admittime) AS starttime,\n    LEAST(COALESCE(p.stoptime, a.dischtime), a.dischtime) AS stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN male_adm a\n    ON p.subject_id = a.subject_id\n   AND p.hadm_id = a.hadm_id\n  WHERE (\n        LOWER(COALESCE(p.drug, '')) LIKE '%aspirin%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%acetylsalicylic%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%asa%'\n  )\n),\n\np2y12_pres AS (\n  -- P2Y12 inhibitor inpatient prescription intervals clipped to admission window\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    GREATEST(p.starttime, a.admittime) AS starttime,\n    LEAST(COALESCE(p.stoptime, a.dischtime), a.dischtime) AS stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  JOIN male_adm a\n    ON p.subject_id = a.subject_id\n   AND p.hadm_id = a.hadm_id\n  WHERE (\n        LOWER(COALESCE(p.drug, '')) LIKE '%clopidogrel%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%plavix%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%prasugrel%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%effient%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%ticagrelor%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%brilinta%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%ticlopidine%'\n     OR LOWER(COALESCE(p.drug, '')) LIKE '%ticlid%'\n  )\n),\n\noverlaps AS (\n  -- compute raw overlap intervals between any aspirin and any P2Y12 prescription in same admission\n  SELECT\n    asp.hadm_id,\n    GREATEST(asp.starttime, p2.starttime) AS start_ts,\n    LEAST(asp.stoptime, p2.stoptime) AS end_ts\n  FROM aspirin_pres asp\n  JOIN p2y12_pres p2\n    ON asp.subject_id = p2.subject_id\n   AND asp.hadm_id = p2.hadm_id\n  WHERE asp.starttime < p2.stoptime\n    AND p2.starttime < asp.stoptime\n),\n\nvalid_overlaps AS (\n  -- drop null/zero-length overlaps\n  SELECT\n    hadm_id,\n    TIMESTAMP(start_ts) AS start_ts,\n    TIMESTAMP(end_ts)   AS end_ts\n  FROM overlaps\n  WHERE start_ts IS NOT NULL\n    AND end_ts IS NOT NULL\n    AND TIMESTAMP_DIFF(end_ts, start_ts, SECOND) > 0\n),\n\n-- merge/union contiguous or overlapping overlap-intervals into DAPT episodes per admission\nnumbered AS (\n  SELECT\n    hadm_id,\n    start_ts,\n    end_ts,\n    LAG(end_ts) OVER (PARTITION BY hadm_id ORDER BY start_ts, end_ts) AS prev_end\n  FROM valid_overlaps\n),\n\ngrp_flag AS (\n  SELECT\n    hadm_id,\n    start_ts,\n    end_ts,\n    CASE\n      WHEN prev_end IS NULL THEN 1\n      WHEN start_ts > prev_end THEN 1    -- gap -> new group\n      ELSE 0                             -- overlapping/contiguous -> same group\n    END AS new_group\n  FROM numbered\n),\n\ngrp AS (\n  SELECT\n    hadm_id,\n    start_ts,\n    end_ts,\n    SUM(new_group) OVER (PARTITION BY hadm_id ORDER BY start_ts, end_ts\n                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS grp_id\n  FROM grp_flag\n),\n\nmerged AS (\n  SELECT\n    hadm_id,\n    MIN(start_ts) AS episode_start,\n    MAX(end_ts)   AS episode_end\n  FROM grp\n  GROUP BY hadm_id, grp_id\n),\n\ndapt_episodes AS (\n  -- final DAPT episodes with duration in days (float)\n  SELECT\n    hadm_id,\n    episode_start,\n    episode_end,\n    SAFE_DIVIDE(TIMESTAMP_DIFF(episode_end, episode_start, SECOND), 86400.0) AS duration_days\n  FROM merged\n),\n\nquantiles AS (\n  -- approximate quantiles array (0..100)\n  SELECT APPROX_QUANTILES(duration_days, 100) AS q\n  FROM dapt_episodes\n),\n\ncnt AS (\n  SELECT COUNT(*) AS num_dapt_episodes\n  FROM dapt_episodes\n)\n\n-- compute quartiles and IQR across all DAPT episodes for the selected population\nSELECT\n  q.q[OFFSET(25)] AS p25_days,\n  q.q[OFFSET(75)] AS p75_days,\n  q.q[OFFSET(75)] - q.q[OFFSET(25)] AS iqr_days,\n  c.num_dapt_episodes\nFROM quantiles q\nCROSS JOIN cnt c;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword END at [61:41]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword END at [61:41]\n\nLocation: US\nJob ID: 343f90f8-bf19-41ab-a9c3-d7d0a1de1744\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 2847c6ce-2a3d-4ef5-88a6-e6c07e8813bd\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 95\u2011year\u2011old female inpatient with AMI. Among female AMI admissions aged 90\u2013100, what is the 75th\u2011percentile lab\u2011instability score in the first 48 hours? For \u2265P75 patients, report in\u2011hospital mortality, mean LOS, and critical lab rates versus all inpatients 90\u2013100.",
+  "final_sql": "WITH ami_set AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = a.subject_id\n  WHERE (\n          (di.icd_version = 9 AND di.icd_code LIKE '410%')     -- AMI ICD-9\n          OR\n          (di.icd_version = 10 AND di.icd_code LIKE 'I21%')    -- AMI ICD-10\n        )\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 90 AND 100\n),\nlab_data AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS LOS_days,\n    COUNT(*) AS total_labs_48h,\n    SUM(CASE\n          WHEN le.valuenum IS NOT NULL\n               AND (\n                   (le.ref_range_lower IS NOT NULL AND le.valuenum < le.ref_range_lower)\n                   OR\n                   (le.ref_range_upper IS NOT NULL AND le.valuenum > le.ref_range_upper)\n               )\n          THEN 1 ELSE 0\n        END) AS lab_instability_score\n  FROM ami_set AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON le.hadm_id = a.hadm_id\n   AND le.charttime >= a.admittime\n   AND le.charttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n  GROUP BY a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.deathtime\n),\np75 AS (\n  -- Compute the 75th percentile threshold without PERCENTILE_CONT\n  SELECT lab_instability_score AS p75_threshold\n  FROM (\n    SELECT lab_instability_score,\n           ROW_NUMBER() OVER (ORDER BY lab_instability_score) AS rn,\n           COUNT(*) OVER () AS total\n    FROM lab_data\n  )\n  WHERE rn = CEILING(0.75 * total)\n  LIMIT 1\n),\nfinal AS (\n  SELECT\n     p75_threshold,\n     AVG(CASE WHEN ld.lab_instability_score >= p75_threshold THEN CASE WHEN ld.deathtime IS NOT NULL THEN 1 ELSE 0 END END) AS p75_inhospital_mortality_rate,\n     AVG(CASE WHEN ld.lab_instability_score >= p75_threshold THEN ld.LOS_days END) AS p75_mean_los,\n     AVG(CASE WHEN ld.lab_instability_score >= p75_threshold THEN SAFE_DIVIDE(ld.lab_instability_score, NULLIF(ld.total_labs_48h, 0)) END) AS p75_mean_critical_lab_rate,\n     AVG(CASE WHEN ld.deathtime IS NOT NULL THEN 1 ELSE 0 END) AS all_inhospital_mortality_rate,\n     AVG(ld.LOS_days) AS all_mean_los,\n     AVG(SAFE_DIVIDE(ld.lab_instability_score, NULLIF(ld.total_labs_48h, 0))) AS all_mean_critical_lab_rate\n  FROM lab_data ld\n  CROSS JOIN p75\n  GROUP BY p75_threshold\n)\nSELECT *\nFROM final;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [51:32]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [51:32]\n\nLocation: US\nJob ID: 66c0e284-b3ed-4629-9280-8b6baf95aab3\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column p75_threshold which is neither grouped nor aggregated at [60:5]; reason: invalidQuery, location: query, message: SELECT list expression references column p75_threshold which is neither grouped nor aggregated at [60:5]\n\nLocation: US\nJob ID: 1225b9eb-fc40-42ab-bad1-df36ebd111b9\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

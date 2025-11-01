@@ -1,0 +1,22 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT \n    subject_id, hadm_id, stay_id, first_careunit, last_careunit, \n    intime, outtime, los,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  WHERE intime IS NOT NULL\n),\neligible_patients AS (\n  SELECT DISTINCT \n    fis.subject_id, fis.hadm_id, fis.stay_id, fis.intime, fis.outtime, fis.los,\n    adm.hospital_expire_flag\n  FROM first_icu_stays fis\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat \n    ON fis.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm \n    ON fis.hadm_id = adm.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag \n    ON fis.subject_id = diag.subject_id AND fis.hadm_id = diag.hadm_id\n  WHERE fis.rn = 1\n    AND pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 90 AND 100\n    AND (diag.icd_code LIKE '57.%' OR diag.icd_code LIKE 'K7%')  -- Hepatic failure/cirrhosis\n),\nprocedure_counts AS (\n  SELECT \n    ep.*,\n    COUNT(DISTINCT proc.icd_code) AS procedure_count\n  FROM eligible_patients ep\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n    ON ep.subject_id = proc.subject_id \n    AND ep.hadm_id = proc.hadm_id\n    AND DATE(proc.chartdate) >= ep.intime\n    AND DATE(proc.chartdate) < TIMESTAMP_ADD(ep.intime, INTERVAL 72 HOUR)\n  GROUP BY \n    ep.subject_id, ep.hadm_id, ep.stay_id, ep.intime, ep.outtime, ep.los, \n    ep.hospital_expire_flag\n),\nwith_quartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM procedure_counts\n)\nSELECT \n  quartile,\n  COUNT(DISTINCT subject_id) AS num_patients,\n  MIN(procedure_count) AS min_procedures,\n  MAX(procedure_count) AS max_procedures,\n  ROUND(AVG(procedure_count), 2) AS mean_procedures,\n  ROUND(AVG(los / 86400.0), 2) AS mean_los_days,\n  ROUND(AVG(CASE WHEN hospital_expire_flag = 1 THEN 1.0 ELSE 0 END) * 100, 1) AS mortality_pct\nFROM with_quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column quartile contains an analytic function, which is not allowed in GROUP BY at [48:10]; reason: invalidQuery, location: query, message: Column quartile contains an analytic function, which is not allowed in GROUP BY at [48:10]\n\nLocation: US\nJob ID: 7f025ee1-434a-4680-849e-4353d3f1acb1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

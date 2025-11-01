@@ -1,0 +1,16 @@
+{
+  "query": "For my 57-year-old female patient: among women 52\u201362 admitted with AMI whose first Troponin T >0.01 ng/mL, report patient/admission counts, mean age, LOS, first troponin stats, and in-hospital mortality.",
+  "final_sql": "WITH ami_admissions AS (\n  -- Identify admissions for women age 52-62 with AMI\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.hadm_id = d.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n      ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND (\n      -- ICD-10: I21.x, I22.x; ICD-9: 410.x\n      (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^410'))\n      OR (d.icd_version = 10 AND (REGEXP_CONTAINS(d.icd_code, r'^I21') OR REGEXP_CONTAINS(d.icd_code, r'^I22')))\n    )\n),\ntroponin_t_labs AS (\n  -- Find Troponin T itemids\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\nfirst_troponin AS (\n  -- For each qualifying admission, get first Troponin T > 0.01 ng/mL\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n    JOIN troponin_t_labs t\n      ON l.itemid = t.itemid\n  WHERE\n    l.valuenum IS NOT NULL\n)\n,\nfirst_troponin_per_admission AS (\n  -- Get the first Troponin T per admission\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.charttime AS first_troponin_time,\n    f.valuenum AS first_troponin_value\n  FROM (\n    SELECT\n      subject_id,\n      hadm_id,\n      charttime,\n      valuenum,\n      ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n    FROM first_troponin\n  ) f\n  WHERE f.rn = 1\n    AND f.valuenum > 0.01\n)\n,\nfinal_cohort AS (\n  -- Join admissions and first Troponin T\n  SELECT\n    aa.subject_id,\n    aa.hadm_id,\n    aa.anchor_age,\n    aa.admittime,\n    aa.dischtime,\n    aa.hospital_expire_flag,\n    ft.first_troponin_time,\n    ft.first_troponin_value,\n    DATETIME_DIFF(aa.dischtime, aa.admittime, DAY) AS los\n  FROM\n    ami_admissions aa\n    JOIN first_troponin_per_admission ft\n      ON aa.subject_id = ft.subject_id AND aa.hadm_id = ft.hadm_id\n)\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(*) AS admission_count,\n  ROUND(AVG(anchor_age), 2) AS mean_age,\n  ROUND(AVG(los), 2) AS mean_los_days,\n  ROUND(MIN(first_troponin_value), 4) AS min_first_troponin,\n  ROUND(MAX(first_troponin_value), 4) AS max_first_troponin,\n  ROUND(AVG(first_troponin_value), 4) AS mean_first_troponin,\n  ROUND(STDDEV(first_troponin_value), 4) AS stddev_first_troponin,\n  ROUND(AVG(CAST(hospital_expire_flag AS FLOAT64)), 4) AS in_hospital_mortality_rate\nFROM\n  final_cohort\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

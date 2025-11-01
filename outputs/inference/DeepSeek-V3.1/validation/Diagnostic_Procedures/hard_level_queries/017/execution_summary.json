@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH first_icu_stays AS (\n    SELECT \n        subject_id,\n        hadm_id,\n        stay_id,\n        intime,\n        outtime,\n        los,\n        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS stay_seq\n    FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nsepsis_patients AS (\n    SELECT \n        diag.subject_id,\n        diag.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n        ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n    WHERE \n        (d.icd_code LIKE 'A41%' OR d.icd_code = 'R65.20' OR d.icd_code = 'R65.21')  -- ICD-10 sepsis\n        OR (d.icd_code LIKE '038%' OR d.icd_code = '995.52')  -- ICD-9 sepsis\n),\ncohort AS (\n    SELECT \n        p.subject_id,\n        p.gender,\n        p.anchor_age,\n        icu.hadm_id,\n        icu.stay_id,\n        icu.intime,\n        icu.outtime,\n        icu.los,\n        adm.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN first_icu_stays icu\n        ON p.subject_id = icu.subject_id AND icu.stay_seq = 1\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON icu.hadm_id = adm.hadm_id\n    INNER JOIN sepsis_patients sep\n        ON icu.hadm_id = sep.hadm_id\n    WHERE \n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 83 AND 93\n),\nprocedures_in_first_72h AS (\n    SELECT \n        c.subject_id,\n        c.stay_id,\n        COUNT(DISTINCT pe.itemid) AS procedure_count\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n        ON c.stay_id = pe.stay_id\n        AND pe.starttime >= c.intime\n        AND pe.starttime < DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    GROUP BY c.subject_id, c.stay_id\n),\ncohort_with_procedures AS (\n    SELECT \n        c.*,\n        COALESCE(p.procedure_count, 0) AS procedure_count\n    FROM cohort c\n    LEFT JOIN procedures_in_first_72h p\n        ON c.stay_id = p.stay_id\n),\nquartiles AS (\n    SELECT \n        *,\n        NTILE(4) OVER (ORDER BY procedure_count) AS intensity_quartile\n    FROM cohort_with_procedures\n)\nSELECT \n    intensity_quartile,\n    COUNT(*) AS num_patients,\n    AVG(procedure_count) AS mean_procedure_count,\n    AVG(los) AS mean_icu_los_days,\n    100.0 * SUM(hospital_expire_flag) / COUNT(*) AS mortality_percent\nFROM quartiles\nGROUP BY intensity_quartile\nORDER BY intensity_quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

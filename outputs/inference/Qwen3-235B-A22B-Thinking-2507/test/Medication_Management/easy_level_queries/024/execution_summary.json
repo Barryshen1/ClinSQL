@@ -1,0 +1,23 @@
+{
+  "query": "For my 89-year-old male patient: among hospitalized men aged 84\u201394, what is the maximum single inpatient DAPT prescription duration?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.anchor_year,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 84 AND 94\n),\naspirin AS (\n  SELECT \n    p.hadm_id,\n    GREATEST(p.starttime, c.admittime) AS starttime,\n    LEAST(COALESCE(p.stoptime, '9999-01-01'), c.dischtime) AS stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN cohort c\n    ON p.hadm_id = c.hadm_id\n  WHERE (LOWER(p.drug) LIKE '%aspirin%' OR LOWER(p.drug) LIKE '%acetylsalicylic acid%')\n    AND GREATEST(p.starttime, c.admittime) < LEAST(COALESCE(p.stoptime, '9999-01-01'), c.dischtime)\n),\np2y12 AS (\n  SELECT \n    p.hadm_id,\n    GREATEST(p.starttime, c.admittime) AS starttime,\n    LEAST(COALESCE(p.stoptime, '9999-01-01'), c.dischtime) AS stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n  INNER JOIN cohort c\n    ON p.hadm_id = c.hadm_id\n  WHERE (LOWER(p.drug) LIKE '%clopidogrel%' \n         OR LOWER(p.drug) LIKE '%prasugrel%' \n         OR LOWER(p.drug) LIKE '%ticagrelor%')\n    AND GREATEST(p.starttime, c.admittime) < LEAST(COALESCE(p.stoptime, '9999-01-01'), c.dischtime)\n),\nevents AS (\n  SELECT \n    hadm_id,\n    starttime AS time,\n    1 AS aspirin_delta,\n    0 AS p2y12_delta\n  FROM aspirin\n  UNION ALL\n  SELECT \n    hadm_id,\n    stoptime,\n    -1,\n    0\n  FROM aspirin\n  UNION ALL\n  SELECT \n    hadm_id,\n    starttime,\n    0,\n    1\n  FROM p2y12\n  UNION ALL\n  SELECT \n    hadm_id,\n    stoptime,\n    0,\n    -1\n  FROM p2y12\n),\nevents_with_running AS (\n  SELECT \n    hadm_id,\n    time,\n    SUM(aspirin_delta) OVER (PARTITION BY hadm_id ORDER BY time, aspirin_delta DESC, p2y12_delta DESC) AS aspirin_count,\n    SUM(p2y12_delta) OVER (PARTITION BY hadm_id ORDER BY time, aspirin_delta DESC, p2y12_delta DESC) AS p2y12_count\n  FROM events\n),\nsegments AS (\n  SELECT \n    hadm_id,\n    time AS start_time,\n    LEAD(time) OVER (PARTITION BY hadm_id ORDER BY time) AS end_time,\n    aspirin_count > 0 AS aspirin_active,\n    p2y12_count > 0 AS p2y12_active\n  FROM events_with_running\n),\ndapt_segments AS (\n  SELECT \n    hadm_id,\n    start_time,\n    end_time,\n    TIMESTAMP_DIFF(end_time, start_time, SECOND) AS duration_seconds\n  FROM segments\n  WHERE aspirin_active AND p2y12_active\n    AND end_time IS NOT NULL\n),\ndapt_duration AS (\n  SELECT \n    hadm_id,\n    SUM(duration_seconds) AS total_dapt_seconds\n  FROM dapt_segments\n  GROUP BY hadm_id\n)\nSELECT \n  MAX(total_dapt_seconds) / (24*60*60) AS max_dapt_duration_days\nFROM dapt_duration;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"age\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"age\" at [1:10]\n\nLocation: US\nJob ID: f09442b5-0bff-4d5f-9308-1ac38281ca25\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

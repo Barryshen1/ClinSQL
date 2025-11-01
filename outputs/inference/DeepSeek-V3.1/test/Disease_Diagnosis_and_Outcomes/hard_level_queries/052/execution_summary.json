@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 80-year-old woman with COPD exacerbation. For female inpatients 75\u201385 with COPD exacerbation, stratified into quartiles by the composite risk score, report per quartile: 90-day mortality, major complication rate, median survivor LOS, and broader 75\u201385 female 90-day mortality.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.dod,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    -- Count distinct diagnoses as a simple risk score proxy\n    COUNT(DISTINCT di.icd_code) AS risk_score,\n    NTILE(4) OVER (ORDER BY COUNT(DISTINCT di.icd_code)) AS risk_quartile\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 75 AND 85\n    AND EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx \n      WHERE dx.hadm_id = a.hadm_id \n      AND dx.icd_code = 'J44.1' \n      AND dx.icd_version = 10\n    )\n  GROUP BY p.subject_id, p.gender, p.anchor_age, p.dod, a.hadm_id, a.admittime, a.dischtime\n),\n\ncomplications AS (\n  SELECT \n    c.hadm_id,\n    MAX(CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END) AS icu_admission,\n    -- Mechanical ventilation: use procedure codes\n    MAX(CASE WHEN pi.icd_code IN ('5A1955Z', '5A09357', '5A09457', '5A09557') THEN 1 ELSE 0 END) AS mechanical_ventilation,\n    -- Respiratory failure: use diagnosis codes\n    MAX(CASE WHEN rf.icd_code IN ('J96.00', 'J96.01', 'J96.02', 'J96.20', 'J96.21', 'J96.22') THEN 1 ELSE 0 END) AS respiratory_failure\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON c.hadm_id = i.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n    ON c.hadm_id = pi.hadm_id AND pi.icd_version = 10\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` rf\n    ON c.hadm_id = rf.hadm_id AND rf.icd_version = 10\n  GROUP BY c.hadm_id\n),\n\ncohort_with_outcomes AS (\n  SELECT\n    c.*,\n    CASE WHEN c.dod IS NOT NULL AND DATE_DIFF(c.dod, c.admittime, DAY) <= 90 THEN 1 ELSE 0 END AS mortality_90day,\n    CASE WHEN c.dod IS NULL OR DATE_DIFF(c.dod, c.admittime, DAY) > 90 THEN 1 ELSE 0 END AS survived_90day,\n    CASE WHEN comp.icu_admission = 1 OR comp.mechanical_ventilation = 1 OR comp.respiratory_failure = 1 THEN 1 ELSE 0 END AS major_complication,\n    DATE_DIFF(c.dischtime, c.admittime, DAY) AS los_days\n  FROM cohort c\n  LEFT JOIN complications comp\n    ON c.hadm_id = comp.hadm_id\n),\n\nsurvivor_los AS (\n  SELECT\n    risk_quartile,\n    APPROX_QUANTILE(los_days, 0.5) AS median_los_survivors\n  FROM cohort_with_outcomes\n  WHERE survived_90day = 1\n  GROUP BY risk_quartile\n),\n\nbroader_mortality AS (\n  SELECT\n    COUNT(*) AS total_patients,\n    SUM(CASE WHEN p.dod IS NOT NULL AND DATE_DIFF(p.dod, a.admittime, DAY) <= 90 THEN 1 ELSE 0 END) AS deaths_90day,\n    ROUND(100.0 * SUM(CASE WHEN p.dod IS NOT NULL AND DATE_DIFF(p.dod, a.admittime, DAY) <= 90 THEN 1 ELSE 0 END) / COUNT(*), 2) AS mortality_rate_percent\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 75 AND 85\n)\n\nSELECT\n  c.risk_quartile,\n  COUNT(*) AS n_patients,\n  ROUND(100.0 * SUM(mortality_90day) / COUNT(*), 2) AS mortality_90day_percent,\n  ROUND(100.0 * SUM(major_complication) / COUNT(*), 2) AS major_complication_percent,\n  s.median_los_survivors\nFROM cohort_with_outcomes c\nLEFT JOIN survivor_los s\n  ON c.risk_quartile = s.risk_quartile\nGROUP BY c.risk_quartile, s.median_los_survivors\nORDER BY c.risk_quartile;\n\n-- Additionally, output the broader mortality for context\nSELECT * FROM broader_mortality;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/e9731683-e9ed-4d42-ad71-d7584d07701f?maxResults=0&location=US&prettyPrint=false: Query error: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [64:5]\n\nLocation: US\nJob ID: e9731683-e9ed-4d42-ad71-d7584d07701f\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/a722f75b-cbfd-4057-928b-85d7d639c856?maxResults=0&location=US&prettyPrint=false: Not found: Table physionet-data:mimiciv_3_1_hosp.elixhauser_quan was not found in location US at [1:1]\n\nLocation: US\nJob ID: a722f75b-cbfd-4057-928b-85d7d639c856\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/0a0619ff-eba8-426b-8e34-2dc528e8cf7c?maxResults=0&location=US&prettyPrint=false: Query error: SELECT list expression references column los_days which is neither grouped nor aggregated at [75:19]\n\nLocation: US\nJob ID: 0a0619ff-eba8-426b-8e34-2dc528e8cf7c\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/e9731683-e9ed-4d42-ad71-d7584d07701f?maxResults=0&location=US&prettyPrint=false: Query error: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [64:5]\n\nLocation: US\nJob ID: e9731683-e9ed-4d42-ad71-d7584d07701f\n"
+    }
+  ]
+}

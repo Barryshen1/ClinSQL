@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating an 84-year-old woman. Among women 79\u201389 with community\u2011acquired or aspiration pneumonia, report in\u2011hospital mortality by LOS (\u22647 vs >7) and day\u20111 ICU, plus mech vent, vasopressor, and RRT prevalence.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: women 79-89 with pneumonia\n  SELECT DISTINCT \n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n    ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 79 AND 89\n    AND a.admission_type != 'NEWBORN'\n    AND REGEXP_CONTAINS(LOWER(d.icd_code), r'(?i)^(j1[8-9]|j15|j16|j17|j18|j69|486|5070)')  -- ICD-10: J15-J18/J69; ICD-9: 486 (pneumonia), 5070 (aspiration)\n    AND a.hadm_id IS NOT NULL\n    AND icd.icd_version IS NOT NULL\n),\n\nday1_icu AS (\n  -- Flag admissions with day-1 ICU\n  SELECT \n    t.hadm_id,\n    1 AS has_day1_icu\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.transfers` t\n    ON a.hadm_id = t.hadm_id\n  WHERE t.eventtype = 'admit'\n    AND t.careunit IN ('SICU', 'MICU', 'CCU', 'CSRU', 'TSICU', 'NICU')\n    AND DATE(t.intime) <= DATE_ADD(DATE(a.admittime), INTERVAL 1 DAY)\n),\n\nmech_vent AS (\n  -- Mechanical ventilation (any in any ICU stay)\n  SELECT DISTINCT \n    ie.hadm_id,\n    1 AS has_mech_vent\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ie.stay_id = ce.stay_id\n  WHERE ce.itemid IN (720, 223848, 223849, 224008, 224031, 225477, 225478, 225479,\n                      225916, 221912, 222315, 227589)\n    AND ce.value IS NOT NULL\n    AND (ce.valuenum > 0 OR ce.value != '0')\n    AND ce.charttime BETWEEN ie.intime AND ie.outtime\n),\n\nvasopressor AS (\n  -- Vasopressors (any in any ICU stay)\n  SELECT DISTINCT \n    ie.hadm_id,\n    1 AS has_vaso\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.inputevents` inp\n    ON ie.stay_id = inp.stay_id\n  WHERE inp.itemid IN (220615, 221906, 223835, 225798, 227481, 225159, 221289, 222282,\n                       225468, 225442)\n    AND inp.amount > 0\n    AND inp.starttime BETWEEN ie.intime AND ie.outtime\n),\n\nrrt AS (\n  -- RRT (any in any ICU stay)\n  SELECT DISTINCT \n    ie.hadm_id,\n    1 AS has_rrt\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.inputevents` inp\n    ON ie.stay_id = inp.stay_id\n    AND inp.itemid IN (225826, 225830, 225831, 225832, 225833, 225834,\n                       228369)\n    AND inp.amount > 0\n    AND inp.starttime BETWEEN ie.intime AND ie.outtime\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON ie.stay_id = pe.stay_id\n    AND pe.itemid IN (225456)\n    AND pe.value IS NOT NULL\n    AND pe.starttime BETWEEN ie.intime AND ie.outtime\n  WHERE inp.stay_id IS NOT NULL OR pe.stay_id IS NOT NULL\n)\n\n-- Main aggregation\nSELECT \n  CASE WHEN c.los_days <= 7 THEN 'LOS <=7 days' ELSE 'LOS >7 days' END AS los_group,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(c.hospital_expire_flag) * 100, 2) AS mortality_pct,\n  ROUND(AVG(COALESCE(d1.has_day1_icu, 0)) * 100, 2) AS day1_icu_pct,\n  ROUND(AVG(COALESCE(mv.has_mech_vent, 0)) * 100, 2) AS mech_vent_pct,\n  ROUND(AVG(COALESCE(va.has_vaso, 0)) * 100, 2) AS vasopressor_pct,\n  ROUND(AVG(COALESCE(rr.has_rrt, 0)) * 100, 2) AS rrt_pct\nFROM cohort c\nLEFT JOIN day1_icu d1 ON c.hadm_id = d1.hadm_id\nLEFT JOIN mech_vent mv ON c.hadm_id = mv.hadm_id\nLEFT JOIN vasopressor va ON c.hadm_id = va.hadm_id\nLEFT JOIN rrt rr ON c.hadm_id = rr.hadm_id\nGROUP BY los_group\nORDER BY \n  CASE los_group WHEN 'LOS <=7 days' THEN 1 ELSE 2 END;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \"/\" at [58:85]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \"/\" at [58:85]\n\nLocation: US\nJob ID: 9ba08ba0-daf6-4f43-b167-c7968a177c72\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"REGEXP\" at [21:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"REGEXP\" at [21:27]\n\nLocation: US\nJob ID: 3062422b-4804-41aa-97d6-18281576a671\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

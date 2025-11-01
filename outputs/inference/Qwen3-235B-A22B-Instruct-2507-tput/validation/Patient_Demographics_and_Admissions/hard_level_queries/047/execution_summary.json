@@ -1,0 +1,28 @@
+{
+  "query": "I have a 73-year-old female Medicare patient. Among female Medicare patients aged 68\u201378 admitted from the ED with a principal hemorrhagic stroke, what are the 30-day readmission rate, median index LOS for readmitted vs non-readmitted, and % with LOS >4 days?",
+  "final_sql": "WITH patient_admissions AS (\n  -- Step 1: Get all admissions for female Medicare patients aged 68\u201378 admitted from ED\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- Compute age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND a.insurance = 'Medicare'\n    AND a.admission_location = 'Emergency Room'\n    AND a.dischtime IS NOT NULL\n    AND a.admittime IS NOT NULL\n    AND (p.dod IS NULL OR a.admittime <= p.dod)  -- valid admission before death\n),\n-- Step 2: Filter for principal hemorrhagic stroke (seq_num = 1 and ICD code I61 or I62)\nhemorrhagic_stroke AS (\n  SELECT di.subject_id, di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  WHERE di.seq_num = 1\n    AND di.icd_version = 10\n    AND (di.icd_code LIKE 'I61%' OR di.icd_code LIKE 'I62%')\n),\n-- Step 3: Combine and filter qualifying admissions\nqualifying_admissions AS (\n  SELECT pa.*\n  FROM patient_admissions pa\n  INNER JOIN hemorrhagic_stroke hs\n    ON pa.subject_id = hs.subject_id AND pa.hadm_id = hs.hadm_id\n  WHERE pa.age_at_admit BETWEEN 68 AND 78\n),\n-- Step 4: Rank admissions per patient to get index admission\nindex_admissions AS (\n  SELECT *,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n  FROM qualifying_admissions\n),\nindex_only AS (\n  SELECT *\n  FROM index_admissions\n  WHERE rn = 1  -- first (index) admission\n),\n-- Step 5: Check for 30-day readmission\nreadmission_flag AS (\n  SELECT\n    i.*,\n    -- Check if there's any later admission within 30 days of discharge\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM qualifying_admissions qa\n        WHERE qa.subject_id = i.subject_id\n          AND qa.admittime > i.dischtime\n          AND qa.admittime <= DATETIME_ADD(i.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmitted_30day\n  FROM index_only i\n)\n-- Final aggregation\nSELECT\n  -- 30-day readmission rate\n  ROUND(AVG(CAST(readmitted_30day AS FLOAT64)), 3) AS readmission_rate_30day,\n  -- Median index LOS for readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted_30day = 1 THEN los_days END, 100)[OFFSET(50)] AS median_los_readmitted,\n  -- Median index LOS for non-readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted_30day = 0 THEN los_days END, 100)[OFFSET(50)] AS median_los_nonreadmitted,\n  -- % with index LOS > 4 days\n  ROUND(\n    AVG(CAST(los_days > 4 AS INT64)) * 100, 1\n  ) AS pct_los_gt_4_days\nFROM readmission_flag;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword IS at [19:30]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword IS at [19:30]\n\nLocation: US\nJob ID: 3d7665f7-ff4e-4ed7-a938-6343fc521e8b\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to FLOAT64 at [75:14]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to FLOAT64 at [75:14]\n\nLocation: US\nJob ID: 0b7ed7a0-fe4c-4d6c-ac98-1583ffa92375\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

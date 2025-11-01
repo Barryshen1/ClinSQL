@@ -1,0 +1,29 @@
+{
+  "query": "For a 44-year-old man: among male ICU admissions aged 39\u201349 with DKA, stratify first ICU stay diagnostic intensity (distinct procedures in first 24 h) into quintiles and report number of stays, mean/min/max procedure count, mean ICU LOS (days) and hospital mortality%",
+  "final_sql": "WITH dka_hadm AS (\n    SELECT di.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n    WHERE d.long_title LIKE '%ketoacidosis%'\n),\n\neligible_patients AS (\n    SELECT p.subject_id, p.anchor_age, a.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n    WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND a.hadm_id IN (SELECT hadm_id FROM dka_hadm)\n),\n\nfirst_icu_stay AS (\n    SELECT \n        i.stay_id, \n        i.hadm_id, \n        i.intime, \n        i.los,\n        ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    WHERE i.hadm_id IN (SELECT hadm_id FROM eligible_patients)\n),\n\nprocedures_count AS (\n    SELECT \n        f.stay_id, \n        f.hadm_id, \n        f.intime,\n        f.los,\n        COUNT(DISTINCT pe.itemid) AS proc_count\n    FROM first_icu_stay f\n    JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON f.stay_id = pe.stay_id\n    WHERE f.rn = 1\n    AND pe.starttime >= f.intime\n    AND pe.starttime <= f.intime + INTERVAL 24 HOUR\n    GROUP BY f.stay_id, f.hadm_id, f.intime, f.los\n),\n\nhospital_mortality AS (\n    SELECT a.hadm_id, a.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    WHERE a.hadm_id IN (SELECT hadm_id FROM eligible_patients)\n),\n\nfinal_data AS (\n    SELECT \n        p.proc_count,\n        p.los,\n        h.hospital_expire_flag\n    FROM procedures_count p\n    JOIN hospital_mortality h ON p.hadm_id = h.hadm_id\n),\n\nquintiles AS (\n    SELECT \n        proc_count,\n        los,\n        hospital_expire_flag,\n        NTILE(5) OVER (ORDER BY proc_count) AS quintile\n    FROM final_data\n)\n\nSELECT \n    quintile,\n    COUNT(*) AS num_stays,\n    AVG(proc_count) AS mean_proc_count,\n    MIN(proc_count) AS min_proc_count,\n    MAX(proc_count) AS max_proc_count,\n    AVG(los) AS mean_los_days,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS hospital_mortality_pct\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [43:5]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [43:5]\n\nLocation: US\nJob ID: 3677b0b9-b2e1-4e17-a904-a1e6f547c198\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [43:5]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [43:5]\n\nLocation: US\nJob ID: a8f472f8-dd7f-4919-970f-afb73703b02b\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

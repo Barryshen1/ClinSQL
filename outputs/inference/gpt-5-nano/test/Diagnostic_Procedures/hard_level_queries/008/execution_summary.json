@@ -1,0 +1,22 @@
+{
+  "query": "I have a 53-year-old man with upper GI bleeding. Among male ICU patients aged 48\u201358 with UGIB, stratify first 24\u2011hour diagnostic procedure counts into quintiles and report average procedures, hospital LOS (days), and in\u2011hospital mortality (%) per quintile.",
+  "final_sql": "WITH ugib_stays AS (\n  SELECT\n    I.subject_id,\n    I.hadm_id,\n    I.stay_id,\n    I.intime,\n    -- Compute hospital LOS in days using TIMESTAMP_DIFF with proper casts\n    TIMESTAMP_DIFF(TIMESTAMP(H.dischtime), TIMESTAMP(H.admittime), SECOND) / 86400.0 AS hospital_los_days,\n    -- Mortality indicator as 0/1\n    CAST(H.hospital_expire_flag AS INT64) AS in_hospital_mortality\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS I\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS H\n    ON I.hadm_id = H.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS DI\n    ON DI.subject_id = I.subject_id AND DI.hadm_id = I.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS DCD\n    ON DCD.icd_code = DI.icd_code AND DCD.icd_version = DI.icd_version\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS P\n    ON P.subject_id = I.subject_id\n  WHERE P.gender = 'M'\n    AND P.anchor_age BETWEEN 48 AND 58\n    AND (\n      LOWER(DCD.long_title) LIKE '%upper%'\n      OR LOWER(DCD.long_title) LIKE '%gastric%'\n      OR LOWER(DCD.long_title) LIKE '%duodenum%'\n      OR LOWER(DI.icd_code) LIKE '578%'\n    )\n),\nper_stay AS (\n  SELECT\n    U.subject_id,\n    U.hadm_id,\n    U.stay_id,\n    U.intime,\n    U.hospital_los_days,\n    U.in_hospital_mortality,\n    SUM(\n      CASE\n        WHEN di.category = 'Diagnostic'\n             AND PE.starttime BETWEEN U.intime AND TIMESTAMP_ADD(U.intime, INTERVAL 24 HOUR)\n        THEN 1\n        ELSE 0\n      END\n    ) AS first24_diag_proc\n  FROM ugib_stays AS U\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS PE\n    ON PE.stay_id = U.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON di.itemid = PE.itemid\n  GROUP BY\n    U.subject_id,\n    U.hadm_id,\n    U.stay_id,\n    U.intime,\n    U.hospital_los_days,\n    U.in_hospital_mortality\n)\nSELECT quintile,\n       AVG(first24_diag_proc) AS avg_first24_diag_proc,\n       AVG(hospital_los_days) AS avg_hospital_los_days,\n       SAFE_DIVIDE(SUM(in_hospital_mortality), COUNT(*)) * 100 AS in_hospital_mortality_percent\nFROM (\n  SELECT *,\n         NTILE(5) OVER (ORDER BY first24_diag_proc) AS quintile\n  FROM per_stay\n) AS t\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [7:6]; reason: invalidQuery, location: query, message: No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [7:6]\n\nLocation: US\nJob ID: f434504b-656d-483f-a78e-bf468668ff27\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

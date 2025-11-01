@@ -1,0 +1,28 @@
+{
+  "query": "For my 87\u2011year\u2011old female patient, among women 82\u201392 admitted with chest pain or AMI and initial troponin T >0.01 ng/mL, report p25, p50, p75 and min\u2013max.",
+  "final_sql": "WITH patient_cohort AS (\n    -- Step 1: Identify female patients aged 82-92\n    SELECT\n        p.subject_id,\n        p.gender,\n        p.anchor_age,\n        adm.hadm_id,\n        adm.admittime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON p.subject_id = adm.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 82 AND 92\n),\nadmissions_with_diagnosis AS (\n    -- Step 2: Filter these admissions for diagnoses of Chest Pain or AMI\n    SELECT DISTINCT\n        pc.subject_id,\n        pc.hadm_id\n    FROM\n        patient_cohort pc\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n        ON pc.subject_id = di.subject_id AND pc.hadm_id = di.hadm_id\n    WHERE\n        (\n            -- ICD-9 codes for Acute Myocardial Infarction\n            (di.icd_version = 9 AND di.icd_code BETWEEN '4100' AND '4109')\n            -- ICD-10 codes for Acute Myocardial Infarction\n            OR (di.icd_version = 10 AND di.icd_code LIKE 'I21%')\n            -- ICD-9 codes for Chest Pain (786.5x)\n            OR (di.icd_version = 9 AND di.icd_code LIKE '7865%')\n            -- ICD-10 codes for Chest Pain (R07.x)\n            OR (di.icd_version = 10 AND di.icd_code LIKE 'R07%')\n        )\n),\ninitial_troponin_measurements AS (\n    -- Step 3: Find the first Troponin T measurement for each qualifying admission\n    -- No filtering on value here; we find the absolute first measurement.\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        le.valuenum AS initial_troponin_t_value,\n        ROW_NUMBER() OVER (PARTITION BY ad.hadm_id ORDER BY le.charttime) AS rn\n    FROM\n        admissions_with_diagnosis ad\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` le\n        ON ad.subject_id = le.subject_id AND ad.hadm_id = le.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n        ON le.itemid = dli.itemid\n    WHERE\n        dli.label = 'Troponin T' -- Specific lab item for Troponin T\n        AND le.valuenum IS NOT NULL -- Ensure numeric value exists\n        AND le.valueuom = 'ng/mL' -- Ensure the unit is correct\n),\nfiltered_admissions_with_initial_troponin AS (\n    -- Step 4: Filter for the first valid measurement (rn = 1) and\n    -- apply the condition that this initial value must be > 0.01 ng/mL\n    SELECT\n        initial_troponin_t_value\n    FROM\n        initial_troponin_measurements\n    WHERE\n        rn = 1 -- Select only the first measurement per admission\n        AND initial_troponin_t_value > 0.01 -- Now apply the threshold for the *initial* value\n)\n-- Step 5: Calculate statistics (p25, p50, p75, min-max)\n-- All aggregate functions are now explicitly window functions\nSELECT\n    MIN(initial_troponin_t_value) OVER () AS min_troponin_t,\n    MAX(initial_troponin_t_value) OVER () AS max_troponin_t,\n    PERCENTILE_CONT(initial_troponin_t_value, 0.25) OVER () AS p25_troponin_t,\n    PERCENTILE_CONT(initial_troponin_t_value, 0.50) OVER () AS p50_troponin_t,\n    PERCENTILE_CONT(initial_troponin_t_value, 0.75) OVER () AS p75_troponin_t\nFROM\n    filtered_admissions_with_initial_troponin\nLIMIT 1; -- Add LIMIT 1 since these are global aggregates and we only need one row of results;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \")\" at [62:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \")\" at [62:1]\n\nLocation: US\nJob ID: 304c4dd9-3229-4cc1-99ee-5751b5848530\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column troponin_t_value which is neither grouped nor aggregated at [68:21]; reason: invalidQuery, location: query, message: SELECT list expression references column troponin_t_value which is neither grouped nor aggregated at [68:21]\n\nLocation: US\nJob ID: b8d084a7-cdd6-49ed-8a73-016b98473f11\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

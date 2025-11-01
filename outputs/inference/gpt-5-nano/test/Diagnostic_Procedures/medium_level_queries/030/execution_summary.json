@@ -1,0 +1,22 @@
+{
+  "query": "I have a 58-year-old woman. For females 53\u201363 admitted with upper GI bleeding (1\u20138 day stays), what are p25, p50, p75 diagnostic procedures per admission for 1\u20134 vs 5\u20138 days?",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE LOWER(gender) IN ('f', 'female')\n    AND anchor_age BETWEEN 53 AND 63\n),\n\nugib_admissions AS (\n  SELECT DISTINCT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN eligible_patients ep ON ep.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON di.subject_id = a.subject_id AND di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON dd.icd_code = di.icd_code AND dd.icd_version = di.icd_version\n  WHERE (\n        LOWER(dd.long_title) LIKE '%upper%' AND LOWER(dd.long_title) LIKE '%hemorrhage%'\n      )\n    AND DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) BETWEEN 1 AND 8\n),\n\nadmission_bins AS (\n  SELECT a.subject_id, a.hadm_id,\n         CASE\n           WHEN DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) BETWEEN 1 AND 4 THEN '1-4'\n           WHEN DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) BETWEEN 5 AND 8 THEN '5-8'\n         END AS stay_group\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  WHERE a.hadm_id IN (SELECT hadm_id FROM ugib_admissions)\n),\n\nper_admission AS (\n  SELECT ib.hadm_id, ib.stay_group,\n         SUM(CASE WHEN dp.icd_code IS NOT NULL THEN 1 ELSE 0 END) AS diag_proc_cnt\n  FROM admission_bins ib\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pc\n    ON pc.hadm_id = ib.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n    ON dp.icd_code = pc.icd_code AND dp.icd_version = pc.icd_version\n  GROUP BY ib.hadm_id, ib.stay_group\n),\n\nquartiles AS (\n  SELECT stay_group,\n         APPROX_QUANTILES(diag_proc_cnt, 4) AS q\n  FROM per_admission\n  GROUP BY stay_group\n)\n\nSELECT\n  stay_group,\n  CAST(q[OFFSET(1)] AS INT64) AS p25,  -- 25th percentile\n  CAST(q[OFFSET(2)] AS INT64) AS p50,  -- 50th percentile (median)\n  CAST(q[OFFSET(3)] AS INT64) AS p75   -- 75th percentile\nFROM quartiles\nORDER BY stay_group;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator BETWEEN\n  Argument types: INTERVAL, INT64, INT64\n  Signature: (T1) BETWEEN (T1) AND (T1)\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, INTERVAL} at [20:47]; reason: invalidQuery, location: query, message: No matching signature for operator BETWEEN\n  Argument types: INTERVAL, INT64, INT64\n  Signature: (T1) BETWEEN (T1) AND (T1)\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, INTERVAL} at [20:47]\n\nLocation: US\nJob ID: d90c8d77-00c6-4245-a6c4-81af081a8856\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

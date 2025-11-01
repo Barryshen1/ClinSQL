@@ -1,0 +1,28 @@
+{
+  "query": "For a 56-year-old male: among men 51\u201361 admitted with postoperative complications, stratified by ICU vs non\u2011ICU, LOS (1\u20132/3\u20135/6\u20139/\u226510) and Charlson comorbidity (0\u20131/2/\u22653), report mortality (%), median LOS, CKD and diabetes prevalence.",
+  "final_sql": "with postop_admissions as (\n  select distinct\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    datetime_diff(a.dischtime, a.admittime, day) as los_days,\n    case\n      when icu.hadm_id is not null then 'ICU'\n      else 'Non-ICU'\n    end as icu_status\n  from physionet-data.mimiciv_3_1_hosp.admissions a\n  join physionet-data.mimiciv_3_1_hosp.patients p\n    on a.subject_id = p.subject_id\n  left join physionet-data.mimiciv_3_1_icu.icustays icu\n    on a.hadm_id = icu.hadm_id\n  where p.gender = 'M'\n    and p.anchor_age between 51 and 61\n    and exists (\n      select 1\n      from physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      join physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n        on d.icd_code = dd.icd_code and d.icd_version = dd.icd_version\n      where d.hadm_id = a.hadm_id\n        and lower(dd.long_title) like '%postoperative complication%'\n    )\n),\n\n-- Charlson Comorbidity Index (Quan et al.)\ncci_calc as (\n  select\n    d.hadm_id,\n    sum(case\n      when dd.long_title like '%Myocardial infarction%' then 1\n      when dd.long_title like '%Congestive heart disease%' then 1\n      when dd.long_title like '%Peripheral vascular disease%' then 1\n      when dd.long_title like '%Cerebrovascular disease%' then 1\n      when dd.long_title like '%Dementia%' then 1\n      when dd.long_title like '%Chronic pulmonary disease%' then 1\n      when dd.long_title like '%Rheumatologic disease%' then 1\n      when dd.long_title like '%Peptic ulcer disease%' then 1\n      when dd.long_title like '%Mild liver disease%' then 1\n      when dd.long_title like '%Diabetes without chronic complication%' then 1\n      when dd.long_title like '%Diabetes with chronic complication%' then 2\n      when dd.long_title like '%Hemiplegia or paraplegia%' then 2\n      when dd.long_title like '%Renal disease%' then 2\n      when dd.long_title like '%Any malignancy%' then 2\n      when dd.long_title like '%Moderate or severe liver disease%' then 3\n      when dd.long_title like '%Metastatic solid tumor%' then 6\n      when dd.long_title like '%AIDS/HIV%' then 6\n      else 0\n    end) as charlson_score\n  from physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n  join physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n    on d.icd_code = dd.icd_code and d.icd_version = dd.icd_version\n  where d.hadm_id in (select hadm_id from postop_admissions)\n  group by d.hadm_id\n),\n\nadmission_with_strata as (\n  select\n    pa.*,\n    cci.charlson_score,\n    case\n      when pa.los_days between 1 and 2 then '1-2'\n      when pa.los_days between 3 and 5 then '3-5'\n      when pa.los_days between 6 and 9 then '6-9'\n      when pa.los_days >= 10 then '>=10'\n      else '<1'\n    end as los_group,\n    case\n      when cci.charlson_score between 0 and 1 then '0-1'\n      when cci.charlson_score = 2 then '2'\n      when cci.charlson_score >= 3 then '>=3'\n      else '0'\n    end as cci_group,\n    case\n      when exists (\n        select 1\n        from physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n        join physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n          on d.icd_code = dd.icd_code and d.icd_version = dd.icd_version\n        where d.hadm_id = pa.hadm_id\n          and (dd.long_title like '%Chronic kidney disease%' or dd.long_title like '%Renal disease%')\n      ) then 1 else 0\n    end as has_ckd,\n    case\n      when exists (\n        select 1\n        from physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n        join physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n          on d.icd_code = dd.icd_code and d.icd_version = dd.icd_version\n        where d.hadm_id = pa.hadm_id\n          and dd.long_title like '%Diabetes%'\n      ) then 1 else 0\n    end as has_diabetes\n  from postop_admissions pa\n  left join cci_calc cci\n    on pa.hadm_id = cci.hadm_id\n)\n\nselect\n  icu_status,\n  los_group,\n  cci_group,\n  count(*) as n_patients,\n  round(avg(hospital_expire_flag) * 100, 2) as mortality_percent,\n  approx_quantiles(los_days, 2)[ordinal(2)] as median_los,\n  round(avg(has_ckd) * 100, 2) as ckd_prevalence_percent,\n  round(avg(has_diabetes) * 100, 2) as diabetes_prevalence_percent\nfrom admission_with_strata\ngroup by icu_status, los_group, cci_group\norder by icu_status, los_group, cci_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]\n\nLocation: US\nJob ID: 59d4e0c7-7e5b-4e8b-bae5-a98a57c729c4\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:8]\n\nLocation: US\nJob ID: bea54ed4-d661-49ba-aa0d-e4566319f476\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have a 65-year-old woman in ICU with mixed shock. In female ICU patients 60\u201370 with mixed shock, what is the cohort 95th\u2011percentile instability score (first 48 h)? Compare top decile versus cohort for hypotension (MAP<65), tachycardia, ICU LOS, and mortality.",
+  "final_sql": "WITH \n-- Identify female patients aged 60-70\npatients_eligible AS (\n  SELECT subject_id, anchor_age, gender\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age BETWEEN 60 AND 70\n),\n\n-- Identify ICU stays for eligible patients with mixed shock\nicu_stays_eligible AS (\n  SELECT i.subject_id, i.hadm_id, i.stay_id, i.intime, i.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN patients_eligible p ON i.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  WHERE d.icd_code LIKE 'R57%'  -- Mixed shock ICD code, adjust as necessary\n),\n\n-- Sample vital signs for MAP and heart rate within the first 48 hours of ICU stay\nvital_signs AS (\n  SELECT \n    ce.subject_id, \n    ce.hadm_id, \n    ce.stay_id, \n    ce.charttime,\n    ce.valuenum AS map_valuenum,\n    ce.value AS map_value\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN icu_stays_eligible ise ON ce.stay_id = ise.stay_id\n  WHERE ce.itemid = 220050  -- MAP\n  AND ce.charttime BETWEEN ise.intime AND TIMESTAMP_ADD(ise.intime, INTERVAL 48 HOUR)\n),\n\nheart_rate_vitals AS (\n  SELECT \n    ce.subject_id, \n    ce.hadm_id, \n    ce.stay_id, \n    ce.charttime,\n    ce.valuenum AS heart_rate_valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN icu_stays_eligible ise ON ce.stay_id = ise.stay_id\n  WHERE ce.itemid = 220179  -- Heart rate\n  AND ce.charttime BETWEEN ise.intime AND TIMESTAMP_ADD(ise.intime, INTERVAL 48 HOUR)\n),\n\n-- Calculate instability score (simple example, adjust as necessary)\ninstability_score AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    -- Example instability score calculation\n    PERCENT_RANK() OVER (PARTITION BY subject_id ORDER BY map_valuenum) AS instability_score\n  FROM vital_signs\n),\n\n-- Calculate cohort 95th-percentile instability score\ncohort_percentile AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 0.95)[OFFSET(1)] AS percentile_score\n  FROM instability_score\n),\n\n-- Identify top decile patients\ntop_decile_patients AS (\n  SELECT subject_id, hadm_id, stay_id\n  FROM instability_score\n  WHERE instability_score > (SELECT percentile_score FROM cohort_percentile)\n)\n\n-- Compare outcomes for top decile vs. cohort\nSELECT \n  'Hypotension (MAP<65)' AS outcome,\n  COUNT(DISTINCT CASE WHEN map_valuenum < 65 THEN subject_id END) AS count_hypotension,\n  COUNT(DISTINCT subject_id) AS total_patients\nFROM vital_signs\nUNION ALL\nSELECT \n  'Tachycardia',\n  COUNT(DISTINCT CASE WHEN heart_rate_valuenum > 100 THEN subject_id END),\n  COUNT(DISTINCT subject_id)\nFROM heart_rate_vitals\nWHERE subject_id IN (SELECT subject_id FROM top_decile_patients)\nUNION ALL\nSELECT \n  'ICU LOS',\n  AVG(TIMESTAMP_DIFF(outtime, intime, HOUR)) AS icu_los,\n  COUNT(DISTINCT subject_id)\nFROM icu_stays_eligible\nUNION ALL\nSELECT \n  'Mortality',\n  COUNT(DISTINCT CASE WHEN a.hospital_expire_flag = 1 THEN subject_id END),\n  COUNT(DISTINCT subject_id)\nFROM `physionet-data.mimiciv_3_1_hosp.admissions` a\nJOIN patients_eligible p ON a.subject_id = p.subject_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: STRUCT<subject_id INT64, hadm_id INT64, stay_id INT64, ...>, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [61:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: STRUCT<subject_id INT64, hadm_id INT64, stay_id INT64, ...>, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [61:5]\n\nLocation: US\nJob ID: 9ec29565-d04d-4f7e-8ec3-1f05d018ddd5\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [47:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [47:27]\n\nLocation: US\nJob ID: 61c8f0a3-fdad-4f71-baf7-4153dcb45377\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: ic at [11:46]; reason: invalidQuery, location: query, message: Unrecognized name: ic at [11:46]\n\nLocation: US\nJob ID: 466bfa91-1166-4b72-ac83-1d6ed2007cd7\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: STRUCT<subject_id INT64, hadm_id INT64, stay_id INT64, ...>, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [61:5]; reason: invalidQuery, location: query, message: No matching signature for aggregate function APPROX_QUANTILES\n  Argument types: STRUCT<subject_id INT64, hadm_id INT64, stay_id INT64, ...>, FLOAT64\n  Signature: APPROX_QUANTILES(T1, INT64)\n    Argument 2: Unable to coerce type FLOAT64 to expected type INT64 at [61:5]\n\nLocation: US\nJob ID: 9ec29565-d04d-4f7e-8ec3-1f05d018ddd5\n"
+    }
+  ]
+}

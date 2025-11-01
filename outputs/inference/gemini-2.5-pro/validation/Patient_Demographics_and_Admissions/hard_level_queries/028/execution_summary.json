@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 60\u2011year\u2011old woman. In female Medicare patients aged 55\u201365 admitted from the ED with principal cellulitis, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent of index stays >7 days?",
+  "final_sql": "WITH cellulitis_codes AS (\n    -- Step 1: Identify all ICD codes for 'cellulitis'.\n    -- This makes the query robust to different ICD versions (9 or 10).\n    SELECT\n        icd_code,\n        icd_version\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n    WHERE\n        LOWER(long_title) LIKE '%cellulitis%'\n),\n\nbase_cohort AS (\n    -- Step 2: Define the index cohort of interest based on patient and admission criteria.\n    -- We select admissions that match the criteria and calculate their length of stay.\n    SELECT DISTINCT -- Use DISTINCT to ensure each hadm_id is counted only once\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        -- Calculate length of stay in days for the index admission\n        DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n        ON adm.hadm_id = dx.hadm_id\n    INNER JOIN\n        cellulitis_codes AS cc\n        ON dx.icd_code = cc.icd_code AND dx.icd_version = cc.icd_version\n    WHERE\n        -- Patient criteria\n        pat.gender = 'F'\n        AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) BETWEEN 55 AND 65\n        -- Admission criteria\n        AND adm.insurance = 'Medicare'\n        AND adm.admission_location = 'EMERGENCY ROOM'\n        -- Diagnosis criteria\n        AND dx.seq_num = 1 -- Principal diagnosis\n),\n\nadmissions_ranked AS (\n    -- Step 3a: For each patient in our cohort, get all their hospital admissions and rank them chronologically.\n    -- This is a necessary step to find the admission that *follows* our index admission.\n    SELECT\n        subject_id,\n        hadm_id,\n        admittime,\n        dischtime,\n        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime) AS rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions`\n    WHERE\n        subject_id IN (SELECT DISTINCT subject_id FROM base_cohort)\n),\n\ncohort_with_next_admission AS (\n    -- Step 3b: Join the ranked admissions table to itself to find the next admission.\n    -- Then, join with our base_cohort to filter for only our index stays.\n    SELECT\n        bc.hadm_id,\n        bc.los_days,\n        r1.dischtime,\n        r2.admittime AS next_admittime,\n        -- Calculate the time from discharge of the index stay to the start of the next admission.\n        DATETIME_DIFF(r2.admittime, r1.dischtime, DAY) AS days_to_next_admission\n    FROM\n        base_cohort AS bc\n    INNER JOIN\n        admissions_ranked AS r1\n        ON bc.hadm_id = r1.hadm_id\n    LEFT JOIN -- Use a LEFT JOIN to include patients who were not readmitted\n        admissions_ranked AS r2\n        ON r1.subject_id = r2.subject_id AND r2.rn = r1.rn + 1\n),\n\nfinal_cohort_metrics AS (\n    -- Step 4: Create a flag for 30-day readmission status.\n    SELECT\n        hadm_id,\n        los_days,\n        CASE\n            WHEN days_to_next_admission IS NOT NULL AND days_to_next_admission <= 30 THEN 1\n            ELSE 0\n        END AS is_readmitted_30_days\n    FROM\n        cohort_with_next_admission\n)\n\n-- Step 5: Aggregate the results to calculate the final metrics.\nSELECT\n    -- 30-day readmission rate\n    AVG(is_readmitted_30_days) * 100 AS readmission_rate_30_day_percent,\n\n    -- Median index LOS for readmitted patients\n    APPROX_QUANTILES(\n        CASE WHEN is_readmitted_30_days = 1 THEN los_days END, 100 IGNORE NULLS\n    )[OFFSET(50)] AS median_los_readmitted,\n\n    -- Median index LOS for non-readmitted patients\n    APPROX_QUANTILES(\n        CASE WHEN is_readmitted_30_days = 0 THEN los_days END, 100 IGNORE NULLS\n    )[OFFSET(50)] AS median_los_non_readmitted,\n\n    -- Percent of index stays with LOS > 7 days\n    AVG(CASE WHEN los_days > 7 THEN 1 ELSE 0 END) * 100 AS percent_los_gt_7_days\nFROM\n    final_cohort_metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"principal\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"principal\" at [1:8]\n\nLocation: US\nJob ID: 9b08fab1-8933-43a0-8514-58e8320682e0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"principal\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"principal\" at [1:8]\n\nLocation: US\nJob ID: efc848b1-974b-4cd4-97cf-a385d548c0af\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

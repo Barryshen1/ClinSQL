@@ -1,0 +1,28 @@
+{
+  "query": "I have a 91-year-old man. Among male patients aged 86\u201396 with sepsis (excluding septic shock), report in-hospital mortality (%) by LOS (\u22643/4\u20136/7\u201310/>10 days) and day\u20111 ICU status, plus median days-to-death.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: male patients aged 86-96 with sepsis (ICD-10/9, excluding septic shock)\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    -- LOS in days\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    -- LOS bin (matched to question: \u22643/4\u20136/7\u201310/>10)\n    CASE \n      WHEN DATE_DIFF(a.dischtime, a.admittime, DAY) <= 3 THEN '\u22643'\n      WHEN DATE_DIFF(a.dischtime, a.admittime, DAY) <= 6 THEN '4-6'\n      WHEN DATE_DIFF(a.dischtime, a.admittime, DAY) <= 10 THEN '7-10'\n      ELSE '>10'\n    END AS los_bin\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 86 AND 96\n    AND EXISTS (\n      -- Sepsis diagnosis (ICD-10/9 codes, exclude septic shock)\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.subject_id = a.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND (\n          -- ICD-10: Sepsis/severe sepsis (exclude shock)\n          (d.icd_version = '10' AND (\n            d.icd_code LIKE 'A40.%' OR d.icd_code LIKE 'A41.%' OR \n            d.icd_code = 'R65.20' OR d.icd_code = 'R65.2' OR\n            d.icd_code LIKE 'P36.%'\n          ) AND d.icd_code NOT LIKE 'R65.2[1|9]%')\n          OR\n          -- ICD-9: Sepsis (exclude shock equivalents)\n          (d.icd_version = '9' AND (\n            d.icd_code = '995.91' OR d.icd_code = '995.92' OR\n            d.icd_code LIKE '038.%' OR d.icd_code LIKE '785.5[2|9]'\n          ))\n        )\n    )\n),\nicu_status AS (\n  -- Determine day-1 ICU status using icustays\n  SELECT \n    c.*,\n    -- First ICU stay intime (if any)\n    MIN(i.intime) AS first_icu_intime\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON c.subject_id = i.subject_id \n    AND c.hadm_id = i.hadm_id\n  GROUP BY \n    c.subject_id, c.hadm_id, c.admittime, c.dischtime, c.deathtime, \n    c.hospital_expire_flag, c.gender, c.anchor_age, c.los_days, c.los_bin\n),\nday1_icu AS (\n  SELECT \n    *,\n    -- Day-1 ICU status\n    CASE \n      WHEN first_icu_intime IS NULL THEN 'No ICU'\n      WHEN DATE(admittime) = DATE(first_icu_intime) THEN 'ICU (day 1)'\n      ELSE 'ICU (not day 1)'\n    END AS day1_icu_status,\n    -- Days to death (deceased only)\n    CASE WHEN hospital_expire_flag = 1 THEN DATE_DIFF(deathtime, admittime, DAY) END AS days_to_death\n  FROM icu_status\n)\n-- Mortality table by LOS bin and day-1 ICU status\nSELECT \n  los_bin,\n  day1_icu_status,\n  COUNT(*) AS total_admissions,\n  SUM(hospital_expire_flag) AS deaths,\n  ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(*), 2) AS mortality_pct\nFROM day1_icu\nGROUP BY los_bin, day1_icu_status\nORDER BY \n  CASE los_bin \n    WHEN '\u22643' THEN 1 \n    WHEN '4-6' THEN 2 \n    WHEN '7-10' THEN 3 \n    ELSE 4 \n  END,\n  CASE day1_icu_status \n    WHEN 'No ICU' THEN 1 \n    WHEN 'ICU (day 1)' THEN 2 \n    ELSE 3 \n  END\n\nUNION ALL\n\n-- Overall median days-to-death (deceased only; padded to match columns)\nSELECT \n  NULL AS los_bin,\n  NULL AS day1_icu_status,\n  NULL AS total_admissions,\n  NULL AS deaths,\n  PERCENTILE_CONT(days_to_death, 0.5) AS median_days_to_death\nFROM day1_icu\nWHERE hospital_expire_flag = 1 AND days_to_death IS NOT NULL;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got keyword UNION at [98:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword UNION at [98:1]\n\nLocation: US\nJob ID: 4b503cab-4106-4c15-9457-3a69340eb4e8\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword UNION at [97:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword UNION at [97:1]\n\nLocation: US\nJob ID: 1fd7ae20-c018-47c7-bf8d-7a13c210205c\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword UNION at [92:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword UNION at [92:1]\n\nLocation: US\nJob ID: 51217987-46e6-4dfd-83d9-1b46289d88d5\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword UNION at [98:1]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword UNION at [98:1]\n\nLocation: US\nJob ID: 4b503cab-4106-4c15-9457-3a69340eb4e8\n"
+    }
+  ]
+}

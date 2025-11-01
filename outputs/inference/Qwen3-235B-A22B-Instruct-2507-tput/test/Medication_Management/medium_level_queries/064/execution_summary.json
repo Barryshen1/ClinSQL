@@ -1,0 +1,22 @@
+{
+  "query": "As a 76\u2011year\u2011old male with diabetes and acute heart failure, among inpatients aged 71\u201381, report initiation rates (%) for metformin, sulfonylureas, DPP\u20114, SGLT2, thiazolidinediones: first 72h vs last 48h.",
+  "final_sql": "WITH patient_cohort AS (\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  JOIN `physionet-data.mimiciv_3_1_hosp`.patients p ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND (p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 71 AND 81\n),\ndiabetes_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE (icd_version = 10 AND (LOWER(long_title) LIKE '%type 2 diabetes%' \n         OR LOWER(long_title) LIKE '%diabetes mellitus type 2%'))\n     OR (icd_version = 9 AND icd_code LIKE '250%')\n),\nhf_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses\n  WHERE (icd_version = 10 AND LOWER(long_title) LIKE '%acute heart failure%')\n     OR (icd_version = 9 AND icd_code LIKE '428.2%')\n),\ncohort_with_comorbidities AS (\n  SELECT pc.*\n  FROM patient_cohort pc\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    WHERE di.hadm_id = pc.hadm_id\n      AND di.icd_code IN (SELECT icd_code FROM diabetes_codes)\n  )\n  AND EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n    WHERE di.hadm_id = pc.hadm_id\n      AND di.icd_code IN (SELECT icd_code FROM hf_codes)\n  )\n),\ndrug_mapping AS (\n  SELECT \n    drug,\n    CASE\n      WHEN LOWER(drug) LIKE '%metformin%' THEN 'metformin'\n      WHEN LOWER(drug) IN ('glipizide', 'glyburide', 'glimepiride', 'tolbutamide', 'acetohexamide', 'chlorpropamide', 'tolazamide') THEN 'sulfonylureas'\n      WHEN LOWER(drug) IN ('sitagliptin', 'saxagliptin', 'linagliptin', 'alogliptin') THEN 'DPP-4'\n      WHEN LOWER(drug) IN ('empagliflozin', 'dapagliflozin', 'canagliflozin') THEN 'SGLT2'\n      WHEN LOWER(drug) IN ('pioglitazone', 'rosiglitazone') THEN 'thiazolidinediones'\n      ELSE NULL\n    END AS drug_class\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions\n  WHERE LOWER(drug) IN (\n    'metformin', 'glipizide', 'glyburide', 'glimepiride', 'tolbutamide', 'acetohexamide', 'chlorpropamide', 'tolazamide',\n    'sitagliptin', 'saxagliptin', 'linagliptin', 'alogliptin',\n    'empagliflozin', 'dapagliflozin', 'canagliflozin',\n    'pioglitazone', 'rosiglitazone'\n  )\n),\nprescriptions_with_class AS (\n  SELECT \n    p.hadm_id,\n    p.starttime,\n    dm.drug_class\n  FROM `physionet-data.mimiciv_3_1_hosp`.prescriptions p\n  JOIN drug_mapping dm ON LOWER(p.drug) = LOWER(dm.drug)\n  WHERE dm.drug_class IS NOT NULL\n),\nfirst_prescriptions AS (\n  SELECT \n    hadm_id,\n    drug_class,\n    starttime,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id, drug_class ORDER BY starttime) AS rn\n  FROM prescriptions_with_class\n),\ninitiation_timing AS (\n  SELECT \n    c.hadm_id,\n    fp.drug_class,\n    CASE \n      WHEN fp.starttime <= c.admittime + INTERVAL '72' HOUR \n        AND fp.starttime >= c.admittime \n        THEN 'first_72h'\n      WHEN fp.starttime >= c.dischtime - INTERVAL '48' HOUR \n        AND fp.starttime <= c.dischtime \n        THEN 'last_48h'\n      ELSE NULL\n    END AS time_window\n  FROM cohort_with_comorbidities c\n  JOIN first_prescriptions fp ON c.hadm_id = fp.hadm_id\n  WHERE fp.rn = 1\n    AND fp.starttime IS NOT NULL\n),\ncohort_counts AS (\n  SELECT COUNT(*) AS total_patients\n  FROM cohort_with_comorbidities\n)\nSELECT\n  drug_class,\n  time_window,\n  COUNT(*) AS initiation_count,\n  total_patients,\n  ROUND(COUNT(*) * 100.0 / total_patients, 2) AS initiation_rate_pct\nFROM initiation_timing\nCROSS JOIN cohort_counts\nWHERE time_window IS NOT NULL\nGROUP BY drug_class, time_window, total_patients\nORDER BY drug_class, time_window;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \";\" at [93:33]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \";\" at [93:33]\n\nLocation: US\nJob ID: 9e632aee-329c-44af-9c12-917528e9e3b1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

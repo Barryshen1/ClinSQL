@@ -1,0 +1,1 @@
+SELECT (percentile_cont(0.75) within GROUP (ORDER BY los) - percentile_cont(0.25) within GROUP (ORDER BY los)) AS interquartile_range FROM icustays JOIN patients ON icustays.subject_id = patients.subject_id WHERE patients.gender = 'M' AND patients.anchor_year_group BETWEEN 46 AND 56 AND icustays.hadm_id IN (SELECT hadm_id FROM diagnoses_icd WHERE icd_code = 'I64.9');

@@ -1,0 +1,1 @@
+with acute pancreatitis, give mean, min and max diagnostic procedures per admission for 1–4 vs 5–8 days, stratified by primary vs secondary.";

@@ -1,0 +1,22 @@
+{
+  "query": "I have a 57-year-old female post\u2013cardiac arrest inpatient. Among females 52\u201362 with post\u2013cardiac arrest, in the first 48 h what is the instability score IQR (Q1, median)? Compare critical lab events/admission to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH cardiac_arrest_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%cardiac arrest%'\n     OR (icd_version = 9 AND icd_code = '4275')\n     OR (icd_version = 10 AND icd_code IN ('I460', 'I461', 'I462', 'I468', 'I469'))\n),\ncohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        WHERE diag.hadm_id = a.hadm_id\n          AND diag.icd_code = cac.icd_code\n          AND diag.icd_version = cac.icd_version\n      ) THEN 1 \n      ELSE 0 \n    END AS has_cardiac_arrest\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  CROSS JOIN cardiac_arrest_codes cac\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 52 AND 62\n    AND a.admittime IS NOT NULL\n),\nlab_abnormal_counts AS (\n  SELECT \n    c.hadm_id,\n    c.has_cardiac_arrest,\n    c.los_days,\n    c.hospital_expire_flag,\n    COUNT(CASE WHEN le.flag = 'abnormal' THEN 1 END) AS abnormal_lab_count_48h\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON c.hadm_id = le.hadm_id\n    AND le.charttime >= c.admittime\n    AND le.charttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.hadm_id, c.has_cardiac_arrest, c.los_days, c.hospital_expire_flag\n),\nsummary_stats AS (\n  SELECT\n    has_cardiac_arrest,\n    APPROX_QUANTILES(abnormal_lab_count_48h, 1000)[OFFSET(250)] AS q1_abnormal_labs,\n    APPROX_QUANTILES(abnormal_lab_count_48h, 1000)[OFFSET(500)] AS median_abnormal_labs,\n    APPROX_QUANTILES(los_days, 1000)[OFFSET(500)] AS median_los_days,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    COUNT(*) AS cohort_size\n  FROM lab_abnormal_counts\n  GROUP BY has_cardiac_arrest\n)\nSELECT\n  has_cardiac_arrest,\n  q1_abnormal_labs,\n  median_abnormal_labs,\n  median_los_days,\n  mortality_rate,\n  cohort_size\nFROM summary_stats\nORDER BY has_cardiac_arrest;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Subquery of type IN must have only one output column at [25:47]; reason: invalidQuery, location: query, message: Subquery of type IN must have only one output column at [25:47]\n\nLocation: US\nJob ID: 83750f61-19a7-45a9-bc03-b4965eb37ed1\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

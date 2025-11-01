@@ -1,0 +1,22 @@
+{
+  "query": "My 81-year-old man is on dual antiplatelet therapy. Among men 76\u201386 on DAPT, average ICU LOS (days) for first admission?",
+  "final_sql": "WITH first_icu AS (\n  SELECT s_all.*\n  FROM (\n    SELECT\n      s.*,\n      ROW_NUMBER() OVER (PARTITION BY s.subject_id ORDER BY s.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` s\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON s.subject_id = p.subject_id\n    WHERE p.gender = 'M'\n      AND p.anchor_age BETWEEN 76 AND 86\n  ) s_all\n  WHERE rn = 1\n),\n\nantiplatelet_rx AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    starttime,\n    stoptime,\n    CASE\n      WHEN REGEXP_CONTAINS(UPPER(COALESCE(drug, '')), r'ASPIRIN|ACETYLSALICYLIC') THEN 'aspirin'\n      WHEN REGEXP_CONTAINS(UPPER(COALESCE(drug, '')), r'CLOPIDOGREL|PLAVIX') THEN 'clopidogrel'\n      WHEN REGEXP_CONTAINS(UPPER(COALESCE(drug, '')), r'TICAGRELOR|BRILINTA') THEN 'ticagrelor'\n      WHEN REGEXP_CONTAINS(UPPER(COALESCE(drug, '')), r'PRASUGREL|EFFIENT') THEN 'prasugrel'\n      WHEN REGEXP_CONTAINS(UPPER(COALESCE(drug, '')), r'TICLOPIDINE') THEN 'ticlopidine'\n      WHEN REGEXP_CONTAINS(UPPER(COALESCE(drug, '')), r'DIPYRIDAMOLE') THEN 'dipyridamole'\n      ELSE NULL\n    END AS ap_agent\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n),\n\noverlap_rx AS (\n  -- prescriptions for antiplatelet agents that overlap the first ICU stay\n  SELECT f.subject_id,\n         f.hadm_id,\n         f.stay_id,\n         f.intime,\n         f.outtime,\n         f.los,\n         ar.ap_agent,\n         ar.starttime,\n         ar.stoptime\n  FROM first_icu f\n  JOIN antiplatelet_rx ar\n    ON f.subject_id = ar.subject_id\n   AND f.hadm_id = ar.hadm_id\n   AND ar.ap_agent IS NOT NULL\n   -- overlap condition: prescription period intersects ICU period\n   AND ar.starttime <= f.outtime\n   AND COALESCE(ar.stoptime, ar.starttime) >= f.intime\n)\n\nSELECT\n  AVG(los) AS avg_icu_los_days,\n  COUNT(*) AS n_first_icustays_with_dapt\nFROM (\n  -- require at least two distinct antiplatelet agents overlapping the first ICU stay\n  SELECT subject_id, stay_id, los, COUNT(DISTINCT ap_agent) AS n_agents\n  FROM overlap_rx\n  GROUP BY subject_id, stay_id, los\n  HAVING n_agents >= 2\n);",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name subject_id is ambiguous at [5:44]; reason: invalidQuery, location: query, message: Column name subject_id is ambiguous at [5:44]\n\nLocation: US\nJob ID: 4554beee-545e-465a-8a68-32c4a2a58cf7\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

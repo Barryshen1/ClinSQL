@@ -1,0 +1,22 @@
+{
+  "query": "I'm treating a 75\u2011year\u2011old man with hemorrhagic stroke. Among male inpatients age 70\u201380 with hemorrhagic stroke, what's the 25th percentile of the first\u201148\u2011hour laboratory instability score? Compare cohort vs general inpatient critical\u2011lab event rate, and give mean LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH\n-- Step 1: Identify the cohort of male patients aged 70-80 with a hemorrhagic stroke diagnosis.\ncohort_hadm AS (\n    SELECT DISTINCT\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n        ON pat.subject_id = adm.subject_id\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n        ON adm.hadm_id = dx.hadm_id\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 70 AND 80\n        AND (\n            -- Hemorrhagic stroke ICD-9 codes\n            (dx.icd_version = 9 AND SUBSTR(dx.icd_code, 1, 3) IN ('430', '431', '432')) OR\n            -- Hemorrhagic stroke ICD-10 codes\n            (dx.icd_version = 10 AND SUBSTR(dx.icd_code, 1, 3) IN ('I60', 'I61', 'I62'))\n        )\n),\n\n-- Step 2: Calculate the \"lab instability score\" for each patient in the cohort.\n-- The score is the count of 'abnormal' labs in the first 48 hours of admission.\ncohort_scores AS (\n    SELECT\n        ch.hadm_id,\n        COUNT(le.labevent_id) AS first_48hr_instability_score\n    FROM\n        cohort_hadm AS ch\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n        ON ch.hadm_id = le.hadm_id\n        -- Filter for abnormal labs within the first 48 hours\n        AND le.flag = 'abnormal'\n        AND le.charttime BETWEEN ch.admittime AND TIMESTAMP_ADD(ch.admittime, INTERVAL 48 HOUR)\n    GROUP BY\n        ch.hadm_id\n),\n\n-- Step 3a: Calculate the 25th percentile of the instability score for the cohort.\ncohort_percentile AS (\n    SELECT\n        APPROX_QUANTILES(first_48hr_instability_score, 100)[OFFSET(25)] AS score_25th_percentile\n    FROM\n        cohort_scores\n),\n\n-- Step 3b: Calculate mean LOS and mortality for the cohort.\ncohort_main_stats AS (\n    SELECT\n        AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS cohort_mean_los_days,\n        AVG(hospital_expire_flag) AS cohort_in_hospital_mortality\n    FROM\n        cohort_hadm\n),\n\n-- Step 4: Calculate the critical lab event rates for the cohort vs. the general inpatient population.\n-- The rate is defined as (abnormal labs in first 48h) / (total labs in first 48h).\ncomparison_rates AS (\n    SELECT\n        SAFE_DIVIDE(\n            COUNTIF(le.flag = 'abnormal'),\n            COUNT(le.labevent_id)\n        ) AS general_critical_lab_rate,\n        SAFE_DIVIDE(\n            COUNTIF(le.flag = 'abnormal' AND ch.hadm_id IS NOT NULL),\n            COUNTIF(ch.hadm_id IS NOT NULL)\n        ) AS cohort_critical_lab_rate\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n        ON adm.hadm_id = le.hadm_id\n    LEFT JOIN\n        cohort_hadm AS ch ON adm.hadm_id = ch.hadm_id\n    WHERE\n        -- Only consider labs within the first 48 hours of any admission\n        le.charttime BETWEEN adm.admittime AND TIMESTAMP_ADD(adm.admittime, INTERVAL 48 HOUR)\n)\n\n-- Step 5: Combine all calculated metrics into a single output row.\nSELECT\n    cp.score_25th_percentile,\n    cr.cohort_critical_lab_rate,\n    cr.general_critical_lab_rate,\n    cs.cohort_mean_los_days,\n    cs.cohort_in_hospital_mortality\nFROM\n    cohort_percentile AS cp\nCROSS JOIN\n    cohort_main_stats AS cs\nCROSS JOIN\n    comparison_rates AS cr;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: c4265e36-dbfd-4650-b33d-3faf8053baf2\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

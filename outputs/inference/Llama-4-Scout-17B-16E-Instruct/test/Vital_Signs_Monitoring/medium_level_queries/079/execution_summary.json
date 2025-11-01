@@ -1,0 +1,28 @@
+{
+  "query": "For a 45-year-old male in ICU: among male ICU patients 40\u201350, report percent in per-stay mean SBP categories (<140; 140\u2013159; \u2265160 mmHg) during first 48 h and MI rate per category.",
+  "final_sql": "WITH \n-- Identify male patients aged 40-50\npatients_info AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age, \n    a.hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a \n  ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M' AND \n    p.anchor_age BETWEEN 40 AND 50\n),\n\n-- Extract ICU stay information and join with patients_info\nicu_stay AS (\n  SELECT \n    i.subject_id, \n    i.hadm_id, \n    i.stay_id, \n    i.intime\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN \n    patients_info p \n  ON i.subject_id = p.subject_id AND i.hadm_id = p.hadm_id\n),\n\n-- Extract SBP values within the first 48 hours of ICU stay\nsbp_values AS (\n  SELECT \n    ce.stay_id,\n    ce.valuenum AS sbp\n  FROM \n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` di \n  ON ce.itemid = di.itemid\n  JOIN \n    icu_stay ic \n  ON ce.stay_id = ic.stay_id\n  WHERE \n    di.label = 'Systolic Blood Pressure' \n    AND ce.charttime BETWEEN ic.intime AND TIMESTAMP_ADD(ic.intime, INTERVAL 48 HOUR)\n),\n\n-- Calculate mean SBP for each stay and categorize\nstay_sbp_categories AS (\n  SELECT \n    stay_id,\n    AVG(sbp) AS mean_sbp,\n    CASE \n      WHEN AVG(sbp) < 140 THEN '<140'\n      WHEN AVG(sbp) BETWEEN 140 AND 159 THEN '140\u2013159'\n      WHEN AVG(sbp) >= 160 THEN '\u2265160'\n    END AS sbp_category\n  FROM \n    sbp_values\n  GROUP BY \n    stay_id\n),\n\n-- Identify MI events per stay\nmi_events AS (\n  SELECT \n    i.stay_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN \n    icu_stay i \n  ON d.subject_id = i.subject_id AND d.hadm_id = i.hadm_id\n  WHERE \n    d.icd_code LIKE '410%'\n)\n\n-- Calculate percentages and MI rates per category\nSELECT \n  s.sbp_category,\n  COUNT(DISTINCT s.stay_id) AS stays_in_category,\n  SUM(CASE WHEN s.stay_id IN (SELECT stay_id FROM mi_events) THEN 1 ELSE 0 END) AS mi_events_in_category,\n  COUNT(DISTINCT s.stay_id) / (SELECT COUNT(DISTINCT stay_id) FROM icu_stay) * 100 AS percentage_in_category,\n  SUM(CASE WHEN s.stay_id IN (SELECT stay_id FROM mi_events) THEN 1 ELSE 0 END) / COUNT(DISTINCT s.stay_id) AS mi_rate_in_category\nFROM \n  stay_sbp_categories s\nGROUP BY \n  s.sbp_category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: icu_stay at [44:27]; reason: invalidQuery, location: query, message: Unrecognized name: icu_stay at [44:27]\n\nLocation: US\nJob ID: aa26c738-3814-4d3e-9045-07bf0d93ef0e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Scalar subquery produced more than one element; reason: invalidQuery, location: query, message: Scalar subquery produced more than one element\n\nLocation: US\nJob ID: 8c5fcfda-7877-4d7f-b751-0480c73f38c2\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

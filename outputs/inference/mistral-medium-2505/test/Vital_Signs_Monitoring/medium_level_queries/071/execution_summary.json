@@ -1,0 +1,16 @@
+{
+  "query": "I have a 43-year-old woman in ICU. Among female ICU stays aged 38\u201348, what percentile is a per-stay mean SpO2 of 92% (proportion of stays with mean \u226492%)?",
+  "final_sql": "WITH\n-- Get female patients aged 38-48 at admission\nfemale_patients AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    -- Calculate age at admission\n    p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year AS age_at_admission\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age + EXTRACT(YEAR FROM a.admittime) - p.anchor_year BETWEEN 38 AND 48\n),\n\n-- Get ICU stays for these patients\nicu_stays AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n  JOIN\n    female_patients fp\n  ON\n    s.subject_id = fp.subject_id AND s.hadm_id = fp.hadm_id\n),\n\n-- Get SpO2 measurements (itemid 220277 is SpO2 in MIMIC-IV)\nspo2_measurements AS (\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.charttime,\n    ce.valuenum AS spo2_value\n  FROM\n    `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.d_items` di\n  ON\n    ce.itemid = di.itemid\n  WHERE\n    di.label = 'SpO2'\n    AND ce.valuenum BETWEEN 0 AND 100  -- Filter valid SpO2 values\n),\n\n-- Calculate mean SpO2 per ICU stay\nmean_spo2_per_stay AS (\n  SELECT\n    sm.stay_id,\n    AVG(sm.spo2_value) AS mean_spo2\n  FROM\n    spo2_measurements sm\n  GROUP BY\n    sm.stay_id\n),\n\n-- Count total stays and stays with mean SpO2 <= 92\npercentile_calculation AS (\n  SELECT\n    COUNT(*) AS total_stays,\n    SUM(CASE WHEN mean_spo2 <= 92 THEN 1 ELSE 0 END) AS stays_with_spo2_le_92\n  FROM\n    mean_spo2_per_stay\n)\n\n-- Calculate the percentile\nSELECT\n  stays_with_spo2_le_92,\n  total_stays,\n  ROUND((stays_with_spo2_le_92 / total_stays) * 100, 2) AS percentile\nFROM\n  percentile_calculation;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

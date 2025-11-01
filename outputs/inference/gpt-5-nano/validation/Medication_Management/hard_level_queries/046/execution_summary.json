@@ -1,0 +1,28 @@
+{
+  "query": "I have a 50\u2011year\u2011old female inpatient to evaluate. Among female inpatients aged 45\u201355 with multi\u2011trauma, compute medication complexity over the first 7 days, stratify into tertiles, and report admissions, mean/min/max score, mean LOS, mortality%, and 30\u2011day readmission% per tertile.",
+  "final_sql": "with trauma_codes as (\n  select\n    di.hadm_id,\n    CAST(REGEXP_EXTRACT(di.icd_code, '([0-9]{3})') AS INT64) AS icd3\n  from `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n  where di.icd_version = 9\n),\ntrauma_hadm AS (\n  select hadm_id\n  from trauma_codes\n  where icd3 BETWEEN 800 AND 959\n  group by hadm_id\n  having COUNT(DISTINCT icd3) >= 2\n),\nage_gender_cohort AS (\n  select p.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, a.deathtime\n  from `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  join `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    on p.subject_id = a.subject_id\n  where p.gender = 'F'\n    and p.anchor_age BETWEEN 45 AND 55\n    and a.hadm_id IN (SELECT hadm_id FROM trauma_hadm)\n),\ncohort as (\n  select ag.subject_id, ag.hadm_id, ag.admittime, ag.dischtime, ag.deathtime, ag.hospital_expire_flag\n  from age_gender_cohort AS ag\n),\nmed_counts as (\n  select c.hadm_id,\n         COUNT(DISTINCT IFNULL(presc.drug, '')) AS med_count\n  from cohort AS c\n  left join `physionet-data.mimiciv_3_1_hosp.prescriptions` AS presc\n    on presc.subject_id = c.subject_id\n   and presc.hadm_id = c.hadm_id\n   and presc.starttime >= c.admittime\n   and presc.starttime < TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n  group by c.hadm_id\n),\nbase as (\n  select c.hadm_id,\n         c.subject_id,\n         c.admittime,\n         c.disptime,\n         c.dischtime,\n         c.deathtime,\n         c.hospital_expire_flag,\n         coalesce(m.med_count, 0) AS med_count,\n         TIMESTAMP_DIFF(c.dischtime, c.admittime, SECOND) / 86400.0 AS los_days\n  from cohort AS c\n  left join med_counts AS m\n    on m.hadm_id = c.hadm_id\n),\nwith_readmit as (\n  select b.*,\n         case when exists (\n           select 1\n           from `physionet-data.mimiciv_3_1_hosp.admissions` AS a2\n           where a2.subject_id = b.subject_id\n             and a2.admittime > b.dischtime\n             and a2.admittime <= TIMESTAMP_ADD(b.dischtime, INTERVAL 30 DAY)\n         ) then 1 else 0 end AS readmit_flag,\n         case when b.deathtime IS NOT NULL THEN 1 ELSE 0 END AS mortality_flag\n  from base AS b\n)\nselect\n  tertile,\n  COUNT(*) AS admissions,\n  AVG(med_count) AS med_count_mean,\n  MIN(med_count) AS med_count_min,\n  MAX(med_count) AS med_count_max,\n  AVG(los_days) AS los_mean,\n  AVG(mortality_flag) * 100 AS mortality_rate_pct,\n  AVG(readmit_flag) * 100 AS readmit_rate_30day_pct\nfrom (\n  select w.*,\n         NTILE(3) OVER (ORDER BY med_count) AS tertile\n  from with_readmit AS w\n) AS t\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name disptime not found inside c at [43:12]; reason: invalidQuery, location: query, message: Name disptime not found inside c at [43:12]\n\nLocation: US\nJob ID: a755e5b8-4463-4f63-ad24-66e5ada1b3d2\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword AT at [1:6]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword AT at [1:6]\n\nLocation: US\nJob ID: f9095c00-8d78-4678-ac3d-6e62e5074c89\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"-\" at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"-\" at [1:11]\n\nLocation: US\nJob ID: 84df1858-fe8a-420c-8284-8b998983137f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name disptime not found inside c at [43:12]; reason: invalidQuery, location: query, message: Name disptime not found inside c at [43:12]\n\nLocation: US\nJob ID: a755e5b8-4463-4f63-ad24-66e5ada1b3d2\n"
+    }
+  ]
+}

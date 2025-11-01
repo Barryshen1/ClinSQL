@@ -1,0 +1,22 @@
+{
+  "query": "I have a 44-year-old female inpatient. Among female inpatients 39\u201349 with asthma exacerbation, what is the 75th\u2011percentile lab instability score in the first 48 hours? Compare critical\u2011lab events per admission to all inpatients and report cohort LOS and in\u2011hospital mortality.",
+  "final_sql": "WITH asthma_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 39 AND 49\n    AND d.icd_code LIKE 'J45%'\n),\n\nlab_instability_per_adm AS (\n  -- Include all asthma admissions; count only labs abnormal within first 48h\n  SELECT\n    a.hadm_id,\n    COUNT(l.valuenum) AS lab_instability_score\n  FROM asthma_admissions AS a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n    ON l.hadm_id = a.hadm_id\n   AND l.charttime >= a.admittime\n   AND l.charttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n   AND l.valuenum IS NOT NULL\n   AND ((l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower) OR\n        (l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper))\n  GROUP BY a.hadm_id\n),\n\ncritical_events_asthma AS (\n  -- Critical-lab events within 48h for asthma admissions\n  SELECT\n    a.hadm_id,\n    COUNT(l.valuenum) AS critical_events\n  FROM asthma_admissions AS a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n    ON l.hadm_id = a.hadm_id\n   AND l.charttime >= a.admittime\n   AND l.charttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n   AND l.valuenum IS NOT NULL\n   AND ((l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower * 0.5) OR\n        (l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper * 1.5))\n  GROUP BY a.hadm_id\n),\n\ncritical_events_all AS (\n  -- Critical-lab events within 48h for all admissions (inpatients)\n  SELECT\n    a.hadm_id,\n    COUNT(l.valuenum) AS critical_events\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS l\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON l.hadm_id = a.hadm_id\n  WHERE l.charttime >= a.admittime\n    AND l.charttime <= TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n    AND l.valuenum IS NOT NULL\n    AND ((l.ref_range_lower IS NOT NULL AND l.valuenum < l.ref_range_lower * 0.5) OR\n         (l.ref_range_upper IS NOT NULL AND l.valuenum > l.ref_range_upper * 1.5))\n  GROUP BY a.hadm_id\n)\n\nSELECT\n  (SELECT COUNT(*) FROM asthma_admissions) AS asthma_admissions_count,\n\n  -- 75th percentile of lab-instability score in the first 48 hours for asthma cohort\n  (\n    SELECT quantiles[OFFSET(75)]\n    FROM (\n      SELECT APPROX_QUANTILES(lab_instability_score, 100) AS quantiles\n      FROM lab_instability_per_adm\n    )\n  ) AS p75_lab_instability_asthma_48h,\n\n  -- Mean number of critical-lab events within 48h per admission: asthma vs all inpatients\n  (SELECT AVG(COALESCE(ce.critical_events, 0))\n     FROM asthma_admissions aa\n     LEFT JOIN critical_events_asthma ce ON aa.hadm_id = ce.hadm_id\n  ) AS mean_critical_events_per_adm_48h_asthma,\n\n  (SELECT AVG(COALESCE(ceAll.critical_events, 0))\n     FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n     LEFT JOIN critical_events_all ceAll ON a.hadm_id = ceAll.hadm_id\n  ) AS mean_critical_events_per_adm_48h_all_inpatients,\n\n  -- Cohort LOS and in-hospital mortality\n  (SELECT AVG(los_days) FROM asthma_admissions) AS mean_los_days_asthma__cohort,\n  (SELECT AVG(hospital_expire_flag) FROM asthma_admissions) AS in_hospital_mortality_rate_asthma_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"admissions\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: admissions, message: Table \"admissions\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: 106ca3aa-3900-4d96-8560-d883152f97da\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

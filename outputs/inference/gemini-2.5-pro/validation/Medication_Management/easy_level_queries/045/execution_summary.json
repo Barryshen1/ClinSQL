@@ -1,0 +1,16 @@
+{
+  "query": "For my 62-year-old male inpatient, among male patients aged 57\u201367, what is the IQR of single inpatient DAPT prescription durations?",
+  "final_sql": "WITH\n  -- Step 1: Define the patient cohort (males aged 57-67)\n  PatientCohort AS (\n    SELECT\n      subject_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE\n      gender = 'M'\n      AND anchor_age BETWEEN 57 AND 67\n  ),\n\n  -- Step 2: Classify all relevant antiplatelet prescriptions\n  AntiplateletPrescriptions AS (\n    SELECT\n      p.subject_id,\n      p.hadm_id,\n      p.starttime,\n      p.stoptime,\n      CASE\n        WHEN LOWER(p.drug) LIKE '%aspirin%'\n        THEN 'aspirin'\n        WHEN\n          LOWER(p.drug) LIKE '%clopidogrel%'\n          OR LOWER(p.drug) LIKE '%ticagrelor%'\n          OR LOWER(p.drug) LIKE '%prasugrel%'\n        THEN 'p2y12_inhibitor'\n        ELSE NULL\n      END AS drug_class\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    WHERE\n      -- Ensure timestamps are available for duration calculation\n      p.starttime IS NOT NULL\n      AND p.stoptime IS NOT NULL\n  ),\n\n  -- Step 3: Identify DAPT admissions and calculate the duration of therapy for each\n  DaptDurations AS (\n    SELECT\n      ap.hadm_id,\n      -- Calculate duration from the earliest start to the latest stop time of any DAPT drug\n      DATETIME_DIFF(MAX(ap.stoptime), MIN(ap.starttime), DAY) AS dapt_duration_days\n    FROM\n      AntiplateletPrescriptions AS ap\n      -- Join with the patient cohort to filter for the correct population\n    INNER JOIN\n      PatientCohort AS pc\n      ON ap.subject_id = pc.subject_id\n    WHERE\n      ap.drug_class IS NOT NULL\n    GROUP BY\n      ap.hadm_id\n    -- This HAVING clause is key: it ensures the admission had BOTH drug classes\n    HAVING\n      COUNT(DISTINCT ap.drug_class) = 2\n  )\n\n-- Step 4: Calculate the Interquartile Range (IQR) of the DAPT durations\nSELECT\n  -- IQR = 75th percentile (Q3) - 25th percentile (Q1)\n  (\n    APPROX_QUANTILES(dapt_duration_days, 4)[OFFSET(3)]\n    - APPROX_QUANTILES(dapt_duration_days, 4)[OFFSET(1)]\n  ) AS iqr_dapt_duration_days\nFROM\n  DaptDurations\n-- Add a sanity check for non-negative durations\nWHERE\n  dapt_duration_days >= 0;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

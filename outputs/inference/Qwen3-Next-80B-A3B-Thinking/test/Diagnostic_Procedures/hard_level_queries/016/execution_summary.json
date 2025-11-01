@@ -1,0 +1,17 @@
+{
+  "query": "I have a 93-year-old man. Among male patients aged 88\u201398 on their first ICU stay with pneumonia, stratify first 72-hour diagnostic procedure counts into quintiles and report average procedure count, average ICU LOS (days), and in-hospital mortality% per quintile.",
+  "final_sql": "WITH first_icu AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON i.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 88 AND 98\n),\npneumonia_hadm AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dc\n    ON d.icd_code = dc.icd_code AND d.icd_version = dc.icd_version\n  WHERE dc.long_title LIKE '%pneumonia%'\n),\nproc_counts AS (\n  SELECT \n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.los,\n    (SELECT COUNT(*)\n     FROM `physionet-data.mimiciv_3_1_icu.procedureevents` p\n     WHERE p.stay_id = f.stay_id\n       AND p.starttime BETWEEN f.intime AND DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n    ) AS proc_count\n  FROM first_icu f\n  WHERE f.rn = 1\n    AND f.hadm_id IN (SELECT hadm_id FROM pneumonia_hadm)\n),\nmortality_data AS (\n  SELECT \n    p.subject_id,\n    p.hadm_id,\n    p.proc_count,\n    p.los,\n    a.hospital_expire_flag\n  FROM proc_counts p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.hadm_id = a.hadm_id\n),\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY proc_count) AS quintile\n  FROM mortality_data\n)\nSELECT \n  quintile,\n  AVG(proc_count) AS avg_proc_count,\n  AVG(los) AS avg_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_percent\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "Qwen3-Next-80B-A3B-Thinking",
+  "model_id": "Qwen3-Next-80B-A3B-Thinking",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

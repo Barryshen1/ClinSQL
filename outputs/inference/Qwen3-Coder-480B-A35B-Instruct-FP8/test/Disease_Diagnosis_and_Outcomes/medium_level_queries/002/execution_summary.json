@@ -1,0 +1,16 @@
+{
+  "query": "67-year-old female with AMI: among females 62\u201372 without shock or respiratory failure, compare in\u2011hospital mortality LOS \u22645 vs >5 days; report mortality rates, CKD and diabetes prevalence, and absolute/relative mortality differences.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    p.anchor_age,\n    p.gender,\n    MAX(CASE WHEN did.long_title LIKE '%Chronic kidney disease%' THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN did.long_title LIKE '%Diabetes%' THEN 1 ELSE 0 END) AS has_diabetes\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON di.icd_code = did.icd_code AND di.icd_version = did.icd_version\n  WHERE\n    p.anchor_age BETWEEN 62 AND 72\n    AND p.gender = 'F'\n    AND di.seq_num = 1\n    AND did.icd_code LIKE 'I21%' -- AMI\n    AND a.hadm_id NOT IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di2\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did2\n        ON di2.icd_code = did2.icd_code AND di2.icd_version = did2.icd_version\n      WHERE\n        did2.icd_code IN ('R578', 'J960') OR\n        did2.long_title LIKE '%shock%' OR\n        did2.long_title LIKE '%respiratory failure%'\n    )\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag, p.anchor_age, p.gender\n),\n\ngrouped_stats AS (\n  SELECT\n    CASE WHEN los <= 5 THEN 'LOS <= 5' ELSE 'LOS > 5' END AS los_group,\n    COUNT(*) AS n_patients,\n    SUM(hospital_expire_flag) AS deaths,\n    AVG(hospital_expire_flag) AS mortality_rate,\n    AVG(has_ckd) AS ckd_prevalence,\n    AVG(has_diabetes) AS diabetes_prevalence\n  FROM cohort\n  GROUP BY los_group\n)\n\nSELECT\n  los_group,\n  n_patients,\n  deaths,\n  mortality_rate,\n  ckd_prevalence,\n  diabetes_prevalence,\n  -- Absolute mortality difference\n  ABS(\n    FIRST_VALUE(mortality_rate) OVER (ORDER BY los_group)\n    - LAST_VALUE(mortality_rate) OVER (ORDER BY los_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)\n  ) AS abs_mortality_diff,\n  -- Relative mortality difference\n  SAFE_DIVIDE(\n    FIRST_VALUE(mortality_rate) OVER (ORDER BY los_group)\n    - LAST_VALUE(mortality_rate) OVER (ORDER BY los_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),\n    LAST_VALUE(mortality_rate) OVER (ORDER BY los_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)\n  ) AS rel_mortality_diff\nFROM grouped_stats\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

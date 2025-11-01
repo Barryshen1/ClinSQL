@@ -1,0 +1,1 @@
+SELECT MAX(o.value) AS max_respiratory_rate FROM omr o JOIN patients p ON o.subject_id = p.subject_id JOIN icustays s ON o.subject_id = s.subject_id WHERE p.gender = 'F' AND p.anchor_age = 43 AND s.first_careunit = 'ICU' AND p.anchor_year BETWEEN 38 AND 48 AND o.charttime BETWEEN s.intime AND s.intime + INTERVAL '24 hours' AND o.itemid = 170275007;

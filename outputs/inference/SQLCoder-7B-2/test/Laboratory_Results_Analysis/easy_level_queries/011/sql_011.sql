@@ -1,0 +1,1 @@
+SELECT stddev(l.value) AS standard_deviation FROM labevents l JOIN patients p ON l.subject_id = p.subject_id JOIN icustays i ON l.subject_id = i.subject_id WHERE p.gender = 'M' AND p.age >= 56 AND i.first_careunit = 'ICU';

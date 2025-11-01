@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.9) within GROUP (ORDER BY total_instability) AS percentile, AVG(los) AS average_los, AVG(icu_mortality_rate) AS average_mortality FROM patient_data WHERE total_instability > 85;

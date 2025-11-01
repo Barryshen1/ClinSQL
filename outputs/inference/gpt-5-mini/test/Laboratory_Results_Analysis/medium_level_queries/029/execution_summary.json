@@ -1,0 +1,22 @@
+{
+  "query": "For context on my 63-year-old male: among males aged 58\u201368 admitted with chest pain or AMI with initial Troponin T >0.04 ng/mL, give summary statistics including in-hospital mortality rate.",
+  "final_sql": "WITH\n-- Identify Troponin T itemids from d_labitems\ntroponin_items AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n     OR LOWER(label) LIKE '%troponin-t%'\n     OR LOWER(label) LIKE '%troponin t %'\n),\n\n-- For each admission, find the earliest Troponin T lab (within the admission) and keep its value/unit\ntroponin_first AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.itemid,\n    l.charttime,\n    l.valuenum,\n    l.valueuom,\n    ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime ASC, l.storetime ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON l.hadm_id = a.hadm_id\n  JOIN troponin_items ti\n    ON l.itemid = ti.itemid\n  WHERE l.valuenum IS NOT NULL\n    -- restrict lab to fall within the admission window\n    AND l.charttime >= a.admittime\n    AND l.charttime <= a.dischtime\n),\n-- Keep only the initial lab per admission\ntroponin_initial AS (\n  SELECT subject_id, hadm_id, itemid, charttime, valuenum, valueuom\n  FROM troponin_first\n  WHERE rn = 1\n),\n\n-- Admissions with diagnosis indicating chest pain or AMI\ndiag_hadm AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n   AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%chest pain%'\n     OR LOWER(dd.long_title) LIKE '%pain in chest%'\n     OR LOWER(dd.long_title) LIKE '%myocardial infarction%'\n     OR LOWER(dd.long_title) LIKE '%acute myocardial%'\n),\n\n-- Cohort: male patients age 58-68 with qualifying diagnosis and initial troponin > 0.04 ng/mL\ncohort_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    ti.valuenum AS initial_troponin,\n    ti.valueuom AS troponin_uom,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR)/24.0 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN diag_hadm dh\n    ON a.hadm_id = dh.hadm_id\n  JOIN troponin_initial ti\n    ON a.hadm_id = ti.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    -- Keep troponin values > 0.04 and (preferably) in ng/mL (or if unit missing)\n    AND ti.valuenum > 0.04\n    AND (\n         LOWER(COALESCE(ti.valueuom, '')) LIKE '%ng/ml%' OR\n         ti.valueuom IS NULL OR ti.valueuom = ''\n        )\n)\n\n-- Final aggregation: summary statistics\nSELECT\n  COUNT(*) AS admissions_count,\n  COUNT(DISTINCT subject_id) AS unique_patients,\n  ROUND(AVG(anchor_age), 2) AS mean_age,\n  MIN(anchor_age) AS min_age,\n  MAX(anchor_age) AS max_age,\n  -- Troponin statistics (ng/mL)\n  ROUND(AVG(initial_troponin), 4) AS mean_initial_troponin_ng_per_mL,\n  ROUND(STDDEV(initial_troponin), 4) AS sd_initial_troponin,\n  ROUND(APPROX_QUANTILES(initial_troponin, 100)[OFFSET(50)], 4) AS median_initial_troponin_ng_per_mL,\n  MIN(initial_troponin) AS min_initial_troponin_ng_per_mL,\n  MAX(initial_troponin) AS max_initial_troponin_ng_per_mL,\n  -- Length of stay (days)\n  ROUND(AVG(los_days), 2) AS mean_los_days,\n  ROUND(MIN(los_days), 2) AS min_los_days,\n  ROUND(MAX(los_days), 2) AS max_los_days,\n  -- In-hospital mortality\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS deaths_in_hospital,\n  ROUND( SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)) , 4) AS in_hospital_mortality_rate\nFROM cohort_admissions;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [93:18]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [93:18]\n\nLocation: US\nJob ID: 90875214-7e21-48e9-a228-467f7b7de220\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

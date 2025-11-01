@@ -1,0 +1,16 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.hospital_expire_flag,\n        -- Calculate LOS in days\n        DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n        -- Check for 30-day readmission\n        CASE WHEN EXISTS (\n            SELECT 1 \n            FROM `physionet-data.mimiciv_3_1_hosp.admissions` readm \n            WHERE readm.subject_id = adm.subject_id \n            AND readm.admittime > adm.dischtime \n            AND readm.admittime <= DATETIME_ADD(adm.dischtime, INTERVAL 30 DAY)\n        ) THEN 1 ELSE 0 END AS readmit_30d\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    WHERE pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 41 AND 51\n        -- Neutropenia: at least one ANC < 1.5 during admission\n        AND EXISTS (\n            SELECT 1 \n            FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n            INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli\n                ON le.itemid = dli.itemid\n            WHERE le.hadm_id = adm.hadm_id\n                AND le.itemid = 51256  -- Absolute neutrophil count\n                AND le.valuenum < 1.5\n        )\n        -- Fever: at least one temperature > 38\u00b0C during admission\n        AND EXISTS (\n            SELECT 1 \n            FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n            INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n                ON ce.itemid = di.itemid\n            WHERE ce.hadm_id = adm.hadm_id\n                AND ce.itemid = 223762  -- Temperature Celsius\n                AND ce.valuenum > 38\n        )\n),\n\nmed_counts AS (\n    SELECT \n        c.subject_id,\n        c.hadm_id,\n        COUNT(DISTINCT pr.drug) AS med_count\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        ON c.hadm_id = pr.hadm_id\n    WHERE pr.starttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    GROUP BY c.subject_id, c.hadm_id\n),\n\ncohort_with_meds AS (\n    SELECT \n        c.*,\n        COALESCE(m.med_count, 0) AS med_count,\n        NTILE(3) OVER (ORDER BY COALESCE(m.med_count, 0)) AS tertile\n    FROM cohort c\n    LEFT JOIN med_counts m\n        ON c.hadm_id = m.hadm_id\n)\n\nSELECT \n    tertile,\n    COUNT(*) AS n_patients,\n    ROUND(AVG(los_days), 2) AS avg_los_days,\n    ROUND(100 * AVG(hospital_expire_flag), 2) AS mortality_percent,\n    ROUND(100 * AVG(readmit_30d), 2) AS readmit_30d_percent\nFROM cohort_with_meds\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

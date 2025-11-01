@@ -1,0 +1,28 @@
+{
+  "query": "I have a 75-year-old female inpatient with pulmonary embolism. For female inpatients aged 70\u201380 with PE, stratify into risk-score quintiles and report per quintile: 90\u2011day mortality, general 70\u201380 female 90\u2011day mortality (comparison), AKI and ARDS rates, and median survivor LOS",
+  "final_sql": "WITH\n-- Base population: female inpatients aged 70-80\nbase_population AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    p.dod,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    CASE WHEN a.deathtime IS NOT NULL OR p.dod IS NOT NULL THEN 1 ELSE 0 END AS died_in_hospital,\n    CASE WHEN a.deathtime IS NOT NULL AND TIMESTAMP_DIFF(a.deathtime, a.admittime, DAY) <= 90 THEN 1\n         WHEN p.dod IS NOT NULL AND TIMESTAMP_DIFF(p.dod, a.admittime, DAY) <= 90 THEN 1\n         ELSE 0 END AS died_within_90_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\n\n-- PE patients (ICD-10 codes I26.*)\npe_patients AS (\n  SELECT\n    b.*\n  FROM\n    base_population b\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON b.hadm_id = d.hadm_id\n  WHERE\n    d.icd_code LIKE 'I26%'\n    AND d.icd_version = 10\n),\n\n-- Risk score calculation (simplified)\nrisk_scores AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    -- Count of comorbidities (excluding PE)\n    (SELECT COUNT(DISTINCT icd_code)\n     FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n     WHERE d.hadm_id = p.hadm_id\n     AND d.icd_code NOT LIKE 'I26%'\n     AND d.icd_version = 10) AS comorbidity_count,\n    -- For simplicity, we'll just use comorbidity count as our risk score\n    (SELECT COUNT(DISTINCT icd_code)\n     FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n     WHERE d.hadm_id = p.hadm_id\n     AND d.icd_code NOT LIKE 'I26%'\n     AND d.icd_version = 10) AS risk_score\n  FROM\n    pe_patients p\n),\n\n-- Add AKI and ARDS flags\npe_with_complications AS (\n  SELECT\n    r.subject_id,\n    r.hadm_id,\n    r.risk_score,\n    b.died_within_90_days,\n    b.los,\n    MAX(CASE WHEN d.icd_code LIKE 'N17%' THEN 1 ELSE 0 END) AS has_aki,\n    MAX(CASE WHEN d.icd_code LIKE 'J80%' THEN 1 ELSE 0 END) AS has_ards\n  FROM\n    risk_scores r\n  JOIN\n    base_population b ON r.subject_id = b.subject_id AND r.hadm_id = b.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON r.hadm_id = d.hadm_id\n  GROUP BY\n    r.subject_id, r.hadm_id, r.risk_score, b.died_within_90_days, b.los\n),\n\n-- Calculate risk quintiles separately\nrisk_quintiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    risk_score,\n    died_within_90_days,\n    los,\n    has_aki,\n    has_ards,\n    NTILE(5) OVER (ORDER BY risk_score) AS risk_quintile\n  FROM\n    pe_with_complications\n),\n\n-- General female 70-80 population for comparison\ngeneral_population AS (\n  SELECT\n    COUNT(DISTINCT subject_id) AS total_patients,\n    SUM(died_within_90_days) AS deaths_within_90_days\n  FROM\n    base_population\n),\n\n-- Final stratified results\nstratified_results AS (\n  SELECT\n    rq.risk_quintile,\n    COUNT(DISTINCT rq.subject_id) AS patient_count,\n    SUM(rq.has_aki) AS aki_count,\n    SUM(rq.has_ards) AS ards_count,\n    SUM(rq.died_within_90_days) AS deaths_within_90_days,\n    PERCENTILE_CONT(rq.los, 0.5) OVER (PARTITION BY rq.risk_quintile) AS median_los_survivors\n  FROM\n    risk_quintiles rq\n  GROUP BY\n    rq.risk_quintile, rq.died_within_90_days, rq.los, rq.has_aki, rq.has_ards\n)\n\n-- Final output\nSELECT\n  sr.risk_quintile,\n  sr.patient_count,\n  ROUND(100 * sr.deaths_within_90_days / sr.patient_count, 2) AS pe_90day_mortality_pct,\n  ROUND(100 * gp.deaths_within_90_days / gp.total_patients, 2) AS general_90day_mortality_pct,\n  ROUND(100 * sr.aki_count / sr.patient_count, 2) AS aki_rate_pct,\n  ROUND(100 * sr.ards_count / sr.patient_count, 2) AS ards_rate_pct,\n  sr.median_los_survivors\nFROM\n  stratified_results sr\nCROSS JOIN\n  general_population gp\nORDER BY\n  sr.risk_quintile;",
+  "execution_success": true,
+  "row_count": 223,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Star expansion expression references column comorbidity_count which is neither grouped nor aggregated at [65:5]; reason: invalidQuery, location: query, message: Star expansion expression references column comorbidity_count which is neither grouped nor aggregated at [65:5]\n\nLocation: US\nJob ID: 86901c70-85f4-4a08-93b2-a003c948c47e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in PARTITION BY at [99:52]; reason: invalidQuery, location: query, message: Analytic function not allowed in PARTITION BY at [99:52]\n\nLocation: US\nJob ID: 06f4a405-4ec3-4db0-b908-846fbe8a921c\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 223,
+      "error": null
+    }
+  ]
+}

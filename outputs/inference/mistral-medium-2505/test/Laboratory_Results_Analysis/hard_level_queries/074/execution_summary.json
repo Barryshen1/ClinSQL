@@ -1,0 +1,22 @@
+{
+  "query": "For a 42-year-old man with heart failure, among male inpatients aged 37\u201347 within the first 72 hours what is the maximum laboratory instability score (unique critically abnormal lab types)? Compare critical-event rate to general inpatients, and report LOS and mortality.",
+  "final_sql": "WITH\n-- Define heart failure ICD codes (ICD-9 and ICD-10)\nheart_failure_codes AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE\n    (icd_version = 9 AND icd_code IN ('428.0', '428.1', '428.20', '428.21', '428.22', '428.23', '428.30', '428.31', '428.32', '428.33', '428.40', '428.41', '428.42', '428.43', '428.9'))\n    OR (icd_version = 10 AND icd_code LIKE 'I50.%')\n),\n\n-- Get heart failure patients\nhf_patients AS (\n  SELECT DISTINCT d.subject_id, d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN heart_failure_codes hf ON d.icd_code = hf.icd_code AND d.icd_version = hf.icd_version\n),\n\n-- Get general inpatients (male, 37-47, no heart failure)\ngeneral_patients AS (\n  SELECT DISTINCT a.subject_id, a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND a.subject_id NOT IN (SELECT subject_id FROM hf_patients)\n),\n\n-- Get all lab events within first 72 hours with critical flags\ncritical_labs AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.itemid,\n    l.charttime,\n    d.category,\n    l.flag\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` d ON l.itemid = d.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON l.hadm_id = a.hadm_id\n  WHERE\n    l.flag IN ('abnormal', 'critically abnormal', 'critical', 'panic')\n    AND l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n),\n\n-- Calculate instability score (count of unique critical lab categories per admission)\ninstability_scores AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    COUNT(DISTINCT category) AS instability_score\n  FROM critical_labs\n  GROUP BY subject_id, hadm_id\n),\n\n-- Combine patient groups with their scores\npatient_scores AS (\n  SELECT\n    'Heart Failure' AS patient_group,\n    s.subject_id,\n    s.hadm_id,\n    s.instability_score,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours\n  FROM instability_scores s\n  JOIN hf_patients hf ON s.subject_id = hf.subject_id AND s.hadm_id = hf.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON s.hadm_id = a.hadm_id\n\n  UNION ALL\n\n  SELECT\n    'General Inpatient' AS patient_group,\n    s.subject_id,\n    s.hadm_id,\n    s.instability_score,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours\n  FROM instability_scores s\n  JOIN general_patients g ON s.subject_id = g.subject_id AND s.hadm_id = g.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON s.hadm_id = a.hadm_id\n),\n\n-- Calculate critical event rates\ncritical_event_rates AS (\n  SELECT\n    patient_group,\n    COUNT(DISTINCT hadm_id) AS total_admissions,\n    COUNT(DISTINCT CASE WHEN instability_score > 0 THEN hadm_id END) AS admissions_with_critical_labs,\n    COUNT(DISTINCT CASE WHEN instability_score > 0 THEN hadm_id END) / COUNT(DISTINCT hadm_id) AS critical_event_rate,\n    AVG(instability_score) AS avg_instability_score,\n    MAX(instability_score) AS max_instability_score,\n    AVG(los_hours) AS avg_los_hours,\n    SUM(hospital_expire_flag) / COUNT(DISTINCT hadm_id) AS mortality_rate\n  FROM patient_scores\n  GROUP BY patient_group\n)\n\n-- Final results\nSELECT * FROM critical_event_rates\nORDER BY patient_group;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name icd_version not found inside hf at [15:82]; reason: invalidQuery, location: query, message: Name icd_version not found inside hf at [15:82]\n\nLocation: US\nJob ID: 9daa1e1c-00e0-4f87-aab9-3d8249ab665a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

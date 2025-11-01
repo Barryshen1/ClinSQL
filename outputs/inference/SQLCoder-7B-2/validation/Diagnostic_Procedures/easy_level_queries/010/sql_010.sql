@@ -1,0 +1,1 @@
+SELECT MAX(COUNT(DISTINCT p.procedure_id)) AS max_procedures FROM patients p JOIN procedures_icd pi ON p.subject_id = pi.subject_id WHERE p.gender = 'M' AND p.anchor_year = 1989 AND EXTRACT(YEAR FROM p.dob) BETWEEN 1984 AND 1994 AND pi.icd_code = 'E1113';

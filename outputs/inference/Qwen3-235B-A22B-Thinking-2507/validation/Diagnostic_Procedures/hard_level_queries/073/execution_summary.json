@@ -1,0 +1,29 @@
+{
+  "query": "95-year-old man\u2014among male ICU patients aged 90\u2013100 with hepatic failure on first ICU stay, stratify distinct diagnostic procedures in initial 72 hours into quartiles and report per quartile number of patients, min/max/mean procedures, mean LOS (days), and in\u2011hospital mortality (%)",
+  "final_sql": "WITH first_icu_stay AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    los,\n    gender,\n    anchor_age,\n    anchor_year,\n    age_at_admission\n  FROM (\n    SELECT \n      icu.subject_id,\n      icu.hadm_id,\n      icu.stay_id,\n      icu.intime,\n      icu.los,\n      p.gender,\n      p.anchor_age,\n      p.anchor_year,\n      p.anchor_age + (EXTRACT(YEAR FROM icu.intime) - p.anchor_year) AS age_at_admission,\n      ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY icu.intime) AS rn\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON icu.subject_id = p.subject_id\n  )\n  WHERE rn = 1\n),\nhepatic_failure AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code \n    AND d.icd_version = dd.icd_version\n  WHERE \n    dd.long_title LIKE '%hepatic failure%' \n    OR dd.long_title LIKE '%liver failure%'\n),\ncohort AS (\n  SELECT \n    fis.subject_id,\n    fis.hadm_id,\n    fis.stay_id,\n    fis.intime,\n    fis.los\n  FROM first_icu_stay fis\n  INNER JOIN hepatic_failure hf\n    ON fis.subject_id = hf.subject_id \n    AND fis.hadm_id = hf.hadm_id\n  WHERE \n    fis.gender = 'M'\n    AND fis.age_at_admission BETWEEN 90 AND 100\n),\nprocedure_counts AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.stay_id,\n    c.los,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON c.subject_id = pe.subject_id\n    AND c.hadm_id = pe.hadm_id\n    AND c.stay_id = pe.stay_id\n    AND pe.starttime >= c.intime\n    AND pe.starttime <= c.intime + INTERVAL '72' HOUR\n    AND pe.ordercategoryname = 'Diagnostic'\n  GROUP BY c.subject_id, c.hadm_id, c.stay_id, c.los\n),\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM procedure_counts\n)\nSELECT \n  quartile,\n  COUNT(*) AS num_patients,\n  MIN(procedure_count) AS min_procedures,\n  MAX(procedure_count) AS max_procedures,\n  AVG(procedure_count) AS mean_procedures,\n  AVG(los) AS mean_los_days,\n  AVG(a.hospital_expire_flag) * 100 AS mortality_percent\nFROM quartiles q\nINNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON q.hadm_id = a.hadm_id\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function not allowed in WHERE clause at [16:5]; reason: invalidQuery, location: query, message: Analytic function not allowed in WHERE clause at [16:5]\n\nLocation: US\nJob ID: f95ddd33-8799-4bdf-9e32-296bb94144dc\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside pe at [69:12]; reason: invalidQuery, location: query, message: Name charttime not found inside pe at [69:12]\n\nLocation: US\nJob ID: 36e4c521-1ded-4c70-b492-75aeddddfa29\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

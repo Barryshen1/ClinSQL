@@ -1,0 +1,16 @@
+{
+  "query": "I have an 82-year-old male. Among male patients age 77\u201387 admitted with AMI, what's the distribution of initial hs\u2011TnT (normal / borderline / myocardial injury)? Report counts and percentages.",
+  "final_sql": "WITH\n  -- Step 1: Identify hospital admissions for male patients aged 77-87 with an AMI diagnosis.\n  ami_admissions AS (\n    SELECT DISTINCT dx.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n      ON pat.subject_id = dx.subject_id\n    WHERE\n      pat.gender = 'M'\n      AND pat.anchor_age BETWEEN 77 AND 87\n      AND (\n        (dx.icd_version = 9 AND dx.icd_code LIKE '410%') -- AMI in ICD-9\n        OR (dx.icd_version = 10 AND dx.icd_code LIKE 'I21%') -- AMI in ICD-10\n      )\n  ),\n  -- Step 2: Find the first hs-TnT measurement for each of these admissions.\n  first_hsc_tnt AS (\n    SELECT\n      le.hadm_id,\n      le.valuenum,\n      -- Rank measurements by time to find the first one\n      ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime) AS rn\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    INNER JOIN ami_admissions AS adm\n      ON le.hadm_id = adm.hadm_id\n    WHERE\n      le.itemid = 52598 -- d_labitems: Troponin T, High Sensitivity\n      AND le.valuenum IS NOT NULL\n      AND le.valueuom = 'ng/L' -- Ensure we are using the correct units for comparison\n  ),\n  -- Step 3: Categorize the first measurement based on the provided thresholds.\n  categorized_tnt AS (\n    SELECT\n      hadm_id,\n      CASE\n        WHEN valuenum < 14\n          THEN 'Normal'\n        WHEN valuenum BETWEEN 14 AND 52\n          THEN 'Borderline'\n        WHEN valuenum > 52\n          THEN 'Myocardial Injury'\n      END AS tnt_category\n    FROM first_hsc_tnt\n    WHERE\n      rn = 1 -- Filter for only the first measurement\n  )\n-- Step 4: Count the number of patients in each category and calculate the percentage.\nSELECT\n  tnt_category,\n  COUNT(hadm_id) AS number_of_admissions,\n  ROUND(100.0 * COUNT(hadm_id) / SUM(COUNT(hadm_id)) OVER (), 2) AS percentage\nFROM categorized_tnt\nGROUP BY\n  tnt_category\nORDER BY\n  number_of_admissions DESC;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For a 60-year-old woman: among female patients aged 55\u201365 admitted with AMI whose first hs\u2011TnT >0.01 ng/mL, report patient and admission counts and hs\u2011TnT mean, median, and IQR.",
+  "final_sql": "WITH\n-- Female patients aged 55-65\nfemale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 55 AND 65\n),\n\n-- Admissions with AMI diagnosis\nami_admissions AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE\n    a.subject_id IN (SELECT subject_id FROM female_patients)\n    AND (\n      di.icd_code LIKE 'I21.%' OR\n      di.icd_code LIKE 'I22.%' OR\n      LOWER(di.long_title) LIKE '%myocardial infarction%'\n    )\n),\n\n-- First hs-TnT > 0.01 ng/mL per admission\nfirst_hs_tnt AS (\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.valuenum AS hs_tnt_value,\n    ROW_NUMBER() OVER (PARTITION BY l.hadm_id ORDER BY l.charttime) AS row_num\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` di\n    ON l.itemid = di.itemid\n  WHERE\n    l.hadm_id IN (SELECT hadm_id FROM ami_admissions)\n    AND LOWER(di.label) LIKE '%hs-tnt%'\n    AND l.valuenum > 0.01\n),\n\n-- Calculate percentiles\nhs_tnt_percentiles AS (\n  SELECT\n    APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(25)] AS q1,\n    APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(50)] AS median,\n    APPROX_QUANTILES(hs_tnt_value, 100)[OFFSET(75)] AS q3\n  FROM\n    first_hs_tnt\n  WHERE\n    row_num = 1\n)\n\n-- Final aggregation\nSELECT\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(DISTINCT hadm_id) AS admission_count,\n  AVG(hs_tnt_value) AS mean_hs_tnt,\n  p.median AS median_hs_tnt,\n  p.q1 AS q1_hs_tnt,\n  p.q3 AS q3_hs_tnt,\n  p.q3 - p.q1 AS iqr_hs_tnt\nFROM\n  first_hs_tnt f\nCROSS JOIN\n  hs_tnt_percentiles p\nWHERE\n  f.row_num = 1;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 SELECT list expression references p.median which is neither grouped nor aggregated at [70:3]; reason: invalidQuery, location: query, message: SELECT list expression references p.median which is neither grouped nor aggregated at [70:3]\n\nLocation: US\nJob ID: 9f39fd00-fd83-4f57-a2b9-4ee4e807a2dc\n",
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column hs_tnt_value which is neither grouped nor aggregated at [58:19]; reason: invalidQuery, location: query, message: SELECT list expression references column hs_tnt_value which is neither grouped nor aggregated at [58:19]\n\nLocation: US\nJob ID: bcae9b15-823c-4a86-b6b1-39cdc698100d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 37a6e324-e870-4d0a-9569-cd40418e7752\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references p.median which is neither grouped nor aggregated at [70:3]; reason: invalidQuery, location: query, message: SELECT list expression references p.median which is neither grouped nor aggregated at [70:3]\n\nLocation: US\nJob ID: 9f39fd00-fd83-4f57-a2b9-4ee4e807a2dc\n"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "For my 73\u2011year\u2011old woman with T2DM and HF: among female inpatients 68\u201378, report prevalence (%) of metformin, sulfonylureas, DPP\u20114 and SGLT2 inhibitors in first 48h versus last 12h and net percentage\u2011point change.",
+  "final_sql": "WITH\n-- Define medication classes and their identifiers\nmedication_classes AS (\n  SELECT 'Metformin' AS class, 'metformin' AS drug_pattern UNION ALL\n  SELECT 'Sulfonylureas', 'sulfonylurea' UNION ALL\n  SELECT 'DPP-4 inhibitors', 'dpp-4' UNION ALL\n  SELECT 'SGLT2 inhibitors', 'sglt2'\n),\n\n-- Get female patients aged 68-78\neligible_patients AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS total_hours\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 68 AND 78\n),\n\n-- Get all medications administered\nall_medications AS (\n  SELECT\n    e.hadm_id,\n    LOWER(p.medication) AS medication_name,\n    p.starttime,\n    p.stoptime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.pharmacy` p\n  JOIN\n    eligible_patients e ON p.hadm_id = e.hadm_id\n  UNION DISTINCT\n  SELECT\n    e.hadm_id,\n    LOWER(pr.drug) AS medication_name,\n    pr.starttime,\n    pr.stoptime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  JOIN\n    eligible_patients e ON pr.hadm_id = e.hadm_id\n),\n\n-- Classify medications\nclassified_medications AS (\n  SELECT\n    a.hadm_id,\n    a.medication_name,\n    a.starttime,\n    a.stoptime,\n    m.class\n  FROM\n    all_medications a\n  JOIN\n    medication_classes m ON LOWER(a.medication_name) LIKE '%' || LOWER(m.drug_pattern) || '%'\n),\n\n-- First 48 hours medications\nfirst_48h_meds AS (\n  SELECT\n    e.hadm_id,\n    c.class,\n    MAX(CASE WHEN c.starttime BETWEEN e.admittime AND TIMESTAMP_ADD(e.admittime, INTERVAL 48 HOUR) THEN 1 ELSE 0 END) AS has_medication\n  FROM\n    eligible_patients e\n  LEFT JOIN\n    classified_medications c ON e.hadm_id = c.hadm_id\n  GROUP BY\n    e.hadm_id, c.class\n),\n\n-- Last 12 hours medications\nlast_12h_meds AS (\n  SELECT\n    e.hadm_id,\n    c.class,\n    MAX(CASE WHEN c.starttime BETWEEN TIMESTAMP_SUB(e.dischtime, INTERVAL 12 HOUR) AND e.dischtime THEN 1 ELSE 0 END) AS has_medication\n  FROM\n    eligible_patients e\n  LEFT JOIN\n    classified_medications c ON e.hadm_id = c.hadm_id\n  GROUP BY\n    e.hadm_id, c.class\n),\n\n-- Aggregate results\naggregated_results AS (\n  SELECT\n    m.class,\n    COUNT(DISTINCT e.hadm_id) AS total_patients,\n    SUM(f.has_medication) AS first_48h_count,\n    SUM(l.has_medication) AS last_12h_count\n  FROM\n    eligible_patients e\n  CROSS JOIN\n    (SELECT DISTINCT class FROM medication_classes) m\n  LEFT JOIN\n    first_48h_meds f ON e.hadm_id = f.hadm_id AND m.class = f.class\n  LEFT JOIN\n    last_12h_meds l ON e.hadm_id = l.hadm_id AND m.class = l.class\n  GROUP BY\n    m.class\n)\n\n-- Final calculation\nSELECT\n  class,\n  ROUND((first_48h_count / total_patients) * 100, 2) AS first_48h_prevalence,\n  ROUND((last_12h_count / total_patients) * 100, 2) AS last_12h_prevalence,\n  ROUND(((last_12h_count / total_patients) - (first_48h_count / total_patients)) * 100, 2) AS net_change_pp\nFROM\n  aggregated_results\nORDER BY\n  class;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 INNER JOIN must have an immediately following ON or USING clause at [60:3]; reason: invalidQuery, location: query, message: INNER JOIN must have an immediately following ON or USING clause at [60:3]\n\nLocation: US\nJob ID: 6b18b03b-213a-4c44-8c65-fb860ecdf9f8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Query without FROM clause cannot use SELECT DISTINCT at [4:3]; reason: invalidQuery, location: query, message: Query without FROM clause cannot use SELECT DISTINCT at [4:3]\n\nLocation: US\nJob ID: 31d20016-93e5-4324-a35e-2bbbdfa23aca\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

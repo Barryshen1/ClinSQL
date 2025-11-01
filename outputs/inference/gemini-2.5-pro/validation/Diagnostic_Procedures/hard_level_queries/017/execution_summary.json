@@ -1,0 +1,16 @@
+{
+  "query": "Evaluating an 88-year-old man: among male patients aged 83\u201393 with sepsis on their first ICU stay, stratify first\u201172\u2011hour diagnostic intensity (distinct procedures) into quartiles and report mean procedure counts, mean ICU LOS in days, and mortality (%) per quartile.",
+  "final_sql": "WITH first_icu_stay AS (\n  -- This CTE identifies the first ICU stay for each patient and gathers baseline data.\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.hospital_expire_flag,\n    i.stay_id,\n    i.intime,\n    i.los,\n    ROW_NUMBER() OVER(PARTITION BY p.subject_id ORDER BY i.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS i\n    ON a.hadm_id = i.hadm_id\n),\nsepsis_cohort AS (\n  -- This CTE filters for male patients aged 83-93 who had a sepsis diagnosis during their first ICU stay.\n  SELECT DISTINCT\n    fis.subject_id,\n    fis.hadm_id,\n    fis.stay_id,\n    fis.intime,\n    fis.los,\n    fis.hospital_expire_flag\n  FROM first_icu_stay AS fis\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    ON fis.hadm_id = dx.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS ddx\n    ON dx.icd_code = ddx.icd_code AND dx.icd_version = ddx.icd_version\n  WHERE\n    fis.rn = 1 -- Filter for the first ICU stay only\n    AND fis.gender = 'M' -- Filter for male patients\n    AND (EXTRACT(YEAR FROM fis.admittime) - fis.anchor_year + fis.anchor_age) BETWEEN 83 AND 93 -- Filter for age\n    AND LOWER(ddx.long_title) LIKE '%sepsis%' -- Filter for sepsis diagnosis\n),\nprocedure_counts AS (\n  -- This CTE counts the number of distinct procedures for each patient in the cohort within the first 72 hours.\n  SELECT\n    sc.subject_id,\n    sc.stay_id,\n    sc.los,\n    sc.hospital_expire_flag,\n    COUNT(DISTINCT pe.itemid) AS procedure_count\n  FROM sepsis_cohort AS sc\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON sc.stay_id = pe.stay_id\n    AND pe.starttime <= TIMESTAMP_ADD(sc.intime, INTERVAL 72 HOUR) -- Within the first 72 hours of ICU admission\n  GROUP BY\n    sc.subject_id,\n    sc.stay_id,\n    sc.los,\n    sc.hospital_expire_flag\n),\nprocedure_quartiles AS (\n  -- This CTE assigns each patient to a quartile based on their procedure count.\n  SELECT\n    pc.procedure_count,\n    pc.los,\n    pc.hospital_expire_flag,\n    NTILE(4) OVER (ORDER BY pc.procedure_count) AS quartile\n  FROM procedure_counts AS pc\n)\n-- Final query to calculate and report the metrics per quartile.\nSELECT\n  quartile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(CAST(hospital_expire_flag AS NUMERIC)) * 100 AS mortality_percentage\nFROM procedure_quartiles\nGROUP BY\n  quartile\nORDER BY\n  quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

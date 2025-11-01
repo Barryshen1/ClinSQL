@@ -1,0 +1,23 @@
+{
+  "query": "I\u2019m evaluating a 49-year-old man with AMI. In male inpatients aged 44\u201354 with AMI, what is the 75th percentile of the first 72\u2011hour lab instability score? Also compare critical lab frequency to general inpatients and report cohort LOS and mortality.",
+  "final_sql": "WITH patients_filtered AS (\n  SELECT \n    subject_id,\n    anchor_age,\n    anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M'\n),\nadmissions_filtered AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN patients_filtered p\n    ON a.subject_id = p.subject_id\n  WHERE \n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 44 AND 54\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n),\nami_cohort_admissions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.los\n  FROM admissions_filtered a\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE \n      d.hadm_id = a.hadm_id\n      AND d.icd_version = 10\n      AND d.icd_code IN (\n        'I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4', 'I21.9',\n        'I22.0', 'I22.1', 'I22.2', 'I22.8', 'I22.9'\n      )\n  )\n),\ngeneral_cohort_admissions AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM admissions_filtered a\n  WHERE NOT EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    WHERE \n      d.hadm_id = a.hadm_id\n      AND d.icd_version = 10\n      AND d.icd_code IN (\n        'I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4', 'I21.9',\n        'I22.0', 'I22.1', 'I22.2', 'I22.8', 'I22.9'\n      )\n  )\n),\nami_critical_labs AS (\n  SELECT \n    a.hadm_id,\n    COUNT(l.labevent_id) AS critical_lab_count\n  FROM ami_cohort_admissions a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND l.flag IN ('critical', 'critical high', 'critical low')\n  GROUP BY a.hadm_id\n),\ngeneral_critical_labs AS (\n  SELECT \n    a.hadm_id,\n    COUNT(l.labevent_id) AS critical_lab_count\n  FROM general_cohort_admissions a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN a.admittime AND DATETIME_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND l.flag IN ('critical', 'critical high', 'critical low')\n  GROUP BY a.hadm_id\n),\nami_cohort AS (\n  SELECT \n    a.hadm_id,\n    COALESCE(c.critical_lab_count, 0) AS critical_lab_count,\n    a.los,\n    a.hospital_expire_flag\n  FROM ami_cohort_admissions a\n  LEFT JOIN ami_critical_labs c\n    ON a.hadm_id = c.hadm_id\n),\ngeneral_cohort AS (\n  SELECT \n    hadm_id,\n    COALESCE(critical_lab_count, 0) AS critical_lab_count\n  FROM general_critical_labs\n),\nami_stats AS (\n  SELECT\n    APPROX_QUANTILES(critical_lab_count, 1000)[OFFSET(750)] AS percentile_75,\n    AVG(critical_lab_count) AS ami_critical_lab_avg,\n    AVG(los) AS ami_los_avg,\n    AVG(hospital_expire_flag) AS ami_mortality_rate\n  FROM ami_cohort\n),\ngeneral_stats AS (\n  SELECT\n    AVG(critical_lab_count) AS general_critical_lab_avg\n  FROM general_cohort\n)\nSELECT\n  s.percentile_75,\n  s.ami_critical_lab_avg,\n  g.general_critical_lab_avg,\n  s.ami_los_avg,\n  s.ami_mortality_rate\nFROM ami_stats s\nCROSS JOIN general_stats g;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [105:47]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [105:47]\n\nLocation: US\nJob ID: 3cf945b1-f995-4068-a737-41d2ceced5b4\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

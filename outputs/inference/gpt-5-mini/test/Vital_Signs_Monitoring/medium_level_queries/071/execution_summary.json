@@ -1,0 +1,16 @@
+{
+  "query": "I have a 43-year-old woman in ICU. Among female ICU stays aged 38\u201348, what percentile is a per-stay mean SpO2 of 92% (proportion of stays with mean \u226492%)?",
+  "final_sql": "WITH spo2_items AS (\n  -- find itemids likely to represent SpO2 / oxygen saturation\n  SELECT DISTINCT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%spo2%'\n     OR LOWER(label) LIKE '%o2 sat%'\n     OR LOWER(label) LIKE '%oxygen saturation%'\n     OR LOWER(label) LIKE '%sao2%'\n     OR LOWER(label) LIKE '%pulse oxim%'\n),\nspo2_readings AS (\n  -- numeric SpO2 readings from ICU chart events, limited to reasonable range\n  SELECT\n    ce.subject_id,\n    ce.hadm_id,\n    ce.stay_id,\n    ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN spo2_items di\n    ON ce.itemid = di.itemid\n  WHERE ce.stay_id IS NOT NULL\n    AND ce.valuenum IS NOT NULL\n    AND ce.valuenum BETWEEN 1 AND 100\n),\nper_stay_mean AS (\n  -- per-ICU-stay mean SpO2\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    AVG(sr.valuenum) AS mean_spo2\n  FROM spo2_readings sr\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` s\n    USING(subject_id, hadm_id, stay_id)\n  GROUP BY s.subject_id, s.hadm_id, s.stay_id\n),\nfiltered_stays AS (\n  -- restrict to female patients aged 38-48 (anchor_age)\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.stay_id,\n    m.mean_spo2,\n    p.gender,\n    p.anchor_age\n  FROM per_stay_mean m\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    USING(subject_id)\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n)\n-- final summary: count and percentile (proportion <= 92%)\nSELECT\n  COUNT(*) AS n_stays,\n  SUM(CASE WHEN mean_spo2 <= 92 THEN 1 ELSE 0 END) AS n_stays_mean_le_92,\n  SAFE_DIVIDE(SUM(CASE WHEN mean_spo2 <= 92 THEN 1 ELSE 0 END), COUNT(*)) * 100.0 AS percentile_le_92\nFROM filtered_stays;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

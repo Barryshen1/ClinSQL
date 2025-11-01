@@ -1,0 +1,28 @@
+{
+  "query": "For a 55-year-old man: among males 50\u201360 with sepsis (excluding septic shock), report in-hospital mortality (%) with 95% CIs and median time-to-death among non-survivors (days) by LOS (<8 vs \u22658 days).",
+  "final_sql": "WITH patients AS (\n  SELECT subject_id, gender, anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M' AND anchor_age BETWEEN 50 AND 60\n),\nadmissions AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN patients p ON a.subject_id = p.subject_id\n  WHERE a.dischtime > a.admittime\n),\nsepsis_hadm AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND (icd_code LIKE '038.%' OR icd_code LIKE '670.2%' OR icd_code LIKE '670.3%'))\n    OR\n    (icd_version = 10 AND (icd_code LIKE 'A40.%' OR icd_code LIKE 'A41.%'))\n  )\n),\nshock_hadm AS (\n  SELECT DISTINCT subject_id, hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND icd_code = '785.52')\n    OR\n    (icd_version = 10 AND icd_code LIKE 'R65.2%')\n  )\n),\ncohort AS (\n  SELECT \n    a.*,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    DATE_DIFF(a.deathtime, a.admittime, DAY) AS ttd_days,\n    CASE WHEN DATE_DIFF(a.dischtime, a.admittime, DAY) < 8 THEN '<8' ELSE '>=8' END AS los_group\n  FROM admissions a\n  INNER JOIN sepsis_hadm s ON a.subject_id = s.subject_id AND a.hadm_id = s.hadm_id\n  LEFT JOIN shock_hadm sh ON a.subject_id = sh.subject_id AND a.hadm_id = sh.hadm_id\n  WHERE sh.hadm_id IS NULL\n),\nagg AS (\n  SELECT \n    los_group,\n    COUNT(*) AS n,\n    SUM(hospital_expire_flag) AS deaths,\n    APPROX_QUANTILES(ttd_days, 2)[OFFSET(1)] AS median_ttd\n  FROM cohort\n  GROUP BY los_group\n)\nSELECT \n  los_group,\n  n,\n  deaths,\n  ROUND(SAFE_DIVIDE(deaths, n) * 100, 2) AS mortality_pct,\n  ROUND(\n    (\n      (\n        (SAFE_DIVIDE(deaths, n) + (1.96 * 1.96) / (2 * n)) / (1 + (1.96 * 1.96) / n)\n      ) -\n      (\n        1.96 * SQRT(SAFE_DIVIDE(deaths, n) * (1 - SAFE_DIVIDE(deaths, n)) / n + (1.96 * 1.96) / (4 * n * n))\n        / (1 + (1.96 * 1.96) / n)\n      )\n    ) * 100,\n    2\n  ) AS ci_lower_pct,\n  ROUND(\n    (\n      (\n        (SAFE_DIVIDE(deaths, n) + (1.96 * 1.96) / (2 * n)) / (1 + (1.96 * 1.96) / n)\n      ) +\n      (\n        1.96 * SQRT(SAFE_DIVIDE(deaths, n) * (1 - SAFE_DIVIDE(deaths, n)) / n + (1.96 * 1.96) / (4 * n * n))\n        / (1 + (1.96 * 1.96) / n)\n      )\n    ) * 100,\n    2\n  ) AS ci_upper_pct,\n  ROUND(median_ttd, 1) AS median_ttd_days\nFROM agg\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:6]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [16:6]\n\nLocation: US\nJob ID: 27969012-5e69-4164-a288-0b934b87691e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: bb8c2721-1114-4e3b-822d-efce74a74cbe\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 80 AND 90\n    -- At least one acute decompensated heart failure diagnosis (ICD-10)\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n        ON d.icd_code = diag.icd_code\n       AND d.icd_version = diag.icd_version\n      WHERE\n        d.hadm_id = a.hadm_id\n        AND d.icd_version = 10\n        AND LOWER(diag.long_title) LIKE '%acute%'\n        AND LOWER(diag.long_title) LIKE '%heart failure%'\n    )\n),\n\n-- Assign LOS bins\ncohort_binned AS (\n  SELECT\n    *,\n    CASE\n      WHEN los_days BETWEEN 1 AND 3 THEN '1\u20133'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4\u20137'\n      ELSE '>=8'\n    END AS los_bin\n  FROM cohort\n),\n\n-- Aggregate counts and compute mortality rate + 95% CI\nmortality_stats AS (\n  SELECT\n    los_bin,\n    COUNT(*)                     AS n,\n    SUM(hospital_expire_flag)    AS deaths,\n    SAFE_DIVIDE(SUM(hospital_expire_flag), COUNT(*)) AS p\n  FROM cohort_binned\n  GROUP BY los_bin\n),\n\n-- Compute median time-to-death among those who died in each bin\nmedian_time_to_death AS (\n  SELECT\n    los_bin,\n    -- APPROX_QUANTILES ignores NULLs, so we only feed in los_days for decedents\n    APPROX_QUANTILES(los_days, 2)[OFFSET(1)] AS median_time_to_death\n  FROM cohort_binned\n  WHERE hospital_expire_flag = 1\n  GROUP BY los_bin\n)\n\nSELECT\n  m.los_bin AS los_category,\n  m.n,\n  m.deaths,\n  ROUND(100 * m.p, 2) AS mortality_pct,\n  ROUND(100 * (m.p - 1.96 * SQRT(m.p * (1 - m.p) / m.n)), 2) AS ci_lower_pct,\n  ROUND(100 * (m.p + 1.96 * SQRT(m.p * (1 - m.p) / m.n)), 2) AS ci_upper_pct,\n  mt.median_time_to_death\nFROM mortality_stats m\nLEFT JOIN median_time_to_death mt\n  ON m.los_bin = mt.los_bin\nORDER BY\n  CASE m.los_bin\n    WHEN '1\u20133' THEN 1\n    WHEN '4\u20137' THEN 2\n    ELSE 3\n  END;",
+      "success": true,
+      "error": null,
+      "row_count": 3
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 3
+}

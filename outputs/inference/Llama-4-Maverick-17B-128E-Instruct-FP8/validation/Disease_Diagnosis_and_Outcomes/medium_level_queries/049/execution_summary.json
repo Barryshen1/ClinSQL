@@ -1,0 +1,22 @@
+{
+  "query": "For a 56\u2011year\u2011old man: among men 51\u201361 with STEMI vs NSTEMI, show in\u2011hospital mortality (%) and N by LOS (1\u20132,3\u20135,6\u20139,\u226510 days) and comorbidity groups (0\u20131,2,\u22653) with CKD and diabetes prevalence.",
+  "final_sql": "WITH \n-- Step 1: Filter patients based on age and gender, and get hadm_id\npatient_filter AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 51 AND 61\n),\n\n-- Step 2: Identify STEMI/NSTEMI patients\nstem_nstem AS (\n  SELECT p.hadm_id,\n         MAX(CASE WHEN d.long_title LIKE '%STEMI%' THEN 1 ELSE 0 END) AS stemi_flag,\n         MAX(CASE WHEN d.long_title LIKE '%NSTEMI%' THEN 1 ELSE 0 END) AS nstemi_flag\n  FROM patient_filter p\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON p.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE di.icd_version = 10 AND (d.long_title LIKE '%STEMI%' OR d.long_title LIKE '%NSTEMI%')\n  GROUP BY p.hadm_id\n),\n\n-- Step 3: Calculate in-hospital mortality and LOS\nadmission_details AS (\n  SELECT a.hadm_id, \n         a.hospital_expire_flag,\n         DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN patient_filter p ON a.hadm_id = p.hadm_id\n),\n\n-- Step 4: Count comorbidities\ncomorbidity_count AS (\n  SELECT di.hadm_id, COUNT(DISTINCT di.icd_code) AS comorbidity_cnt,\n         MAX(CASE WHEN d.icd_code IN ('N18.9', 'N18.1', 'N18.2', 'N18.3', 'N18.4', 'N18.5', 'N18.6', 'N18.8') THEN 1 ELSE 0 END) AS ckd_flag,\n         MAX(CASE WHEN d.icd_code LIKE 'E11%' THEN 1 ELSE 0 END) AS diabetes_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  JOIN patient_filter p ON di.hadm_id = p.hadm_id\n  WHERE di.icd_version = 10\n  GROUP BY di.hadm_id\n)\n\n-- Final query\nSELECT \n  CASE \n    WHEN sn.stemi_flag = 1 AND sn.nstemi_flag = 0 THEN 'STEMI'\n    WHEN sn.stemi_flag = 0 AND sn.nstemi_flag = 1 THEN 'NSTEMI'\n    ELSE 'Other'\n  END AS MI_type,\n  COUNT(a.hadm_id) AS N,\n  AVG(a.hospital_expire_flag) * 100 AS in_hospital_mortality,\n  COUNT(CASE WHEN a.los BETWEEN 1 AND 2 THEN 1 END) AS los_1_2,\n  COUNT(CASE WHEN a.los BETWEEN 3 AND 5 THEN 1 END) AS los_3_5,\n  COUNT(CASE WHEN a.los BETWEEN 6 AND 9 THEN 1 END) AS los_6_9,\n  COUNT(CASE WHEN a.los >= 10 THEN 1 END) AS los_ge_10,\n  COUNT(CASE WHEN cc.comorbidity_cnt BETWEEN 0 AND 1 THEN 1 END) AS comorbidity_0_1,\n  COUNT(CASE WHEN cc.comorbidity_cnt = 2 THEN 1 END) AS comorbidity_2,\n  COUNT(CASE WHEN cc.comorbidity_cnt >= 3 THEN 1 END) AS comorbidity_ge_3,\n  AVG(cc.ckd_flag) * 100 AS ckd_prevalence,\n  AVG(cc.diabetes_flag) * 100 AS diabetes_prevalence\nFROM admission_details a\nJOIN stem_nstem sn ON a.hadm_id = sn.hadm_id\nJOIN comorbidity_count cc ON a.hadm_id = cc.hadm_id\nGROUP BY MI_type\nORDER BY MI_type;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hadm_id at [4:22]; reason: invalidQuery, location: query, message: Unrecognized name: hadm_id at [4:22]\n\nLocation: US\nJob ID: b4deaa6b-7106-4e40-abe5-6fd373c75c13\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

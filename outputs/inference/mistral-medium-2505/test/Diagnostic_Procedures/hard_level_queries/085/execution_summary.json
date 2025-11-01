@@ -1,0 +1,16 @@
+{
+  "query": "For a 92-year-old woman: among female ICU patients aged 87\u201397 with lower GI bleeding (first ICU stay), stratify by quintiles of distinct procedures in the first 48 hours and report mean procedure count, mean ICU LOS (days), and in-hospital mortality%.",
+  "final_sql": "WITH\n-- Get female patients aged 87-97\nfemale_patients AS (\n  SELECT\n    subject_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE\n    gender = 'F'\n    AND anchor_age BETWEEN 87 AND 97\n),\n\n-- Get first ICU stay per admission with lower GI bleeding diagnosis\nfirst_icu_stays AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.intime AS icu_intime,\n    i.outtime AS icu_outtime,\n    i.los AS icu_los,\n    a.hospital_expire_flag,\n    ROW_NUMBER() OVER (PARTITION BY a.hadm_id ORDER BY i.intime) AS icu_stay_rank\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON a.hadm_id = i.hadm_id\n  JOIN\n    female_patients p\n    ON a.subject_id = p.subject_id\n  WHERE\n    EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` di\n        ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n      WHERE\n        d.hadm_id = a.hadm_id\n        AND (\n          (d.icd_version = 10 AND d.icd_code IN ('K92.2', 'K92.1', 'K92.0'))\n          OR (d.icd_version = 9 AND d.icd_code IN ('578.1', '578.0', '578.9'))\n        )\n    )\n),\n\n-- Get only first ICU stay per admission\nfirst_icu_stays_filtered AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    icu_intime,\n    icu_outtime,\n    icu_los,\n    hospital_expire_flag\n  FROM\n    first_icu_stays\n  WHERE\n    icu_stay_rank = 1\n),\n\n-- Count distinct procedures in first 48 hours of ICU stay\nprocedure_counts AS (\n  SELECT\n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    COUNT(DISTINCT p.itemid) AS procedure_count\n  FROM\n    first_icu_stays_filtered f\n  JOIN\n    `physionet-data.mimiciv_3_1_icu.procedureevents` p\n    ON f.stay_id = p.stay_id\n  WHERE\n    p.starttime BETWEEN f.icu_intime\n    AND TIMESTAMP_ADD(f.icu_intime, INTERVAL 48 HOUR)\n  GROUP BY\n    f.subject_id, f.hadm_id, f.stay_id\n),\n\n-- Create quintiles based on procedure counts\nquintiles AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    procedure_count,\n    NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM\n    procedure_counts\n)\n\n-- Final aggregation by quintile\nSELECT\n  quintile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(icu_los) AS mean_icu_los_days,\n  AVG(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100 AS in_hospital_mortality_percent\nFROM\n  quintiles q\nJOIN\n  first_icu_stays_filtered f\n  ON q.subject_id = f.subject_id AND q.hadm_id = f.hadm_id AND q.stay_id = f.stay_id\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

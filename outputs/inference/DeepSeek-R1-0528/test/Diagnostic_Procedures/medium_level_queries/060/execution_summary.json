@@ -1,0 +1,16 @@
+{
+  "query": "Among male patients aged 49\u201359 with primary heart failure (patient is 54), for LOS 1\u20134 vs 5\u20137 days stratified by ICU use, what are admission counts and mean CT/MRI per admission?",
+  "final_sql": "WITH filtered_admissions AS (\n  SELECT \n      adm.subject_id, \n      adm.hadm_id, \n      adm.admittime, \n      adm.dischtime,\n      -- Calculate age at admission\n      pt.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pt.anchor_year) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n      ON adm.subject_id = pt.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      ON adm.hadm_id = diag.hadm_id\n      AND adm.subject_id = diag.subject_id\n  WHERE \n      pt.gender = 'M'\n      AND diag.seq_num = 1  -- Primary diagnosis\n      AND (\n          (diag.icd_version = 9 AND diag.icd_code LIKE '428%') \n          OR \n          (diag.icd_version = 10 AND diag.icd_code LIKE 'I50%')\n      )\n      -- Age 49-59 at admission\n      AND (pt.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - pt.anchor_year)) BETWEEN 49 AND 59\n),\nlos_groups AS (\n  SELECT \n      *,\n      DATE_DIFF(dischtime, admittime, DAY) AS los_days,\n      CASE \n          WHEN DATE_DIFF(dischtime, admittime, DAY) BETWEEN 1 AND 4 THEN '1-4'\n          WHEN DATE_DIFF(dischtime, admittime, DAY) BETWEEN 5 AND 7 THEN '5-7'\n      END AS los_group\n  FROM filtered_admissions\n  -- Only include LOS 1-7 days\n  WHERE DATE_DIFF(dischtime, admittime, DAY) BETWEEN 1 AND 7\n),\nct_mri_codes AS (\n  SELECT DISTINCT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`\n  WHERE \n      LOWER(long_title) LIKE '%computed tomography%' \n      OR LOWER(long_title) LIKE '%magnetic resonance%'\n      OR LOWER(long_title) LIKE '%mri%'\n      OR LOWER(long_title) LIKE '%ct%'\n),\nct_mri_counts AS (\n  SELECT \n      lg.hadm_id,\n      COUNT(proc.icd_code) AS ct_mri_count  -- Count scans per admission\n  FROM los_groups lg\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n      ON lg.hadm_id = proc.hadm_id\n      AND lg.subject_id = proc.subject_id\n  LEFT JOIN ct_mri_codes c\n      ON proc.icd_code = c.icd_code\n      AND proc.icd_version = c.icd_version\n  GROUP BY lg.hadm_id\n)\nSELECT \n    CASE \n        WHEN EXISTS (\n            SELECT 1 \n            FROM `physionet-data.mimiciv_3_1_icu.icustays` icu \n            WHERE icu.hadm_id = lg.hadm_id\n        ) THEN 'Yes' \n        ELSE 'No' \n    END AS icu_use,\n    lg.los_group,\n    COUNT(DISTINCT lg.hadm_id) AS admission_count,\n    AVG(cc.ct_mri_count) AS mean_ct_mri_per_admission\nFROM los_groups lg\nLEFT JOIN ct_mri_counts cc\n    ON lg.hadm_id = cc.hadm_id\nGROUP BY icu_use, los_group\nORDER BY icu_use, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

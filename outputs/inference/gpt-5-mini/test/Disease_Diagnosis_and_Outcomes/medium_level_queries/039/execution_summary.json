@@ -1,0 +1,28 @@
+{
+  "query": "My 71\u2011year\u2011old female with AMI, no initial shock or respiratory failure: among females 66\u201376 with AMI, report in\u2011hospital mortality (%) and median time\u2011to\u2011death (days) by LOS 1\u20133/4\u20137/\u22658 and emergent vs non\u2011emergent admission.",
+  "final_sql": "WITH ami_hadms AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND STARTS_WITH(icd_code, '410'))\n    OR\n    (icd_version = 10 AND (STARTS_WITH(UPPER(icd_code), 'I21') OR STARTS_WITH(UPPER(icd_code), 'I22')))\n  )\n),\n\nexclude_shock_resp AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    -- Shock:\n    (icd_version = 9 AND STARTS_WITH(icd_code, '7855')) OR\n    (icd_version = 10 AND STARTS_WITH(UPPER(icd_code), 'R57'))\n  )\n  OR (\n    -- Respiratory failure:\n    (icd_version = 9 AND (STARTS_WITH(icd_code, '5188') OR icd_code = '7991')) OR\n    (icd_version = 10 AND STARTS_WITH(UPPER(icd_code), 'J96'))\n  )\n),\n\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    a.admission_type,\n    p.gender,\n    p.anchor_age,\n    -- LOS in days (inclusive)\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) + 1 AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 66 AND 76\n    AND a.hadm_id IN (SELECT hadm_id FROM ami_hadms)\n    AND a.hadm_id NOT IN (SELECT hadm_id FROM exclude_shock_resp)\n),\n\ncohort_derived AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    deathtime,\n    hospital_expire_flag,\n    admission_type,\n    anchor_age,\n    los_days,\n    CASE\n      WHEN los_days BETWEEN 1 AND 3 THEN '1-3'\n      WHEN los_days BETWEEN 4 AND 7 THEN '4-7'\n      ELSE '>=8'\n    END AS los_bucket,\n    CASE\n      WHEN LOWER(COALESCE(admission_type, '')) = 'emergency' THEN 'Emergency'\n      ELSE 'Non-emergency'\n    END AS admission_urgency,\n    -- time-to-death in fractional days; NULL if not expired in-hospital\n    CASE\n      WHEN hospital_expire_flag = 1 AND deathtime IS NOT NULL THEN\n        TIMESTAMP_DIFF(deathtime, admittime, SECOND) / 86400.0\n      ELSE NULL\n    END AS days_to_death\n  FROM cohort\n)\n\nSELECT\n  los_bucket,\n  admission_urgency AS admission_type_group,\n  COUNT(*) AS n_admissions,\n  SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS n_deaths,\n  ROUND(100.0 * SAFE_DIVIDE(SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END), COUNT(*)), 2) AS mortality_pct,\n  -- median time-to-death among those who died in-hospital in this group (NULL if no deaths)\n  APPROX_QUANTILES(IF(hospital_expire_flag = 1, days_to_death, NULL), 100)[OFFSET(50)] AS median_time_to_death_days\nFROM cohort_derived\nGROUP BY los_bucket, admission_urgency\nORDER BY\n  CASE los_bucket WHEN '1-3' THEN 1 WHEN '4-7' THEN 2 ELSE 3 END,\n  CASE admission_urgency WHEN 'Emergency' THEN 1 ELSE 2 END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"AMI\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"AMI\" at [1:9]\n\nLocation: US\nJob ID: c9bd8bcc-1745-4208-aa7b-d0b632afe920\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: a41d61d8-da49-4732-868f-aa6afacf3dcc\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

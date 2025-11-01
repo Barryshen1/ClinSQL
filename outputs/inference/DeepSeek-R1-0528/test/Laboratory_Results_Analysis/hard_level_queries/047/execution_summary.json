@@ -1,0 +1,22 @@
+{
+  "query": "I have a 76-year-old man. Among male inpatients with ARDS aged 71\u201381, what is the 90th\u2011percentile instability score in the first 72 hours? For patients at/above that threshold, report mortality, mean LOS, and compare critical lab rates to general inpatients.",
+  "final_sql": "WITH\ntarget_cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 71 AND 81\n    AND adm.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE (icd_code = '51882' AND icd_version = 9)\n        OR (icd_code = 'J80' AND icd_version = 10)\n    )\n),\nfirst_icu AS (\n  SELECT\n    t.subject_id,\n    t.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime\n  FROM target_cohort t\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON t.hadm_id = i.hadm_id\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) = 1\n),\ntarget_labs AS (\n  SELECT\n    f.stay_id,\n    f.subject_id,\n    f.hadm_id,\n    COUNT(le.labevent_id) AS abnormal_count\n  FROM first_icu f\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON f.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN f.intime AND DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n    AND le.flag = 'abnormal'\n  GROUP BY f.stay_id, f.subject_id, f.hadm_id\n),\npercentile AS (\n  SELECT\n    APPROX_QUANTILES(abnormal_count, 100) AS p\n  FROM target_labs\n),\nthreshold AS (\n  SELECT p[OFFSET(90)] AS threshold_value\n  FROM percentile\n),\ntarget_above AS (\n  SELECT\n    tl.*\n  FROM target_labs tl\n  CROSS JOIN threshold t\n  WHERE tl.abnormal_count >= t.threshold_value\n),\ntarget_outcomes AS (\n  SELECT\n    ta.stay_id,\n    ta.subject_id,\n    ta.hadm_id,\n    ta.abnormal_count,\n    adm.hospital_expire_flag,\n    DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_hospital\n  FROM target_above ta\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ta.hadm_id = adm.hadm_id\n),\ncontrol_cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 71 AND 81\n    AND adm.hadm_id NOT IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE (icd_code = '51882' AND icd_version = 9)\n        OR (icd_code = 'J80' AND icd_version = 10)\n    )\n),\ncontrol_icu AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    i.stay_id,\n    i.intime\n  FROM control_cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON c.hadm_id = i.hadm_id\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) = 1\n),\ncontrol_labs AS (\n  SELECT\n    f.stay_id,\n    f.subject_id,\n    f.hadm_id,\n    COUNT(le.labevent_id) AS abnormal_count\n  FROM control_icu f\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON f.hadm_id = le.hadm_id\n    AND le.charttime BETWEEN f.intime AND DATETIME_ADD(f.intime, INTERVAL 72 HOUR)\n    AND le.flag = 'abnormal'\n  GROUP BY f.stay_id, f.subject_id, f.hadm_id\n)\nSELECT\n  'Target (\u226590th Percentile)' AS cohort,\n  COUNT(*) AS num_patients,\n  AVG(hospital_expire_flag) * 100 AS mortality_rate_percent,\n  AVG(los_hospital) AS mean_los_days,\n  AVG(abnormal_count) AS mean_abnormal_labs\nFROM target_outcomes\nUNION ALL\nSELECT\n  'Control (General Inpatients)' AS cohort,\n  COUNT(*) AS num_patients,\n  NULL AS mortality_rate_percent,\n  NULL AS mean_los_days,\n  AVG(abnormal_count) AS mean_abnormal_labs\nFROM control_labs;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Missing whitespace between literal and alias at [29:75]; reason: invalidQuery, location: query, message: Syntax error: Missing whitespace between literal and alias at [29:75]\n\nLocation: US\nJob ID: 84f7d9b8-8ea0-49e0-b9fa-37854b56995e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

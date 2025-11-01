@@ -1,0 +1,16 @@
+{
+  "query": "For my 49-year-old female, among hospitalized women 44\u201354 on DAPT, what is the SD of single antiplatelet prescription duration?",
+  "final_sql": "WITH AdmissionsFiltered AS (\n    SELECT\n        adm.subject_id,\n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    WHERE\n        pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 44 AND 54\n),\nAntiplateletPrescriptionsCategorized AS (\n    SELECT\n        af.subject_id,\n        af.hadm_id,\n        px.pharmacy_id, -- Unique identifier for the prescription line item\n        px.drug,\n        px.starttime,\n        px.stoptime,\n        CASE\n            WHEN LOWER(px.drug) LIKE '%aspirin%' OR LOWER(px.drug) LIKE '%asa%' OR LOWER(px.drug) LIKE '%acetylsalicylic acid%' THEN 'Aspirin'\n            WHEN LOWER(px.drug) LIKE '%clopidogrel%' OR LOWER(px.drug) LIKE '%plavix%' THEN 'P2Y12_Inhibitor'\n            WHEN LOWER(px.drug) LIKE '%ticagrelor%' OR LOWER(px.drug) LIKE '%brilinta%' THEN 'P2Y12_Inhibitor'\n            WHEN LOWER(px.drug) LIKE '%prasugrel%' OR LOWER(px.drug) LIKE '%effient%' THEN 'P2Y12_Inhibitor'\n            ELSE NULL\n        END AS drug_category,\n        DATE_DIFF(px.stoptime, px.starttime, DAY) AS duration_days\n    FROM\n        AdmissionsFiltered AS af\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.prescriptions` AS px\n        ON af.subject_id = px.subject_id AND af.hadm_id = px.hadm_id\n    WHERE\n        (LOWER(px.drug) LIKE '%aspirin%' OR LOWER(px.drug) LIKE '%asa%' OR LOWER(px.drug) LIKE '%acetylsalicylic acid%'\n        OR LOWER(px.drug) LIKE '%clopidogrel%' OR LOWER(px.drug) LIKE '%plavix%'\n        OR LOWER(px.drug) LIKE '%ticagrelor%' OR LOWER(px.drug) LIKE '%brilinta%'\n        OR LOWER(px.drug) LIKE '%prasugrel%' OR LOWER(px.drug) LIKE '%effient%')\n        AND px.starttime IS NOT NULL\n        AND px.stoptime IS NOT NULL\n        AND px.stoptime >= px.starttime -- Ensures valid time range for duration calculation\n),\nDAPTPatients AS (\n    SELECT DISTINCT\n        t1.subject_id,\n        t1.hadm_id\n    FROM\n        AntiplateletPrescriptionsCategorized AS t1\n    INNER JOIN\n        AntiplateletPrescriptionsCategorized AS t2\n        ON t1.subject_id = t2.subject_id\n        AND t1.hadm_id = t2.hadm_id\n    WHERE\n        t1.drug_category = 'Aspirin'\n        AND t2.drug_category = 'P2Y12_Inhibitor'\n        -- Check for overlap between Aspirin and P2Y12_Inhibitor prescriptions\n        AND t1.starttime <= t2.stoptime\n        AND t2.starttime <= t1.stoptime\n)\nSELECT\n    STDDEV(apc.duration_days) AS sd_single_antiplatelet_duration_days\nFROM\n    AntiplateletPrescriptionsCategorized AS apc\nINNER JOIN\n    DAPTPatients AS dapt\n    ON apc.subject_id = dapt.subject_id\n    AND apc.hadm_id = dapt.hadm_id\nWHERE\n    apc.duration_days IS NOT NULL AND apc.duration_days >= 0 -- Ensure duration is non-null and non-negative\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

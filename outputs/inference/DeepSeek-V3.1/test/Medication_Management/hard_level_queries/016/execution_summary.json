@@ -1,0 +1,16 @@
+{
+  "query": "I am evaluating an 85\u2011year\u2011old female inpatient with hepatic failure. Among female inpatients aged 80\u201390 with hepatic failure, calculate a 7\u2011day medication complexity score, stratify cohort into tertiles, and report LOS, in\u2011hospital mortality and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH cohort AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime,\n        adm.hospital_expire_flag,\n        pat.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    WHERE pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 80 AND 90\n        AND adm.hadm_id IN (\n            SELECT hadm_id \n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n            WHERE diag.icd_code LIKE 'K70%'   -- Alcoholic liver disease\n                OR diag.icd_code LIKE 'K72%'   -- Hepatic failure\n                OR diag.icd_code = 'K76.2'     -- Hepatic necrosis\n                OR diag.icd_code = 'K74.6'     -- Cirrhosis (as proxy)\n        )\n),\n\nmeds AS (\n    SELECT \n        c.subject_id,\n        c.hadm_id,\n        COUNT(DISTINCT emd.product_description) AS med_count\n    FROM cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar` em\n        ON c.hadm_id = em.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.emar_detail` emd\n        ON em.emar_id = emd.emar_id\n    WHERE em.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 7 DAY)\n        AND emd.product_description IS NOT NULL\n    GROUP BY c.subject_id, c.hadm_id\n),\n\nwith_med_score AS (\n    SELECT \n        c.*,\n        COALESCE(m.med_count, 0) AS med_count\n    FROM cohort c\n    LEFT JOIN meds m\n        ON c.hadm_id = m.hadm_id AND c.subject_id = m.subject_id\n),\n\ntertiles AS (\n    SELECT *,\n        NTILE(3) OVER (ORDER BY med_count) AS tertile\n    FROM with_med_score\n),\n\nreadmissions AS (\n    SELECT \n        t1.hadm_id AS index_hadm,\n        COUNT(t2.hadm_id) AS readmit_30d\n    FROM tertiles t1\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` t2\n        ON t1.subject_id = t2.subject_id\n        AND t2.admittime > t1.dischtime\n        AND t2.admittime <= DATETIME_ADD(t1.dischtime, INTERVAL 30 DAY)\n        AND t1.hospital_expire_flag = 0  -- only if survived index admission\n    GROUP BY t1.hadm_id\n)\n\nSELECT \n    t.tertile,\n    COUNT(*) AS n_admissions,\n    AVG(DATETIME_DIFF(t.dischtime, t.admittime, DAY)) AS avg_los,\n    AVG(t.hospital_expire_flag) * 100 AS in_hospital_mortality_percent,\n    AVG(r.readmit_30d) * 100 AS readmit_30d_percent\nFROM tertiles t\nLEFT JOIN readmissions r\n    ON t.hadm_id = r.index_hadm\nWHERE t.dischtime IS NOT NULL   -- exclude ongoing admissions\nGROUP BY t.tertile\nORDER BY t.tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

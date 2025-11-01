@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating an 80\u2011year\u2011old man. For male inpatients aged 75\u201385 with hepatic failure, during the first 48 hours what was the cohort\u2019s maximum instability score, mortality, average LOS, and how did critical lab frequencies compare to general inpatients?",
+  "final_sql": "WITH hepatic_cohort AS (\n  SELECT DISTINCT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los AS icu_los,\n    adm.hospital_expire_flag\n  FROM\n    physionet-data.mimiciv_3_1_icu.icustays icu\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions adm\n    ON icu.hadm_id = adm.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients pat\n    ON icu.subject_id = pat.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd dx\n    ON icu.hadm_id = dx.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_dx\n    ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 75 AND 85\n    AND LOWER(d_dx.long_title) LIKE '%hepatic failure%'\n),\n\n-- Vasopressor use in first 48 hours as instability proxy\nvasopressor_use AS (\n  SELECT\n    he.stay_id,\n    MAX(ie.amount) AS max_vasopressor_dose\n  FROM\n    hepatic_cohort he\n  JOIN\n    physionet-data.mimiciv_3_1_icu.inputevents ie\n    ON he.stay_id = ie.stay_id\n  JOIN\n    physionet-data.mimiciv_3_1_icu.d_items di\n    ON ie.itemid = di.itemid\n  WHERE\n    LOWER(di.label) IN ('norepinephrine', 'epinephrine', 'dopamine', 'vasopressin')\n    AND ie.starttime BETWEEN he.intime AND DATETIME_ADD(he.intime, INTERVAL 48 HOUR)\n  GROUP BY\n    he.stay_id\n),\n\n-- Labs in first 48 hours for hepatic cohort\nhepatic_labs AS (\n  SELECT\n    he.stay_id,\n    COUNT(CASE WHEN LOWER(di.label) = 'bilirubin' THEN 1 END) AS bilirubin_count,\n    COUNT(CASE WHEN LOWER(di.label) = 'creatinine' THEN 1 END) AS creatinine_count,\n    COUNT(CASE WHEN LOWER(di.label) = 'inr' THEN 1 END) AS inr_count,\n    COUNT(CASE WHEN LOWER(di.label) = 'platelets' THEN 1 END) AS platelet_count\n  FROM\n    hepatic_cohort he\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.labevents le\n    ON he.hadm_id = le.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_labitems di\n    ON le.itemid = di.itemid\n  WHERE\n    le.charttime BETWEEN he.intime AND DATETIME_ADD(he.intime, INTERVAL 48 HOUR)\n    AND LOWER(di.label) IN ('bilirubin', 'creatinine', 'inr', 'platelets')\n  GROUP BY\n    he.stay_id\n),\n\n-- General inpatient lab frequencies (scalar aggregate)\ngeneral_labs AS (\n  SELECT\n    COUNT(CASE WHEN LOWER(di.label) = 'bilirubin' THEN 1 END) AS bilirubin_count,\n    COUNT(CASE WHEN LOWER(di.label) = 'creatinine' THEN 1 END) AS creatinine_count,\n    COUNT(CASE WHEN LOWER(di.label) = 'inr' THEN 1 END) AS inr_count,\n    COUNT(CASE WHEN LOWER(di.label) = 'platelets' THEN 1 END) AS platelet_count\n  FROM\n    physionet-data.mimiciv_3_1_hosp.labevents le\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_labitems di\n    ON le.itemid = di.itemid\n  WHERE\n    le.charttime IS NOT NULL\n    AND LOWER(di.label) IN ('bilirubin', 'creatinine', 'inr', 'platelets')\n)\n\n-- Final aggregation\nSELECT\n  MAX(COALESCE(v.max_vasopressor_dose, 0)) AS max_instability_score,\n  AVG(he.hospital_expire_flag) AS mortality_rate,\n  AVG(he.icu_los) AS avg_icu_los,\n  SUM(hl.bilirubin_count) AS hepatic_bilirubin_count,\n  SUM(hl.creatinine_count) AS hepatic_creatinine_count,\n  SUM(hl.inr_count) AS hepatic_inr_count,\n  SUM(hl.platelet_count) AS hepatic_platelet_count,\n  (SELECT bilirubin_count FROM general_labs) AS general_bilirubin_count,\n  (SELECT creatinine_count FROM general_labs) AS general_creatinine_count,\n  (SELECT inr_count FROM general_labs) AS general_inr_count,\n  (SELECT platelet_count FROM general_labs) AS general_platelet_count\nFROM\n  hepatic_cohort he\nLEFT JOIN\n  vasopressor_use v\n  ON he.stay_id = v.stay_id\nLEFT JOIN\n  hepatic_labs hl\n  ON he.stay_id = hl.stay_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside ie at [45:12]; reason: invalidQuery, location: query, message: Name charttime not found inside ie at [45:12]\n\nLocation: US\nJob ID: 0f1d5ee7-5dcb-49a7-9ddb-5caa482c7a05\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references gl.bilirubin_count which is neither grouped nor aggregated at [99:3]; reason: invalidQuery, location: query, message: SELECT list expression references gl.bilirubin_count which is neither grouped nor aggregated at [99:3]\n\nLocation: US\nJob ID: 46b21e61-6377-4e80-9b52-197f9e66574a\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

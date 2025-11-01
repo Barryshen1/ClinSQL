@@ -1,0 +1,16 @@
+{
+  "query": "I have a 78-year-old man admitted with ACS. Among male patients aged 73\u201383 with elevated initial Troponin T, please summarize cohort statistics including average length of stay and in-hospital mortality.",
+  "final_sql": "WITH cohort AS (\n  -- Step 1-4: Filter patients meeting demographic + ACS diagnosis + elevated initial troponin T\n  WITH acs_admissions AS (\n    SELECT DISTINCT adm.subject_id, adm.hadm_id, adm.admittime, adm.dischtime, adm.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON adm.subject_id = pat.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      ON adm.hadm_id = diag.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddiag\n      ON diag.icd_code = ddiag.icd_code \n     AND diag.icd_version = ddiag.icd_version\n    WHERE pat.gender = 'M'\n      AND pat.anchor_age BETWEEN 73 AND 83\n      AND (\n        LOWER(ddiag.long_title) LIKE '%acute myocardial infarction%' \n        OR LOWER(ddiag.long_title) LIKE '%unstable angina%' \n        OR LOWER(ddiag.long_title) LIKE '%acute ischemic heart%'\n      )\n  ),\n  troponin_first AS (\n    SELECT subject_id, hadm_id, MIN_BY(lab.valuenum, lab.charttime) AS first_trop_val, MIN(lab.charttime) AS first_trop_time\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` lab\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n      ON lab.itemid = dl.itemid\n    WHERE LOWER(dl.label) LIKE '%troponin t%'\n      AND lab.valuenum IS NOT NULL\n    GROUP BY subject_id, hadm_id\n  )\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag,\n         t.first_trop_val, t.first_trop_time\n  FROM acs_admissions a\n  JOIN troponin_first t\n    ON a.subject_id = t.subject_id\n   AND a.hadm_id = t.hadm_id\n  WHERE t.first_trop_val > 0.014  -- elevated cut-off\n)\n-- Step 7: Summarize\nSELECT \n  COUNT(*) AS n_admissions,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR)/24.0) AS avg_los_days,\n  100.0 * SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate_percent\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

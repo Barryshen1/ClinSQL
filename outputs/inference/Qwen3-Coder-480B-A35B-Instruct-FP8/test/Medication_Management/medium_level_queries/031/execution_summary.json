@@ -1,0 +1,16 @@
+{
+  "query": "Male patient age 58: among male inpatients 53\u201363 with diabetes and heart failure, give percentages with injectable GLP\u20111 RA initiated within first 24 hours versus final 12 hours before discharge.",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND a.dischtime IS NOT NULL\n    AND a.admission_type != 'OUTPATIENT'\n),\n\ndiabetes_hf_admissions AS (\n  SELECT\n    c.hadm_id,\n    c.admittime,\n    c.dischtime\n  FROM\n    cohort c\n  WHERE\n    EXISTS (\n      SELECT 1\n      FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE d.hadm_id = c.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '250%')\n          OR (d.icd_version = 10 AND d.icd_code BETWEEN 'E08' AND 'E13')\n        )\n    )\n    AND EXISTS (\n      SELECT 1\n      FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n        ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n      WHERE d.hadm_id = c.hadm_id\n        AND (\n          (d.icd_version = 9 AND d.icd_code LIKE '428%')\n          OR (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n        )\n    )\n),\n\nglp1_ra_prescriptions AS (\n  SELECT\n    p.hadm_id,\n    p.starttime,\n    p.stoptime\n  FROM\n    physionet-data.mimiciv_3_1_hosp.prescriptions p\n  WHERE\n    LOWER(p.drug) IN (\n      'semaglutide', 'dulaglutide', 'exenatide', 'liraglutide'\n    )\n    OR LOWER(p.drug) LIKE '%glp-1%'\n    OR LOWER(p.drug) LIKE '%glucagon-like peptide%'\n),\n\ntimed_flags AS (\n  SELECT\n    d.hadm_id,\n    MAX(CASE\n      WHEN g.starttime <= d.admittime + INTERVAL 24 HOUR THEN 1\n      ELSE 0\n    END) AS glp1_first_24h,\n    MAX(CASE\n      WHEN g.starttime >= d.dischtime - INTERVAL 12 HOUR THEN 1\n      ELSE 0\n    END) AS glp1_last_12h\n  FROM\n    diabetes_hf_admissions d\n  LEFT JOIN\n    glp1_ra_prescriptions g\n    ON d.hadm_id = g.hadm_id\n  GROUP BY\n    d.hadm_id\n)\n\nSELECT\n  COUNT(*) AS total_admissions,\n  SUM(glp1_first_24h) AS count_first_24h,\n  SUM(glp1_last_12h) AS count_last_12h,\n  ROUND(SUM(glp1_first_24h) * 100.0 / COUNT(*), 2) AS pct_first_24h,\n  ROUND(SUM(glp1_last_12h) * 100.0 / COUNT(*), 2) AS pct_last_12h\nFROM\n  timed_flags;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

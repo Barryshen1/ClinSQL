@@ -1,0 +1,16 @@
+{
+  "query": "For an 82\u2011year\u2011old man with asthma exacerbation, among males 77\u201387 admitted 1\u20134 vs 5\u20138 days and stratified by ICU vs non\u2011ICU, what are mean, min, max CT/MRI per admission?",
+  "final_sql": "WITH asthma_admissions AS (\n  -- Find admissions for men age 77-87 with asthma diagnosis\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.anchor_age,\n    p.gender\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      ON a.hadm_id = d.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 77 AND 87\n    AND (\n      -- ICD-10 asthma: J45.x\n      (d.icd_version = 10 AND REGEXP_CONTAINS(d.icd_code, r'^J45'))\n      -- ICD-9 asthma: 493.xx\n      OR (d.icd_version = 9 AND REGEXP_CONTAINS(d.icd_code, r'^493'))\n    )\n),\nadmission_los AS (\n  -- Calculate length of stay and group\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    anchor_age,\n    gender,\n    DATE_DIFF(dischtime, admittime, DAY) AS los_days,\n    CASE\n      WHEN DATE_DIFF(dischtime, admittime, DAY) BETWEEN 1 AND 4 THEN '1-4'\n      WHEN DATE_DIFF(dischtime, admittime, DAY) BETWEEN 5 AND 8 THEN '5-8'\n      ELSE NULL\n    END AS los_group\n  FROM asthma_admissions\n),\nicu_status AS (\n  -- Mark admissions as ICU or non-ICU\n  SELECT\n    al.subject_id,\n    al.hadm_id,\n    al.los_group,\n    IF(ic.hadm_id IS NOT NULL, 'ICU', 'non-ICU') AS icu_flag\n  FROM admission_los al\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` ic\n    ON al.hadm_id = ic.hadm_id\n  WHERE al.los_group IS NOT NULL\n),\nct_mri_procs AS (\n  -- Find CT/MRI procedures per admission\n  SELECT\n    pr.subject_id,\n    pr.hadm_id,\n    COUNT(*) AS ct_mri_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n    ON pr.icd_code = dp.icd_code AND pr.icd_version = dp.icd_version\n  WHERE\n    -- CT: ICD-9 87.xx, MRI: ICD-9 88.xx\n    (\n      (pr.icd_version = 9 AND (REGEXP_CONTAINS(pr.icd_code, r'^87') OR REGEXP_CONTAINS(pr.icd_code, r'^88')))\n      -- For ICD-10, imaging codes are not in procedures_icd, so we focus on ICD-9\n    )\n  GROUP BY pr.subject_id, pr.hadm_id\n)\nSELECT\n  icu.los_group,\n  icu.icu_flag,\n  COUNT(DISTINCT icu.hadm_id) AS admission_count,\n  AVG(IFNULL(proc.ct_mri_count, 0)) AS mean_ct_mri,\n  MIN(IFNULL(proc.ct_mri_count, 0)) AS min_ct_mri,\n  MAX(IFNULL(proc.ct_mri_count, 0)) AS max_ct_mri\nFROM icu_status icu\nLEFT JOIN ct_mri_procs proc\n  ON icu.subject_id = proc.subject_id AND icu.hadm_id = proc.hadm_id\nGROUP BY icu.los_group, icu.icu_flag\nORDER BY icu.los_group, icu.icu_flag;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

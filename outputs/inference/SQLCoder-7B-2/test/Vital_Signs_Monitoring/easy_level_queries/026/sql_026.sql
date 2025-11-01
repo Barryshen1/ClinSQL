@@ -1,0 +1,1 @@
+SELECT MIN(o.value) AS min_respiratory_rate FROM omr o JOIN patients p ON o.subject_id = p.subject_id JOIN icustays s ON o.subject_id = s.subject_id WHERE p.gender = 'M' AND p.age = 44 AND s.first_careunit IN (SELECT first_careunit FROM icustays WHERE age BETWEEN 39 AND 49) AND o.charttime BETWEEN s.intime AND s.intime + INTERVAL '24 hours';

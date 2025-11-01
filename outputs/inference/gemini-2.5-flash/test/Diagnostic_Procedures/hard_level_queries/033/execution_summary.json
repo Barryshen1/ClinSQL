@@ -1,0 +1,22 @@
+{
+  "query": "42-year-old male with pneumonia: among male ICU patients aged 37\u201347 in their first ICU stay, stratify distinct procedures in the first 48 hours into quintiles and report mean procedure count, mean ICU LOS (days), and hospital mortality by quintile.",
+  "final_sql": "WITH cohort_raw AS (\n    -- Select eligible patients and their first ICU stay information\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        icu.stay_id,\n        icu.intime,\n        icu.los,\n        ad.hospital_expire_flag,\n        -- Rank ICU stays to identify the first for each admission\n        ROW_NUMBER() OVER (PARTITION BY ad.subject_id, ad.hadm_id ORDER BY icu.intime) AS rn\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON ad.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n        ON ad.hadm_id = icu.hadm_id\n    WHERE\n        pat.gender = 'M'\n        AND pat.anchor_age BETWEEN 37 AND 47\n        AND EXISTS ( -- Check for pneumonia diagnosis during the admission\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n            WHERE di.hadm_id = ad.hadm_id\n                AND (\n                    (di.icd_version = 10 AND di.icd_code LIKE 'J1[0-8]%') -- ICD-10 codes for pneumonia (J10-J18)\n                    OR\n                    (di.icd_version = 9 AND LEFT(di.icd_code, 3) BETWEEN '480' AND '487') -- ICD-9 codes for pneumonia (480.x-487.x)\n                )\n        )\n),\nfirst_icu_pneumonia_patients AS (\n    -- Filter for only the first ICU stay of the admission\n    SELECT\n        subject_id,\n        hadm_id,\n        stay_id,\n        intime,\n        los,\n        hospital_expire_flag\n    FROM\n        cohort_raw\n    WHERE\n        rn = 1\n),\npatient_procedures_48hr AS (\n    -- Count distinct procedures within the first 48 hours of ICU stay for each patient\n    SELECT\n        pfp.subject_id,\n        pfp.hadm_id,\n        pfp.stay_id,\n        pfp.los,\n        pfp.hospital_expire_flag,\n        COUNT(DISTINCT pe.itemid) AS procedure_count_48hr -- Count distinct procedures\n    FROM\n        first_icu_pneumonia_patients AS pfp\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n        ON pfp.stay_id = pe.stay_id\n        AND pe.starttime BETWEEN pfp.intime AND TIMESTAMP_ADD(pfp.intime, INTERVAL 48 HOUR)\n    GROUP BY\n        pfp.subject_id, pfp.hadm_id, pfp.stay_id, pfp.los, pfp.hospital_expire_flag\n),\nquintiles_assigned AS (\n    -- Assign quintiles based on the procedure count\n    SELECT\n        subject_id,\n        hadm_id,\n        stay_id,\n        los,\n        hospital_expire_flag,\n        procedure_count_48hr,\n        NTILE(5) OVER (ORDER BY procedure_count_48hr ASC) AS procedure_quintile\n    FROM\n        patient_procedures_48hr\n)\n-- Calculate mean procedure count, mean ICU LOS, and hospital mortality percent by quintile\nSELECT\n    procedure_quintile,\n    CAST(AVG(procedure_count_48hr) AS BIGNUMERIC) AS mean_distinct_procedure_count,\n    CAST(AVG(los) AS BIGNUMERIC) AS mean_icu_los_days,\n    CAST(AVG(hospital_expire_flag) * 100 AS BIGNUMERIC) AS hospital_mortality_percent\nFROM\n    quintiles_assigned\nWHERE\n    procedure_quintile IS NOT NULL -- Safely exclude any rows that might not be assigned a quintile (e.g., if there are very few valid rows overall for NTILE)\nGROUP BY\n    procedure_quintile\nORDER BY\n    procedure_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"diagnosis\" at [1:16]\n\nLocation: US\nJob ID: 63d1c40d-a24e-4b03-b70e-260584ee2df3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

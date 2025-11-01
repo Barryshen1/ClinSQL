@@ -1,0 +1,28 @@
+{
+  "query": "I have a 70\u2011year\u2011old female with acute pancreatitis. Among female inpatients 65\u201375 with acute pancreatitis, stratify first\u201148\u2011hour lab instability scores into quintiles and report count, mean instability, mean LOS, mortality per quintile, and % with critical labs versus age\u2011matched inpatients.",
+  "final_sql": "WITH \n-- Step 1: Identify acute pancreatitis ICD codes\nacute_pancreatitis_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE LOWER(long_title) LIKE '%acute pancreatitis%'\n  AND icd_version = 10\n),\n\n-- Step 2: Identify patients with acute pancreatitis\nap_patients AS (\n  SELECT DISTINCT p.subject_id, p.anchor_age, a.hadm_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  WHERE p.anchor_age BETWEEN 65 AND 75\n  AND p.gender = 'F'\n  AND d.icd_code IN (SELECT icd_code FROM acute_pancreatitis_codes)\n  AND a.admission_type = 'EMERGENCY'\n),\n\n-- Step 3: Calculate lab instability scores for the first 48 hours\nlab_instability AS (\n  SELECT ap.subject_id, ap.hadm_id,\n         SUM(CASE \n             WHEN le.valuenum < dli.ref_range_lower OR le.valuenum > dli.ref_range_upper \n             THEN 1 \n             ELSE 0 \n             END) AS instability_score,\n         SUM(CASE \n             WHEN (le.valuenum < dli.ref_range_lower OR le.valuenum > dli.ref_range_upper) \n             -- Assuming there's no direct 'Critical Lab Value' label; adjust according to actual data\n             AND dli.label IN ('CRITICAL LAB VALUE', 'CRITICAL RESULT') \n             THEN 1 \n             ELSE 0 \n             END) AS critical_lab_count\n  FROM ap_patients ap\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le ON ap.hadm_id = le.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dli ON le.itemid = dli.itemid\n  WHERE le.charttime BETWEEN ap.admittime AND TIMESTAMP_ADD(ap.admittime, INTERVAL 48 HOUR)\n  AND dli.ref_range_lower IS NOT NULL AND dli.ref_range_upper IS NOT NULL\n  GROUP BY ap.subject_id, ap.hadm_id\n),\n\n-- Step 4: Calculate quintiles of lab instability scores\nquintiles AS (\n  SELECT hadm_id, instability_score, critical_lab_count,\n         NTILE(5) OVER (ORDER BY instability_score) AS quintile\n  FROM lab_instability\n),\n\n-- Step 5: Calculate required statistics per quintile\nstats AS (\n  SELECT q.quintile,\n         COUNT(*) AS count,\n         AVG(q.instability_score) AS mean_instability,\n         AVG(TIMESTAMP_DIFF(ap.dischtime, ap.admittime, HOUR)) AS mean_los_hours,\n         SUM(CASE WHEN ap.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(*) AS mortality_rate,\n         AVG(q.critical_lab_count) AS avg_critical_labs, -- Direct average\n         (SUM(q.critical_lab_count) / COUNT(*)) * 100 AS percent_critical_labs -- Percentage\n  FROM quintiles q\n  INNER JOIN ap_patients ap ON q.hadm_id = ap.hadm_id\n  GROUP BY q.quintile\n)\n\nSELECT * FROM stats\nORDER BY quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name ref_range_lower not found inside dli at [41:11]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dli at [41:11]\n\nLocation: US\nJob ID: 2f696d4b-85c1-436a-adf8-c08f76b78567\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dli at [25:42]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dli at [25:42]\n\nLocation: US\nJob ID: 0c0bd1a7-b028-46eb-9c90-19ef3257fab2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dli at [40:11]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dli at [40:11]\n\nLocation: US\nJob ID: 6524d184-5288-444b-8dda-9d8b57b016d4\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name ref_range_lower not found inside dli at [41:11]; reason: invalidQuery, location: query, message: Name ref_range_lower not found inside dli at [41:11]\n\nLocation: US\nJob ID: 2f696d4b-85c1-436a-adf8-c08f76b78567\n"
+    }
+  ]
+}

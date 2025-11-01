@@ -1,0 +1,22 @@
+{
+  "query": "58\u2011year\u2011old man: among men 53\u201363 with sepsis (excluding septic shock), what are in\u2011hospital mortality (%) and prevalence (%) of mechanical ventilation, vasopressors, and RRT by LOS (<8 vs \u22658) and day\u20111 ICU?",
+  "final_sql": "WITH sepsis_admissions AS (\n  SELECT \n    di.hadm_id,\n    MAX(CASE \n        WHEN (di.icd_version = 9 AND (di.icd_code LIKE '038%' OR di.icd_code IN ('99591', '99592'))) \n             OR (di.icd_version = 10 AND (di.icd_code LIKE 'A40%' OR di.icd_code LIKE 'A41%' OR di.icd_code = 'R6520'))\n        THEN 1 ELSE 0 \n    END) AS has_sepsis,\n    MAX(CASE \n        WHEN (di.icd_version = 9 AND di.icd_code = '78552') \n             OR (di.icd_version = 10 AND di.icd_code IN ('R6521', 'T8112'))\n        THEN 1 ELSE 0 \n    END) AS has_shock\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  GROUP BY di.hadm_id\n  HAVING has_sepsis = 1 AND has_shock = 0\n),\n\ncohort_admissions AS (\n  SELECT \n    p.subject_id, \n    p.gender, \n    p.anchor_age, \n    p.anchor_year,\n    a.hadm_id, \n    a.admittime, \n    a.dischtime, \n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN sepsis_admissions s\n    ON a.hadm_id = s.hadm_id\n  WHERE \n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 53 AND 63\n),\n\nicu_stays AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  INNER JOIN cohort_admissions c\n    ON i.hadm_id = c.hadm_id\n  WHERE \n    i.intime <= DATETIME_ADD(c.admittime, INTERVAL 1 DAY)\n),\n\ncohort_icu AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.los,\n    c.hospital_expire_flag AS mortality,\n    -- Mechanical ventilation flag\n    CASE WHEN EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_icu.procedureevents` p\n      WHERE p.stay_id = i.stay_id\n        AND p.itemid IN (225468, 227194)\n        AND p.starttime >= i.intime AND p.starttime <= i.outtime\n    ) THEN 1 ELSE 0 END AS mech_vent,\n    -- Vasopressors flag\n    CASE WHEN EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_icu.ingredientevents` v\n      WHERE v.stay_id = i.stay_id\n        AND v.itemid IN (221906, 221289, 221662, 222315, 222318)\n        AND v.starttime >= i.intime AND v.starttime <= i.outtime\n    ) THEN 1 ELSE 0 END AS vasopressor,\n    -- RRT flag\n    CASE WHEN EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_icu.procedureevents` r\n      WHERE r.stay_id = i.stay_id\n        AND r.itemid IN (225802, 225803, 225805, 225809, 225955)\n        AND r.starttime >= i.intime AND r.starttime <= i.outtime\n    ) THEN 1 ELSE 0 END AS rrt\n  FROM icu_stays i\n  INNER JOIN cohort_admissions c\n    ON i.hadm_id = c.hadm_id\n  WHERE i.rn = 1\n)\n\nSELECT \n  CASE \n    WHEN los < 8 THEN '<8' \n    ELSE '>=8' \n  END AS los_group,\n  COUNT(*) AS total_stays,\n  ROUND(100 * SUM(mortality) / COUNT(*), 2) AS mortality_percent,\n  ROUND(100 * SUM(mech_vent) / COUNT(*), 2) AS mech_vent_percent,\n  ROUND(100 * SUM(vasopressor) / COUNT(*), 2) AS vasopressor_percent,\n  ROUND(100 * SUM(rrt) / COUNT(*), 2) AS rrt_percent\nFROM cohort_icu\nGROUP BY los_group\nORDER BY los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "403 Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.; reason: accessDenied, message: Access Denied: Table physionet-data:mimiciv_hosp.admissions: User does not have permission to query table physionet-data:mimiciv_hosp.admissions, or perhaps it does not exist.\n\nLocation: US\nJob ID: 79414830-77a6-4b9a-8e0b-92c454647c44\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

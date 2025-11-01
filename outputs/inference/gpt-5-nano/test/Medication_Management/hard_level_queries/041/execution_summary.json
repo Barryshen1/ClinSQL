@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating a 45\u2011year\u2011old man with heart failure. In male inpatients aged 40\u201350 with HF, stratified by quintiles of a 7\u2011day medication complexity score, report patient counts, score ranges, mean LOS (days), in\u2011hospital mortality, and 30\u2011day readmission.",
+  "final_sql": "WITH hf_admissions AS (\n  -- HF admissions for male patients aged 40-50\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'Male'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      WHERE di.subject_id = a.subject_id\n        AND di.hadm_id = a.hadm_id\n        AND (\n              (di.icd_version = 9 AND di.icd_code LIKE '428%')\n              OR\n              (di.icd_version = 10 AND di.icd_code LIKE 'I50%')\n            )\n    )\n),\nmcs_per_hadm AS (\n  -- 7-day medication complexity score per admission: distinct drugs in first 7 days\n  SELECT\n    h.hadm_id,\n    COUNT(DISTINCT p.drug) AS mcs\n  FROM hf_admissions AS h\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    ON p.subject_id = h.subject_id\n   AND p.hadm_id = h.hadm_id\n  WHERE p.starttime IS NOT NULL\n    AND p.starttime >= h.admittime\n    AND TIMESTAMP_DIFF(p.starttime, h.admittime, DAY) <= 7\n  GROUP BY h.hadm_id\n),\nhf_with_mcs AS (\n  -- Attach MCS to HF admissions; default to 0 if no meds found in first 7 days\n  SELECT\n    h.subject_id,\n    h.hadm_id,\n    h.admittime,\n    h.dischtime,\n    h.hospital_expire_flag,\n    COALESCE(m.mcs, 0) AS mcs\n  FROM hf_admissions AS h\n  LEFT JOIN mcs_per_hadm AS m\n    ON h.hadm_id = m.hadm_id\n),\nadmissions_with_next AS (\n  -- Compute the next admission per patient to assess 30-day readmission\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    LEAD(a.admittime) OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS next_admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n),\nhf_final AS (\n  -- Final per-admission record: includes MCS and readmission flag\n  SELECT\n    w.hadm_id,\n    w.subject_id,\n    w.admittime,\n    w.dischtime,\n    w.hospital_expire_flag,\n    w.mcs,\n    CASE\n      WHEN n.next_admittime IS NULL THEN 0\n      WHEN TIMESTAMP_DIFF(n.next_admittime, w.dischtime, DAY) <= 30 THEN 1\n      ELSE 0\n    END AS readmit30,\n    TIMESTAMP_DIFF(w.dischtime, w.admittime, SECOND) / 86400.0 AS los_days\n  FROM hf_with_mcs AS w\n  LEFT JOIN admissions_with_next AS n\n    ON w.subject_id = n.subject_id AND w.hadm_id = n.hadm_id\n),\nmcs_quintile AS (\n  -- Compute quintile per admission by 7-day MCS\n  SELECT\n    f.*,\n    NTILE(5) OVER (ORDER BY f.mcs) AS quintile\n  FROM hf_final AS f\n)\nSELECT\n  quintile,\n  COUNT(*) AS admission_count,\n  MIN(mcs) AS mcs_min,\n  MAX(mcs) AS mcs_max,\n  AVG(los_days) AS mean_los_days,\n  SAFE_DIVIDE(SUM(IF(hospital_expire_flag = 1, 1, 0)), COUNT(*)) AS in_hospital_mortality_rate,\n  AVG(readmit30) AS thirty_day_readmission_rate\nFROM mcs_quintile\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column quintile contains an analytic function, which is not allowed in GROUP BY at [91:10]; reason: invalidQuery, location: query, message: Column quintile contains an analytic function, which is not allowed in GROUP BY at [91:10]\n\nLocation: US\nJob ID: 3c720d20-de57-496f-8ba4-b4c1259d2de6\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 78-year-old man admitted with ACS. Among male patients aged 73\u201383 with elevated initial Troponin T, please summarize cohort statistics including average length of stay and in-hospital mortality.",
+  "final_sql": "SELECT\n    COUNT(DISTINCT cohort.subject_id) AS num_unique_patients_in_cohort,\n    COUNT(DISTINCT cohort.hadm_id) AS num_unique_admissions_in_cohort,\n    AVG(DATETIME_DIFF(cohort.dischtime, cohort.admittime, HOUR) / 24.0) AS average_length_of_stay_days,\n    AVG(cohort.hospital_expire_flag) AS in_hospital_mortality_rate\nFROM\n    ( -- CTE: Admissions meeting demographic and ACS diagnosis criteria\n        SELECT\n            ad.subject_id,\n            ad.hadm_id,\n            ad.admittime,\n            ad.dischtime,\n            ad.hospital_expire_flag\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` ad\n        INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pa\n            ON ad.subject_id = pa.subject_id\n        INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dicd\n            ON ad.subject_id = dicd.subject_id AND ad.hadm_id = dicd.hadm_id\n        WHERE\n            pa.gender = 'M'\n            AND pa.anchor_age BETWEEN 73 AND 83\n            AND dicd.seq_num = 1 -- Primary diagnosis\n            AND dicd.icd_version = 10 -- Using ICD-10 for MIMIC-IV\n            AND (\n                dicd.icd_code LIKE 'I21%' OR -- Acute myocardial infarction (STEMI, NSTEMI)\n                dicd.icd_code LIKE 'I22%' OR -- Subsequent myocardial infarction\n                dicd.icd_code LIKE 'I24%'    -- Other acute ischemic heart diseases\n            )\n    ) AS cohort\nINNER JOIN\n    ( -- CTE: Initial elevated Troponin T for each admission\n        SELECT\n            le.subject_id,\n            le.hadm_id,\n            le.valuenum AS troponin_t_value,\n            ROW_NUMBER() OVER (PARTITION BY le.subject_id, le.hadm_id ORDER BY le.charttime) AS rn\n        FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n        WHERE\n            le.itemid = 50993 -- Troponin T (lookup in d_labitems)\n            AND le.valuenum IS NOT NULL\n            AND le.valuenum > 0.04 -- Clinical threshold for elevated Troponin T (e.g., > 0.04 ng/mL)\n    ) AS initial_troponin_t_filtered\n    ON cohort.subject_id = initial_troponin_t_filtered.subject_id\n    AND cohort.hadm_id = initial_troponin_t_filtered.hadm_id\nWHERE\n    initial_troponin_t_filtered.rn = 1 -- Ensure we only pick the very first Troponin T measurement\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

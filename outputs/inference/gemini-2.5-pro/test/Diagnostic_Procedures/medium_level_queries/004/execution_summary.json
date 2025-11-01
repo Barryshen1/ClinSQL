@@ -1,0 +1,16 @@
+{
+  "query": "For a 50\u2011year\u2011old woman: among female HF admissions aged 45\u201355, LOS 1\u20137 days, by primary vs secondary diagnosis and 1\u20133 vs 4\u20137 day stays, what are mean/min/max CT/MRI per admission?",
+  "final_sql": "WITH\n  -- Step 1: Identify all hospital admissions for Heart Failure (HF) and determine if it was a primary diagnosis\n  hf_admissions AS (\n    SELECT\n      dia.hadm_id,\n      MIN(dia.seq_num) AS min_hf_seq_num\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dia\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dia\n      ON dia.icd_code = d_dia.icd_code\n      AND dia.icd_version = d_dia.icd_version\n    WHERE\n      LOWER(d_dia.long_title) LIKE '%heart failure%'\n    GROUP BY\n      dia.hadm_id\n  ),\n\n  -- Step 2: Count the number of CT or MRI scans for each hospital admission\n  scan_counts AS (\n    SELECT\n      hadm_id,\n      COUNT(*) AS num_scans\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n    WHERE\n      LOWER(short_description) LIKE '%ct %' OR LOWER(short_description) LIKE '%mri%'\n    GROUP BY\n      hadm_id\n  ),\n\n  -- Step 3: Create the base cohort of admissions meeting patient and stay criteria\n  base_cohort AS (\n    SELECT\n      adm.hadm_id,\n      -- Calculate age at the time of admission\n      (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) + pat.anchor_age AS age_at_admission,\n      -- Calculate length of stay in days\n      DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n    WHERE\n      pat.gender = 'F'\n      AND DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 7\n      -- Filter for age at admission between 45 and 55\n      AND (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year) + pat.anchor_age BETWEEN 45 AND 55\n  )\n\n-- Final step: Join the cohorts, classify, group, and aggregate the results\nSELECT\n  CASE\n    WHEN hf.min_hf_seq_num = 1\n    THEN 'Primary'\n    ELSE 'Secondary'\n  END AS hf_diagnosis_type,\n  CASE\n    WHEN bc.los_days BETWEEN 1 AND 3\n    THEN '1-3 days'\n    WHEN bc.los_days BETWEEN 4 AND 7\n    THEN '4-7 days'\n  END AS los_group,\n  AVG(COALESCE(sc.num_scans, 0)) AS mean_scans_per_admission,\n  MIN(COALESCE(sc.num_scans, 0)) AS min_scans_per_admission,\n  MAX(COALESCE(sc.num_scans, 0)) AS max_scans_per_admission\nFROM\n  base_cohort AS bc\n-- Join with HF admissions to only include patients with a heart failure diagnosis\nINNER JOIN\n  hf_admissions AS hf\n  ON bc.hadm_id = hf.hadm_id\n-- Left join with scan counts to include admissions with zero scans\nLEFT JOIN\n  scan_counts AS sc\n  ON bc.hadm_id = sc.hadm_id\nGROUP BY\n  hf_diagnosis_type,\n  los_group\nORDER BY\n  hf_diagnosis_type,\n  los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

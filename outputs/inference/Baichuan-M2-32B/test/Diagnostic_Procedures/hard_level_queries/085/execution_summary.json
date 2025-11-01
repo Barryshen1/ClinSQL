@@ -1,0 +1,23 @@
+{
+  "query": "For a 92-year-old woman: among female ICU patients aged 87\u201397 with lower GI bleeding (first ICU stay), stratify by quintiles of distinct procedures in the first 48 hours and report mean procedure count, mean ICU LOS (days), and in-hospital mortality%.",
+  "final_sql": "WITH first_icu_stays AS (\n  SELECT \n    subject_id, \n    hadm_id, \n    stay_id, \n    intime, \n    outtime,\n    ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\ndiagnosis_filter AS (\n  SELECT DISTINCT\n    d.subject_id,\n    d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%lower gi bleeding%'\n     OR LOWER(dd.long_title) LIKE '%lower gastrointestinal hemorrhage%'\n),\nicu_adm AS (\n  SELECT \n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.outtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM first_icu_stays f\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON f.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE f.rn = 1\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 87 AND 97\n),\nicu_adm_with_diagnosis AS (\n  SELECT \n    i.*\n  FROM icu_adm i\n  JOIN diagnosis_filter d\n    ON i.subject_id = d.subject_id\n    AND i.hadm_id = d.hadm_id\n),\nprocedures_48h AS (\n  SELECT \n    p.subject_id,\n    p.hadm_id,\n    COUNT(DISTINCT p.icd_code) AS distinct_procedure_count\n  FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  JOIN icu_adm_with_diagnosis i\n    ON p.subject_id = i.subject_id\n    AND p.hadm_id = i.hadm_id\n  WHERE p.chartdate >= DATE(i.intime)\n    AND p.chartdate <= DATE(DATETIME_ADD(i.intime, INTERVAL 48 HOUR))\n  GROUP BY p.subject_id, p.hadm_id\n),\npatient_data AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.hospital_expire_flag,\n    COALESCE(p.distinct_procedure_count, 0) AS distinct_procedure_count,\n    (UNIX_SECONDS(TIMESTAMP(i.outtime)) - UNIX_SECONDS(TIMESTAMP(i.intime))) / (24 * 3600) AS los_days\n  FROM icu_adm_with_diagnosis i\n  LEFT JOIN procedures_48h p\n    ON i.subject_id = p.subject_id\n    AND i.hadm_id = p.hadm_id\n),\nquintiles AS (\n  SELECT \n    *,\n    NTILE(5) OVER (ORDER BY distinct_procedure_count) AS quintile\n  FROM patient_data\n)\nSELECT \n  quintile,\n  AVG(distinct_procedure_count) AS mean_procedure_count,\n  AVG(los_days) AS mean_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_percent\nFROM quintiles\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [68:6]; reason: invalidQuery, location: query, message: No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [68:6]\n\nLocation: US\nJob ID: aebf07e2-2e4d-4c31-bddc-c7b1f5a9558d\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

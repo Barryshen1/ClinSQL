@@ -1,0 +1,22 @@
+{
+  "query": "For my 64-year-old male patient with ACS, among males 59\u201369 what are p25/p50/p75 of diagnostic procedures per admission, stratified by 1\u20133 vs 4\u20137 days and primary vs secondary diagnosis?",
+  "final_sql": "WITH admissions_cohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  USING (subject_id)\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 59 AND 69\n),\n\n-- Identify admissions with ACS and label as primary vs secondary based on seq_num\nacs_admissions AS (\n  SELECT\n    ac.hadm_id,\n    CASE\n      WHEN MAX(CASE WHEN di.seq_num = 1 THEN 1 ELSE 0 END) = 1 THEN 'primary'\n      ELSE 'secondary'\n    END AS acs_role\n  FROM\n    admissions_cohort ac\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  USING (hadm_id)\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n  ON\n    di.icd_code = d.icd_code\n    AND di.icd_version = d.icd_version\n  WHERE\n    -- Text-based ACS identification (adjust to a definitive ICD list if available)\n    LOWER(d.long_title) LIKE '%acute%'\n    AND (\n      LOWER(d.long_title) LIKE '%myocard%'\n      OR LOWER(d.long_title) LIKE '%coronar%'\n      OR LOWER(d.long_title) LIKE '%angina%'\n    )\n  GROUP BY\n    ac.hadm_id\n),\n\n-- Count diagnostic procedures per admission by day relative to admission\n-- Using procedures_icd + d_icd_procedures and text filters to approximate \"diagnostic\"\nproc_events AS (\n  SELECT\n    p.hadm_id,\n    -- admission-relative day (admission day = 1)\n    DATE_DIFF(DATE(p.chartdate), DATE(a.admittime), DAY) + 1 AS day\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.procedures_icd` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` dp\n  ON\n    p.icd_code = dp.icd_code\n    AND p.icd_version = dp.icd_version\n  JOIN\n    admissions_cohort a\n  ON\n    p.hadm_id = a.hadm_id\n  WHERE\n    p.chartdate IS NOT NULL\n    -- Approximate diagnostic procedures by text matching; refine with explicit codes if available\n    AND (\n      LOWER(dp.long_title) LIKE '%diagnos%'\n      OR LOWER(dp.long_title) LIKE '%imaging%'\n      OR LOWER(dp.long_title) LIKE '%radiolog%'\n      OR LOWER(dp.long_title) LIKE '%angiograph%'\n      OR LOWER(dp.long_title) LIKE '%catheteriz%'\n    )\n),\n\n-- Aggregate counts per admission in the two windows (1-3 and 4-7)\nproc_counts_per_adm AS (\n  SELECT\n    hadm_id,\n    SUM(CASE WHEN day BETWEEN 1 AND 3 THEN 1 ELSE 0 END) AS cnt_1_3,\n    SUM(CASE WHEN day BETWEEN 4 AND 7 THEN 1 ELSE 0 END) AS cnt_4_7\n  FROM\n    proc_events\n  GROUP BY\n    hadm_id\n),\n\n-- Combine ACS admissions (only those with ACS) with procedure counts, ensuring zeros included\nper_admission_counts AS (\n  SELECT\n    a.hadm_id,\n    acs.acs_role,\n    COALESCE(pc.cnt_1_3, 0) AS proc_count_1_3,\n    COALESCE(pc.cnt_4_7, 0) AS proc_count_4_7\n  FROM\n    acs_admissions acs\n  JOIN\n    admissions_cohort a\n  USING (hadm_id)\n  LEFT JOIN\n    proc_counts_per_adm pc\n  USING (hadm_id)\n),\n\n-- Unpivot the two windows so each row is (hadm_id, acs_role, day_range, proc_count)\nunpivoted AS (\n  SELECT hadm_id, acs_role, '1-3' AS day_range, proc_count_1_3 AS proc_count\n  FROM per_admission_counts\n  UNION ALL\n  SELECT hadm_id, acs_role, '4-7' AS day_range, proc_count_4_7 AS proc_count\n  FROM per_admission_counts\n)\n\n-- Final: compute approximate percentiles p25/p50/p75 per (acs_role, day_range)\nSELECT\n  acs_role,\n  day_range,\n  quantiles[OFFSET(25)] AS p25,\n  quantiles[OFFSET(50)] AS p50,\n  quantiles[OFFSET(75)] AS p75\nFROM (\n  SELECT\n    acs_role,\n    day_range,\n    APPROX_QUANTILES(proc_count, 100) AS quantiles\n  FROM\n    unpivoted\n  GROUP BY\n    acs_role,\n    day_range\n)\nORDER BY\n  acs_role,\n  day_range;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: 797df419-c0e8-4e4d-8d4c-efa2e252fde0\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

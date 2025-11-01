@@ -1,0 +1,16 @@
+{
+  "query": "For a 44-year-old man: among male ICU admissions aged 39\u201349 with DKA, stratify first ICU stay diagnostic intensity (distinct procedures in first 24 h) into quintiles and report number of stays, mean/min/max procedure count, mean ICU LOS (days) and hospital mortality%",
+  "final_sql": "WITH\n  -- Step 1: Identify all hospital admissions with a diagnosis of Diabetic Ketoacidosis (DKA)\n  dka_hadm_ids AS (\n    SELECT DISTINCT\n      hadm_id\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx ON dx.icd_code = d_dx.icd_code\n      AND dx.icd_version = d_dx.icd_version\n    WHERE\n      LOWER(d_dx.long_title) LIKE '%diabetic ketoacidosis%'\n  ),\n  -- Step 2 & 3: Filter for male patients (age 39-49) with DKA and identify their first ICU stay\n  first_icu_stays AS (\n    SELECT\n      icu.stay_id,\n      icu.intime,\n      icu.los,\n      adm.hospital_expire_flag,\n      ROW_NUMBER() OVER (\n        PARTITION BY\n          icu.hadm_id\n        ORDER BY\n          icu.intime\n      ) AS icu_stay_rank\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm ON pat.subject_id = adm.subject_id\n      INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS icu ON adm.hadm_id = icu.hadm_id\n      INNER JOIN dka_hadm_ids ON adm.hadm_id = dka_hadm_ids.hadm_id\n    WHERE\n      pat.gender = 'M'\n      AND pat.anchor_age BETWEEN 39 AND 49\n  ),\n  -- Step 4: For each first ICU stay, count distinct procedures within the first 24 hours\n  proc_counts_24h AS (\n    SELECT\n      fis.stay_id,\n      fis.los,\n      fis.hospital_expire_flag,\n      COUNT(DISTINCT pe.itemid) AS distinct_procedure_count\n    FROM\n      first_icu_stays AS fis\n      LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe ON fis.stay_id = pe.stay_id\n      AND pe.starttime BETWEEN fis.intime AND DATETIME_ADD(fis.intime, INTERVAL 24 HOUR)\n    WHERE\n      fis.icu_stay_rank = 1\n    GROUP BY\n      fis.stay_id,\n      fis.los,\n      fis.hospital_expire_flag\n  ),\n  -- Step 5: Stratify stays into quintiles based on the procedure count\n  stay_quintiles AS (\n    SELECT\n      stay_id,\n      los,\n      hospital_expire_flag,\n      distinct_procedure_count,\n      NTILE(5) OVER (\n        ORDER BY\n          distinct_procedure_count\n      ) AS procedure_quintile\n    FROM\n      proc_counts_24h\n  )\n  -- Step 6: Aggregate metrics by quintile and present the final results\nSELECT\n  procedure_quintile,\n  COUNT(stay_id) AS number_of_stays,\n  MIN(distinct_procedure_count) AS min_procedure_count,\n  MAX(distinct_procedure_count) AS max_procedure_count,\n  ROUND(AVG(distinct_procedure_count), 2) AS mean_procedure_count,\n  ROUND(AVG(los), 2) AS mean_icu_los_days,\n  ROUND(AVG(hospital_expire_flag) * 100, 2) AS hospital_mortality_percent\nFROM\n  stay_quintiles\nGROUP BY\n  procedure_quintile\nORDER BY\n  procedure_quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

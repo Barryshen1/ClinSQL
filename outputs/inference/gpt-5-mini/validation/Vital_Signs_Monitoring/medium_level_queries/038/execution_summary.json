@@ -1,0 +1,22 @@
+{
+  "query": "I have a 71-year-old male. Among male ICU patients aged 66\u201376 who were invasively ventilated, what is the interquartile range of systolic blood pressure measured in the first 6 hours?",
+  "final_sql": "WITH male_icu AS (\n  -- ICU stays for male patients aged 66-76 (anchor_age used for age filtering)\n  SELECT icu.subject_id, icu.hadm_id, icu.stay_id, icu.intime, icu.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON icu.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 66 AND 76\n),\nvent_stays AS (\n  -- Keep stays with evidence of invasive ventilation (text-based search in item label or value)\n  SELECT DISTINCT s.subject_id, s.hadm_id, s.stay_id, s.intime, s.outtime\n  FROM male_icu s\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n    ON ce.stay_id = s.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ce.itemid = di.itemid\n  WHERE ce.charttime BETWEEN s.intime AND s.outtime\n    AND (\n      LOWER(COALESCE(di.label, '')) LIKE '%ventilat%'         -- ventilator / ventilation\n      OR LOWER(COALESCE(di.label, '')) LIKE '%endotracheal%'  -- endotracheal tube\n      OR LOWER(COALESCE(di.label, '')) LIKE '%intubat%'       -- intubation / intubated\n      OR LOWER(COALESCE(ce.value, '')) LIKE '%ventilat%'\n      OR LOWER(COALESCE(ce.value, '')) LIKE '%intubat%'\n    )\n),\nsystolic_measurements AS (\n  -- Systolic BP measurements within first 6 hours of the ICU stay for the ventilated male cohort\n  SELECT\n    ce2.stay_id,\n    ce2.charttime,\n    ce2.valuenum AS sbp\n  FROM vent_stays s\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce2\n    ON ce2.stay_id = s.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` di2\n    ON ce2.itemid = di2.itemid\n  WHERE ce2.valuenum IS NOT NULL\n    AND ce2.charttime BETWEEN s.intime AND TIMESTAMP_ADD(s.intime, INTERVAL 6 HOUR)\n    AND (\n      LOWER(COALESCE(di2.label, '')) LIKE '%systolic%'\n      OR LOWER(COALESCE(di2.label, '')) LIKE '%sbp%'\n      OR LOWER(COALESCE(di2.label, '')) LIKE '%systolic blood pressure%'\n    )\n)\n-- Compute quantiles (single row) and count (single row), then combine\nSELECT\n  q.quantiles[OFFSET(1)] AS q1_sbp,\n  q.quantiles[OFFSET(3)] AS q3_sbp,\n  q.quantiles[OFFSET(3)] - q.quantiles[OFFSET(1)] AS iqr_sbp,\n  n.n_measurements\nFROM (\n  SELECT APPROX_QUANTILES(sbp, 4) AS quantiles\n  FROM systolic_measurements\n) q\nCROSS JOIN (\n  SELECT COUNT(*) AS n_measurements\n  FROM systolic_measurements\n) n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column quantiles which is neither grouped nor aggregated at [47:3]; reason: invalidQuery, location: query, message: SELECT list expression references column quantiles which is neither grouped nor aggregated at [47:3]\n\nLocation: US\nJob ID: 04627171-36a7-49e1-a451-bdc43c8895be\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

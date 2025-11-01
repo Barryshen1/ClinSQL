@@ -1,0 +1,29 @@
+{
+  "query": "For my 55-year-old female patient: among female inpatients 50\u201360 with diabetes and heart failure, report initiation rates of injectable GLP\u20111s in first 72h versus final 72h, with absolute and relative change.",
+  "final_sql": "WITH eligible_patients AS (\n    SELECT\n        p.subject_id,\n        a.hadm_id,\n        a.admittime,\n        a.dischtime,\n        p.anchor_age AS age_at_index\n    FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n        ON p.subject_id = a.subject_id\n    WHERE p.gender = 'F'\n        AND p.anchor_age BETWEEN 50 AND 60\n),\ndiagnoses AS (\n    SELECT\n        d.subject_id,\n        d.hadm_id,\n        d.icd_code,\n        diag.long_title\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` diag\n        ON d.icd_code = diag.icd_code\n        AND d.icd_version = diag.icd_version\n    WHERE diag.long_title LIKE '%diabetes%' OR diag.long_title LIKE '%heart failure%'\n),\ncohort_admissions AS (\n    SELECT\n        ep.subject_id,\n        ep.hadm_id,\n        ep.admittime,\n        ep.dischtime\n    FROM eligible_patients ep\n    WHERE EXISTS (\n        SELECT 1\n        FROM diagnoses d1\n        WHERE d1.subject_id = ep.subject_id\n            AND d1.hadm_id = ep.hadm_id\n            AND d1.long_title LIKE '%diabetes%'\n    )\n    AND EXISTS (\n        SELECT 1\n        FROM diagnoses d2\n        WHERE d2.subject_id = ep.subject_id\n            AND d2.hadm_id = ep.hadm_id\n            AND d2.long_title LIKE '%heart failure%'\n    )\n),\nglp1_prescriptions AS (\n    SELECT\n        p.subject_id,\n        p.hadm_id,\n        p.starttime,\n        p.drug,\n        p.route,\n        ROW_NUMBER() OVER (\n            PARTITION BY p.subject_id, p.hadm_id, p.drug\n            ORDER BY p.starttime\n        ) AS rx_seq\n    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    WHERE \n        (p.drug LIKE '%semaglutide%' OR p.drug LIKE '%tirzepatide%' OR p.drug LIKE '%GLP-1%')\n        AND p.route IN ('Subcutaneous', 'Intravenous')\n),\ninitiations AS (\n    SELECT\n        gp.subject_id,\n        gp.hadm_id,\n        gp.starttime,\n        CASE \n            WHEN gp.rx_seq = 1 THEN 1 \n            ELSE 0 \n        END AS is_initiation\n    FROM glp1_prescriptions gp\n),\ntime_windows AS (\n    SELECT\n        c.subject_id,\n        c.hadm_id,\n        c.admittime,\n        c.dischtime,\n        DATETIME_ADD(c.admittime, INTERVAL 72 HOUR) AS first_72h_end,\n        DATETIME_SUB(c.dischtime, INTERVAL 72 HOUR) AS final_72h_start\n    FROM cohort_admissions c\n),\nadmission_glps AS (\n    SELECT\n        tw.subject_id,\n        tw.hadm_id,\n        SUM(CASE \n            WHEN i.starttime BETWEEN tw.admittime AND tw.first_72h_end \n            THEN i.is_initiation \n            ELSE 0 \n        END) AS first_72h_initiations,\n        SUM(CASE \n            WHEN i.starttime BETWEEN \n                GREATEST(tw.admittime, tw.final_72h_start) AND tw.dischtime \n            THEN i.is_initiation \n            ELSE 0 \n        END) AS final_72h_initiations\n    FROM time_windows tw\n    LEFT JOIN initiations i\n        ON tw.subject_id = i.subject_id\n        AND tw.hadm_id = i.hadm_id\n    GROUP BY tw.subject_id, tw.hadm_id\n)\nSELECT\n    COUNT(DISTINCT hadm_id) AS total_admissions,\n    SUM(first_72h_initiations) AS total_first_72h_initiations,\n    SUM(final_72h_initiations) AS total_final_72h_initiations,\n    SUM(final_72h_initiations) - SUM(first_72h_initiations) AS absolute_change,\n    CASE \n        WHEN SUM(first_72h_initiations) > 0 \n        THEN (SUM(final_72h_initiations) - SUM(first_72h_initiations)) / SUM(first_72h_initiations) \n        ELSE NULL \n    END AS relative_change\nFROM admission_glps;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:15]\n\nLocation: US\nJob ID: 79840119-e9ca-40f6-bd96-a0f148c95e66\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:11]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:11]\n\nLocation: US\nJob ID: 872c659b-dea4-4e34-91bd-7dc9222cd8d8\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

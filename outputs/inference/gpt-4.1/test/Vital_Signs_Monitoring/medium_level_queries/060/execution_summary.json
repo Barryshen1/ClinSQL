@@ -1,0 +1,16 @@
+{
+  "query": "Concerned about my 75-year-old female ICU patient: among female ICU patients aged 70\u201380, based on maximum SBP in first 24h, report percent by SBP category (<130;130\u2013139;140\u2013159;\u2265160) and stroke rate.",
+  "final_sql": "WITH sbp_itemids AS (\n  -- Find SBP itemids from d_items\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%systolic%' AND LOWER(label) LIKE '%blood pressure%'\n),\n\nfemale_icu_70_80 AS (\n  -- Get female ICU stays age 70-80\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON icu.subject_id = pat.subject_id\n  WHERE pat.gender = 'F'\n    AND pat.anchor_age BETWEEN 70 AND 80\n),\n\nsbp_first24h AS (\n  -- Get max SBP in first 24h of ICU stay\n  SELECT\n    f.stay_id,\n    f.hadm_id,\n    MAX(c.valuenum) AS max_sbp\n  FROM female_icu_70_80 f\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON f.stay_id = c.stay_id\n  WHERE c.itemid IN (SELECT itemid FROM sbp_itemids)\n    AND c.valuenum IS NOT NULL\n    AND c.charttime BETWEEN f.intime AND TIMESTAMP_ADD(f.intime, INTERVAL 24 HOUR)\n  GROUP BY f.stay_id, f.hadm_id\n),\n\nstroke_hadm AS (\n  -- Identify admissions with stroke diagnosis\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  WHERE (\n    -- ICD-10 stroke codes\n    (d.icd_version = 10 AND (\n      SAFE_CAST(SUBSTR(d.icd_code, 1, 3) AS STRING) IN ('I60', 'I61', 'I63', 'I64')\n    ))\n    -- ICD-9 stroke codes (optional, for completeness)\n    OR (d.icd_version = 9 AND (\n      SAFE_CAST(SUBSTR(d.icd_code, 1, 3) AS STRING) IN ('430', '431', '434', '436')\n    ))\n  )\n),\n\nsbp_categorized AS (\n  -- Categorize SBP and flag stroke\n  SELECT\n    s.stay_id,\n    s.hadm_id,\n    s.max_sbp,\n    CASE\n      WHEN s.max_sbp < 130 THEN '<130'\n      WHEN s.max_sbp >= 130 AND s.max_sbp < 140 THEN '130-139'\n      WHEN s.max_sbp >= 140 AND s.max_sbp < 160 THEN '140-159'\n      WHEN s.max_sbp >= 160 THEN '\u2265160'\n      ELSE 'Unknown'\n    END AS sbp_category,\n    CASE WHEN sh.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS stroke_flag\n  FROM sbp_first24h s\n  LEFT JOIN stroke_hadm sh\n    ON s.hadm_id = sh.hadm_id\n)\n\nSELECT\n  sbp_category,\n  COUNT(*) AS n_patients,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS percent_patients,\n  SUM(stroke_flag) AS n_stroke,\n  ROUND(SUM(stroke_flag) * 100.0 / COUNT(*), 1) AS stroke_rate_percent\nFROM sbp_categorized\nWHERE sbp_category != 'Unknown'\nGROUP BY sbp_category\nORDER BY\n  CASE sbp_category\n    WHEN '<130' THEN 1\n    WHEN '130-139' THEN 2\n    WHEN '140-159' THEN 3\n    WHEN '\u2265160' THEN 4\n    ELSE 5\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

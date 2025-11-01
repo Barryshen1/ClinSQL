@@ -1,0 +1,1 @@
+SELECT stddev(l.value) AS standard_deviation FROM labevents l JOIN patients p ON l.subject_id = p.subject_id JOIN admissions a ON l.subject_id = a.subject_id WHERE p.gender = 'M' AND EXTRACT(YEAR FROM age(CURRENT_DATE, p.dob)) = 95 AND l.itemid = 111785002 AND a.admission_type_id = 25;

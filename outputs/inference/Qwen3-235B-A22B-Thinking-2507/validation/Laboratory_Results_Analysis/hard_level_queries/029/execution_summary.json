@@ -1,0 +1,23 @@
+{
+  "query": "Patient: female, 55. Among female inpatients aged 50\u201360 with hyperosmolar hyperglycemic state, what is the 75th percentile of the first\u201148\u2011hour laboratory instability score? For admissions \u2265 this threshold, give mortality, mean LOS (days), and compare critical\u2011lab rates versus general inpatients.",
+  "final_sql": "WITH \nadmissions_with_age AS (\n  SELECT \n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    p.anchor_age - (p.anchor_year - EXTRACT(YEAR FROM a.admittime)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n),\n\ncohort_base AS (\n  SELECT \n    hadm_id, \n    subject_id, \n    admittime\n  FROM admissions_with_age\n  WHERE gender = 'F'\n    AND age_at_admit >= 50\n    AND age_at_admit <= 60\n),\n\ncohort_hhs AS (\n  SELECT DISTINCT \n    c.hadm_id, \n    c.subject_id, \n    c.admittime\n  FROM cohort_base c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON c.hadm_id = d.hadm_id\n  WHERE d.icd_version = 10\n    AND d.icd_code IN ('E0801', 'E0802', 'E0901', 'E0902', 'E1001', 'E1002', 'E1101', 'E1102', 'E1301', 'E1302')\n),\n\ninstability_scores AS (\n  SELECT \n    c.hadm_id,\n    COUNT(l.labevent_id) AS instability_score\n  FROM cohort_hhs c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n    AND l.charttime >= c.admittime\n    AND l.charttime < TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND l.flag = 'abnormal'\n  GROUP BY c.hadm_id\n),\n\npercentile_calc AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 100)[OFFSET(75)] AS p75\n  FROM instability_scores\n),\n\nhigh_instability AS (\n  SELECT \n    i.hadm_id\n  FROM instability_scores i\n  CROSS JOIN percentile_calc p\n  WHERE i.instability_score >= p.p75\n),\n\nhigh_instability_metrics AS (\n  SELECT \n    AVG(a.hospital_expire_flag) AS mortality_rate,\n    AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) / 24.0) AS mean_los_days,\n    COUNT(DISTINCT CASE WHEN l.labevent_id IS NOT NULL THEN a.hadm_id END) / COUNT(DISTINCT a.hadm_id) AS critical_lab_rate\n  FROM high_instability hi\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON hi.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime >= a.admittime\n    AND l.charttime < TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n    AND l.flag = 'abnormal'\n),\n\ngeneral_critical_lab_rate AS (\n  SELECT \n    COUNT(DISTINCT CASE WHEN l.labevent_id IS NOT NULL THEN a.hadm_id END) / COUNT(DISTINCT a.hadm_id) AS critical_lab_rate_general\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON a.hadm_id = l.hadm_id\n    AND l.charttime >= a.admittime\n    AND l.charttime < TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n    AND l.flag = 'abnormal'\n)\n\nSELECT \n  mortality_rate,\n  mean_los_days,\n  critical_lab_rate AS critical_lab_rate_high,\n  (SELECT critical_lab_rate_general FROM general_critical_lab_rate) AS critical_lab_rate_general\nFROM high_instability_metrics;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"hyperglycemic\" at [1:19]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"hyperglycemic\" at [1:19]\n\nLocation: US\nJob ID: 9d4a4d34-4c68-43b1-aa8a-5b5fdcc22ea3\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 55-year-old female patient: among female inpatients 50\u201360 with diabetes and heart failure, report initiation rates of injectable GLP\u20111s in first 72h versus final 72h, with absolute and relative change.",
+  "final_sql": "WITH\n-- Define diabetes and heart failure ICD codes\ndiabetes_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code LIKE 'E11%' OR icd_code LIKE 'E12%' OR icd_code LIKE 'E13%' OR icd_code LIKE 'E14%'\n),\nheart_failure_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code LIKE 'I50%'\n),\n\n-- Get female patients 50-60 with diabetes and heart failure\neligible_patients AS (\n  SELECT DISTINCT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d1 ON a.subject_id = d1.subject_id AND a.hadm_id = d1.hadm_id\n  JOIN diabetes_codes dc ON d1.icd_code = dc.icd_code\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2 ON a.subject_id = d2.subject_id AND a.hadm_id = d2.hadm_id\n  JOIN heart_failure_codes hfc ON d2.icd_code = hfc.icd_code\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 50 AND 60\n    AND a.admission_type IN ('ELECTIVE', 'EMERGENCY', 'URGENT')\n),\n\n-- Get admissions for eligible patients with sufficient length of stay\neligible_admissions AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN eligible_patients ep ON a.subject_id = ep.subject_id\n  WHERE TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n),\n\n-- GLP-1 medications (injectable)\nglp1_meds AS (\n  SELECT DISTINCT drug\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE LOWER(drug) LIKE '%liraglutide%'\n     OR LOWER(drug) LIKE '%semaglutide%'\n     OR LOWER(drug) LIKE '%dulaglutide%'\n     OR LOWER(drug) LIKE '%exenatide%'\n),\n\n-- GLP-1 prescriptions in first 72 hours\nfirst_72h_glp1 AS (\n  SELECT DISTINCT ea.hadm_id\n  FROM eligible_admissions ea\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON ea.hadm_id = p.hadm_id\n  JOIN glp1_meds gm ON p.drug = gm.drug\n  WHERE p.starttime BETWEEN ea.admittime AND TIMESTAMP_ADD(ea.admittime, INTERVAL 72 HOUR)\n),\n\n-- GLP-1 prescriptions in final 72 hours\nfinal_72h_glp1 AS (\n  SELECT DISTINCT ea.hadm_id\n  FROM eligible_admissions ea\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON ea.hadm_id = p.hadm_id\n  JOIN glp1_meds gm ON p.drug = gm.drug\n  WHERE p.starttime BETWEEN TIMESTAMP_SUB(ea.dischtime, INTERVAL 72 HOUR) AND ea.dischtime\n),\n\n-- Counts for each period\ncounts AS (\n  SELECT\n    COUNT(DISTINCT ea.hadm_id) AS total_admissions,\n    COUNT(DISTINCT f72.hadm_id) AS first_72h_count,\n    COUNT(DISTINCT fin72.hadm_id) AS final_72h_count\n  FROM eligible_admissions ea\n  LEFT JOIN first_72h_glp1 f72 ON ea.hadm_id = f72.hadm_id\n  LEFT JOIN final_72h_glp1 fin72 ON ea.hadm_id = fin72.hadm_id\n)\n\n-- Final results\nSELECT\n  total_admissions,\n  first_72h_count,\n  final_72h_count,\n  (first_72h_count / total_admissions) * 100 AS first_72h_rate,\n  (final_72h_count / total_admissions) * 100 AS final_72h_rate,\n  (final_72h_count - first_72h_count) AS absolute_change,\n  CASE\n    WHEN first_72h_count = 0 THEN NULL\n    ELSE ((final_72h_count - first_72h_count) / first_72h_count) * 100\n  END AS relative_change_percentage\nFROM counts;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/b7e49bcf-6a60-4dd0-8c88-29df1e781dac?maxResults=0&location=US&prettyPrint=false: division by zero: 0 / 0\n\nLocation: US\nJob ID: b7e49bcf-6a60-4dd0-8c88-29df1e781dac\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

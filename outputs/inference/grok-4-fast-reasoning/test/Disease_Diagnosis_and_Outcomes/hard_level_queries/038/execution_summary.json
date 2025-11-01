@@ -1,0 +1,28 @@
+{
+  "query": "I\u2019m evaluating a 79\u2011year\u2011old man. In male inpatients aged 74\u201384 with AKI, what are the cohort\u2019s median risk score (IQR) and 30\u2011day mortality? Compare ARDS rate and survivor LOS to general male inpatients 74\u201384 and give the risk percentile.",
+  "final_sql": "WITH base_cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.dod,\n    EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age AS admission_age,\n    CASE WHEN aki.subject_id IS NOT NULL THEN 1 ELSE 0 END AS has_aki\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  LEFT JOIN (\n    SELECT DISTINCT subject_id, hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE (icd_version = 9 AND icd_code LIKE '584%')\n       OR (icd_version = 10 AND icd_code LIKE 'N17.%')\n  ) aki ON a.subject_id = aki.subject_id AND a.hadm_id = aki.hadm_id\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year + p.anchor_age) BETWEEN 74 AND 84\n),\nmortality_cohort AS (\n  SELECT *,\n    CASE \n      WHEN deathtime IS NOT NULL AND deathtime <= TIMESTAMP_ADD(admittime, INTERVAL 30 DAY) THEN 1\n      WHEN deathtime IS NULL AND dod IS NOT NULL \n           AND dod <= DATE_ADD(DATE(admittime), INTERVAL 30 DAY) THEN 1\n      ELSE 0\n    END AS thirty_day_death\n  FROM base_cohort\n),\ndrg_cohort AS (\n  SELECT \n    mc.*,\n    CAST(dc.drg_mortality AS INT64) AS risk_score\n  FROM mortality_cohort mc\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.drgcodes` dc\n    ON mc.subject_id = dc.subject_id \n    AND mc.hadm_id = dc.hadm_id \n    AND dc.drg_type = 'MS'\n),\nards_cohort AS (\n  SELECT \n    dc.*,\n    CASE WHEN ar.subject_id IS NOT NULL THEN 1 ELSE 0 END AS has_ards\n  FROM drg_cohort dc\n  LEFT JOIN (\n    SELECT DISTINCT subject_id, hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE (icd_version = 9 AND icd_code = '51882')\n       OR (icd_version = 10 AND icd_code = 'J80')\n  ) ar ON dc.subject_id = ar.subject_id AND dc.hadm_id = ar.hadm_id\n),\nlos_cohort AS (\n  SELECT *,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days\n  FROM ards_cohort\n),\ngeneral_risks AS (\n  SELECT ARRAY_AGG(risk_score IGNORE NULLS) AS all_risks\n  FROM los_cohort\n),\naki_stats AS (\n  SELECT \n    'AKI Cohort' AS cohort_type,\n    COUNT(*) AS n_admissions,\n    APPROX_QUANTILES(risk_score, 100)[OFFSET(50)] AS median_risk_score,\n    APPROX_QUANTILES(risk_score, 100)[OFFSET(25)] AS risk_iqr_lower,\n    APPROX_QUANTILES(risk_score, 100)[OFFSET(75)] AS risk_iqr_upper,\n    AVG(CAST(thirty_day_death AS FLOAT64)) AS thirty_day_mortality_rate,\n    AVG(CAST(has_ards AS FLOAT64)) AS ards_rate,\n    APPROX_QUANTILES(IF(thirty_day_death = 0, CAST(los_days AS FLOAT64), NULL), 1)[OFFSET(0)] AS median_survivor_los_days,\n    NULL AS risk_percentile\n  FROM los_cohort\n  WHERE has_aki = 1\n),\ngeneral_stats AS (\n  SELECT \n    'General Cohort' AS cohort_type,\n    COUNT(*) AS n_admissions,\n    NULL AS median_risk_score,\n    NULL AS risk_iqr_lower,\n    NULL AS risk_iqr_upper,\n    NULL AS thirty_day_mortality_rate,\n    AVG(CAST(has_ards AS FLOAT64)) AS ards_rate,\n    APPROX_QUANTILES(IF(thirty_day_death = 0, CAST(los_days AS FLOAT64), NULL), 1)[OFFSET(0)] AS median_survivor_los_days,\n    NULL AS risk_percentile\n  FROM los_cohort\n),\ncombined AS (\n  SELECT * FROM aki_stats\n  UNION ALL\n  SELECT * FROM general_stats\n)\nSELECT \n  c.* EXCEPT(risk_percentile),\n  CASE \n    WHEN c.cohort_type = 'AKI Cohort' AND c.median_risk_score IS NOT NULL AND ARRAY_LENGTH(gr.all_risks) > 0 THEN\n      (SELECT COUNTIF(r <= c.median_risk_score) FROM UNNEST(gr.all_risks) r) * 100.0 / ARRAY_LENGTH(gr.all_risks)\n    ELSE NULL \n  END AS risk_percentile\nFROM combined c\nCROSS JOIN general_risks gr\nORDER BY cohort_type;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:12]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [18:12]\n\nLocation: US\nJob ID: 3511a769-e550-4b07-be7f-1e783295b3bb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 3d3915be-6d6d-485d-ae33-904d308afe20\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I'm evaluating an 87\u2011year\u2011old man. Among male ICU patients aged 82\u201392 with cardiogenic shock, stratify first\u201124\u2011hour procedure burden into quintiles and report for each quintile mean procedure count, mean hospital LOS in days, and in\u2011hospital mortality percentage.",
+  "final_sql": "WITH cohorts AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    i.stay_id,\n    i.intime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS i\n    ON i.subject_id = p.subject_id AND i.hadm_id = a.hadm_id\n  WHERE UPPER(p.gender) = 'M'\n    AND p.anchor_age BETWEEN 82 AND 92\n),\n\n-- Step 2: restrict to cardiogenic shock diagnoses\ncardio_shock AS (\n  SELECT DISTINCT c.subject_id, c.hadm_id\n  FROM cohorts AS c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON d.subject_id = c.subject_id AND d.hadm_id = c.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS di\n    ON d.icd_code = di.icd_code AND d.icd_version = di.icd_version\n  WHERE UPPER(di.long_title) LIKE '%CARDIOGENIC SHOCK%'\n),\n\n-- Step 3: Final cohort of ICU stays with cardiogenic shock\ncohort AS (\n  SELECT c.subject_id, c.hadm_id, c.stay_id, c.intime\n  FROM cohorts AS c\n  JOIN cardio_shock AS cs\n    ON c.subject_id = cs.subject_id AND c.hadm_id = cs.hadm_id\n),\n\n-- Step 4: Compute first-24h procedure count, LOS, and mortality per admission\nper_stay AS (\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    -- first 24-hour procedure count\n    COALESCE(SUM(\n      CASE\n        WHEN pe.starttime >= s.intime\n             AND pe.starttime < TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR)\n        THEN 1\n        ELSE 0\n      END\n    ), 0) AS first24hr_proc_count,\n    -- hospital LOS in days (fractional)\n    TIMESTAMP_DIFF(TIMESTAMP(a.dischtime), TIMESTAMP(a.admittime), SECOND) / 86400.0 AS hospital_los_days,\n    -- in-hospital mortality indicator\n    CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END AS in_hospital_mortality\n  FROM cohort AS s\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.subject_id = s.subject_id AND a.hadm_id = s.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON pe.subject_id = s.subject_id\n   AND pe.hadm_id = s.hadm_id\n   AND pe.stay_id = s.stay_id\n  WHERE a.dischtime IS NOT NULL\n  GROUP BY s.subject_id, s.hadm_id, s.stay_id, s.intime, a.dischtime, a.admittime, a.hospital_expire_flag\n)\n\n-- Step 5: Assign quintiles and summarize by quintile\n, quintileised AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    first24hr_proc_count,\n    hospital_los_days,\n    in_hospital_mortality,\n    NTILE(5) OVER (ORDER BY first24hr_proc_count) AS quintile\n  FROM per_stay\n)\n\nSELECT\n  quintile,\n  AVG(first24hr_proc_count) AS mean_proc_count,\n  AVG(hospital_los_days) AS mean_hospital_los_days,\n  AVG(in_hospital_mortality) * 100 AS in_hospital_mortality_percentage\nFROM quintileised\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [52:6]; reason: invalidQuery, location: query, message: No matching signature for function UNIX_SECONDS\n  Argument types: DATETIME\n  Signature: UNIX_SECONDS(TIMESTAMP)\n    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [52:6]\n\nLocation: US\nJob ID: 29917ac3-7a5c-4caa-bbd8-0b41c71e6a1c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

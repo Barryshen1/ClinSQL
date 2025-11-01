@@ -1,0 +1,29 @@
+{
+  "query": "I have a 73-year-old female inpatient. Among females aged 68\u201378 with AMI and an ICU stay, what is the median risk score (IQR) and 90\u2011day mortality? Compare major complication rate and survivor LOS to age\u2011matched general inpatients and give the risk percentile.",
+  "final_sql": "WITH ami_icd AS (\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE \n    -- ICD-9: 410.00-410.91 (acute MI)\n    (icd_version = 9 AND icd_code >= '4100' AND icd_code <= '41091')\n    OR\n    -- ICD-10: I21 and I22 codes (acute MI)\n    (icd_version = 10 AND icd_code >= 'I21' AND icd_code < 'I23')\n),\n\n-- Calculate age at admission and mortality flags\npatients_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    -- Calculate age at admission\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission,\n    -- 90-day mortality flag (in-hospital or post-discharge)\n    CASE \n      WHEN a.deathtime IS NOT NULL AND DATETIME_DIFF(a.deathtime, a.admittime, DAY) <= 90 THEN 1\n      WHEN p.dod IS NOT NULL AND DATE_DIFF(p.dod, CAST(a.admittime AS DATE), DAY) <= 90 THEN 1\n      ELSE 0\n    END AS mortality_90d,\n    -- Length of stay in days (risk proxy)\n    DATETIME_DIFF(a.dischtime, a.admittime, DAY) AS los\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n),\n\n-- AMI patients\nami_patients AS (\n  SELECT \n    pa.*\n  FROM patients_age pa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON pa.hadm_id = d.hadm_id\n  INNER JOIN ami_icd ami\n    ON d.icd_code = ami.icd_code AND d.icd_version = ami.icd_version\n  WHERE pa.gender = 'F'  -- Female\n),\n\n-- Target cohort: Females 68-78 with AMI and ICU stay\nami_icu_cohort AS (\n  SELECT \n    ap.*\n  FROM ami_patients ap\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON ap.hadm_id = i.hadm_id\n  WHERE ap.age_at_admission BETWEEN 68 AND 78\n),\n\n-- Comparison cohort: Age-matched general inpatients (same age/gender range)\ngeneral_cohort AS (\n  SELECT \n    pa.*\n  FROM patients_age pa\n  WHERE pa.gender = 'F'\n    AND pa.age_at_admission BETWEEN 68 AND 78\n    AND pa.hadm_id NOT IN (SELECT hadm_id FROM ami_patients)  -- Exclude AMI patients\n)\n\n-- Final analysis\nSELECT\n  'AMI_ICU' AS cohort,\n  COUNT(*) AS n,\n  -- Median risk score (LOS as proxy) with IQR\n  APPROX_QUANTILES(los, 100)[OFFSET(50)] AS median_risk_score,\n  APPROX_QUANTILES(los, 100)[OFFSET(25)] AS q1_risk_score,\n  APPROX_QUANTILES(los, 100)[OFFSET(75)] AS q3_risk_score,\n  -- 90-day mortality\n  AVG(mortality_90d) AS mortality_90d_rate,\n  -- Major complication rate (using heart failure as proxy)\n  (SELECT COUNT(DISTINCT d.hadm_id) \n   FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n   WHERE d.hadm_id IN (SELECT hadm_id FROM ami_icu_cohort)\n     AND d.icd_code IN ('I50', 'I500', 'I501', 'I509')\n  ) / COUNT(*) AS complication_rate,\n  -- Survivor LOS\n  APPROX_QUANTILES(IF(mortality_90d = 0, los, NULL), 100)[OFFSET(50)] AS survivor_los_median,\n  -- Risk percentile (where AMI_ICU median LOS falls in general cohort distribution)\n  (SELECT \n     COUNTIF(g.los < a.median_los) * 100.0 / COUNT(*) \n   FROM general_cohort g, \n        (SELECT APPROX_QUANTILES(los, 100)[OFFSET(50)] AS median_los \n         FROM ami_icu_cohort) a\n  ) AS risk_percentile\nFROM ami_icu_cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:10]\n\nLocation: US\nJob ID: 7dffae0b-4584-4863-ab30-b728cb5e9d10\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword ANY at [84:22]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword ANY at [84:22]\n\nLocation: US\nJob ID: 0a5e8f0d-87d2-4c40-808a-6c7b30dd69ef\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

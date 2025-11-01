@@ -1,0 +1,16 @@
+{
+  "query": "I have a 73-year-old man with heart failure. Among males 68\u201378, report in-hospital mortality (%) and CKD and diabetes prevalence (%) stratified by LOS <8 vs \u22658 days.",
+  "final_sql": "WITH cohort_admissions AS (\n    -- Step 1: Identify the cohort of male patients aged 68-78 at the time of admission\n    -- Step 2: Calculate hospital LOS and create stratification groups\n    SELECT\n        a.hadm_id,\n        a.hospital_expire_flag,\n        CASE\n            WHEN TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24.0 * 3600.0) < 8 THEN '< 8 days'\n            ELSE '>= 8 days'\n        END AS los_group\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n        ON p.subject_id = a.subject_id\n    WHERE\n        p.gender = 'M'\n        AND a.dischtime IS NOT NULL -- Ensure LOS can be calculated\n        AND a.admittime IS NOT NULL\n        AND (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) + p.anchor_age BETWEEN 68 AND 78\n),\ndiagnosis_flags AS (\n    -- Step 3: For each admission in the cohort, create flags for CKD and Diabetes\n    SELECT\n        hadm_id,\n        MAX(\n            CASE\n                WHEN (icd_version = 9 AND icd_code LIKE '585%')\n                    OR (icd_version = 10 AND icd_code LIKE 'N18%')\n                THEN 1\n                ELSE 0\n            END\n        ) AS has_ckd,\n        MAX(\n            CASE\n                WHEN (icd_version = 9 AND icd_code LIKE '250%')\n                    OR (icd_version = 10 AND (\n                        icd_code LIKE 'E08%' OR icd_code LIKE 'E09%' OR icd_code LIKE 'E10%'\n                        OR icd_code LIKE 'E11%' OR icd_code LIKE 'E13%'\n                        )\n                    )\n                THEN 1\n                ELSE 0\n            END\n        ) AS has_diabetes\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n        hadm_id IN (SELECT hadm_id FROM cohort_admissions) -- Filter for efficiency\n    GROUP BY\n        hadm_id\n)\n-- Step 4: Join cohort with diagnoses and calculate final metrics\nSELECT\n    c.los_group,\n    COUNT(c.hadm_id) AS total_admissions,\n    -- Use AVG on binary flags (0/1) to get the proportion, then multiply by 100 for percentage\n    ROUND(AVG(c.hospital_expire_flag) * 100, 2) AS in_hospital_mortality_percent,\n    ROUND(AVG(COALESCE(d.has_ckd, 0)) * 100, 2) AS ckd_prevalence_percent,\n    ROUND(AVG(COALESCE(d.has_diabetes, 0)) * 100, 2) AS diabetes_prevalence_percent\nFROM\n    cohort_admissions AS c\nLEFT JOIN\n    diagnosis_flags AS d\n    ON c.hadm_id = d.hadm_id\nGROUP BY\n    c.los_group\nORDER BY\n    c.los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

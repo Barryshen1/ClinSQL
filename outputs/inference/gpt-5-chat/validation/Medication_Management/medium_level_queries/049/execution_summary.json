@@ -1,0 +1,22 @@
+{
+  "query": "For my 71-year-old male inpatient, among male admissions aged 66\u201376 with diabetes and heart failure (\u226572\u2011h), report percentages only for each antidiabetic class in first 72h vs final 24h.",
+  "final_sql": "WITH cohort AS (\n  SELECT a.subject_id, a.hadm_id, p.gender, p.anchor_age,\n         a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 66 AND 76\n    AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 72\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n       AND d.icd_version = dd.icd_version\n      WHERE (dd.icd_code LIKE '250%' OR dd.icd_code LIKE 'E10%' OR dd.icd_code LIKE 'E11%' OR dd.icd_code LIKE 'E12%' OR dd.icd_code LIKE 'E13%' OR dd.icd_code LIKE 'E14%')\n      GROUP BY hadm_id\n    )\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n        ON d.icd_code = dd.icd_code\n       AND d.icd_version = dd.icd_version\n      WHERE (dd.icd_code LIKE '428%' OR dd.icd_code LIKE 'I50%')\n      GROUP BY hadm_id\n    )\n),\nrx_classified AS (\n  SELECT c.hadm_id,\n         CASE\n           WHEN LOWER(pr.drug) LIKE '%metformin%' THEN 'Biguanide'\n           WHEN LOWER(pr.drug) LIKE '%glipizide%' \n             OR LOWER(pr.drug) LIKE '%glyburide%' \n             OR LOWER(pr.drug) LIKE '%glimepiride%' THEN 'Sulfonylurea'\n           WHEN LOWER(pr.drug) LIKE '%insulin%' THEN 'Insulin'\n           WHEN LOWER(pr.drug) LIKE '%sitagliptin%' \n             OR LOWER(pr.drug) LIKE '%linagliptin%' \n             OR LOWER(pr.drug) LIKE '%alogliptin%' \n             OR LOWER(pr.drug) LIKE '%saxagliptin%' THEN 'DPP-4 inhibitor'\n           WHEN LOWER(pr.drug) LIKE '%liraglutide%' \n             OR LOWER(pr.drug) LIKE '%exenatide%' \n             OR LOWER(pr.drug) LIKE '%semaglutide%' \n             OR LOWER(pr.drug) LIKE '%dulaglutide%' THEN 'GLP-1 agonist'\n           WHEN LOWER(pr.drug) LIKE '%empagliflozin%' \n             OR LOWER(pr.drug) LIKE '%dapagliflozin%' \n             OR LOWER(pr.drug) LIKE '%canagliflozin%' THEN 'SGLT2 inhibitor'\n           WHEN LOWER(pr.drug) LIKE '%pioglitazone%' \n             OR LOWER(pr.drug) LIKE '%rosiglitazone%' THEN 'Thiazolidinedione'\n           ELSE NULL\n         END AS drug_class,\n         CASE\n           WHEN pr.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 72 HOUR) THEN 'first72h'\n           WHEN pr.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 24 HOUR) AND c.dischtime THEN 'final24h'\n           ELSE NULL\n         END AS time_window\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.subject_id = pr.subject_id\n   AND c.hadm_id = pr.hadm_id\n  WHERE pr.starttime IS NOT NULL\n),\nwindow_counts AS (\n  SELECT time_window, drug_class,\n         COUNT(DISTINCT hadm_id) AS hadm_count\n  FROM rx_classified\n  WHERE drug_class IS NOT NULL AND time_window IS NOT NULL\n  GROUP BY time_window, drug_class\n),\ntotal_counts AS (\n  SELECT time_window, COUNT(DISTINCT hadm_id) AS total_hadm\n  FROM rx_classified\n  WHERE time_window IS NOT NULL\n  GROUP BY time_window\n)\nSELECT w.time_window, w.drug_class,\n       ROUND(100.0 * w.hadm_count / t.total_hadm, 2) AS pct_admissions\nFROM window_counts w\nJOIN total_counts t\n  ON w.time_window = t.time_window\nORDER BY w.time_window, w.drug_class;",
+  "execution_success": true,
+  "row_count": 10,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword WINDOW at [56:17]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword WINDOW at [56:17]\n\nLocation: US\nJob ID: eff2bd1e-cb11-4549-9788-6227c726adc8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 10,
+      "error": null
+    }
+  ]
+}

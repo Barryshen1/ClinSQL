@@ -1,0 +1,29 @@
+{
+  "query": "I have a 58-year-old woman after cardiac arrest. Among female inpatients 53\u201363 with post\u2011arrest, what is the 90th percentile 48\u2011hour lab instability score? For those \u2265 that value, report count, mortality, mean LOS, and compare critical lab frequency to all inpatients.",
+  "final_sql": "WITH PatientCohort AS (\n  -- Select patients meeting the criteria: female, age 53-63, post-cardiac arrest\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.hadm_id,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n    AND a.admission_type = 'EMERGENCY' -- Assuming cardiac arrest usually presents as emergency admission\n    AND EXISTS (\n      SELECT\n        1\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      WHERE\n        d.subject_id = p.subject_id\n        AND d.hadm_id = a.hadm_id\n        AND d.icd_code LIKE 'I46%' -- ICD-10 code for Cardiac arrest\n    )\n),\nLabInstabilityScore AS (\n  -- Calculate the lab instability score for each patient within the first 48 hours\n  SELECT\n    pc.subject_id,\n    pc.hadm_id,\n    SUM(\n      CASE\n        WHEN ABS(le.value - le.ref_range_lower) > 0.5 * (le.ref_range_upper - le.ref_range_lower) THEN 1\n        ELSE 0\n      END\n    ) AS instability_score\n  FROM\n    PatientCohort AS pc\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    ON pc.subject_id = le.subject_id\n    AND pc.hadm_id = le.hadm_id\n  WHERE\n    le.charttime BETWEEN pc.admittime AND TIMESTAMP_ADD(pc.admittime, INTERVAL 48 HOUR)\n    AND le.itemid IN (\n      -- Select relevant lab items (e.g., electrolytes, coagulation, cardiac markers)\n      SELECT\n        itemid\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.d_labitems`\n      WHERE\n        category = 'Electrolytes'\n        OR category = 'Coagulation'\n        OR category = 'Cardiac Markers'\n        OR category = 'Blood Gas'\n    )\n  GROUP BY\n    pc.subject_id,\n    pc.hadm_id\n),\nPercentileThreshold AS (\n  -- Calculate the 90th percentile of the instability score\n  SELECT\n    PERCENTILE_CONT(instability_score, 0.90) AS percentile_90\n  FROM\n    LabInstabilityScore\n),\nHighInstabilityCohort AS (\n  -- Select patients with instability score >= 90th percentile\n  SELECT\n    lis.subject_id,\n    lis.hadm_id,\n    lis.instability_score\n  FROM\n    LabInstabilityScore AS lis\n  CROSS JOIN\n    PercentileThreshold AS pt\n  WHERE\n    lis.instability_score >= pt.percentile_90\n),\nCohortStats AS (\n  -- Calculate statistics for the high instability cohort\n  SELECT\n    COUNT(DISTINCT subject_id) AS patient_count,\n    SUM(CASE WHEN a.hospital_expire_flag = 1 THEN 1 ELSE 0 END) AS mortality_count,\n    AVG(TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY)) AS mean_los_days\n  FROM\n    HighInstabilityCohort AS hic\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON hic.subject_id = a.subject_id\n    AND hic.hadm_id = a.hadm_id\n),\nCriticalLabFrequency AS (\n  -- Calculate the frequency of critical labs for the high instability cohort\n  SELECT\n    COUNT(DISTINCT le.itemid) AS critical_lab_count\n  FROM\n    HighInstabilityCohort AS hic\n  INNER JOIN\n    `physionet-data.mimiciv;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unclosed identifier literal at [105:5]; reason: invalidQuery, location: query, message: Syntax error: Unclosed identifier literal at [105:5]\n\nLocation: US\nJob ID: a66c2e6b-9693-433a-8c3f-d719822da532\n",
+  "model": "MedGemma-27B",
+  "model_id": "google/medgemma-27b-text-it",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \";\" at [105:38]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \";\" at [105:38]\n\nLocation: US\nJob ID: f33a9727-62ad-4b42-9239-203f1da73a49\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \";\" at [82:8]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \";\" at [82:8]\n\nLocation: US\nJob ID: 83107d8f-86c4-4081-b5c8-7f9ce67fd5b2\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unclosed identifier literal at [105:5]; reason: invalidQuery, location: query, message: Syntax error: Unclosed identifier literal at [105:5]\n\nLocation: US\nJob ID: a66c2e6b-9693-433a-8c3f-d719822da532\n"
+    }
+  ]
+}

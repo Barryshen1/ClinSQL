@@ -1,0 +1,1 @@
+SELECT MAX(icustays.los) AS max_length_of_stay FROM patients JOIN icustays ON patients.subject_id = icustays.subject_id WHERE patients.gender = 'M' AND patients.anchor_age = 63 AND EXTRACT(YEAR FROM icustays.intime) BETWEEN 2015 AND 2019 AND EXTRACT(YEAR FROM icustays.outtime) BETWEEN 2015 AND 2019 AND (icustays.outtime - icustays.intime) > 0;

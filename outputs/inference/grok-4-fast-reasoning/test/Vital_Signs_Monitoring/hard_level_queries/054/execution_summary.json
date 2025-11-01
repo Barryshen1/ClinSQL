@@ -1,0 +1,28 @@
+{
+  "query": "I have an 87\u2011year\u2011old male. Among male ICU patients 82\u201392 with acute respiratory failure, during first 72 hours report p25/median/p75, IQR of composite instability score (MAP<65 + HR>100 burdens) and compare average burdens, ICU LOS, and mortality to general ICU.",
+  "final_sql": "WITH arf_hadms AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (icd_version = 9 AND icd_code = '51881')\n     OR (icd_version = 10 AND (icd_code LIKE 'J96.0%' OR icd_code LIKE 'J96.2%'))\n),\nmap_burden AS (\n  SELECT \n    ce.stay_id,\n    SUM(CASE WHEN ce.valuenum < 65 THEN 1.0 ELSE 0 END) / COUNT(*) AS burden_map\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON ce.stay_id = i.stay_id\n  WHERE ce.itemid = 220052\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= i.intime\n    AND ce.charttime <= DATETIME_ADD(i.intime, INTERVAL 72 HOUR)\n  GROUP BY ce.stay_id\n),\nhr_burden AS (\n  SELECT \n    ce.stay_id,\n    SUM(CASE WHEN ce.valuenum > 100 THEN 1.0 ELSE 0 END) / COUNT(*) AS burden_hr\n  FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i ON ce.stay_id = i.stay_id\n  WHERE ce.itemid = 220045\n    AND ce.valuenum IS NOT NULL\n    AND ce.charttime >= i.intime\n    AND ce.charttime <= DATETIME_ADD(i.intime, INTERVAL 72 HOUR)\n  GROUP BY ce.stay_id\n),\nburdens AS (\n  SELECT \n    i.stay_id,\n    i.subject_id,\n    i.hadm_id,\n    COALESCE(m.burden_map, 0.0) AS burden_map,\n    COALESCE(h.burden_hr, 0.0) AS burden_hr,\n    COALESCE(m.burden_map, 0.0) + COALESCE(h.burden_hr, 0.0) AS composite,\n    i.los,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n  LEFT JOIN map_burden m ON i.stay_id = m.stay_id\n  LEFT JOIN hr_burden h ON i.stay_id = h.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON i.hadm_id = a.hadm_id\n),\nflagged AS (\n  SELECT \n    b.*,\n    CASE \n      WHEN p.gender = 'M' \n           AND p.anchor_age BETWEEN 82 AND 92 \n           AND arf.hadm_id IS NOT NULL \n      THEN 1 \n      ELSE 0 \n    END AS is_cohort\n  FROM burdens b\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON b.subject_id = p.subject_id\n  LEFT JOIN arf_hadms arf ON b.hadm_id = arf.hadm_id\n)\nSELECT \n  'Cohort' AS population,\n  APPROX_QUANTILES(composite, 100)[OFFSET(25)] AS p25,\n  APPROX_QUANTILES(composite, 100)[OFFSET(50)] AS median,\n  APPROX_QUANTILES(composite, 100)[OFFSET(75)] AS p75,\n  APPROX_QUANTILES(composite, 100)[OFFSET(75)] - APPROX_QUANTILES(composite, 100)[OFFSET(25)] AS IQR,\n  AVG(burden_map) AS avg_map_burden,\n  AVG(burden_hr) AS avg_hr_burden,\n  AVG(los) AS avg_icu_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM flagged \nWHERE is_cohort = 1\n\nUNION ALL\n\nSELECT \n  'General ICU' AS population,\n  CAST(NULL AS FLOAT64) AS p25,\n  CAST(NULL AS FLOAT64) AS median,\n  CAST(NULL AS FLOAT64) AS p75,\n  CAST(NULL AS FLOAT64) AS IQR,\n  AVG(burden_map) AS avg_map_burden,\n  AVG(burden_hr) AS avg_hr_burden,\n  AVG(los) AS avg_icu_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate\nFROM flagged \nWHERE is_cohort = 0;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [4:10]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [4:10]\n\nLocation: US\nJob ID: 166f3c92-c3f3-4009-8c04-f7b7ab6304bb\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 7e5a4ccd-89a0-46c9-87d9-161c74e1af63\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

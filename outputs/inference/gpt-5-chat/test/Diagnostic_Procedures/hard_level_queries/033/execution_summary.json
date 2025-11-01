@@ -1,0 +1,16 @@
+{
+  "query": "42-year-old male with pneumonia: among male ICU patients aged 37\u201347 in their first ICU stay, stratify distinct procedures in the first 48 hours into quintiles and report mean procedure count, mean ICU LOS (days), and hospital mortality by quintile.",
+  "final_sql": "WITH first_icu AS (\n  SELECT\n    icu.subject_id,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.los,\n    ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY icu.intime) AS rn\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` icu\n),\nmale_age_filtered AS (\n  SELECT\n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    icu.hadm_id,\n    icu.stay_id,\n    icu.intime,\n    icu.los\n  FROM first_icu icu\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = icu.subject_id\n  WHERE rn = 1\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n),\npneumonia_patients AS (\n  SELECT DISTINCT\n    m.subject_id,\n    m.hadm_id,\n    m.stay_id,\n    m.intime,\n    m.los\n  FROM male_age_filtered m\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON m.subject_id = d.subject_id\n    AND m.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON d.icd_code = dd.icd_code\n    AND d.icd_version = dd.icd_version\n  WHERE\n    -- ICD-10 J13-J18 or ICD-9 486\n    (d.icd_version = 10 AND (d.icd_code LIKE 'J13%' OR d.icd_code LIKE 'J14%' OR \n                             d.icd_code LIKE 'J15%' OR d.icd_code LIKE 'J16%' OR \n                             d.icd_code LIKE 'J17%' OR d.icd_code LIKE 'J18%'))\n    OR\n    (d.icd_version = 9 AND d.icd_code = '486')\n),\nproc_counts AS (\n  SELECT\n    p.subject_id,\n    p.hadm_id,\n    p.stay_id,\n    p.los,\n    COUNT(DISTINCT pe.itemid) AS proc_count\n  FROM pneumonia_patients p\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n    ON p.subject_id = pe.subject_id\n    AND p.hadm_id = pe.hadm_id\n    AND p.stay_id = pe.stay_id\n    AND pe.starttime >= p.intime\n    AND pe.starttime < DATETIME_ADD(p.intime, INTERVAL 48 HOUR)\n  GROUP BY p.subject_id, p.hadm_id, p.stay_id, p.los\n),\nquintiled AS (\n  SELECT\n    pc.*,\n    a.hospital_expire_flag,\n    NTILE(5) OVER (ORDER BY pc.proc_count) AS quintile\n  FROM proc_counts pc\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON pc.hadm_id = a.hadm_id\n)\nSELECT\n  quintile,\n  AVG(proc_count) AS mean_proc_count,\n  AVG(los) AS mean_icu_los_days,\n  AVG(hospital_expire_flag) AS hospital_mortality\nFROM quintiled\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

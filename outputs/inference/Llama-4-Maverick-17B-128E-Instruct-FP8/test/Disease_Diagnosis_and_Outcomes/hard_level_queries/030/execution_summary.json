@@ -1,0 +1,28 @@
+{
+  "query": "For a 69-year-old male inpatient, among male inpatients aged 64\u201374 with upper GI bleeding stratified into quintiles by composite risk score (diagnosis count +20\u00d7major complication), give n, mean score, 30\u2011day mortality %, major complication %, and median LOS among survivors.",
+  "final_sql": "WITH \n-- Step 1: Filter patients and calculate age\npatients_filtered AS (\n  SELECT subject_id, anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'M' AND anchor_age BETWEEN 64 AND 74\n),\n\n-- Step 2: Identify patients with upper GI bleeding\nupper_gi_bleeding AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Gastrointestinal hemorrhage%' OR dicd.long_title LIKE '%Upper GI bleed%'\n),\n\n-- Step 3: Calculate diagnosis count and major complication for each hadm_id\ndiagnosis_count AS (\n  SELECT hadm_id, COUNT(*) as count_diagnoses\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n),\nmajor_complication AS (\n  SELECT hadm_id, COUNT(*) as count_major_complication\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Complication%'  -- Simplified condition for major complication\n  GROUP BY hadm_id\n),\n\n-- Step 4: Calculate composite risk score\ncomposite_risk_score AS (\n  SELECT a.hadm_id, \n         COALESCE(dc.count_diagnoses, 0) as count_diagnoses,\n         COALESCE(mc.count_major_complication, 0) as count_major_complication,\n         COALESCE(dc.count_diagnoses, 0) + 20 * COALESCE(mc.count_major_complication, 0) as composite_score\n  FROM upper_gi_bleeding a\n  LEFT JOIN diagnosis_count dc ON a.hadm_id = dc.hadm_id\n  LEFT JOIN major_complication mc ON a.hadm_id = mc.hadm_id\n),\n\n-- Step 5: Calculate quintiles of composite risk score\nquintiles AS (\n  SELECT hadm_id, composite_score,\n         NTILE(5) OVER (ORDER BY composite_score) as quintile\n  FROM composite_risk_score\n),\n\n-- Step 6: Calculate outcomes\nadmissions_info AS (\n  SELECT a.hadm_id, a.dischtime, a.deathtime, p.dod,\n         DATE_DIFF(COALESCE(a.deathtime, p.dod), a.dischtime, DAY) as days_to_death,\n         DATE_DIFF(a.dischtime, a.admittime, DAY) as los\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN patients_filtered pf ON a.subject_id = pf.subject_id  -- Filter by age and gender\n),\n\noutcomes AS (\n  SELECT q.quintile,\n         COUNT(*) as n,\n         AVG(q.composite_score) as mean_score,\n         AVG(IF(ai.days_to_death <= 30, 1, 0)) * 100 as mortality_30_day_percent,\n         AVG(IF(mc.count_major_complication > 0, 1, 0)) * 100 as major_complication_percent,\n         APPROX_QUANTILE(ai.los, 0.5) as median_los\n  FROM quintiles q\n  JOIN composite_risk_score crs ON q.hadm_id = crs.hadm_id\n  JOIN admissions_info ai ON q.hadm_id = ai.hadm_id\n  LEFT JOIN major_complication mc ON q.hadm_id = mc.hadm_id\n  WHERE ai.days_to_death IS NULL OR ai.days_to_death > 0  -- Filter out patients who died on the same day as discharge\n  GROUP BY q.quintile\n)\n\nSELECT quintile, n, mean_score, mortality_30_day_percent, major_complication_percent, median_los\nFROM outcomes\nORDER BY quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [65:10]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [65:10]\n\nLocation: US\nJob ID: e6b0ec6f-f4ea-4103-ba83-d12e6e0feb79\n",
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references ai.los which is neither grouped nor aggregated at [64:26]; reason: invalidQuery, location: query, message: SELECT list expression references ai.los which is neither grouped nor aggregated at [64:26]\n\nLocation: US\nJob ID: 66f179d6-36ac-4f81-a60a-7e9e413fe661\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 170587e5-e90f-487d-be49-5f4367b1ed72\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [65:10]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [65:10]\n\nLocation: US\nJob ID: e6b0ec6f-f4ea-4103-ba83-d12e6e0feb79\n"
+    }
+  ]
+}

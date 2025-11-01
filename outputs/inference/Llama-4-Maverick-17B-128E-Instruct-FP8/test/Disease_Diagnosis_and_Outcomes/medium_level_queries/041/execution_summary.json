@@ -1,0 +1,16 @@
+{
+  "query": "I have a 55-year-old female. For women aged 50\u201360 with sepsis excluding septic shock, give in-hospital mortality (%) for LOS \u22647 vs >7 days, absolute/relative difference, and median time-to-death.",
+  "final_sql": "WITH \npatients_filtered AS (\n  SELECT subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.patients`\n  WHERE gender = 'F' AND anchor_age BETWEEN 50 AND 60\n),\nadmissions_filtered AS (\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime, a.deathtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN patients_filtered p ON a.subject_id = p.subject_id\n),\nsepsis_patients AS (\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Sepsis%' AND dicd.long_title NOT LIKE '%septic shock%'\n),\ncombined_data AS (\n  SELECT \n    af.hadm_id,\n    af.admittime,\n    af.dischtime,\n    af.deathtime,\n    DATETIME_DIFF(af.dischtime, af.admittime, DAY) AS los,\n    CASE WHEN af.deathtime IS NOT NULL AND af.deathtime <= af.dischtime THEN 1 ELSE 0 END AS in_hospital_mortality,\n    DATETIME_DIFF(af.deathtime, af.admittime, DAY) AS time_to_death\n  FROM admissions_filtered af\n  INNER JOIN sepsis_patients sp ON af.hadm_id = sp.hadm_id\n),\nstats AS (\n  SELECT \n    CASE WHEN los <= 7 THEN 'LOS <= 7' ELSE 'LOS > 7' END AS los_category,\n    COUNT(*) AS total_patients,\n    SUM(in_hospital_mortality) AS deaths,\n    AVG(in_hospital_mortality) * 100 AS mortality_percentage\n  FROM combined_data\n  GROUP BY CASE WHEN los <= 7 THEN 'LOS <= 7' ELSE 'LOS > 7' END\n),\nmortality_diff AS (\n  SELECT \n    (SELECT mortality_percentage FROM stats WHERE los_category = 'LOS > 7') - (SELECT mortality_percentage FROM stats WHERE los_category = 'LOS <= 7') AS absolute_diff,\n    ((SELECT mortality_percentage FROM stats WHERE los_category = 'LOS > 7') - (SELECT mortality_percentage FROM stats WHERE los_category = 'LOS <= 7')) / (SELECT mortality_percentage FROM stats WHERE los_category = 'LOS <= 7') * 100 AS relative_diff\n),\ntime_to_death_median AS (\n  SELECT APPROX_QUANTILES(time_to_death, 100)[OFFSET(50)] AS median_time_to_death\n  FROM combined_data\n  WHERE in_hospital_mortality = 1\n)\nSELECT \n  s.los_category,\n  s.total_patients,\n  s.deaths,\n  s.mortality_percentage,\n  md.absolute_diff,\n  md.relative_diff,\n  ttd.median_time_to_death\nFROM stats s\nCROSS JOIN mortality_diff md\nCROSS JOIN time_to_death_median ttd;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

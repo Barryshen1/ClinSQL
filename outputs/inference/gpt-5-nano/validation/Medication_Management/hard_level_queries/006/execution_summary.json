@@ -1,0 +1,28 @@
+{
+  "query": "For a 42\u2011year\u2011old man with a postoperative ICU admission, among male inpatients aged 37\u201347, compute medication complexity over the first 72 hours, stratify into quintiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per quintile and estimate his risk.",
+  "final_sql": "WITH cohort_admissions AS (\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.deathtime,\n    i.intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.subject_id = i.subject_id AND a.hadm_id = i.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON p.subject_id = i.subject_id\n  WHERE UPPER(p.gender) = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` pr\n      WHERE pr.subject_id = a.subject_id AND pr.hadm_id = a.hadm_id\n    )\n),\nmeds AS (\n  SELECT\n    ca.subject_id,\n    ca.hadm_id,\n    ca.stay_id,\n    COUNT(DISTINCT ie.itemid) AS med_complexity\n  FROM cohort_admissions AS ca\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.inputevents` AS ie\n    ON ie.subject_id = ca.subject_id\n   AND ie.hadm_id = ca.hadm_id\n   AND ie.stay_id = ca.stay_id\n   AND ie.starttime >= ca.intime\n   AND ie.starttime < TIMESTAMP_ADD(ca.intime, INTERVAL 72 HOUR)\n  GROUP BY ca.subject_id, ca.hadm_id, ca.stay_id\n)\nSELECT\n  quintile,\n  AVG(los_days) AS avg_los_days,\n  AVG(mortality) AS mortality_rate,\n  AVG(readmit_30d) AS readmit_rate,\n  COUNT(*) AS n_patients\nFROM (\n  SELECT\n    m.subject_id,\n    m.hadm_id,\n    m.stay_id,\n    m.med_complexity,\n    NTILE(5) OVER (ORDER BY m.med_complexity) AS quintile,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / 86400.0 AS los_days,\n    CASE\n      WHEN a.hospital_expire_flag = 1 OR a.deathtime IS NOT NULL THEN 1\n      ELSE 0\n    END AS mortality,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = a.subject_id\n          AND a2.hadm_id <> a.hadm_id\n          AND a2.admittime >= a.dischtime\n          AND a2.admittime < TIMESTAMP_ADD(a.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmit_30d\n  FROM meds AS m\n  JOIN cohort_admissions AS ca\n    ON ca.subject_id = m.subject_id\n   AND ca.hadm_id = m.hadm_id\n   AND ca.stay_id = m.stay_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON a.subject_id = m.subject_id\n   AND a.hadm_id = m.hadm_id\n) AS t\nGROUP BY quintile\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"postoperative\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"postoperative\" at [1:8]\n\nLocation: US\nJob ID: e5605fba-670c-4970-8880-c1671f233075\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword PROCEDURE at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword PROCEDURE at [1:8]\n\nLocation: US\nJob ID: a21501b0-a9fc-4398-b99f-e2fd952cefb1\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

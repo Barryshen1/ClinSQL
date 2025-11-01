@@ -1,0 +1,16 @@
+{
+  "query": "For my 53-year-old female ICU patient, among ICU stays aged 48\u201358, report percent distribution of per\u2011stay average HR in first 48h (<60; 60\u201399; 100\u2013119; \u2265120) and AKI rate by category.",
+  "final_sql": "WITH cohort_stays AS (\n  SELECT\n    i.stay_id,\n    i.hadm_id,\n    i.subject_id\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` AS i\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON i.subject_id = p.subject_id\n  WHERE p.anchor_age BETWEEN 48 AND 58\n    AND UPPER(p.gender) = 'F'\n),\n\n-- 2) Per-stay average heart rate in first 48 hours\nhr_per_stay AS (\n  SELECT\n    cs.stay_id,\n    cs.hadm_id,\n    cs.subject_id,\n    AVG(ce.valuenum) AS hr_mean\n  FROM cohort_stays AS cs\n  JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce\n    ON ce.subject_id = cs.subject_id\n   AND ce.hadm_id = cs.hadm_id\n   AND ce.stay_id = cs.stay_id\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON ce.itemid = di.itemid\n  WHERE ce.valuenum IS NOT NULL\n    AND LOWER(di.label) LIKE '%heart rate%'\n    AND ce.charttime BETWEEN (\n          SELECT intime\n          FROM `physionet-data.mimiciv_3_1_icu.icustays`\n          WHERE stay_id = cs.stay_id\n        ) AND TIMESTAMP_ADD(\n              (SELECT intime\n               FROM `physionet-data.mimiciv_3_1_icu.icustays`\n               WHERE stay_id = cs.stay_id),\n              INTERVAL 48 HOUR\n            )\n  GROUP BY cs.stay_id, cs.hadm_id, cs.subject_id\n),\n\n-- 3) Categorize HR and prepare for distribution\nhr_category AS (\n  SELECT\n    stay_id,\n    hadm_id,\n    subject_id,\n    hr_mean,\n    CASE\n      WHEN hr_mean < 60 THEN '<60'\n      WHEN hr_mean >= 60 AND hr_mean <= 99 THEN '60-99'\n      WHEN hr_mean >= 100 AND hr_mean <= 119 THEN '100-119'\n      ELSE '>=120'\n    END AS hr_category\n  FROM hr_per_stay\n  WHERE hr_mean IS NOT NULL\n),\n\n-- 4) AKI by admission (N17* ICD codes)\naki_by_hadm AS (\n  SELECT\n    hadm_id,\n    MAX(CASE WHEN icd_code LIKE 'N17%' THEN 1 ELSE 0 END) AS aki_present\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY hadm_id\n)\n\n-- 5) Final aggregation: distribution by HR category and AKI rate by category\nSELECT\n  h.hr_category,\n  COUNT(*) AS n_stays,\n  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS pct_of_total,\n  ROUND(100.0 * COALESCE(SUM(a.aki_present), 0) / COUNT(*), 2) AS aki_rate_percent\nFROM hr_category AS h\nLEFT JOIN aki_by_hadm AS a\n  ON h.hadm_id = a.hadm_id\nGROUP BY h.hr_category\nORDER BY\n  CASE\n    WHEN h.hr_category = '<60' THEN 1\n    WHEN h.hr_category = '60-99' THEN 2\n    WHEN h.hr_category = '100-119' THEN 3\n    WHEN h.hr_category = '>=120' THEN 4\n  END;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

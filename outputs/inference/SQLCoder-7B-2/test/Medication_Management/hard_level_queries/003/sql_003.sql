@@ -1,0 +1,1 @@
+SELECT * FROM male_inpatients_first_24_hours_with_medication_and_labevents_and_diagnoses_and_procedures_with_poe;

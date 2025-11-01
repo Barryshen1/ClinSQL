@@ -1,0 +1,28 @@
+{
+  "query": "As a physician assessing a 93-year-old man, among male ICU patients 88\u201398 with COPD exacerbation, what is the 75th percentile of distinct procedures in the first 72 hours? Compare mean ICU LOS and in-hospital mortality to age-matched ICU patients.",
+  "final_sql": "WITH base_cohort AS (\n    -- Get first ICU stay for each admission of male patients aged 88-98\n    SELECT \n        p.subject_id,\n        p.anchor_age,\n        i.hadm_id,\n        i.stay_id,\n        i.intime,\n        i.outtime,\n        i.los,\n        adm.hospital_expire_flag\n    FROM `physionet-data.mimiciv_3_1_icu.icustays` i\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON i.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n        ON i.hadm_id = adm.hadm_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 88 AND 98\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY i.hadm_id ORDER BY i.intime) = 1\n),\ncopd_cohort AS (\n    -- Filter base_cohort for COPD exacerbation\n    SELECT \n        b.*\n    FROM base_cohort b\n    WHERE EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE b.hadm_id = d.hadm_id\n        AND (\n            (d.icd_version = 10 AND d.icd_code IN ('J440', 'J441'))\n            OR (d.icd_version = 9 AND d.icd_code IN ('49121', '49122'))\n        )\n    )\n),\ncontrol_cohort AS (\n    -- The rest of the base_cohort\n    SELECT \n        b.*\n    FROM base_cohort b\n    WHERE NOT EXISTS (\n        SELECT 1\n        FROM copd_cohort c\n        WHERE b.hadm_id = c.hadm_id\n    )\n),\nprocedure_counts AS (\n    -- For each patient in COPD cohort, count distinct procedures in first 72h\n    SELECT \n        c.stay_id,\n        COUNT(DISTINCT p.itemid) AS num_procedures\n    FROM copd_cohort c\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` p\n        ON c.stay_id = p.stay_id\n        AND p.starttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    GROUP BY c.stay_id\n),\ncopd_aggregates AS (\n    SELECT\n        'COPD Exacerbation' AS cohort,\n        COUNT(*) AS num_patients,\n        APPROX_QUANTILE(num_procedures, 0.75) AS percentile_75_procedures,\n        AVG(los) AS mean_icu_los,\n        AVG(hospital_expire_flag) AS in_hospital_mortality\n    FROM copd_cohort\n    LEFT JOIN procedure_counts USING (stay_id)\n),\ncontrol_aggregates AS (\n    SELECT\n        'Control' AS cohort,\n        COUNT(*) AS num_patients,\n        NULL AS percentile_75_procedures,\n        AVG(los) AS mean_icu_los,\n        AVG(hospital_expire_flag) AS in_hospital_mortality\n    FROM control_cohort\n)\n-- Main query\nSELECT * FROM copd_aggregates\nUNION ALL\nSELECT * FROM control_aggregates;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [62:9]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [62:9]\n\nLocation: US\nJob ID: 78a54a97-3b37-423b-b0e9-41ac15c65bd5\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column num_procedures which is neither grouped nor aggregated at [62:21]; reason: invalidQuery, location: query, message: SELECT list expression references column num_procedures which is neither grouped nor aggregated at [62:21]\n\nLocation: US\nJob ID: 23a551ab-4327-4276-92e8-d1c79df9a8b2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: ccccb70a-dcdf-4782-a004-60b1f635c975\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [62:9]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [62:9]\n\nLocation: US\nJob ID: 78a54a97-3b37-423b-b0e9-41ac15c65bd5\n"
+    }
+  ]
+}

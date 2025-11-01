@@ -1,0 +1,28 @@
+{
+  "query": "My 50\u2011yr\u2011old male patient: in male ICU patients 45\u201355 with heart failure, what's the 99th percentile of the 72h composite instability score? For the most unstable quartile, compare average tachycardia (>100 bpm), MAP<65, tachypnea (>20), ICU LOS and mortality to ICU population.",
+  "final_sql": "WITH patients_45_55_male AS (\n  SELECT p.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_icu`.icustays icu ON p.subject_id = icu.subject_id\n  WHERE p.gender = 'M'\n    AND (EXTRACT(YEAR FROM icu.intime) - p.anchor_year + p.anchor_age) BETWEEN 45 AND 55\n),\n\nhf_diagnoses AS (\n  SELECT di.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE d.icd_code LIKE 'I50%'\n    AND di.icd_version = 10\n),\n\ncohort AS (\n  SELECT DISTINCT icu.subject_id, icu.hadm_id, icu.stay_id, icu.intime, icu.outtime, icu.los\n  FROM `physionet-data.mimiciv_3_1_icu`.icustays icu\n  INNER JOIN patients_45_55_male p ON icu.subject_id = p.subject_id\n  INNER JOIN hf_diagnoses hf ON icu.hadm_id = hf.hadm_id\n),\n\nvital_items AS (\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_icu`.d_items\n  WHERE label IN ('Heart Rate', 'Mean Blood Pressure', 'Respiratory Rate')\n),\n\nvitals_72h AS (\n  SELECT ce.stay_id, ce.itemid, ce.charttime, ce.valuenum\n  FROM `physionet-data.mimiciv_3_1_icu`.chartevents ce\n  INNER JOIN vital_items vi ON ce.itemid = vi.itemid\n  INNER JOIN cohort c ON ce.stay_id = c.stay_id\n  WHERE ce.charttime >= c.intime\n    AND ce.charttime <= DATETIME_ADD(c.intime, INTERVAL 72 HOUR)\n    AND ce.valuenum IS NOT NULL\n),\n\nabnormal_vitals AS (\n  SELECT \n    stay_id,\n    SUM(CASE WHEN itemid = (SELECT itemid FROM vital_items WHERE label = 'Heart Rate') AND valuenum > 100 THEN 1 ELSE 0 END) AS hr_tach_count,\n    SUM(CASE WHEN itemid = (SELECT itemid FROM vital_items WHERE label = 'Mean Blood Pressure') AND valuenum < 65 THEN 1 ELSE 0 END) AS map_low_count,\n    SUM(CASE WHEN itemid = (SELECT itemid FROM vital_items WHERE label = 'Respiratory Rate') AND valuenum > 20 THEN 1 ELSE 0 END) AS rr_tach_count\n  FROM vitals_72h\n  GROUP BY stay_id\n),\n\ninstability_score AS (\n  SELECT \n    av.stay_id,\n    av.hr_tach_count + av.map_low_count + av.rr_tach_count AS composite_score,\n    av.hr_tach_count,\n    av.map_low_count,\n    av.rr_tach_count,\n    c.los AS icu_los,\n    a.hospital_expire_flag\n  FROM abnormal_vitals av\n  INNER JOIN cohort c ON av.stay_id = c.stay_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a ON c.hadm_id = a.hadm_id\n),\n\npercentiles AS (\n  SELECT \n    APPROX_QUANTILES(composite_score, 100)[OFFSET(99)] AS p99_score\n  FROM instability_score\n),\n\nquartiles AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY composite_score) AS score_quartile\n  FROM instability_score\n),\n\ntop_quartile AS (\n  SELECT *\n  FROM quartiles\n  WHERE score_quartile = 4\n),\n\nsummary_stats AS (\n  SELECT\n    'top_quartile' AS group_name,\n    AVG(CASE WHEN hr_tach_count > 0 THEN 1.0 ELSE 0.0 END) AS avg_tachycardia,\n    AVG(CASE WHEN map_low_count > 0 THEN 1.0 ELSE 0.0 END) AS avg_map_lt_65,\n    AVG(CASE WHEN rr_tach_count > 0 THEN 1.0 ELSE 0.0 END) AS avg_tachypnea,\n    AVG(icu_los) AS avg_icu_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM top_quartile\n\n  UNION ALL\n\n  SELECT\n    'full_cohort' AS group_name,\n    AVG(CASE WHEN hr_tach_count > 0 THEN 1.0 ELSE 0.0 END) AS avg_tachycardia,\n    AVG(CASE WHEN map_low_count > 0 THEN 1.0 ELSE 0.0 END) AS avg_map_lt_65,\n    AVG(CASE WHEN rr_tach_count > 0 THEN 1.0 ELSE 0.0 END) AS avg_tachypnea,\n    AVG(icu_los) AS avg_icu_los,\n    AVG(hospital_expire_flag) AS mortality_rate\n  FROM instability_score\n)\nSELECT * FROM summary_stats;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"failure\" at [1:12]\n\nLocation: US\nJob ID: 832b0962-8196-4668-9bb3-41d81ff1809f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: hr_tach_count at [83:19]; reason: invalidQuery, location: query, message: Unrecognized name: hr_tach_count at [83:19]\n\nLocation: US\nJob ID: e982e9c6-f678-44df-9eb8-d079ebeabe63\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

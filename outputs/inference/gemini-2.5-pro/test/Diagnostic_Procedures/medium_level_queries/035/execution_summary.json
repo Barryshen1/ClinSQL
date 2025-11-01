@@ -1,0 +1,22 @@
+{
+  "query": "Consult: For my 48\u2011year\u2011old male, among AKI admissions aged 43\u201353, what are patient counts and mean MRI/CTs per admission for LOS 1\u20134 vs 5\u20137 days, stratified by primary vs secondary AKI?",
+  "final_sql": "WITH\n  -- Step 1: Identify all hospital admissions with an AKI diagnosis and determine if it's primary or secondary.\n  aki_diagnoses AS (\n    SELECT\n      hadm_id,\n      -- An admission is 'Primary AKI' if any AKI diagnosis has seq_num = 1.\n      -- We use MIN() to prioritize the 'Primary' classification.\n      CASE\n        WHEN MIN(CASE WHEN dx.seq_num = 1 THEN 1 ELSE 2 END) = 1\n        THEN 'Primary AKI'\n        ELSE 'Secondary AKI'\n      END AS aki_type\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n    WHERE\n      -- Filter for AKI diagnosis codes (ICD-9: 584.x, ICD-10: N17.x)\n      (\n        dx.icd_code LIKE '584%' AND dx.icd_version = 9\n      )\n      OR (\n        dx.icd_code LIKE 'N17%' AND dx.icd_version = 10\n      )\n    GROUP BY\n      hadm_id\n  ),\n  -- Step 2: Count the number of CT or MRI scans for each hospital admission.\n  imaging_counts AS (\n    SELECT\n      hadm_id,\n      COUNT(*) AS num_scans\n    FROM\n      `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n    WHERE\n      -- Use LOWER() and LIKE for case-insensitive matching on procedure descriptions in BigQuery\n      LOWER(short_description) LIKE '%ct%'\n      OR LOWER(short_description) LIKE '%mri%'\n      OR LOWER(short_description) LIKE '%magnetic resonance imaging%'\n      OR LOWER(short_description) LIKE '%computed tomography%'\n    GROUP BY\n      hadm_id\n  ),\n  -- Step 3: Build the final cohort by filtering on age and calculating LOS.\n  final_cohort AS (\n    SELECT\n      aki.hadm_id,\n      adm.subject_id,\n      aki.aki_type,\n      -- Categorize length of stay into the specified groups.\n      CASE\n        WHEN DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 1 AND 4\n        THEN '1-4 days'\n        WHEN DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) BETWEEN 5 AND 7\n        THEN '5-7 days'\n        ELSE NULL\n      END AS los_group\n    FROM\n      aki_diagnoses AS aki\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      ON aki.hadm_id = adm.hadm_id\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n    WHERE\n      -- Filter for patient age at admission between 43 and 53\n      (EXTRACT(YEAR FROM adm.admittime) - pat.anchor_year + pat.anchor_age) BETWEEN 43 AND 53\n  )\n-- Step 4: Join the cohort with scan counts and aggregate the final results.\nSELECT\n  fc.aki_type,\n  fc.los_group,\n  COUNT(DISTINCT fc.subject_id) AS patient_count,\n  -- Use COALESCE to treat admissions with no scans as 0 for the average calculation.\n  AVG(COALESCE(img.num_scans, 0)) AS mean_mri_ct_per_admission\nFROM\n  final_cohort AS fc\nLEFT JOIN\n  imaging_counts AS img\n  ON fc.hadm_id = img.hadm_id\nWHERE\n  -- Exclude admissions that do not fall into the specified LOS groups.\n  fc.los_group IS NOT NULL\nGROUP BY\n  fc.aki_type,\n  fc.los_group\nORDER BY\n  fc.aki_type,\n  fc.los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [35:25]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [35:25]\n\nLocation: US\nJob ID: 552fe135-cec0-4651-bf88-7f6b63205e8e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

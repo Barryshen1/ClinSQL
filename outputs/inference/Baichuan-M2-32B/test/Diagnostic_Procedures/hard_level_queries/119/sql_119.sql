@@ -1,0 +1,1 @@
+(icd_version = 9 AND icd_code LIKE '410%') OR (icd_version = 10 AND icd_code LIKE 'I21%');

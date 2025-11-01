@@ -1,0 +1,28 @@
+{
+  "query": "For a 74-year-old man with AMI: among men 69\u201379 without shock or respiratory failure, what's in-hospital mortality by LOS (1\u20133, 4\u20137, \u22658 days)? Provide mortality %, median LOS, discharge destinations.",
+  "final_sql": "WITH ami_patients AS (\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.hospital_expire_flag, a.discharge_location\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 69 AND 79\n    AND LOWER(did.long_title) LIKE '%acute myocardial infarction%'\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND NOT EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d2\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did2 ON d2.icd_code = did2.icd_code AND d2.icd_version = did2.icd_version\n      WHERE d2.hadm_id = a.hadm_id\n        AND (\n          LOWER(did2.long_title) LIKE '%shock%'\n          OR LOWER(did2.long_title) LIKE '%respiratory failure%'\n        )\n    )\n),\nlos_categories AS (\n  SELECT \n    hadm_id,\n    hospital_expire_flag,\n    discharge_location,\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los_days,\n    CASE \n      WHEN TIMESTAMP_DIFF(dischtime, admittime, DAY) BETWEEN 1 AND 3 THEN '1-3 days'\n      WHEN TIMESTAMP_DIFF(dischtime, admittime, DAY) BETWEEN 4 AND 7 THEN '4-7 days'\n      WHEN TIMESTAMP_DIFF(dischtime, admittime, DAY) >= 8 THEN '>=8 days'\n    END AS los_group\n  FROM ami_patients\n),\nmedian_los AS (\n  SELECT \n    los_group,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los_days\n  FROM los_categories\n  WHERE los_group IS NOT NULL\n  GROUP BY los_group\n),\ndischarge_breakdown AS (\n  SELECT \n    los_group,\n    ROUND(100.0 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_percent,\n    discharge_location,\n    COUNT(*) AS discharge_count\n  FROM los_categories\n  WHERE los_group IS NOT NULL\n  GROUP BY los_group, discharge_location\n)\nSELECT \n  db.los_group,\n  db.mortality_percent,\n  ml.median_los_days,\n  db.discharge_location,\n  db.discharge_count\nFROM discharge_breakdown db\nINNER JOIN median_los ml ON db.los_group = ml.los_group\nORDER BY db.los_group, db.discharge_count DESC;",
+  "execution_success": true,
+  "row_count": 21,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [39:19]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [39:19]\n\nLocation: US\nJob ID: af1c4d27-c0cf-4001-b761-1aa8df95b788\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 743d1c31-d504-408b-8fd0-edd0554e21fc\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 21,
+      "error": null
+    }
+  ]
+}

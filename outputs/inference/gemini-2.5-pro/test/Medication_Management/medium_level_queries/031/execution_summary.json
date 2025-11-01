@@ -1,0 +1,22 @@
+{
+  "query": "Male patient age 58: among male inpatients 53\u201363 with diabetes and heart failure, give percentages with injectable GLP\u20111 RA initiated within first 24 hours versus final 12 hours before discharge.",
+  "final_sql": "WITH\n-- Step 1: Create a base cohort of male patients aged 53-63 with a hospital admission.\npatient_base AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    ON p.subject_id = a.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 53 AND 63\n),\n\n-- Step 2a: Pre-aggregate diagnosis flags for each hospital admission.\ndiagnosis_flags AS (\n  SELECT\n    hadm_id,\n    -- Flag for at least one Diabetes diagnosis code\n    COUNT(\n      CASE\n        WHEN (icd_version = 9 AND SUBSTR(icd_code, 1, 3) = '250')\n             OR (icd_version = 10 AND SUBSTR(icd_code, 1, 3) IN ('E08', 'E09', 'E10', 'E11', 'E13'))\n        THEN icd_code\n      END\n    ) > 0 AS has_diabetes,\n    -- Flag for at least one Heart Failure diagnosis code\n    COUNT(\n      CASE\n        WHEN (icd_version = 9 AND SUBSTR(icd_code, 1, 3) = '428')\n             OR (icd_version = 10 AND SUBSTR(icd_code, 1, 3) = 'I50')\n        THEN icd_code\n      END\n    ) > 0 AS has_hf\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  GROUP BY\n    hadm_id\n),\n\n-- Step 2b: Filter the base cohort for patients diagnosed with both diabetes and heart failure.\ndiagnosed_cohort AS (\n  SELECT\n    pb.hadm_id,\n    pb.admittime,\n    pb.dischtime\n  FROM\n    patient_base AS pb\n  INNER JOIN\n    diagnosis_flags AS df\n    ON pb.hadm_id = df.hadm_id\n  WHERE\n    df.has_diabetes AND df.has_hf\n),\n\n-- Step 3: Identify the first initiation time of an injectable GLP-1 RA for each hospital admission.\nglp1ra_initiations AS (\n  SELECT\n    hadm_id,\n    MIN(starttime) AS first_starttime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.prescriptions`\n  WHERE\n    -- A list of common generic and brand names for GLP-1 RAs\n    (\n      LOWER(drug) LIKE '%exenatide%'\n      OR LOWER(drug) LIKE '%liraglutide%'\n      OR LOWER(drug) LIKE '%dulaglutide%'\n      OR LOWER(drug) LIKE '%semaglutide%'\n      OR LOWER(drug) LIKE '%lixisenatide%'\n      OR LOWER(drug) LIKE '%byetta%'\n      OR LOWER(drug) LIKE '%bydureon%'\n      OR LOWER(drug) LIKE '%victoza%'\n      OR LOWER(drug) LIKE '%trulicity%'\n      OR LOWER(drug) LIKE '%ozempic%'\n    )\n    -- Filter for injectable routes by excluding common oral/enteral routes\n    AND route NOT IN ('PO', 'PO/NG', 'NG', 'GT', 'OG', 'JT')\n    AND starttime IS NOT NULL\n  GROUP BY\n    hadm_id\n)\n\n-- Step 4: Join the final cohort with medication data and calculate the final percentages.\nSELECT\n  -- Percentage initiated within the first 24 hours of admission\n  100.0 * COUNTIF(\n    g.first_starttime IS NOT NULL\n    AND g.first_starttime <= DATETIME_ADD(dc.admittime, INTERVAL 24 HOUR)\n  ) / COUNT(dc.hadm_id) AS percentage_initiated_first_24h,\n\n  -- Percentage initiated within the final 12 hours before discharge\n  100.0 * COUNTIF(\n    g.first_starttime IS NOT NULL\n    AND g.first_starttime >= DATETIME_SUB(dc.dischtime, INTERVAL 12 HOUR)\n    AND g.first_starttime <= dc.dischtime\n  ) / COUNT(dc.hadm_id) AS percentage_initiated_last_12h\nFROM\n  diagnosed_cohort AS dc\nLEFT JOIN\n  glp1ra_initiations AS g\n  ON dc.hadm_id = g.hadm_id;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.; reason: invalidQuery, location: query, message: Correlated subqueries that reference other tables are not supported unless they can be de-correlated, such as by transforming them into an efficient JOIN.\n\nLocation: US\nJob ID: 93f3e002-c83c-47bf-a2fd-7a560b1ffe8b\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

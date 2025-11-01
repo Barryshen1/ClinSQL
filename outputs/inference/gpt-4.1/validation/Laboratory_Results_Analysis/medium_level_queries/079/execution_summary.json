@@ -1,0 +1,16 @@
+{
+  "query": "For my 87\u2011year\u2011old female patient, among women 82\u201392 admitted with chest pain or AMI and initial troponin T >0.01 ng/mL, report p25, p50, p75 and min\u2013max.",
+  "final_sql": "WITH chest_pain_ami_icds AS (\n  -- ICD codes for chest pain and AMI (both ICD-9 and ICD-10)\n  SELECT icd_code, icd_version\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE\n    -- Chest pain ICD-9\n    (icd_version = 9 AND (\n      icd_code LIKE '7865%' -- 786.50, 786.51, etc.\n    ))\n    OR\n    -- Chest pain ICD-10\n    (icd_version = 10 AND (\n      icd_code LIKE 'R07%' -- R07.9, R07.2, etc.\n    ))\n    OR\n    -- AMI ICD-9\n    (icd_version = 9 AND (\n      icd_code LIKE '410%' -- 410.xx\n    ))\n    OR\n    -- AMI ICD-10\n    (icd_version = 10 AND (\n      icd_code LIKE 'I21%' OR icd_code LIKE 'I22%' -- I21.xx, I22.xx\n    ))\n),\ntroponin_t_items AS (\n  -- Find itemids for Troponin T (not Troponin I)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n),\ncohort AS (\n  -- Get admissions for women aged 82-92 with chest pain or AMI\n  SELECT\n    a.subject_id,\n    a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN chest_pain_ami_icds icd\n    ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 82 AND 92\n),\ninitial_troponin_t AS (\n  -- For each admission in the cohort, get the first Troponin T value >0.01 ng/mL\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum,\n    l.valueuom\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` l\n  JOIN troponin_t_items tti\n    ON l.itemid = tti.itemid\n  JOIN cohort c\n    ON l.subject_id = c.subject_id AND l.hadm_id = c.hadm_id\n  WHERE\n    l.valuenum IS NOT NULL\n    AND LOWER(l.valueuom) = 'ng/ml'\n)\n, first_troponin_t AS (\n  -- Get the first Troponin T per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    MIN(charttime) AS first_charttime\n  FROM initial_troponin_t\n  GROUP BY subject_id, hadm_id\n)\n, cohort_initial_troponin AS (\n  -- Join to get the value for the first Troponin T per admission\n  SELECT\n    i.subject_id,\n    i.hadm_id,\n    i.charttime,\n    i.valuenum\n  FROM initial_troponin_t i\n  JOIN first_troponin_t f\n    ON i.subject_id = f.subject_id AND i.hadm_id = f.hadm_id AND i.charttime = f.first_charttime\n  WHERE i.valuenum > 0.01\n)\nSELECT\n  COUNT(*) AS n_patients,\n  MIN(valuenum) AS min_troponin_t,\n  MAX(valuenum) AS max_troponin_t,\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(1)] AS p25_troponin_t,\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(2)] AS p50_troponin_t,\n  APPROX_QUANTILES(valuenum, 4)[OFFSET(3)] AS p75_troponin_t\nFROM cohort_initial_troponin\n;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

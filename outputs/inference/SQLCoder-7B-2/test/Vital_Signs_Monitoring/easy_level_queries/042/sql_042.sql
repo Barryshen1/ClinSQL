@@ -1,0 +1,1 @@
+SELECT stddev(o.value) AS standard_deviation FROM omr o JOIN patients p ON o.subject_id = p.subject_id JOIN icustays i ON o.hadm_id = i.hadm_id WHERE p.gender = 'F' AND p.anchor_age = 68 AND EXTRACT(YEAR FROM i.intime) BETWEEN 2013 AND 2014 AND o.result_name = 'Maximum Respiratory Rate' AND p.anchor_year_group BETWEEN 63 AND 73;

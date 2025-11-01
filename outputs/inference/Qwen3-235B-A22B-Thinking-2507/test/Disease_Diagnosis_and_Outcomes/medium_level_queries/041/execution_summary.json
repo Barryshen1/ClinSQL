@@ -1,0 +1,23 @@
+{
+  "query": "I have a 55-year-old female. For women aged 50\u201360 with sepsis excluding septic shock, give in-hospital mortality (%) for LOS \u22647 vs >7 days, absolute/relative difference, and median time-to-death.",
+  "final_sql": "WITH sepsis_cohort AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 50 AND 60\n    AND a.hadm_id IN (\n      SELECT hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n      WHERE icd_version = 10\n      GROUP BY hadm_id\n      HAVING \n        SUM(CASE WHEN icd_code IN (\n          'A400','A401','A402','A403','A404','A408','A409',\n          'A410','A411','A412','A413','A414','A415','A418','A419',\n          'R6520') THEN 1 ELSE 0 END) > 0\n        AND SUM(CASE WHEN icd_code = 'R6521' THEN 1 ELSE 0 END) = 0\n    )\n),\ncohort_with_los AS (\n  SELECT \n    *,\n    TIMESTAMP_DIFF(dischtime, admittime, SECOND) / (24*60*60.0) AS los_days,\n    CASE WHEN hospital_expire_flag = 1 \n         THEN TIMESTAMP_DIFF(deathtime, admittime, SECOND) / (24*60*60.0)\n         ELSE NULL \n    END AS time_to_death_days\n  FROM sepsis_cohort\n),\ngroup_stats AS (\n  SELECT \n    CASE WHEN los_days <= 7 THEN 'le7' ELSE 'gt7' END AS los_group,\n    COUNT(*) AS total,\n    SUM(hospital_expire_flag) AS deaths,\n    (SUM(hospital_expire_flag) * 100.0) / COUNT(*) AS mortality_rate\n  FROM cohort_with_los\n  GROUP BY los_group\n),\npivot_stats AS (\n  SELECT \n    MAX(CASE WHEN los_group = 'le7' THEN mortality_rate ELSE NULL END) AS mortality_le7,\n    MAX(CASE WHEN los_group = 'gt7' THEN mortality_rate ELSE NULL END) AS mortality_gt7,\n    MAX(CASE WHEN los_group = 'le7' THEN deaths ELSE NULL END) AS deaths_le7,\n    MAX(CASE WHEN los_group = 'gt7' THEN deaths ELSE NULL END) AS deaths_gt7,\n    MAX(CASE WHEN los_group = 'le7' THEN total ELSE NULL END) AS total_le7,\n    MAX(CASE WHEN los_group = 'gt7' THEN total ELSE NULL END) AS total_gt7\n  FROM group_stats\n),\ndiff_stats AS (\n  SELECT \n    mortality_le7,\n    mortality_gt7,\n    mortality_gt7 - mortality_le7 AS absolute_diff,\n    CASE \n      WHEN mortality_le7 > 0 THEN (mortality_gt7 - mortality_le7) / mortality_le7 \n      ELSE NULL \n    END AS relative_diff\n  FROM pivot_stats\n),\nmedian_time AS (\n  SELECT \n    APPROX_QUANTILES(time_to_death_days, 100)[OFFSET(50)] AS median_time_to_death\n  FROM cohort_with_los\n  WHERE time_to_death_days IS NOT NULL\n)\nSELECT \n  d.mortality_le7,\n  d.mortality_gt7,\n  d.absolute_diff,\n  d.relative_diff,\n  m.median_time_to_death\nFROM diff_stats d\nCROSS JOIN median_time m;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"excluding\" at [1:13]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"excluding\" at [1:13]\n\nLocation: US\nJob ID: 3a80c1af-70d5-4af4-a689-67b1169eaa2f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

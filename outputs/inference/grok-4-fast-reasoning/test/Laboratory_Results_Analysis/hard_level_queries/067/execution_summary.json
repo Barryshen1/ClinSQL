@@ -1,0 +1,28 @@
+{
+  "query": "58-year-old woman with ACS: among female inpatients 53\u201363 with ACS, compute a 72\u2011hour lab instability score (count of critical lab categories), split into quartiles, report mortality (%) and avg LOS per quartile, and compare critical lab rates to age\u2011matched controls",
+  "final_sql": "WITH acs_condition AS (\n  SELECT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE (\n    (icd_version = 9 AND (icd_code LIKE '410.%' OR icd_code = '411.1'))\n    OR\n    (icd_version = 10 AND (icd_code LIKE 'I21.%' OR icd_code = 'I20.0'))\n  )\n),\neligible_patients AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 53 AND 63\n),\ncohort AS (\n  SELECT \n    ep.*,\n    1 AS cohort_type  -- 1 = ACS\n  FROM eligible_patients ep\n  JOIN acs_condition ac ON ep.hadm_id = ac.hadm_id\n  \n  UNION ALL\n  \n  SELECT \n    ep.*,\n    0 AS cohort_type  -- 0 = Control\n  FROM eligible_patients ep\n  WHERE NOT EXISTS (\n    SELECT 1 \n    FROM acs_condition ac \n    WHERE ac.hadm_id = ep.hadm_id\n  )\n),\nscores AS (\n  SELECT \n    ep.hadm_id,\n    COALESCE(\n      COUNT(DISTINCT CASE \n        WHEN l.flag IS NOT NULL \n          AND l.flag != '' \n          AND li.category IS NOT NULL \n        THEN li.category \n      END), \n      0\n    ) AS instability_score\n  FROM eligible_patients ep\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON ep.hadm_id = a.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l \n    ON l.hadm_id = a.hadm_id \n    AND l.charttime >= a.admittime \n    AND l.charttime < TIMESTAMP_ADD(a.admittime, INTERVAL 72 HOUR)\n    AND l.valuenum IS NOT NULL\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` li \n    ON l.itemid = li.itemid\n  GROUP BY ep.hadm_id\n),\ncohort_with_scores AS (\n  SELECT \n    c.*,\n    COALESCE(s.instability_score, 0) AS instability_score\n  FROM cohort c\n  LEFT JOIN scores s ON c.hadm_id = s.hadm_id\n),\nacs_with_quartile AS (\n  SELECT \n    *,\n    NTILE(4) OVER (ORDER BY instability_score) AS quartile\n  FROM cohort_with_scores\n  WHERE cohort_type = 1\n),\nacs_quartiles AS (\n  SELECT \n    quartile,\n    COUNT(*) AS n_patients,\n    ROUND(AVG(hospital_expire_flag) * 100, 2) AS mortality_pct,\n    ROUND(AVG(TIMESTAMP_DIFF(dischtime, admittime, HOUR) / 24.0), 2) AS avg_los_days\n  FROM acs_with_quartile\n  GROUP BY quartile\n),\ncontrols_summary AS (\n  SELECT \n    COUNT(*) AS n_patients,\n    ROUND(AVG(c.hospital_expire_flag) * 100, 2) AS mortality_pct,\n    ROUND(AVG(TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR) / 24.0), 2) AS avg_los_days,\n    ROUND(AVG(c.instability_score), 2) AS avg_score,\n    ROUND(AVG(CASE WHEN c.instability_score > 0 THEN 1.0 ELSE 0 END) * 100, 2) AS pct_with_critical_labs\n  FROM cohort_with_scores c\n  WHERE c.cohort_type = 0\n)\nSELECT \n  'ACS Quartile' AS report_section,\n  quartile,\n  n_patients,\n  mortality_pct,\n  avg_los_days,\n  NULL AS avg_score,\n  NULL AS pct_with_critical_labs\nFROM acs_quartiles\n\nUNION ALL\n\nSELECT \n  'Controls Summary' AS report_section,\n  NULL AS quartile,\n  n_patients,\n  mortality_pct,\n  avg_los_days,\n  avg_score,\n  pct_with_critical_labs\nFROM controls_summary\n\nORDER BY report_section, quartile NULLS LAST;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "grok-4-fast-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [5:6]; reason: invalidQuery, location: query, message: No matching signature for operator = for argument types: INT64, STRING\n  Signature: T1 = T1\n    Unable to find common supertype for templated argument <T1>\n      Input types for <T1>: {INT64, STRING} at [5:6]\n\nLocation: US\nJob ID: db3e4997-afcb-46a7-8902-e406f7d801c9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column quartile contains an analytic function, which is not allowed in GROUP BY at [81:12]; reason: invalidQuery, location: query, message: Column quartile contains an analytic function, which is not allowed in GROUP BY at [81:12]\n\nLocation: US\nJob ID: b0036115-bcdd-42e4-a126-9a3fe3816e82\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

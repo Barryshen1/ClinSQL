@@ -1,0 +1,22 @@
+{
+  "query": "Male patient age 58: among male inpatients 53\u201363 with diabetes and heart failure, give percentages with injectable GLP\u20111 RA initiated within first 24 hours versus final 12 hours before discharge.",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    a.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    -- Calculate exact age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n),\nfiltered_cohort AS (\n  SELECT *\n  FROM cohort\n  WHERE age_at_admission BETWEEN 53 AND 63\n),\ndiabetes AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '250%') OR\n    (icd_version = 10 AND icd_code LIKE 'E1%')\n),\nheart_failure AS (\n  SELECT DISTINCT hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    (icd_version = 9 AND icd_code LIKE '428%') OR\n    (icd_version = 10 AND \n      (icd_code LIKE 'I50%' OR \n       icd_code IN ('I110', 'I130', 'I132')))\n),\ncohort_with_diag AS (\n  SELECT fc.*\n  FROM filtered_cohort fc  -- Fixed typo: 'filted_cohort' -> 'filtered_cohort'\n  WHERE fc.hadm_id IN (SELECT hadm_id FROM diabetes)\n    AND fc.hadm_id IN (SELECT hadm_id FROM heart_failure)\n),\nglp1_events AS (\n  SELECT \n    e.hadm_id,\n    e.charttime,\n    c.admittime,\n    c.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` e\n  INNER JOIN cohort_with_diag c\n    ON e.hadm_id = c.hadm_id\n  WHERE \n    -- Filter for GLP-1 RA administrations (injectable only)\n    LOWER(e.medication) LIKE '%exenatide%' OR\n    LOWER(e.medication) LIKE '%liraglutide%' OR\n    LOWER(e.medication) LIKE '%dulaglutide%' OR\n    LOWER(e.medication) LIKE '%lixisenatide%' OR\n    LOWER(e.medication) LIKE '%albiglutide%' OR\n    LOWER(e.medication) LIKE '%byetta%' OR\n    LOWER(e.medication) LIKE '%bydureon%' OR\n    LOWER(e.medication) LIKE '%victoza%' OR\n    LOWER(e.medication) LIKE '%saxenda%' OR\n    LOWER(e.medication) LIKE '%trulicity%' OR\n    LOWER(e.medication) LIKE '%ozempic%' OR\n    LOWER(e.medication) LIKE '%adlyxin%'\n    -- Exclude oral formulations\n    AND LOWER(e.medication) NOT LIKE '%oral%'\n    -- Ensure medication was administered\n    AND e.event_txt = 'Given'\n),\nper_admission AS (\n  SELECT \n    c.hadm_id,\n    -- Flag if GLP-1 RA given in first 24h (using TIMESTAMP_ADD)\n    MAX(CASE \n        WHEN g.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR) \n        THEN 1 ELSE 0 \n    END) AS in_first_24h,\n    -- Flag if GLP-1 RA given in final 12h (using TIMESTAMP_SUB)\n    MAX(CASE \n        WHEN g.charttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR) AND c.dischtime \n        THEN 1 ELSE 0 \n    END) AS in_final_12h\n  FROM cohort_with_diag c\n  LEFT JOIN glp1_events g\n    ON c.hadm_id = g.hadm_id\n  GROUP BY c.hadm_id\n)\nSELECT \n  COUNT(hadm_id) AS total_admissions,\n  SUM(in_first_24h) AS count_first_24h,\n  SUM(in_final_12h) AS count_final_12h,\n  ROUND(SUM(in_first_24h) * 100.0 / COUNT(hadm_id), 2) AS pct_first_24h,\n  ROUND(SUM(in_final_12h) * 100.0 / COUNT(hadm_id), 2) AS pct_final_12h\nFROM per_admission;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table \"filted_cohort\" must be qualified with a dataset (e.g. dataset.table).; reason: invalid, location: filted_cohort, message: Table \"filted_cohort\" must be qualified with a dataset (e.g. dataset.table).\n\nLocation: US\nJob ID: 9e230d8b-eef7-4746-98af-071080532722\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "query": "For a 48\u2011year\u2011old man: among males 43\u201353 hospitalized with AMI, what's the median (IQR) number of radiography/CTs per admission for 1\u20133 vs 4\u20137\u2011day stays, stratified by primary vs secondary AMI?",
+  "final_sql": "WITH ami_diagnoses AS (\n  SELECT \n    di.hadm_id,\n    MAX(CASE WHEN di.seq_num = 1 AND \n                 ((di.icd_version = 9 AND di.icd_code LIKE '410%') OR \n                  (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%')))\n             THEN 1 ELSE 0 END) AS is_primary_ami,\n    MAX(CASE WHEN \n                 ((di.icd_version = 9 AND di.icd_code LIKE '410%') OR \n                  (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%')))\n             THEN 1 ELSE 0 END) AS has_ami\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n  GROUP BY di.hadm_id\n),\n\npatient_admissions AS (\n  SELECT\n    a.hadm_id,\n    p.subject_id,\n    a.admittime,\n    a.dischtime,\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, SECOND) / (24*60*60) AS hospital_los,\n    p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) AS age_at_admission,\n    ad.is_primary_ami,\n    CASE \n      WHEN ad.is_primary_ami = 1 THEN 'primary'\n      WHEN ad.has_ami = 1 THEN 'secondary'\n      ELSE NULL \n    END AS ami_type\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN ami_diagnoses ad\n    ON a.hadm_id = ad.hadm_id\n  WHERE p.gender = 'M'\n    AND ad.has_ami = 1\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 43 AND 53\n    AND a.dischtime IS NOT NULL\n),\n\nimaging_procedures AS (\n  SELECT\n    h.hadm_id,\n    COUNT(*) AS imaging_count\n  FROM `physionet-data.mimiciv_3_1_hosp.hcpcsevents` h\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_hcpcs` d\n    ON h.hcpcs_cd = d.code\n  -- Fixed: Join admissions to access admission timestamps\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON h.hadm_id = a.hadm_id\n  WHERE SAFE_CAST(h.hcpcs_cd AS INT64) BETWEEN 70000 AND 76499\n    AND h.chartdate >= DATE(a.admittime)  -- Properly qualified column\n    AND h.chartdate <= DATE(a.dischtime)  -- Properly qualified column\n  GROUP BY h.hadm_id\n),\n\nadmission_stats AS (\n  SELECT\n    pa.hadm_id,\n    pa.ami_type,\n    CASE \n      WHEN pa.hospital_los >= 1 AND pa.hospital_los <= 3 THEN '1-3 days'\n      WHEN pa.hospital_los >= 4 AND pa.hospital_los <= 7 THEN '4-7 days'\n      ELSE NULL \n    END AS los_group,\n    COALESCE(ip.imaging_count, 0) AS imaging_count\n  FROM patient_admissions pa\n  LEFT JOIN imaging_procedures ip\n    ON pa.hadm_id = ip.hadm_id\n  WHERE pa.hospital_los IS NOT NULL\n)\n\nSELECT\n  ami_type,\n  los_group,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(500)] AS median_imaging,\n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(750)] - \n  APPROX_QUANTILES(imaging_count, 1000)[OFFSET(250)] AS iqr_imaging\nFROM admission_stats\nWHERE los_group IS NOT NULL\nGROUP BY ami_type, los_group\nORDER BY ami_type, los_group;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \",\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \",\" at [1:9]\n\nLocation: US\nJob ID: 7e073781-c89f-4505-b9ee-57d0e1715af2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: admittime at [49:29]; reason: invalidQuery, location: query, message: Unrecognized name: admittime at [49:29]\n\nLocation: US\nJob ID: 0eae784b-f3a4-4050-8e9e-d427ed8ec806\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

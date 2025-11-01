@@ -1,0 +1,28 @@
+{
+  "query": "I have an 86\u2011year\u2011old female. Among female patients aged 81\u201391 admitted for chest pain or AMI, what's the distribution of index hs\u2011TnT (normal/borderline/myocardial injury), with counts, percentages, and mean LOS?",
+  "final_sql": "WITH troponin_items AS (\n  -- identify candidate hs-TnT lab items by label / loinc heuristics\n  SELECT itemid, label, loinc_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE (\n    LOWER(label) LIKE '%troponin t%' OR\n    LOWER(label) LIKE '%hs-tnt%' OR\n    LOWER(label) LIKE '%high sensitivity troponin%' OR\n    LOWER(label) LIKE '%high-sensitivity troponin%' OR\n    (loinc_code IS NOT NULL AND LOWER(CAST(loinc_code AS STRING)) LIKE '%6598%')\n  )\n),\n\nadmissions_of_interest AS (\n  -- admissions where any diagnosis contains 'myocardial infarction' or 'chest pain'\n  SELECT DISTINCT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n  WHERE (\n    LOWER(d.long_title) LIKE '%myocardial infarction%' OR\n    LOWER(d.long_title) LIKE '%acute myocardial infarction%' OR\n    LOWER(d.long_title) LIKE '%chest pain%'\n  )\n),\n\neligible_admissions AS (\n  -- apply patient-level filters (female, anchor_age 81-91)\n  SELECT aoi.*\n  FROM admissions_of_interest aoi\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON aoi.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 81 AND 91\n),\n\nindex_hs_tnt_raw AS (\n  -- find hs-TnT lab events for these admissions within 24 hours of admittime\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  JOIN eligible_admissions ea\n    ON le.hadm_id = ea.hadm_id\n  WHERE le.valuenum IS NOT NULL\n    AND le.charttime >= ea.admittime\n    AND le.charttime <= TIMESTAMP_ADD(ea.admittime, INTERVAL 24 HOUR)\n),\n\nindex_hs_tnt AS (\n  -- pick the first (earliest) hs-TnT per admission within the 24h window\n  SELECT\n    subject_id,\n    hadm_id,\n    charttime,\n    valuenum,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC) AS rn\n  FROM index_hs_tnt_raw\n)\n\nSELECT\n  category,\n  COUNT(1) AS admission_count,\n  ROUND(100.0 * COUNT(1) / SUM(COUNT(1)) OVER (), 2) AS pct_of_cohort,\n  ROUND(AVG(TIMESTAMP_DIFF(ad.dischtime, ad.admittime, SECOND) / 86400.0), 2) AS mean_los_days\nFROM (\n  -- join the index troponin (first within 24h) to admission record\n  SELECT\n    ih.hadm_id,\n    ih.valuenum,\n    CASE\n      WHEN ih.valuenum < 14 THEN 'normal (<14)'\n      WHEN ih.valuenum >= 14 AND ih.valuenum < 52 THEN 'borderline (14-51.9)'\n      WHEN ih.valuenum >= 52 THEN 'myocardial injury (>=52)'\n      ELSE 'unknown'\n    END AS category\n  FROM index_hs_tnt ih\n  WHERE ih.rn = 1\n) t\nJOIN eligible_admissions ad ON t.hadm_id = ad.hadm_id\nGROUP BY category\nORDER BY\n  CASE\n    WHEN category LIKE 'normal%' THEN 1\n    WHEN category LIKE 'borderline%' THEN 2\n    WHEN category LIKE 'myocardial injury%' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: loinc_code at [10:6]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [10:6]\n\nLocation: US\nJob ID: 5446ebd0-0ae6-4c2d-9925-5520a0ad476d\n",
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]\n\nLocation: US\nJob ID: 2be51600-03bb-4bdc-915d-db713b3cb9f9\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"pain\" at [1:12]\n\nLocation: US\nJob ID: 722969cf-915f-4613-81f5-bb5b098df5ca\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: loinc_code at [10:6]; reason: invalidQuery, location: query, message: Unrecognized name: loinc_code at [10:6]\n\nLocation: US\nJob ID: 5446ebd0-0ae6-4c2d-9925-5520a0ad476d\n"
+    }
+  ]
+}

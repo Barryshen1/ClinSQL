@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 79\u2011year\u2011old man. Among male ICU patients aged 74\u201384 admitted with upper GI bleeding, using first ICU stay, stratify first\u201172\u2011hour diagnostic intensity into quartiles and report mean procedure count, mean hospital LOS (days), and in\u2011hospital mortality per quartile.",
+  "final_sql": "WITH upper_gi_bleed_admissions AS (\n  SELECT DISTINCT a.hadm_id, a.subject_id, a.admittime, a.dischtime, a.hospital_expire_flag\n  FROM physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN physionet-data.mimiciv_3_1_hosp.diagnoses_icd d ON a.hadm_id = d.hadm_id\n  JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_icd ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version\n  WHERE LOWER(d_icd.long_title) LIKE LOWER('%upper gastrointestinal hemorrhage%')\n     OR LOWER(d_icd.long_title) LIKE LOWER('%gastric hemorrhage%')\n     OR LOWER(d_icd.long_title) LIKE LOWER('%esophageal hemorrhage%')\n     OR LOWER(d_icd.long_title) LIKE LOWER('%duodenal hemorrhage%')\n     OR LOWER(d_icd.long_title) LIKE LOWER('%peptic ulcer hemorrhage%')\n     OR LOWER(d_icd.long_title) LIKE LOWER('%upper GI bleeding%')\n     OR LOWER(d_icd.long_title) LIKE LOWER('%hematemesis%')\n     OR LOWER(d_icd.long_title) LIKE LOWER('%melena%')\n     OR d.icd_code IN ('K25', 'K26', 'K27', 'K28', 'K22.0', 'K22.1', 'K22.2', 'K22.3', 'K22.4', 'K22.5', 'K22.6', 'K22.7', 'K22.8', 'K22.9')\n     AND d.icd_version = 10\n),\nfirst_icu_stay AS (\n  SELECT \n    i.subject_id,\n    i.hadm_id,\n    i.stay_id,\n    i.intime,\n    i.outtime,\n    i.los,\n    ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY i.intime) AS rn\n  FROM physionet-data.mimiciv_3_1_icu.icustays i\n  INNER JOIN upper_gi_bleed_admissions u ON i.hadm_id = u.hadm_id\n),\nfiltered_patients AS (\n  SELECT \n    f.subject_id,\n    f.hadm_id,\n    f.stay_id,\n    f.intime,\n    f.outtime,\n    f.los,\n    p.gender,\n    p.anchor_age,\n    u.hospital_expire_flag\n  FROM first_icu_stay f\n  JOIN physionet-data.mimiciv_3_1_hosp.patients p ON f.subject_id = p.subject_id\n  JOIN upper_gi_bleed_admissions u ON f.hadm_id = u.hadm_id\n  WHERE p.gender = 'M' \n    AND p.anchor_age BETWEEN 74 AND 84\n    AND f.rn = 1\n),\nprocedure_count_72h AS (\n  SELECT \n    fp.subject_id,\n    fp.hadm_id,\n    fp.stay_id,\n    COUNT(*) AS procedure_count_72h\n  FROM filtered_patients fp\n  LEFT JOIN physionet-data.mimiciv_3_1_icu.procedureevents pe \n    ON fp.stay_id = pe.stay_id \n    AND pe.starttime >= fp.intime \n    AND pe.starttime <= TIMESTAMP_ADD(fp.intime, INTERVAL 72 HOUR)\n  GROUP BY fp.subject_id, fp.hadm_id, fp.stay_id\n),\nfinal_data AS (\n  SELECT \n    fp.subject_id,\n    fp.hadm_id,\n    fp.hospital_expire_flag,\n    fp.los AS hospital_los_days,\n    COALESCE(pc.procedure_count_72h, 0) AS procedure_count_72h,\n    NTILE(4) OVER (ORDER BY COALESCE(pc.procedure_count_72h, 0)) AS quartile\n  FROM filtered_patients fp\n  LEFT JOIN procedure_count_72h pc ON fp.stay_id = pc.stay_id\n)\nSELECT \n  quartile,\n  AVG(procedure_count_72h) AS mean_procedure_count,\n  AVG(hospital_los_days) AS mean_hospital_los_days,\n  AVG(hospital_expire_flag) AS in_hospital_mortality\nFROM final_data\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got identifier \"ILIKE\" at [6:26]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got identifier \"ILIKE\" at [6:26]\n\nLocation: US\nJob ID: f930fc79-1672-43f9-98db-fea776a4bbc2\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [58:3]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [58:3]\n\nLocation: US\nJob ID: 233ab921-09dc-4ce1-a5ab-3af10debc8d0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

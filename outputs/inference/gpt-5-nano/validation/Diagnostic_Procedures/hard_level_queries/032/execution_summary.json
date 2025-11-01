@@ -1,0 +1,28 @@
+{
+  "query": "I have a 71\u2011year\u2011old female ICU patient. Among female ICU patients aged 66\u201376 in their first ICU stay with sepsis, what is the 90th percentile of distinct procedures in the first 48 hours? Compare hospital LOS and in\u2011hospital mortality to age\u2011matched controls.",
+  "final_sql": "WITH first_icustay AS (\n  SELECT subject_id, hadm_id, stay_id, intime\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY intime) = 1\n),\nage_filter AS (\n  SELECT f.subject_id, f.hadm_id, f.stay_id\n  FROM first_icustay f\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON p.subject_id = f.subject_id\n  WHERE p.gender = 'Female'\n    AND p.anchor_age BETWEEN 66 AND 76\n),\nsepsis_cohort AS (\n  SELECT af.subject_id, af.hadm_id, af.stay_id\n  FROM age_filter af\n  WHERE EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n      ON di.icd_code = ddi.icd_code AND di.icd_version = ddi.icd_version\n    WHERE di.subject_id = af.subject_id\n      AND di.hadm_id = af.hadm_id\n      AND LOWER(ddi.long_title) LIKE '%sepsis%'\n  )\n),\nno_sepsis_cohort AS (\n  SELECT af.subject_id, af.hadm_id, af.stay_id\n  FROM age_filter af\n  WHERE NOT EXISTS (\n    SELECT 1\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n      ON di.icd_code = ddi.icd_code AND di.icd_version = ddi.icd_version\n    WHERE di.subject_id = af.subject_id\n      AND di.hadm_id = af.hadm_id\n      AND LOWER(ddi.long_title) LIKE '%sepsis%'\n  )\n),\nall_groups AS (\n  SELECT subject_id, hadm_id, stay_id, 'sepsis' AS group_type\n  FROM sepsis_cohort\n  UNION ALL\n  SELECT subject_id, hadm_id, stay_id, 'control' AS group_type\n  FROM no_sepsis_cohort\n),\nper_stay_procs AS (\n  SELECT ag.subject_id, ag.hadm_id, ag.stay_id, ag.group_type,\n         COUNT(DISTINCT pe.itemid) AS distinct_proc_48h\n  FROM all_groups ag\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON i.stay_id = ag.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe\n     ON pe.stay_id = ag.stay_id\n     AND pe.starttime >= i.intime\n     AND pe.starttime < TIMESTAMP_ADD(i.intime, INTERVAL 48 HOUR)\n  GROUP BY ag.subject_id, ag.hadm_id, ag.stay_id, ag.group_type\n),\nlos AS (\n  SELECT ag.subject_id, ag.hadm_id, ag.stay_id, ag.group_type,\n         TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS hosp_los_days,\n         a.hospital_expire_flag\n  FROM all_groups ag\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON a.subject_id = ag.subject_id AND a.hadm_id = ag.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON i.stay_id = ag.stay_id\n),\nper_group_stats AS (\n  SELECT p.group_type,\n         AVG(l.hosp_los_days) AS mean_hosp_los_days,\n         AVG(CASE WHEN l.hospital_expire_flag = 1 THEN 1.0 ELSE 0 END) AS in_hospital_mortality_rate\n  FROM per_stay_procs p\n  JOIN los l\n    ON l.subject_id = p.subject_id\n   AND l.hadm_id = p.hadm_id\n   AND l.stay_id = p.stay_id\n  GROUP BY p.group_type\n),\np90s AS (\n  SELECT p.group_type,\n         (SELECT quant[OFFSET(90)]\n          FROM UNNEST(APPROX_QUANTILES(p.distinct_proc_48h, 100)) AS quant) AS p90_distinct_procedures_48h\n  FROM per_stay_procs p\n  GROUP BY p.group_type\n)\nSELECT s.group_type,\n       p90s.p90_distinct_procedures_48h,\n       g.mean_hosp_los_days,\n       g.in_hospital_mortality_rate\nFROM p90s\nJOIN per_group_stats g\n  ON g.group_type = p90s.group_type\nORDER BY s.group_type;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [83:23]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [83:23]\n\nLocation: US\nJob ID: c18bef5b-b82d-4a30-af96-4a112bf8b613\n",
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Table-valued function not found: SECo at [42:8]; reason: invalidQuery, location: query, message: Table-valued function not found: SECo at [42:8]\n\nLocation: US\nJob ID: c8af5cc4-10a3-47c4-b32a-86e4a7ef94d7\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [70:8]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [70:8]\n\nLocation: US\nJob ID: 9b8be5c7-df6f-4349-883c-eb6e180f82ed\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Aggregate function APPROX_QUANTILES not allowed in UNNEST at [83:23]; reason: invalidQuery, location: query, message: Aggregate function APPROX_QUANTILES not allowed in UNNEST at [83:23]\n\nLocation: US\nJob ID: c18bef5b-b82d-4a30-af96-4a112bf8b613\n"
+    }
+  ]
+}

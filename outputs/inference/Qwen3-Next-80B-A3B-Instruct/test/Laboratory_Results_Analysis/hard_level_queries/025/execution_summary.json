@@ -1,0 +1,28 @@
+{
+  "query": "53\u2011year\u2011old female inpatient. Among female inpatients 48\u201358 with hemorrhagic stroke, what is the 90th\u2011percentile lab\u2011instability score (lab systems with critical values in first 72 h)? For patients \u2265P90 report mortality%, mean LOS, and avg critical labs/patient vs age\u2011matched cohort.",
+  "final_sql": "WITH eligible_patients AS (\n  SELECT DISTINCT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n    ON d.icd_code = did.icd_code AND d.icd_version = did.icd_version\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n    AND (\n      did.icd_code IN ('430', '431', '432') -- ICD-9\n      OR did.icd_code IN ('I60', 'I61', 'I62') -- ICD-10\n    )\n),\n\nlab_critical_events AS (\n  SELECT\n    ep.subject_id,\n    dl.category,\n    le.valuenum,\n    le.ref_range_lower,\n    le.ref_range_upper,\n    le.charttime\n  FROM eligible_patients ep\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON ep.hadm_id = le.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` dl\n    ON le.itemid = dl.itemid\n  WHERE le.valuenum IS NOT NULL\n    AND le.ref_range_lower IS NOT NULL\n    AND le.ref_range_upper IS NOT NULL\n    AND le.charttime >= ep.admittime\n    AND le.charttime <= TIMESTAMP_ADD(ep.admittime, INTERVAL 72 HOUR)\n    AND (le.valuenum < le.ref_range_lower OR le.valuenum > le.ref_range_upper)\n),\n\nlab_instability_score AS (\n  SELECT\n    subject_id,\n    COUNT(DISTINCT category) AS lab_instability_score\n  FROM lab_critical_events\n  GROUP BY subject_id\n),\n\np90_threshold AS (\n  SELECT PERCENTILE_CONT(lab_instability_score, 0.9) AS p90_score\n  FROM lab_instability_score\n),\n\nflagged_patients AS (\n  SELECT\n    ep.subject_id,\n    ep.hadm_id,\n    ep.admittime,\n    ep.dischtime,\n    ep.hospital_expire_flag,\n    lis.lab_instability_score,\n    CASE\n      WHEN lis.lab_instability_score >= p90.p90_score THEN 'Above_P90'\n      ELSE 'Cohort'\n    END AS group_label\n  FROM eligible_patients ep\n  JOIN lab_instability_score lis\n    ON ep.subject_id = lis.subject_id\n  CROSS JOIN p90_threshold p90\n)\n\nSELECT\n  group_label AS group,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS mortality_pct,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS mean_los_days,\n  AVG(lab_instability_score) AS avg_critical_labs_per_patient\nFROM flagged_patients\nGROUP BY group_label\nORDER BY group_label;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Unexpected keyword GROUP at [77:18]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [77:18]\n\nLocation: US\nJob ID: 9218b006-ca8f-4ef6-982c-79cd96a56e6a\n",
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"female\" at [1:16]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"female\" at [1:16]\n\nLocation: US\nJob ID: b8c0f8d7-6705-4902-afbe-a77641b1faf0\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [76:18]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [76:18]\n\nLocation: US\nJob ID: efb0cad7-ae12-4fe8-8918-eb8011d92f02\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected keyword GROUP at [77:18]; reason: invalidQuery, location: query, message: Syntax error: Unexpected keyword GROUP at [77:18]\n\nLocation: US\nJob ID: 9218b006-ca8f-4ef6-982c-79cd96a56e6a\n"
+    }
+  ]
+}

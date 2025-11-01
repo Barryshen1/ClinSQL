@@ -1,0 +1,82 @@
+with `with analyzing in-hospital mortality...`. In BigQuery SQL, `WITH` is used to define a Common Table Expression (CTE), and it must be followed by a valid CTE name, the keyword `AS`, and then a parenthesized query. The parser encountered `IN` (from “in-hospital”) immediately after `with analyzing`, which is invalid syntax.
+
+Fix:
+- Remove the natural language comment line entirely. It is not valid SQL and serves no purpose in the query.
+- Define a proper CTE structure to compute the required metrics: in-hospital mortality, LOS categories, Charlson score categories, and discharge destinations.
+- To compute Charlson comorbidity score, we must derive it from `diagnoses_icd` and `d_icd_diagnoses` using the standard Charlson mapping (e.g., MI, CHF, PVD, etc.).
+- Link `admissions` (for `hospital_expire_flag`, `discharge_location`, `admittime`, `dischtime`) with `patients` (for age and gender) and `diagnoses_icd` (for HF diagnosis and Charlson components).
+- Define LOS as `dischtime - admittime` in days, then categorize into 1–3, 4–7, ≥8 days.
+- Define Charlson score by summing weighted comorbidities (per standard mapping), then categorize into ≤3, 4–5, >5.
+- Use `discharge_location` to classify discharge destination into Home, Rehab, SNF, Hospice (others can be grouped as “Other”).
+- Filter for male patients aged 53–63 (using `anchor_age`) and HF diagnosis (ICD codes: I50.x, I42.x, etc.).
+- Use `physionet-data.mimiciv_3_1_hosp` for all required tables (admissions, patients, diagnoses_icd, d_icd_diagnoses).
+- Avoid ICU tables unless needed — this question is about hospital-level outcomes.
+
+Key changes:
+1. Removed invalid natural language comment.
+2. Used correct table aliases and joined `admissions`, `patients`, `diagnoses_icd`, and `d_icd_diagnoses`.
+3. Used `anchor_age` from `patients` to filter 53–63.
+4. Used `hospital_expire_flag = '1'` for in-hospital mortality.
+5. Used `discharge_location` to classify discharge destination.
+6. Computed Charlson score using standard ICD-9/10 mappings (e.g., I50 for CHF, I25 for CAD, etc.).
+7. Used `DATE_DIFF` to compute LOS in days.
+8. Used `CASE` statements to categorize LOS and Charlson.
+9. Aggregated results with `GROUP BY` for percentages and absolute differences.
+
+Note: MIMIC-IV uses ICD-10 codes. HF is primarily I50.x. Charlson mapping for ICD-10 is well-documented; we use standard mappings.
+
+sql
+WITH hf_patients AS (
+  SELECT
+    a.subject_id,
+    a.hadm_id,
+    a.admittime,
+    a.dischtime,
+    a.hospital_expire_flag,
+    a.discharge_location,
+    p.anchor_age,
+    CASE
+      WHEN a.dischtime IS NOT NULL THEN DATE_DIFF(a.dischtime, a.admittime, DAY)
+      ELSE NULL
+    END AS los_days
+  FROM
+    physionet-data.mimiciv_3_1_hosp.admissions a
+  INNER JOIN
+    physionet-data.mimiciv_3_1_hosp.patients p
+    ON a.subject_id = p.subject_id
+  WHERE
+    p.gender = 'M'
+    AND p.anchor_age BETWEEN 53 AND 63
+    AND EXISTS (
+      SELECT 1
+      FROM physionet-data.mimiciv_3_1_hosp.diagnoses_icd d
+      INNER JOIN physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses d_icd
+        ON d.icd_code = d_icd.icd_code AND d.icd_version = d_icd.icd_version
+      WHERE d.hadm_id = a.hadm_id
+        AND (
+          d_icd.icd_code LIKE 'I50%'  -- Heart failure
+          OR d_icd.icd_code LIKE 'I42%'
+        )
+    )
+),
+charlson_scores AS (
+  SELECT
+    subject_id,
+    hadm_id,
+    SUM(
+      CASE
+        WHEN d_icd.icd_code IN ('I255', 'I256', 'I258', 'I259', 'I251') THEN 1  -- CAD
+        WHEN d_icd.icd_code IN ('I60', 'I61', 'I62', 'I63', 'I64', 'I65', 'I66', 'I67', 'I68', 'I69') THEN 1  -- Stroke/TIA
+        WHEN d_icd.icd_code IN ('I10', 'I11', 'I12', 'I13', 'I15') THEN 1  -- Hypertension
+        WHEN d_icd.icd_code IN ('E10', 'E11', 'E13', 'E14') THEN 1  -- Diabetes
+        WHEN d_icd.icd_code IN ('E78') THEN 1  -- Hyperlipidemia
+        WHEN d_icd.icd_code IN ('I21', 'I22', 'I23', 'I24', 'I25') THEN 1  -- MI
+        WHEN d_icd.icd_code IN ('I50') THEN 1  -- CHF (already included in HF filter, but for completeness)
+        WHEN d_icd.icd_code IN ('I70', 'I71', 'I72', 'I73', 'I77') THEN 1  -- PVD
+        WHEN d_icd.icd_code IN ('C00', 'C01', 'C02', 'C03', 'C04', 'C05', 'C06', 'C07', 'C08', 'C09', 'C10', 'C11', 'C12', 'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19', 'C20', 'C21', 'C22', 'C23', 'C24', 'C25', 'C26', 'C30', 'C31', 'C32', 'C33', 'C34', 'C37', 'C38', 'C39', 'C40', 'C41', 'C43', 'C44', 'C45', 'C46', 'C47', 'C48', 'C49', 'C50', 'C51', 'C52', 'C53', 'C54', 'C55', 'C56', 'C57', 'C58', 'C59', 'C60', 'C61', 'C62', 'C63', 'C64', 'C65', 'C66', 'C67', 'C68', 'C69', 'C70', 'C71', 'C72', 'C73', 'C74', 'C75', 'C76', 'C77', 'C78', 'C79', 'C80', 'C81', 'C82', 'C83', 'C84', 'C85', 'C86', 'C88', 'C89', 'C90', 'C91', 'C92', 'C93', 'C94', 'C95', 'C96', 'C97') THEN 2  -- Malignancy
+        WHEN d_icd.icd_code IN ('E85', 'E86', 'E87', 'E88', 'E89') THEN 1  -- Liver disease
+        WHEN d_icd.icd_code IN ('N17', 'N18', 'N19', 'N25', 'N26', 'N27', 'N28', 'N29') THEN 1  -- Renal disease
+        WHEN d_icd.icd_code IN ('J40', 'J41', 'J42', 'J43', 'J44', 'J45', 'J46', 'J47') THEN 1  -- COPD
+        WHEN d_icd.icd_code IN ('I26') THEN 1  -- Pulmonary embolism
+        WHEN d_icd.icd_code IN ('I110') THEN 1  -- Heart failure with hypertension
+        WHEN d_icd.icd_code IN ('I20', 'I21', 'I22', 'I23', ';

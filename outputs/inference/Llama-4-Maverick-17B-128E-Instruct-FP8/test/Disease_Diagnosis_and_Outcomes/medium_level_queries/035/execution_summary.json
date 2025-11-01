@@ -1,0 +1,16 @@
+{
+  "query": "For a 74-year-old woman: among women 69\u201379 with upper vs lower GI bleed, report in-hospital mortality (%) by LOS (1\u20132, 3\u20135, 6\u20139, \u226510 days) and day\u20111 ICU status, and ICU admission rates.",
+  "final_sql": "WITH \n-- Step 1: Cohort selection and GI bleed classification\ncohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    CASE \n      WHEN dicd.icd_code LIKE 'K25%' OR dicd.icd_code LIKE 'K26%' OR dicd.icd_code LIKE 'K27%' THEN 'Upper GI Bleed'\n      WHEN dicd.icd_code LIKE 'K92.0%' OR dicd.icd_code LIKE 'K92.1%' OR dicd.icd_code LIKE 'K92.2%' THEN 'Lower GI Bleed'\n      ELSE NULL\n    END AS gi_bleed_type\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON di.icd_code = dicd.icd_code AND di.icd_version = dicd.icd_version\n  WHERE \n    p.gender = 'F' AND p.anchor_age BETWEEN 69 AND 79\n),\n-- Step 2: Calculate hospital LOS and in-hospital mortality\nhospital_outcomes AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    gi_bleed_type,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS hospital_los,\n    CASE WHEN deathtime IS NOT NULL AND deathtime <= dischtime THEN 1 ELSE 0 END AS in_hospital_mortality\n  FROM \n    cohort\n),\n-- Step 3: Determine ICU admission status and day-1 ICU status\nicu_status AS (\n  SELECT \n    c.hadm_id,\n    CASE WHEN i.stay_id IS NOT NULL THEN 1 ELSE 0 END AS icu_admission,\n    CASE WHEN i.intime <= DATETIME_ADD(c.admittime, INTERVAL 1 DAY) THEN 1 ELSE 0 END AS day1_icu\n  FROM \n    cohort c\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` i ON c.hadm_id = i.hadm_id\n),\n-- Step 4: Grouping and aggregation\nfinal AS (\n  SELECT \n    gi_bleed_type,\n    CASE \n      WHEN hospital_los BETWEEN 1 AND 2 THEN '1-2 days'\n      WHEN hospital_los BETWEEN 3 AND 5 THEN '3-5 days'\n      WHEN hospital_los BETWEEN 6 AND 9 THEN '6-9 days'\n      WHEN hospital_los >= 10 THEN '>=10 days'\n      ELSE NULL\n    END AS los_category,\n    day1_icu,\n    COUNT(*) AS total_patients,\n    SUM(in_hospital_mortality) AS total_deaths,\n    SUM(icu_admission) AS total_icu_admissions\n  FROM \n    hospital_outcomes ho\n  JOIN \n    icu_status i ON ho.hadm_id = i.hadm_id\n  WHERE \n    gi_bleed_type IS NOT NULL\n  GROUP BY \n    gi_bleed_type, los_category, day1_icu\n)\nSELECT \n  gi_bleed_type,\n  los_category,\n  day1_icu,\n  total_patients,\n  (total_deaths / total_patients) * 100 AS in_hospital_mortality_rate,\n  (total_icu_admissions / total_patients) * 100 AS icu_admission_rate\nFROM \n  final\nORDER BY \n  gi_bleed_type, los_category, day1_icu;",
+  "execution_success": true,
+  "row_count": 9,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 9,
+      "error": null
+    }
+  ]
+}

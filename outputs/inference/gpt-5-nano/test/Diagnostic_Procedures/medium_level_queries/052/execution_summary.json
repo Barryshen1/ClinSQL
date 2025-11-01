@@ -1,0 +1,22 @@
+{
+  "query": "My 78-year-old female with multi\u2011trauma: among females 73\u201383, what are mean, min, and max ultrasounds per admission (including echocardiography) for 1\u20133 vs 4\u20137 day stays, stratified by ED vs elective?",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    CASE\n      WHEN a.admission_type = 'EMERGENCY' THEN 'ED'\n      WHEN a.admission_type = 'ELECTIVE' THEN 'Elective'\n      ELSE a.admission_type\n    END AS admission_type_label\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 73 AND 83\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n    AND a.admission_type IN ('EMERGENCY','ELECTIVE')\n),\n\n-- Ultrasound-related procedure events within admission window\nultra_events AS (\n  SELECT pe.hadm_id, COUNT(*) AS ultrasound_count\n  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n  JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di\n    ON pe.itemid = di.itemid\n  WHERE (LOWER(di.label) LIKE '%ultrasound%'\n         OR LOWER(di.label) LIKE '%echocardiography%')\n  GROUP BY pe.hadm_id\n),\n\n-- Attach counts to cohort and carry a zero for admissions with no ultrasounds\ncohort_with_counts AS (\n  SELECT c.hadm_id,\n         c.admittime,\n         c.dischtime,\n         c.admission_type_label,\n         COALESCE(u.ultrasound_count, 0) AS ultrasound_count\n  FROM cohort AS c\n  LEFT JOIN ultra_events AS u\n    ON c.hadm_id = u.hadm_id\n),\n\n-- Compute stay_group for 1-3d vs 4-7d stays\ncohort_grouped AS (\n  SELECT\n    CASE\n      WHEN DATE_DIFF(DATE(dischtime), DATE(admittime), DAY) + 1 BETWEEN 1 AND 3 THEN '1-3d'\n      WHEN DATE_DIFF(DATE(dischtime), DATE(admittime), DAY) + 1 BETWEEN 4 AND 7 THEN '4-7d'\n      ELSE 'other'\n    END AS stay_group,\n    admission_type_label,\n    ultrasound_count\n  FROM cohort_with_counts\n)\n\nSELECT\n  stay_group,\n  admission_type_label,\n  AVG(ultrasound_count) AS mean_ultrasounds,\n  MIN(ultrasound_count) AS min_ultrasounds,\n  MAX(ultrasound_count) AS max_ultrasounds\nFROM cohort_grouped\nWHERE stay_group IN ('1-3d','4-7d')\nGROUP BY stay_group, admission_type_label\nORDER BY stay_group, admission_type_label;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: disptime; Did you mean dischtime? at [48:27]; reason: invalidQuery, location: query, message: Unrecognized name: disptime; Did you mean dischtime? at [48:27]\n\nLocation: US\nJob ID: 2945509e-16aa-4457-8136-0ffb27e99bed\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

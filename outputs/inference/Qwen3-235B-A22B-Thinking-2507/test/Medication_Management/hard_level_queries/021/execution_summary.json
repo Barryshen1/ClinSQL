@@ -1,0 +1,23 @@
+{
+  "query": "I have a 46\u2011year\u2011old man to assess. Among male inpatients aged 41\u201351 with neutropenia and fever, stratified into tertiles by count of unique medications prescribed in first 48 hours, report LOS (days), in\u2011hospital mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH base_population AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year) BETWEEN 41 AND 51\n),\nwith_icu AS (\n  SELECT \n    b.subject_id,\n    b.hadm_id,\n    b.admittime,\n    b.dischtime,\n    b.hospital_expire_flag\n  FROM base_population b\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON b.hadm_id = i.hadm_id\n),\nwith_neutropenia AS (\n  SELECT \n    w.hadm_id\n  FROM with_icu w\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON w.hadm_id = l.hadm_id\n  WHERE l.itemid = 51146  -- Absolute neutrophil count\n    AND l.valuenum < 1500\n    AND l.valuenum IS NOT NULL\n  GROUP BY w.hadm_id\n),\nwith_fever AS (\n  SELECT DISTINCT\n    w.hadm_id\n  FROM with_icu w\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` i\n    ON w.hadm_id = i.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` c\n    ON i.stay_id = c.stay_id\n  WHERE c.itemid = 223762  -- Temperature Celsius\n    AND c.valuenum > 38.0\n    AND c.valuenum IS NOT NULL\n),\ncohort AS (\n  SELECT \n    w.*\n  FROM with_icu w\n  INNER JOIN with_neutropenia n ON w.hadm_id = n.hadm_id\n  INNER JOIN with_fever f ON w.hadm_id = f.hadm_id\n),\nmedication_count AS (\n  SELECT \n    c.hadm_id,\n    COUNT(DISTINCT drug) AS med_count\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON c.hadm_id = p.hadm_id\n    AND p.starttime >= c.admittime\n    AND p.starttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n  GROUP BY c.hadm_id\n),\ntertile_cohort AS (\n  SELECT \n    c.*,\n    m.med_count,\n    NTILE(3) OVER (ORDER BY m.med_count) AS tertile\n  FROM cohort c\n  INNER JOIN medication_count m\n    ON c.hadm_id = m.hadm_id\n),\nreadmission_flag AS (\n  SELECT \n    t.*,\n    CASE WHEN EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` r \n      WHERE r.subject_id = t.subject_id \n        AND r.admittime > t.dischtime \n        AND r.admittime <= DATETIME_ADD(t.dischtime, INTERVAL 30 DAY)\n    ) THEN 1 ELSE 0 END AS readmission_30d\n  FROM tertile_cohort t\n)\nSELECT\n  tertile,\n  APPROX_QUANTILES(DATETIME_DIFF(dischtime, admittime, HOUR) / 24.0, 100)[OFFSET(50)] AS median_los_days,\n  AVG(hospital_expire_flag) * 100 AS mortality_pct,\n  AVG(readmission_30d) * 100 AS readmission_30d_pct\nFROM readmission_flag\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen3-235B-A22B-Thinking-2507",
+  "model_id": "Qwen3-235B-A22B-Thinking-2507",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got keyword AND at [1:18]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got keyword AND at [1:18]\n\nLocation: US\nJob ID: 600ded82-31db-4fc9-9e58-db4db4c765b8\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "Considering a 75\u2011year\u2011old female: among female inpatients aged 70\u201380 hospitalized for lower GI bleeding, stratified into quintiles by a composite complication-based risk score, report for each quintile N, 90\u2011day mortality rate, major complication rate, and median LOS among 90\u2011day survivors.",
+  "final_sql": "WITH gi_bleed_admissions AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id, \n        adm.admittime, \n        adm.dischtime, \n        adm.deathtime,\n        adm.hospital_expire_flag,\n        pat.dod,\n        pat.anchor_age\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n        ON adm.subject_id = pat.subject_id\n    WHERE pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 70 AND 80\n        AND EXISTS (\n            SELECT 1\n            FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n            WHERE adm.hadm_id = diag.hadm_id\n                AND (diag.icd_code LIKE 'K62.5%'    -- Rectal hemorrhage\n                    OR diag.icd_code LIKE 'K55.2%'  -- Angiodysplasia of colon with hemorrhage\n                    OR diag.icd_code LIKE 'K57.4%'  -- Diverticular disease with hemorrhage\n                    OR diag.icd_code LIKE 'K92.1%'  -- Melena\n                    OR diag.icd_code LIKE 'K92.2%'  -- Gastrointestinal hemorrhage, unspecified\n                )\n        )\n),\n\ncomplications AS (\n    SELECT \n        ga.hadm_id,\n        MAX(CASE WHEN diag.icd_code LIKE 'R57%' THEN 1 ELSE 0 END) AS shock,\n        MAX(CASE WHEN diag.icd_code LIKE 'N17%' THEN 1 ELSE 0 END) AS aki,\n        MAX(CASE WHEN proc.icd_code LIKE '30233N0%' \n                  OR proc.icd_code LIKE '30243N0%' \n                  OR proc.icd_code LIKE '30253N0%' THEN 1 ELSE 0 END) AS transfusion\n    FROM gi_bleed_admissions ga\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        ON ga.hadm_id = diag.hadm_id\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` proc\n        ON ga.hadm_id = proc.hadm_id\n    GROUP BY ga.hadm_id\n),\n\nrisk_scores AS (\n    SELECT \n        ga.*,\n        COALESCE(c.shock, 0) + COALESCE(c.aki, 0) + COALESCE(c.transfusion, 0) AS risk_score\n    FROM gi_bleed_admissions ga\n    LEFT JOIN complications c\n        ON ga.hadm_id = c.hadm_id\n),\n\nquintiles AS (\n    SELECT \n        *,\n        NTILE(5) OVER (ORDER BY risk_score) AS quintile\n    FROM risk_scores\n),\n\noutcomes AS (\n    SELECT \n        quintile,\n        COUNT(*) AS n,\n        -- 90-day mortality: death within 90 days of admission\n        SUM(\n            CASE WHEN \n                (deathtime IS NOT NULL AND DATE_DIFF(DATE(deathtime), DATE(admittime), DAY) <= 90)\n                OR (dod IS NOT NULL AND DATE_DIFF(DATE(dod), DATE(admittime), DAY) <= 90)\n                THEN 1 ELSE 0 \n            END\n        ) AS mortality_90d,\n        -- Major complication rate (at least one of shock, AKI, transfusion)\n        SUM(\n            CASE WHEN risk_score > 0 THEN 1 ELSE 0 END\n        ) AS major_complication,\n        -- Median LOS for 90-day survivors\n        APPROX_QUANTILE(\n            CASE WHEN \n                (deathtime IS NULL OR DATE_DIFF(DATE(deathtime), DATE(admittime), DAY) > 90)\n                AND (dod IS NULL OR DATE_DIFF(DATE(dod), DATE(admittime), DAY) > 90)\n                THEN DATE_DIFF(DATE(dischtime), DATE(admittime), DAY) \n                ELSE NULL \n            END,\n            0.5\n        ) AS median_los_survivors\n    FROM quintiles\n    GROUP BY quintile\n)\n\nSELECT \n    quintile,\n    n,\n    mortality_90d,\n    ROUND(mortality_90d * 100.0 / n, 2) AS mortality_90d_rate,\n    major_complication,\n    ROUND(major_complication * 100.0 / n, 2) AS major_complication_rate,\n    median_los_survivors\nFROM outcomes\nORDER BY quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [78:9]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [78:9]\n\nLocation: US\nJob ID: c9db3aad-a317-4487-a963-68a08b26d1ec\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 LEFT SEMI JOIN cannot be used without a condition that is an equality of fields from both sides of the join.; reason: invalidQuery, location: query, message: LEFT SEMI JOIN cannot be used without a condition that is an equality of fields from both sides of the join.\n\nLocation: US\nJob ID: d925c930-302b-49dc-870e-189183f7daec\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/53830213-dda7-42d5-b66c-275c3c879222?maxResults=0&location=US&prettyPrint=false: Aggregation function PERCENTILE_CONT is not implemented.\n\nLocation: US\nJob ID: 53830213-dda7-42d5-b66c-275c3c879222\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [78:9]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [78:9]\n\nLocation: US\nJob ID: c9db3aad-a317-4487-a963-68a08b26d1ec\n"
+    }
+  ]
+}

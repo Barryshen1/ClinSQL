@@ -1,0 +1,22 @@
+{
+  "query": "For a 45\u2011year\u2011old man with AMI (no shock or respiratory failure), among males 40\u201350 report in\u2011hospital mortality (%) and median LOS by LOS \u22645 vs >5 and day\u20111 ICU status.",
+  "final_sql": "WITH ami_patients AS (\n    SELECT \n        adm.subject_id, \n        adm.hadm_id,\n        adm.admittime,\n        adm.dischtime,\n        adm.hospital_expire_flag,\n        DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) AS los_days,\n        CASE WHEN DATETIME_DIFF(adm.dischtime, adm.admittime, DAY) <= 5 THEN 'LOS \u22645'\n             ELSE 'LOS >5' END AS los_group,\n        p.anchor_age,\n        p.gender\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON adm.subject_id = p.subject_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 40 AND 50\n    -- Identify AMI admissions\n    AND adm.hadm_id IN (\n        SELECT DISTINCT hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n            ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n        WHERE d.long_title LIKE 'Acute myocardial infarction%'\n    )\n    -- Exclude admissions with shock or respiratory failure\n    AND adm.hadm_id NOT IN (\n        SELECT DISTINCT hadm_id\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n        INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d\n            ON diag.icd_code = d.icd_code AND diag.icd_version = d.icd_version\n        WHERE d.long_title LIKE '%shock%' \n           OR d.long_title LIKE '%respiratory failure%'\n    )\n),\nday1_icu AS (\n    SELECT \n        ami.subject_id,\n        ami.hadm_id,\n        MAX(CASE WHEN DATETIME_DIFF(icu.intime, ami.admittime, HOUR) <= 24 THEN 1 ELSE 0 END) AS in_icu_day1\n    FROM ami_patients ami\n    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON ami.hadm_id = icu.hadm_id\n    GROUP BY ami.subject_id, ami.hadm_id\n)\nSELECT \n    los_group,\n    CASE WHEN in_icu_day1 = 1 THEN 'ICU day1' ELSE 'No ICU day1' END AS icu_status,\n    COUNT(*) AS num_admissions,\n    ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 2) AS mortality_percent,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS median_los\nFROM ami_patients ami\nINNER JOIN day1_icu icu\n    ON ami.hadm_id = icu.hadm_id\nGROUP BY los_group, in_icu_day1\nORDER BY los_group, in_icu_day1;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [51:21]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [51:21]\n\nLocation: US\nJob ID: aec94264-a7bb-4dbf-acab-5139873aa5eb\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

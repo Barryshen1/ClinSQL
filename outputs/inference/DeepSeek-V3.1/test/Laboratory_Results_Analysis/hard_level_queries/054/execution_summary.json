@@ -1,0 +1,28 @@
+{
+  "query": "I have a 43\u2011year\u2011old woman. Among female inpatients aged 38\u201348 with AMI, calculate a 72\u2011hour lab instability score, stratify AMI patients into quartiles, and report LOS and in\u2011hospital mortality for each quartile. Compare overall critical\u2011lab rates to age\u2011matched controls.",
+  "final_sql": "WITH\ncohort AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    CASE WHEN di.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS has_ami\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  LEFT JOIN (\n    SELECT DISTINCT hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE\n      (icd_version = 10 AND icd_code LIKE 'I21%')\n      OR (icd_version = 9 AND icd_code LIKE '410%')\n  ) di ON a.hadm_id = di.hadm_id\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 38 AND 48\n),\n\nselected_labs AS (\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE itemid IN (50971, 50983, 50912, 50931, 51003, 50911)  -- K, Na, Creat, Glucose, Troponin T, Troponin I\n),\n\nlabs_72h AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.has_ami,\n    l.itemid,\n    l.valuenum,\n    l.ref_range_lower,\n    l.ref_range_upper,\n    -- Check if abnormal: below lower or above upper\n    CASE\n      WHEN l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper THEN 1\n      ELSE 0\n    END AS is_abnormal\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l\n    ON c.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN c.admittime AND DATETIME_ADD(c.admittime, INTERVAL 72 HOUR)\n  INNER JOIN selected_labs sl\n    ON l.itemid = sl.itemid\n  WHERE l.valuenum IS NOT NULL\n    AND l.ref_range_lower IS NOT NULL\n    AND l.ref_range_upper IS NOT NULL\n),\n\nabnormal_count_per_patient AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    has_ami,\n    COUNT(DISTINCT itemid) AS total_abnormal_labs  -- Count distinct lab tests that were abnormal\n  FROM labs_72h\n  WHERE is_abnormal = 1\n  GROUP BY subject_id, hadm_id, has_ami\n),\n\nami_patients AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    COALESCE(a.total_abnormal_labs, 0) AS lab_instability_score,\n    -- Calculate length of stay in days\n    DATE_DIFF(DATE(c.dischtime), DATE(c.admittime), DAY) AS los_days\n  FROM cohort c\n  LEFT JOIN abnormal_count_per_patient a\n    ON c.hadm_id = a.hadm_id\n  WHERE c.has_ami = 1\n),\n\nami_with_quartiles AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY lab_instability_score) AS quartile\n  FROM ami_patients\n),\n\n-- For AMI quartiles: report quartile ranges, count, avg LOS, mortality rate\nami_quartile_summary AS (\n  SELECT\n    quartile,\n    MIN(lab_instability_score) AS min_score,\n    MAX(lab_instability_score) AS max_score,\n    COUNT(*) AS num_patients,\n    ROUND(AVG(los_days), 2) AS avg_los_days,\n    ROUND(SUM(hospital_expire_flag) * 100.0 / COUNT(*), 2) AS mortality_percent\n  FROM ami_with_quartiles\n  GROUP BY quartile\n),\n\n-- Compare overall critical-lab rates between AMI and controls\ncontrol_vs_ami AS (\n  SELECT\n    has_ami,\n    COUNT(*) AS num_patients,\n    ROUND(AVG(COALESCE(total_abnormal_labs, 0)), 2) AS avg_abnormal_labs\n  FROM cohort c\n  LEFT JOIN abnormal_count_per_patient a\n    ON c.hadm_id = a.hadm_id\n  GROUP BY has_ami\n)\n\n-- Output both results\nSELECT * FROM ami_quartile_summary\nORDER BY quartile;\n\nSELECT * FROM control_vs_ami;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/e3c95642-cf6c-4755-8453-f9941a7dfc92?maxResults=0&location=US&prettyPrint=false: Query error: Column name has_ami is ambiguous at [108:5]\n\nLocation: US\nJob ID: e3c95642-cf6c-4755-8453-f9941a7dfc92\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/606f6506-9a43-4b2a-81d4-566dfddedd0e?maxResults=0&location=US&prettyPrint=false: Query error: Name icd_code not found inside di at [11:18]\n\nLocation: US\nJob ID: 606f6506-9a43-4b2a-81d4-566dfddedd0e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/49a10f79-68aa-4a87-a9a0-b319ebf455e7?maxResults=0&location=US&prettyPrint=false: Invalid value: Table \"abnormal_count_per_patient\" must be qualified with a dataset (e.g. dataset.table). at [105:1]\n\nLocation: US\nJob ID: 49a10f79-68aa-4a87-a9a0-b319ebf455e7\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/mimic-sql-468315/queries/e3c95642-cf6c-4755-8453-f9941a7dfc92?maxResults=0&location=US&prettyPrint=false: Query error: Column name has_ami is ambiguous at [108:5]\n\nLocation: US\nJob ID: e3c95642-cf6c-4755-8453-f9941a7dfc92\n"
+    }
+  ]
+}

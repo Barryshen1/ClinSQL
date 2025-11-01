@@ -1,0 +1,16 @@
+{
+  "query": "For a 45-year-old female patient: among female patients aged 40\u201350 admitted with AMI, what are the counts of initial Troponin T values categorized as normal, borderline, or elevated?",
+  "final_sql": "WITH troponin_items AS (\n  -- Identify lab itemids that look like Troponin T\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin t%'\n     OR LOWER(label) LIKE '%troponin-t%'\n     OR LOWER(label) LIKE '%troponin t hs%'\n     OR LOWER(label) LIKE '%tnt%'\n),\nami_admissions AS (\n  -- Admissions for female patients age 40-50 with an AMI diagnosis\n  SELECT a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 40 AND 50\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n        ON di.icd_code = dicd.icd_code\n       AND di.icd_version = dicd.icd_version\n      WHERE di.hadm_id = a.hadm_id\n        AND LOWER(dicd.long_title) LIKE '%myocardial infarction%'\n    )\n),\nfirst_troponin_per_adm AS (\n  -- For each AMI admission, get the earliest Troponin T lab (numeric) during the admission\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.valueuom,\n    le.ref_range_upper,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime ASC, le.storetime ASC) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  JOIN ami_admissions aa\n    ON le.hadm_id = aa.hadm_id\n  WHERE le.valuenum IS NOT NULL\n    -- restrict to measurements taken during the hospital admission\n    AND le.charttime >= aa.admittime\n    AND le.charttime <= aa.dischtime\n)\nSELECT\n  category,\n  COUNT(*) AS count_admissions\nFROM (\n  SELECT\n    CASE\n      -- Prefer lab-specific reference range when available\n      WHEN ref_range_upper IS NOT NULL AND valuenum <= ref_range_upper THEN 'normal'\n      WHEN ref_range_upper IS NOT NULL AND valuenum > ref_range_upper AND valuenum <= 2 * ref_range_upper THEN 'borderline'\n      WHEN ref_range_upper IS NOT NULL AND valuenum > 2 * ref_range_upper THEN 'elevated'\n      -- Fallback thresholds when ref_range_upper is missing (assumes ng/mL)\n      WHEN ref_range_upper IS NULL AND valuenum <= 0.01 THEN 'normal'\n      WHEN ref_range_upper IS NULL AND valuenum > 0.01 AND valuenum <= 0.1 THEN 'borderline'\n      WHEN ref_range_upper IS NULL AND valuenum > 0.1 THEN 'elevated'\n      ELSE 'unknown'\n    END AS category\n  FROM first_troponin_per_adm\n  WHERE rn = 1\n)\nGROUP BY category\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

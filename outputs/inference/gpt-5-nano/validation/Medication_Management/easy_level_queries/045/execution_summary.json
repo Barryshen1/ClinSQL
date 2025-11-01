@@ -1,0 +1,22 @@
+{
+  "query": "For my 62-year-old male inpatient, among male patients aged 57\u201367, what is the IQR of single inpatient DAPT prescription durations?",
+  "final_sql": "WITH aspirin AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.hadm_id,\n    p.starttime AS starttime,\n    p.stoptime AS stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n  WHERE LOWER(p.drug) LIKE '%aspirin%'\n    AND p.starttime IS NOT NULL\n),\n\n-- Define P2Y12 inhibitor intervals\np2y12 AS (\n  SELECT DISTINCT\n    p.subject_id,\n    p.hadm_id,\n    p.starttime AS starttime,\n    p.stoptime AS stoptime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n  WHERE (\n      LOWER(p.drug) LIKE '%clopidogrel%'\n      OR LOWER(p.drug) LIKE '%prasugrel%'\n      OR LOWER(p.drug) LIKE '%ticagrelor%'\n  )\n  AND p.starttime IS NOT NULL\n),\n\n-- Compute overlaps between aspirin and P2Y12 intervals within the same admission\noverlaps AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    GREATEST(a.starttime, b.starttime) AS overlap_start,\n    LEAST(a.stoptime, b.stoptime) AS overlap_end\n  FROM aspirin AS a\n  JOIN p2y12 AS b\n    ON a.subject_id = b.subject_id\n   AND a.hadm_id = b.hadm_id\n   -- Overlap must be positive\n   WHERE LEAST(a.stoptime, b.stoptime) > GREATEST(a.starttime, b.starttime)\n),\n\n-- Duration of each DAPT overlap segment (in seconds)\ndurations AS (\n  SELECT\n    o.subject_id,\n    o.hadm_id,\n    TIMESTAMP_DIFF(o.overlap_end, o.overlap_start, SECOND) AS duration_seconds\n  FROM overlaps AS o\n  WHERE TIMESTAMP_DIFF(o.overlap_end, o.overlap_start, SECOND) > 0\n),\n\n-- Cohort: male patients aged 57-67\ncohort AS (\n  SELECT DISTINCT adm.subject_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n    ON adm.subject_id = pat.subject_id\n  WHERE pat.gender = 'Male'\n    AND pat.anchor_age BETWEEN 57 AND 67\n)\n\n-- Final: compute IQR (Q1 and Q3) of DAPT durations in hours\nSELECT\n  PERCENTILE_CONT(duration_hours, 0.25) OVER() AS q1_hours,\n  PERCENTILE_CONT(duration_hours, 0.75) OVER() AS q3_hours\nFROM (\n  SELECT duration_seconds / 3600.0 AS duration_hours\n  FROM durations d\n  JOIN cohort c ON d.subject_id = c.subject_id\n) t\nLIMIT 1;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: a at [53:19]; reason: invalidQuery, location: query, message: Unrecognized name: a at [53:19]\n\nLocation: US\nJob ID: 2ba33963-efba-4097-ba50-d73fc7c1248c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

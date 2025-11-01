@@ -1,0 +1,16 @@
+{
+  "query": "I have a 48-year-old male inpatient. Among male inpatients aged 43\u201353 with a transplant diagnosis, compute medication complexity score over the first 7 hospital days, stratify into quartiles, and report per quartile: n, mean score, LOS, in-hospital mortality, and 30-day readmission",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id, \n    a.hadm_id, \n    a.admittime, \n    a.dischtime,\n    a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a \n    ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 43 AND 53\n    AND a.hadm_id IN (\n      SELECT DISTINCT di.hadm_id\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` d \n        ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n      WHERE d.long_title LIKE '%transplant%'\n    )\n),\n\nmed_score AS (\n  SELECT \n    c.hadm_id,\n    SUM(\n      1 + \n      CASE \n        WHEN LOWER(p.route) LIKE '%iv%' THEN 1 \n        WHEN LOWER(p.route) LIKE '%oral%' THEN 0 \n        ELSE 0.5 \n      END +\n      CASE \n        WHEN p.doses_per_24_hrs = 1 THEN 0\n        WHEN p.doses_per_24_hrs = 2 THEN 0.5\n        WHEN p.doses_per_24_hrs >= 3 THEN 1\n        ELSE 0 \n      END\n    ) AS complexity_score\n  FROM cohort c\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p \n    ON c.hadm_id = p.hadm_id\n  WHERE \n    p.starttime >= c.admittime \n    AND p.starttime <= TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.hadm_id\n),\n\nadm_with_next AS (\n  SELECT \n    hadm_id,\n    subject_id,\n    admittime,\n    dischtime,\n    hospital_expire_flag,\n    LEAD(admittime) OVER (PARTITION BY subject_id ORDER BY admittime) AS next_admittime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions`\n),\n\ncohort_outcomes AS (\n  SELECT \n    c.hadm_id,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los,\n    a.hospital_expire_flag,\n    CASE \n      WHEN a.hospital_expire_flag = 1 THEN 0\n      WHEN a.next_admittime IS NOT NULL \n        AND a.next_admittime <= TIMESTAMP_ADD(a.dischtime, INTERVAL 30 DAY) THEN 1\n      ELSE 0 \n    END AS readmission_30day\n  FROM cohort c\n  INNER JOIN adm_with_next a \n    ON c.hadm_id = a.hadm_id\n),\n\ncombined AS (\n  SELECT \n    c.hadm_id,\n    COALESCE(m.complexity_score, 0) AS complexity_score,  -- Handle no prescriptions\n    o.los,\n    o.hospital_expire_flag,\n    o.readmission_30day\n  FROM cohort c\n  LEFT JOIN med_score m ON c.hadm_id = m.hadm_id\n  INNER JOIN cohort_outcomes o ON c.hadm_id = o.hadm_id\n),\n\nquartiles AS (\n  SELECT *,\n    NTILE(4) OVER (ORDER BY complexity_score) AS quartile\n  FROM combined\n)\n\nSELECT \n  quartile,\n  COUNT(*) AS n,\n  AVG(complexity_score) AS mean_score,\n  AVG(los) AS mean_los,\n  AVG(hospital_expire_flag) AS in_hospital_mortality,\n  AVG(readmission_30day) AS readmission_30day\nFROM quartiles\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

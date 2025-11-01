@@ -1,0 +1,28 @@
+{
+  "query": "For my 93\u2011yo female with TIA: among women 88\u201398 with TIA, what's the median (IQR) CT/MRI studies per admission for 1\u20133 vs 4\u20137 day stays, stratified by ICU use?",
+  "final_sql": "with TIA: among women 88-98 with TIA, what's the median (IQR) CT/MRI studies per admission for 1-3 vs 4-7 day stays, stratified by ICU use?\n-- The results are stratified by hospital length of stay (1-3 vs 4-7 days) and whether the patient had an ICU stay.\n\nWITH\n  -- CTE 1: Identify all relevant hospital admissions based on patient demographics and diagnosis.\n  cohort_admissions AS (\n    SELECT DISTINCT -- Use DISTINCT to prevent duplicating admissions if multiple TIA codes exist for one stay\n      adm.hadm_id,\n      -- Categorize length of stay (LOS) into the specified groups.\n      CASE\n        WHEN DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 BETWEEN 1 AND 3\n        THEN '1-3 days'\n        WHEN DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 > 3 AND DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 <= 7\n        THEN '4-7 days'\n        ELSE NULL\n      END AS los_category,\n      -- Flag admissions that included an ICU stay.\n      CASE\n        WHEN icu.hadm_id IS NOT NULL\n        THEN 'ICU'\n        ELSE 'No ICU'\n      END AS icu_status\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    -- Join to get patient demographics (age, gender).\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON adm.subject_id = pat.subject_id\n    -- Join to filter for TIA diagnosis.\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n      ON adm.hadm_id = dx.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx\n      ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version\n    -- Left join to check for an ICU stay during the admission.\n    LEFT JOIN (\n      SELECT DISTINCT hadm_id\n      FROM `physionet-data.mimiciv_3_1_icu.icustays`\n    ) AS icu\n      ON adm.hadm_id = icu.hadm_id\n    WHERE\n      pat.gender = 'F'\n      -- Filter for patients aged 88-98 at admission.\n      AND (\n        pat.anchor_age + DATETIME_DIFF(adm.admittime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR)\n      ) BETWEEN 88 AND 98\n      -- Filter for TIA diagnoses.\n      AND d_dx.long_title LIKE '%Transient ischemic attack%'\n  ),\n  -- CTE 2: Count the number of CT/MRI procedures for each admission.\n  imaging_counts AS (\n    SELECT\n      proc.hadm_id,\n      COUNT(*) AS num_imaging_studies\n    FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` AS proc\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_procedures` AS d_proc\n      ON proc.icd_code = d_proc.icd_code AND proc.icd_version = d_proc.icd_version\n    WHERE\n      -- Identify CT and MRI procedures by their description.\n      LOWER(d_proc.long_title) LIKE '%tomography%' OR LOWER(d_proc.long_title) LIKE '%magnetic resonance imaging%'\n    GROUP BY\n      proc.hadm_id\n  ),\n  -- CTE 3: Join cohort with imaging counts to create the final dataset for aggregation.\n  final_data AS (\n    SELECT\n      ca.los_category,\n      ca.icu_status,\n      ca.hadm_id,\n      -- If an admission has no imaging, its count is 0.\n      COALESCE(ic.num_imaging_studies, 0) AS num_imaging_studies\n    FROM cohort_admissions AS ca\n    LEFT JOIN imaging_counts AS ic\n      ON ca.hadm_id = ic.hadm_id\n    WHERE\n      -- Exclude admissions that do not fall into the specified LOS categories.\n      ca.los_category IS NOT NULL\n  )\n-- Final aggregation to compute statistics for each stratum.\nSELECT\n  los_category,\n  icu_status,\n  COUNT(hadm_id) AS num_admissions,\n  -- Calculate median (p50) and IQR (p75 - p25) using APPROX_QUANTILES.\n  -- APPROX_QUANTILES(..., 4) returns an array: [min, p25, p50, p75, max]\n  APPROX_QUANTILES(num_imaging_studies, 4)[OFFSET(2)] AS median_studies,\n  (APPROX_QUANTILES(num_imaging_studies, 4)[OFFSET(3)] - APPROX_QUANTILES(num_imaging_studies, 4)[OFFSET(1)]) AS iqr_studies\nFROM final_data\nGROUP BY\n  los_category,\n  icu_status\nORDER BY\n  los_category,\n  icu_status;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected keyword AS but got \":\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \":\" at [1:9]\n\nLocation: US\nJob ID: 524a71d2-5bd5-41ed-a886-9e5606454621\n",
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"TIA\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"TIA\" at [1:8]\n\nLocation: US\nJob ID: a6ed4109-ef5d-4558-a51c-1d7e997a699a\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"TIA\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"TIA\" at [1:8]\n\nLocation: US\nJob ID: a120b338-e1d6-4575-8192-d56636243c44\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \":\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \":\" at [1:9]\n\nLocation: US\nJob ID: 524a71d2-5bd5-41ed-a886-9e5606454621\n"
+    }
+  ]
+}

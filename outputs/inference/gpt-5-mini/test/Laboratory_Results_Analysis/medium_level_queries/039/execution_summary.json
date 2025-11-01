@@ -1,0 +1,16 @@
+{
+  "query": "For my 92\u2011year\u2011old female patient: among female patients 87\u201397 admitted with chest pain, report counts, percentages, and mean, median, IQR of index hs\u2011TnT by category (Normal\u22640.04; Borderline 0.04\u20130.1; Injury>0.1).",
+  "final_sql": "WITH cohort AS (\n  -- female patients age 87-97 at admission with primary diagnosis containing \"chest pain\"\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    p.anchor_age\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      USING (subject_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n      USING (hadm_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` ddi\n      ON di.icd_code = ddi.icd_code\n      AND di.icd_version = ddi.icd_version\n  WHERE\n    LOWER(p.gender) = 'f'\n    AND p.anchor_age BETWEEN 87 AND 97\n    AND di.seq_num = 1 -- primary diagnosis\n    AND LOWER(COALESCE(ddi.long_title, '')) LIKE '%chest pain%'\n),\nindex_tn AS (\n  -- earliest troponin lab within 24 hours of admission (numeric valuenum)\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    le.charttime,\n    le.valuenum,\n    le.valueuom,\n    li.label AS lab_label,\n    CASE\n      WHEN le.valuenum <= 0.04 THEN 'Normal'\n      WHEN le.valuenum > 0.04 AND le.valuenum <= 0.1 THEN 'Borderline'\n      WHEN le.valuenum > 0.1 THEN 'Injury'\n      ELSE 'Unknown'\n    END AS category\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n      USING (hadm_id)\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` li\n      ON le.itemid = li.itemid\n  WHERE\n    LOWER(li.label) LIKE '%troponin%' -- capture troponin lab items\n    AND le.valuenum IS NOT NULL\n    AND le.charttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 24 HOUR)\n  QUALIFY\n    ROW_NUMBER() OVER (PARTITION BY c.hadm_id ORDER BY le.charttime ASC) = 1\n),\ntotals AS (\n  SELECT COUNT(*) AS total_n\n  FROM index_tn\n)\nSELECT\n  it.category,\n  COUNT(*) AS n,\n  ROUND(100.0 * COUNT(*) / NULLIF(t.total_n, 0), 2) AS pct_of_cohort_with_index_tn,\n  ROUND(AVG(it.valuenum), 4) AS mean_tn,\n  -- APPROX_QUANTILES returns array [min, Q1, median, Q3, max] when asked for 4 quantiles\n  (APPROX_QUANTILES(it.valuenum, 4))[OFFSET(2)] AS median_tn,\n  (APPROX_QUANTILES(it.valuenum, 4))[OFFSET(1)] AS q1_tn,\n  (APPROX_QUANTILES(it.valuenum, 4))[OFFSET(3)] AS q3_tn,\n  SAFE_CAST((APPROX_QUANTILES(it.valuenum, 4))[OFFSET(3)] - (APPROX_QUANTILES(it.valuenum, 4))[OFFSET(1)] AS FLOAT64) AS iqr_tn\nFROM\n  index_tn it\n  CROSS JOIN totals t\nGROUP BY\n  it.category, t.total_n\nORDER BY\n  -- desired logical ordering\n  CASE it.category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Injury' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

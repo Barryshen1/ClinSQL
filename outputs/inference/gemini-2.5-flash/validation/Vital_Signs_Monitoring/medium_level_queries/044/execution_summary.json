@@ -1,0 +1,22 @@
+{
+  "query": "I\u2019m assessing an 86-year-old man: among male ICU patients aged 81\u201391, what percentile is a per-stay average systolic BP of 150 mmHg over the first 48 hours?",
+  "final_sql": "WITH PatientICUStays AS (\n    -- Select eligible male ICU patients aged 81-91\n    SELECT\n        p.subject_id,\n        p.gender,\n        p.anchor_age,\n        icu.stay_id,\n        icu.intime\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.icustays` icu\n        ON p.subject_id = icu.subject_id\n    WHERE\n        p.gender = 'M'\n        AND p.anchor_age BETWEEN 81 AND 91\n),\nSBP_Measurements AS (\n    -- Extract systolic blood pressure measurements for the eligible patients\n    -- within the first 48 hours of their ICU stay\n    SELECT\n        pis.stay_id,\n        ce.valuenum AS sbp_value\n    FROM\n        PatientICUStays pis\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON pis.stay_id = ce.stay_id\n    WHERE\n        -- ItemIDs for Systolic Blood Pressure (Arterial and Non Invasive)\n        ce.itemid IN (220050, 220179)\n        -- Filter to the first 48 hours of the ICU stay\n        AND ce.charttime BETWEEN pis.intime AND DATETIME_ADD(pis.intime, INTERVAL 48 HOUR)\n        -- Ensure valid numeric SBP values\n        AND ce.valuenum IS NOT NULL\n        AND ce.valuenum > 0\n        AND ce.valuenum < 300 -- Exclude implausibly high values\n),\nAverageSBP_PerStay AS (\n    -- Calculate the average SBP for each ICU stay\n    SELECT\n        stay_id,\n        AVG(sbp_value) AS avg_sbp\n    FROM\n        SBP_Measurements\n    GROUP BY\n        stay_id\n    HAVING\n        COUNT(sbp_value) > 0 -- Ensure at least one valid SBP measurement for the average\n),\nPercentileCalculation AS (\n    -- Count total stays and stays with average SBP <= 150 mmHg\n    SELECT\n        -- Using COALESCE for robustness if no data is found, though COUNT() handles this gracefully\n        COUNT(avg_sbp) AS total_stays,\n        COUNT(CASE WHEN avg_sbp <= 150 THEN 1 END) AS stays_le_150\n    FROM\n        AverageSBP_PerStay\n)\n-- Calculate the percentile\nSELECT\n    (CAST(pc.stays_le_150 AS FLOAT64) / pc.total_stays) * 100 AS percentile_of_150_mmHg\nFROM\n    PercentileCalculation pc;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [61:30]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [61:30]\n\nLocation: US\nJob ID: ce107d87-53f5-487e-9be2-1b14f08d392c\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

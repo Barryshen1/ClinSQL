@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH hemorrhagic_adms AS (\n  -- 1. Filter admissions for male patients age 89\u201399 with hemorrhagic stroke\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 89 AND 99\n    AND EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n      JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dd\n        ON d.icd_code = dd.icd_code\n        AND d.icd_version = dd.icd_version\n      WHERE\n        d.hadm_id = a.hadm_id\n        AND LOWER(dd.long_title) LIKE '%hemorrhag%'\n    )\n),\nmed_counts AS (\n  -- 2. Count distinct drugs in first 7 days of each admission\n  SELECT\n    h.subject_id,\n    h.hadm_id,\n    h.admittime,\n    h.dischtime,\n    h.hospital_expire_flag,\n    COUNT(DISTINCT p.drug) AS med_count\n  FROM\n    hemorrhagic_adms AS h\n  LEFT JOIN\n    `physionet-data.mimiciv_3_1_hosp.prescriptions` AS p\n    ON h.hadm_id = p.hadm_id\n    AND p.starttime >= h.admittime\n    AND p.starttime < TIMESTAMP_ADD(h.admittime, INTERVAL 7 DAY)\n  GROUP BY\n    h.subject_id,\n    h.hadm_id,\n    h.admittime,\n    h.dischtime,\n    h.hospital_expire_flag\n),\nwith_quintile AS (\n  -- 3. Assign quintiles based on med_count\n  SELECT\n    *,\n    NTILE(5) OVER (ORDER BY med_count) AS quintile\n  FROM\n    med_counts\n),\nwith_outcomes AS (\n  -- 4. Compute LOS, mortality, and 30-day readmission flag for each admission\n  SELECT\n    wq.*,\n    DATE_DIFF(wq.dischtime, wq.admittime, DAY) AS los_days,\n    wq.hospital_expire_flag AS inpatient_mortality,\n    -- 30-day readmission: exists another admission within 30 days\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS r\n        WHERE\n          r.subject_id = wq.subject_id\n          AND r.admittime > wq.dischtime\n          AND r.admittime <= TIMESTAMP_ADD(wq.dischtime, INTERVAL 30 DAY)\n      ) THEN 1\n      ELSE 0\n    END AS readmit_30d\n  FROM\n    with_quintile AS wq\n)\n-- 5. Aggregate results by quintile\nSELECT\n  quintile,\n  COUNT(*) AS n_admissions,\n  ROUND(AVG(los_days), 2) AS avg_los_days,\n  ROUND(AVG(inpatient_mortality), 3) AS prop_inpatient_mortality,\n  ROUND(AVG(readmit_30d), 3) AS prop_readmit_30d\nFROM\n  with_outcomes\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+      "success": true,
+      "error": null,
+      "row_count": 5
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 5
+}

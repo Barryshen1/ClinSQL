@@ -1,0 +1,28 @@
+{
+  "query": "Considering a 75\u2011year\u2011old female: among female inpatients aged 70\u201380 hospitalized for lower GI bleeding, stratified into quintiles by a composite complication-based risk score, report for each quintile N, 90\u2011day mortality rate, major complication rate, and median LOS among 90\u2011day survivors.",
+  "final_sql": "WITH\n-- Define lower GI bleeding ICD codes\nlower_gi_bleeding_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE icd_code IN ('K922', 'K921', 'K920', 'K9281', 'K9289')  -- Example codes, adjust as needed\n),\n\n-- Get female patients aged 70-80 with lower GI bleeding\nbase_population AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    p.dod,\n    p.anchor_age,\n    p.anchor_year\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.hadm_id = d.hadm_id\n  JOIN lower_gi_bleeding_codes lgib ON d.icd_code = lgib.icd_code\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 70 AND 80\n    AND a.admission_type NOT LIKE '%NEWBORN%'\n),\n\n-- Calculate a simplified composite risk score (example components)\nrisk_score_components AS (\n  SELECT\n    bp.subject_id,\n    bp.hadm_id,\n    bp.admittime,\n    bp.dischtime,\n    -- Comorbidity count (simplified)\n    COUNT(DISTINCT CASE WHEN d.icd_code IN ('E119', 'I10', 'I509') THEN d.icd_code END) AS comorbidity_count,\n    -- Low hemoglobin (example lab)\n    MAX(CASE WHEN le.itemid = 50821 THEN le.valuenum ELSE NULL END) AS min_hemoglobin,\n    -- High heart rate (example vital)\n    MAX(CASE WHEN ce.itemid = 220045 THEN ce.valuenum ELSE NULL END) AS max_heart_rate\n  FROM base_population bp\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON bp.hadm_id = d.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le ON bp.hadm_id = le.hadm_id AND le.itemid = 50821\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce ON bp.hadm_id = ce.hadm_id AND ce.itemid = 220045\n  GROUP BY bp.subject_id, bp.hadm_id, bp.admittime, bp.dischtime\n),\n\n-- Calculate the composite risk score (simplified example)\nrisk_scores AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    -- Example scoring formula (adjust weights as needed)\n    (comorbidity_count * 2) +\n    (CASE WHEN min_hemoglobin < 10 THEN 3 ELSE 0 END) +\n    (CASE WHEN max_heart_rate > 100 THEN 2 ELSE 0 END) AS composite_risk_score\n  FROM risk_score_components\n),\n\n-- Assign quintiles based on risk score\nquintiles AS (\n  SELECT\n    r.*,\n    NTILE(5) OVER (ORDER BY composite_risk_score) AS risk_quintile\n  FROM risk_scores r\n),\n\n-- Calculate outcomes\noutcomes AS (\n  SELECT\n    q.risk_quintile,\n    q.hadm_id,\n    q.admittime,\n    q.dischtime,\n    p.dod,\n    -- 90-day mortality\n    CASE WHEN DATE_DIFF(DATE(p.dod), DATE(q.admittime), DAY) <= 90 THEN 1 ELSE 0 END AS is_death_90day,\n    -- Major complications (example: sepsis or acute kidney injury)\n    CASE WHEN EXISTS (\n      SELECT 1\n      FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE d.hadm_id = q.hadm_id\n      AND d.icd_code IN ('A419', 'N179')  -- Example complication codes\n    ) THEN 1 ELSE 0 END AS has_major_complication,\n    -- LOS for 90-day survivors\n    CASE WHEN DATE_DIFF(DATE(p.dod), DATE(q.admittime), DAY) > 90 OR p.dod IS NULL\n         THEN TIMESTAMP_DIFF(q.dischtime, q.admittime, HOUR)/24\n         ELSE NULL END AS los_survivors\n  FROM quintiles q\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON q.subject_id = p.subject_id\n),\n\n-- Aggregate results by quintile\nquintile_aggregates AS (\n  SELECT\n    risk_quintile,\n    COUNT(DISTINCT hadm_id) AS n,\n    SUM(is_death_90day) AS deaths_90day,\n    SUM(has_major_complication) AS major_complications,\n    APPROX_QUANTILES(los_survivors, 100)[OFFSET(50)] AS median_los_survivors\n  FROM outcomes\n  GROUP BY risk_quintile\n)\n\n-- Final results\nSELECT\n  risk_quintile,\n  n,\n  ROUND(SUM(deaths_90day) / n * 100, 2) AS mortality_rate_90day_pct,\n  ROUND(SUM(major_complications) / n * 100, 2) AS major_complication_rate_pct,\n  ROUND(median_los_survivors, 2) AS median_los_survivors_days\nFROM quintile_aggregates\nGROUP BY risk_quintile, n, median_los_survivors\nORDER BY risk_quintile;",
+  "execution_success": true,
+  "row_count": 5,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" or keyword ORDER or keyword RANGE or keyword ROWS but got keyword WHERE at [86:7]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" or keyword ORDER or keyword RANGE or keyword ROWS but got keyword WHERE at [86:7]\n\nLocation: US\nJob ID: 07dfc461-3918-496e-ab9c-13b086dab86d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name dischtime not found inside q at [75:7]; reason: invalidQuery, location: query, message: Name dischtime not found inside q at [75:7]\n\nLocation: US\nJob ID: c2262513-4ac5-4530-99fc-14279b7d2339\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 5,
+      "error": null
+    }
+  ]
+}

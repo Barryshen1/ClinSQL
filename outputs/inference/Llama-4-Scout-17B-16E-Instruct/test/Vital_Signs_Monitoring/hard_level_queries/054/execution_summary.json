@@ -1,0 +1,28 @@
+{
+  "query": "I have an 87\u2011year\u2011old male. Among male ICU patients 82\u201392 with acute respiratory failure, during first 72 hours report p25/median/p75, IQR of composite instability score (MAP<65 + HR>100 burdens) and compare average burdens, ICU LOS, and mortality to general ICU.",
+  "final_sql": "WITH \n  -- Filter patients of interest\n  patients_of_interest AS (\n    SELECT \n      p.subject_id, \n      p.anchor_age, \n      p.gender,\n      a.hadm_id,\n      a.admittime,\n      a.dischtime,\n      a.deathtime\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a \n        ON p.subject_id = a.subject_id\n    WHERE \n      p.gender = 'M' \n      AND p.anchor_age BETWEEN 82 AND 92\n  ),\n\n  -- Identify ICU stays for patients of interest with acute respiratory failure\n  icu_stays AS (\n    SELECT \n      i.stay_id,\n      i.hadm_id,\n      i.subject_id,\n      i.intime,\n      i.outtime\n    FROM \n      `physionet-data.mimiciv_3_1_icu.icustays` i\n    JOIN \n      patients_of_interest p \n        ON i.hadm_id = p.hadm_id\n    WHERE \n      -- Assuming acute respiratory failure is coded in diagnoses\n      EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        WHERE d.hadm_id = i.hadm_id \n          AND d.icd_code LIKE '518.2'  -- Acute respiratory failure\n      )\n  ),\n\n  -- Calculate MAP and HR burden\n  vital_signs AS (\n    SELECT \n      cv.subject_id,\n      cv.hadm_id,\n      cv.stay_id,\n      cv.charttime,\n      cv.itemid,\n      cv.valuenum,\n      cv.valueuom\n    FROM \n      `physionet-data.mimiciv_3_1_icu.chartevents` cv\n    WHERE \n      cv.itemid IN (220050, 220179)  -- MAP and HR\n  ),\n\n  -- Calculate burden of instability (MAP < 65, HR > 100)\n  instability_burden AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      stay_id,\n      charttime,\n      itemid,\n      valuenum,\n      valueuom,\n      CASE \n        WHEN itemid = 220050 AND valuenum < 65 THEN 1\n        WHEN itemid = 220179 AND valuenum > 100 THEN 1\n        ELSE 0\n      END AS instability\n    FROM \n      vital_signs\n  ),\n\n  -- Calculate composite instability score (first 72 hours)\n  instability_score AS (\n    SELECT \n      ib.subject_id,\n      ib.hadm_id,\n      ib.stay_id,\n      SUM(ib.instability) AS burden\n    FROM \n      instability_burden ib\n    JOIN \n      icu_stays is_stay \n        ON ib.subject_id = is_stay.subject_id\n        AND ib.hadm_id = is_stay.hadm_id\n        AND ib.stay_id = is_stay.stay_id\n    WHERE \n      ib.charttime BETWEEN is_stay.intime AND TIMESTAMP_ADD(is_stay.intime, INTERVAL 3 HOUR)\n    GROUP BY \n      ib.subject_id, ib.hadm_id, ib.stay_id\n  ),\n\n  -- Calculate ICU LOS and mortality\n  icu_outcomes AS (\n    SELECT \n      i.subject_id,\n      i.hadm_id,\n      i.stay_id,\n      TIMESTAMP_DIFF(i.outtime, i.intime, DAY) AS icu_los,\n      CASE \n        WHEN p.deathtime IS NOT NULL THEN 1\n        ELSE 0\n      END AS mortality\n    FROM \n      icu_stays i\n    JOIN \n      patients_of_interest p \n        ON i.hadm_id = p.hadm_id\n  )\n\n-- Final query to report p25/median/p75, IQR of composite instability score\n-- and compare average burdens, ICU LOS, and mortality\nSELECT \n  PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY burden) AS p25,\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY burden) AS median,\n  PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY burden) AS p75,\n  AVG(burden) AS avg_burden,\n  AVG(icu_los) AS avg_icu_los,\n  AVG(mortality) AS avg_mortality\nFROM \n  instability_score\n  JOIN icu_outcomes \n    ON instability_score.subject_id = icu_outcomes.subject_id\n    AND instability_score.hadm_id = icu_outcomes.hadm_id\n    AND instability_score.stay_id = icu_outcomes.stay_id;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected end of input but got keyword WITHIN at [121:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [121:25]\n\nLocation: US\nJob ID: 5f822d98-5cc0-4ba9-bb39-342fbb724a32\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [116:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [116:25]\n\nLocation: US\nJob ID: a239d84d-d956-406e-a7b0-2e22be4e4fd8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: intime at [90:25]; reason: invalidQuery, location: query, message: Unrecognized name: intime at [90:25]\n\nLocation: US\nJob ID: 0826f453-0411-40d8-822b-aa99df0c762c\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got keyword WITHIN at [121:25]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got keyword WITHIN at [121:25]\n\nLocation: US\nJob ID: 5f822d98-5cc0-4ba9-bb39-342fbb724a32\n"
+    }
+  ]
+}

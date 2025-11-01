@@ -1,0 +1,16 @@
+{
+  "query": "I have a 63\u2011year\u2011old man admitted for COPD exacerbation. Among male patients 58\u201368, stratified into tertiles by medication complexity during the first 72h, report for each tertile: n, min/max and mean complexity score, mean LOS, mortality %, and 30\u2011day readmission %.",
+  "final_sql": "WITH copd_admissions AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n    ON d.icd_code = dicd.icd_code AND d.icd_version = dicd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    AND LOWER(dicd.long_title) LIKE '%copd%'\n    AND LOWER(dicd.long_title) LIKE '%exacerbation%'\n),\n\nmed_complexity AS (\n  SELECT\n    ca.hadm_id,\n    COUNT(DISTINCT pr.drug) AS medication_complexity_score\n  FROM copd_admissions ca\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON ca.hadm_id = pr.hadm_id\n    AND pr.starttime >= ca.admittime\n    AND pr.starttime <= DATETIME_ADD(ca.admittime, INTERVAL 72 HOUR)\n  GROUP BY ca.hadm_id\n),\n\nlos_mortality AS (\n  SELECT\n    hadm_id,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los_days,\n    hospital_expire_flag\n  FROM copd_admissions\n),\n\nreadmission_30d AS (\n  SELECT\n    a1.hadm_id,\n    CASE WHEN a2.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS readmission_30d_flag\n  FROM copd_admissions a1\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON a1.subject_id = a2.subject_id\n    AND a2.admittime > a1.dischtime\n    AND a2.admittime <= DATETIME_ADD(a1.dischtime, INTERVAL 30 DAY)\n  WHERE a2.hadm_id IS NOT NULL\n    OR a2.hadm_id IS NULL\n),\n\ncombined AS (\n  SELECT\n    ca.hadm_id,\n    mc.medication_complexity_score,\n    lm.los_days,\n    lm.hospital_expire_flag,\n    COALESCE(r.readmission_30d_flag, 0) AS readmission_30d_flag,\n    NTILE(3) OVER (ORDER BY mc.medication_complexity_score) AS tertile\n  FROM copd_admissions ca\n  LEFT JOIN med_complexity mc ON ca.hadm_id = mc.hadm_id\n  LEFT JOIN los_mortality lm ON ca.hadm_id = lm.hadm_id\n  LEFT JOIN readmission_30d r ON ca.hadm_id = r.hadm_id\n)\n\nSELECT\n  tertile,\n  COUNT(*) AS n,\n  MIN(medication_complexity_score) AS min_complexity,\n  MAX(medication_complexity_score) AS max_complexity,\n  AVG(medication_complexity_score) AS mean_complexity,\n  AVG(los_days) AS mean_los,\n  AVG(hospital_expire_flag) * 100 AS mortality_percent,\n  AVG(readmission_30d_flag) * 100 AS readmission_30d_percent\nFROM combined\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

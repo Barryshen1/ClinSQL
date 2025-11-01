@@ -1,0 +1,16 @@
+{
+  "query": "Female patient, 47. Among female ICU stays aged 42\u201352, what percentile is a per-stay average heart rate of 90 bpm over the ICU stay? Provide cohort size and percentile.",
+  "final_sql": "WITH cohort_icu_stays AS (\n    -- Step 1: Identify the target cohort of ICU stays\n    SELECT\n        ic.subject_id,\n        ic.hadm_id,\n        ic.stay_id,\n        p.gender,\n        p.anchor_age\n    FROM\n        `physionet-data.mimiciv_3_1_icu.icustays` ic\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON ic.subject_id = p.subject_id\n    WHERE\n        p.gender = 'F'\n        AND p.anchor_age BETWEEN 42 AND 52\n),\navg_hr_per_stay AS (\n    -- Step 2 & 3: Calculate the average heart rate for each eligible ICU stay\n    SELECT\n        cis.stay_id,\n        AVG(ce.valuenum) AS avg_heart_rate\n    FROM\n        cohort_icu_stays cis\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_icu.chartevents` ce\n        ON cis.stay_id = ce.stay_id\n    WHERE\n        ce.itemid = 220045 -- Itemid for 'Heart Rate' from d_items\n        AND ce.valuenum IS NOT NULL -- Ensure a numeric value exists\n        AND ce.valuenum > 0        -- Heart rate must be positive\n    GROUP BY\n        cis.stay_id\n    HAVING\n        COUNT(ce.valuenum) >= 5 -- Require a minimum number of measurements for a stable average\n),\nall_hr_values_for_ranking AS (\n    -- Step 5: Combine the calculated average heart rates with the target value (90 bpm)\n    -- to calculate its percentile rank within the distribution.\n    SELECT avg_heart_rate FROM avg_hr_per_stay\n    UNION ALL\n    SELECT 90.0 AS avg_heart_rate -- Add the target value for ranking purposes\n)\nSELECT\n    (SELECT COUNT(ahr.stay_id) FROM avg_hr_per_stay ahr) AS cohort_size, -- Step 4: Get the cohort size\n    (\n        -- Step 5: Calculate the PERCENT_RANK of 90 bpm\n        SELECT\n            CAST(PERCENT_RANK() OVER (ORDER BY all_values.avg_heart_rate) * 100 AS BIGNUMERIC)\n        FROM\n            all_hr_values_for_ranking all_values\n        WHERE\n            all_values.avg_heart_rate = 90.0\n        ORDER BY\n            all_values.avg_heart_rate -- Ensures consistent result if multiple 90s (though value is constant)\n        LIMIT 1 -- Select only one result for the percentile (it will be the same for all 90s)\n    ) AS percentile_of_90_bpm;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

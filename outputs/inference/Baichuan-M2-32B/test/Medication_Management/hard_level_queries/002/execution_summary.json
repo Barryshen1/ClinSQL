@@ -1,0 +1,29 @@
+{
+  "query": "I'm evaluating a 72-year-old man with AMI. Among male inpatients aged 67-77 with AMI, stratified into tertiles by first-24-hour medication complexity score, report per tertile: admission count, score range and mean, mean LOS (days), in-hospital mortality%, and 30-day readmission%.",
+  "final_sql": "WITH eligible_admissions AS (\n    SELECT\n        a.hadm_id,\n        a.subject_id,\n        a.admittime,\n        a.dischtime,\n        a.hospital_expire_flag,\n        p.anchor_age,\n        p.gender,\n        LEAD(a.admittime) OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS next_admittime\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n        ON a.subject_id = p.subject_id\n    INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n        ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n    WHERE p.gender = 'M'\n        AND p.anchor_age BETWEEN 67 AND 77\n        AND d.icd_code IN ('I21.0', 'I21.1', 'I21.2', 'I21.3', 'I21.4', 'I21.9')\n        AND d.icd_version = 10\n),\nmedication_scores AS (\n    SELECT\n        e.hadm_id,\n        COUNT(DISTINCT pr.drug) AS complexity_score\n    FROM eligible_admissions e\n    LEFT JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        ON e.subject_id = pr.subject_id AND e.hadm_id = pr.hadm_id\n        AND pr.starttime BETWEEN e.admittime AND TIMESTAMP_ADD(e.admittime, INTERVAL 24 HOUR)\n    GROUP BY e.hadm_id\n),\nadmissions_with_tertiles AS (\n    SELECT\n        e.hadm_id,\n        e.subject_id,\n        e.admittime,\n        e.dischtime,\n        e.hospital_expire_flag,\n        e.next_admittime,\n        COALESCE(ms.complexity_score, 0) AS complexity_score,\n        NTILE(3) OVER (ORDER BY COALESCE(ms.complexity_score, 0)) AS tertile\n    FROM eligible_admissions e\n    LEFT JOIN medication_scores ms\n        ON e.hadm_id = ms.hadm_id\n),\nfinal_data AS (\n    SELECT\n        tertile,\n        COUNT(*) AS admission_count,\n        MIN(complexity_score) AS score_min,\n        MAX(complexity_score) AS score_max,\n        AVG(complexity_score) AS score_mean,\n        AVG(DATE_DIFF(CAST(dischtime AS DATE), CAST(admittime AS DATE), DAY)) AS mean_los_days,\n        AVG(CAST(hospital_expire_flag AS FLOAT64)) AS in_hospital_mortality,\n        AVG(CASE WHEN next_admittime BETWEEN dischtime AND TIMESTAMP_ADD(dischtime, INTERVAL 30 DAY) \n                 THEN 1.0 ELSE 0.0 END) AS readmission_rate\n    FROM admissions_with_tertiles\n    GROUP BY tertile\n)\nSELECT\n    tertile,\n    admission_count,\n    score_min,\n    score_max,\n    ROUND(score_mean, 2) AS score_mean,\n    ROUND(mean_los_days, 2) AS mean_los_days,\n    ROUND(in_hospital_mortality * 100, 2) AS in_hospital_mortality_percent,\n    ROUND(readmission_rate * 100, 2) AS readmission_rate_percent\nFROM final_data\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [52:13]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [52:13]\n\nLocation: US\nJob ID: c708814a-abe2-481d-8a2e-afe3e52c6077\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [53:42]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [53:42]\n\nLocation: US\nJob ID: a4e69ca2-34f7-420b-82c3-d6f8c41d3f56\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

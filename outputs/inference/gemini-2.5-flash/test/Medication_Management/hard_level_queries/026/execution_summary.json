@@ -1,0 +1,22 @@
+{
+  "query": "I have an 81\u2011year\u2011old woman with pneumonia. Among female inpatients aged 76\u201386 with pneumonia, stratify admissions into tertiles by medication complexity (unique drugs in first 7 hospital days) and report counts, min/avg/max score, mean LOS, in\u2011hospital mortality%, and 30\u2011day readmission%.",
+  "final_sql": "WITH pneumonia_admissions AS (\n    -- Step 1: Identify the target patient cohort (female, 76-86, with pneumonia)\n    SELECT DISTINCT\n        ad.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime,\n        ad.deathtime,\n        ad.hospital_expire_flag\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pa\n        ON ad.subject_id = pa.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n        ON ad.subject_id = di.subject_id AND ad.hadm_id = di.hadm_id\n    WHERE\n        pa.gender = 'F'\n        AND pa.anchor_age BETWEEN 76 AND 86\n        AND (\n            (di.icd_version = 9 AND di.icd_code BETWEEN '480' AND '48699') -- ICD-9 pneumonia codes\n            OR (di.icd_version = 10 AND di.icd_code BETWEEN 'J12' AND 'J189') -- ICD-10 pneumonia codes\n        )\n),\nmedication_complexity AS (\n    -- Step 2: Calculate medication complexity (unique drugs in first 7 days) and LOS\n    SELECT\n        pa.subject_id,\n        pa.hadm_id,\n        pa.admittime,\n        pa.dischtime,\n        pa.deathtime,\n        pa.hospital_expire_flag,\n        COUNT(DISTINCT pr.drug) AS unique_drugs_7d_score,\n        DATETIME_DIFF(pa.dischtime, pa.admittime, DAY) AS los_days\n    FROM\n        pneumonia_admissions AS pa\n    LEFT JOIN\n        `physionet-data.mimiciv_3_1_hosp.prescriptions` AS pr\n        ON pa.subject_id = pr.subject_id\n        AND pa.hadm_id = pr.hadm_id\n        -- Drugs administered within the first 7 days of admission\n        AND pr.starttime BETWEEN pa.admittime AND DATETIME_ADD(pa.admittime, INTERVAL 7 DAY)\n    GROUP BY\n        pa.subject_id, pa.hadm_id, pa.admittime, pa.dischtime, pa.deathtime, pa.hospital_expire_flag\n),\nadmissions_with_readmission_flag AS (\n    -- Step 3: Determine 30-day readmission status for each admission\n    SELECT\n        mc.*,\n        -- Get the admission time of the next admission for the same patient\n        LEAD(mc.admittime) OVER (PARTITION BY mc.subject_id ORDER BY mc.admittime) AS next_admittime,\n        -- Flag for readmission within 30 days of discharge\n        CASE\n            WHEN DATETIME_DIFF(LEAD(mc.admittime) OVER (PARTITION BY mc.subject_id ORDER BY mc.admittime), mc.dischtime, DAY) <= 30\n            THEN 1\n            ELSE 0\n        END AS readmission_30_day\n    FROM\n        medication_complexity AS mc\n),\nadmissions_with_tertile AS (\n    -- Step 4: Assign medication complexity tertiles\n    SELECT\n        *,\n        NTILE(3) OVER (ORDER BY unique_drugs_7d_score) AS med_complexity_tertile\n    FROM\n        admissions_with_readmission_flag\n)\n-- Step 5: Aggregate results by medication complexity tertile\nSELECT\n    med_complexity_tertile,\n    COUNT(hadm_id) AS admissions_count,\n    MIN(unique_drugs_7d_score) AS min_unique_drugs_score,\n    AVG(unique_drugs_7d_score) AS avg_unique_drugs_score,\n    MAX(unique_drugs_7d_score) AS max_unique_drugs_score,\n    AVG(los_days) AS mean_los_days,\n    SUM(CASE WHEN hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(hadm_id) AS in_hospital_mortality_percent,\n    SUM(readmission_30_day) * 100.0 / COUNT(hadm_id) AS readmission_30_day_percent\nFROM\n    admissions_with_tertile\nGROUP BY\n    med_complexity_tertile\nORDER BY\n    med_complexity_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \".\" at [1:15]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \".\" at [1:15]\n\nLocation: US\nJob ID: 4f1021a9-e601-4357-b531-34ece03ed71a\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

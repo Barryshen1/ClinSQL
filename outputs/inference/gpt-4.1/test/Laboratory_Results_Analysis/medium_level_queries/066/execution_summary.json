@@ -1,0 +1,28 @@
+{
+  "query": "For my 44\u2011year\u2011old male with chest pain: among men aged 39\u201349 admitted for chest pain, report counts, percentages, and mean, median, IQR of initial hs\u2011TnT by category (normal/borderline/myocardial injury).",
+  "final_sql": "WITH chest_pain_admissions AS (\n  -- Find admissions for men aged 39-49 with chest pain diagnosis\n  SELECT\n    adm.subject_id,\n    adm.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n      ON adm.subject_id = pat.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n      ON adm.hadm_id = diag.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd\n      ON diag.icd_code = dicd.icd_code AND diag.icd_version = dicd.icd_version\n  WHERE\n    pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 39 AND 49\n    AND (\n      -- ICD-10 chest pain codes (R07.1, R07.2, R07.3, R07.8, R07.9)\n      (diag.icd_version = 10 AND diag.icd_code IN ('R071', 'R072', 'R073', 'R078', 'R079'))\n      -- ICD-9 chest pain codes (786.50, 786.51, 786.52, 786.59)\n      OR (diag.icd_version = 9 AND diag.icd_code IN ('78650', '78651', '78652', '78659'))\n      -- Or diagnosis description contains 'chest pain'\n      OR LOWER(dicd.long_title) LIKE '%chest pain%'\n    )\n),\nhs_tnt_labitems AS (\n  -- Find itemids for hs-TnT\n  SELECT\n    itemid\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE\n    LOWER(label) LIKE '%troponin t%'\n    AND (\n      LOWER(label) LIKE '%hs%' OR LOWER(label) LIKE '%high sensitivity%'\n    )\n),\ninitial_hs_tnt AS (\n  -- Get first hs-TnT value per admission\n  SELECT\n    l.subject_id,\n    l.hadm_id,\n    l.charttime,\n    l.valuenum\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n    JOIN hs_tnt_labitems dlab\n      ON l.itemid = dlab.itemid\n    JOIN chest_pain_admissions adm\n      ON l.hadm_id = adm.hadm_id\n  WHERE\n    l.valuenum IS NOT NULL\n),\nfirst_hs_tnt_per_admission AS (\n  -- Only keep the first hs-TnT per admission\n  SELECT\n    subject_id,\n    hadm_id,\n    charttime,\n    valuenum,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime ASC) AS rn\n  FROM\n    initial_hs_tnt\n),\ncategorized_hs_tnt AS (\n  SELECT\n    hadm_id,\n    valuenum,\n    CASE\n      WHEN valuenum < 14 THEN 'Normal'\n      WHEN valuenum >= 14 AND valuenum <= 52 THEN 'Borderline'\n      WHEN valuenum > 52 THEN 'Myocardial injury'\n      ELSE 'Unknown'\n    END AS category\n  FROM\n    first_hs_tnt_per_admission\n  WHERE\n    rn = 1\n),\nquantiles_per_category AS (\n  SELECT\n    category,\n    APPROX_QUANTILES(valuenum, 4) AS quantiles\n  FROM\n    categorized_hs_tnt\n  GROUP BY\n    category\n)\nSELECT\n  c.category,\n  COUNT(*) AS count,\n  ROUND(COUNT(*) * 100.0 / COUNT(*) OVER (), 2) AS percentage,\n  ROUND(AVG(c.valuenum), 2) AS mean_hs_tnt,\n  ROUND(q.quantiles[SAFE_OFFSET(2)], 2) AS median_hs_tnt,\n  ROUND(q.quantiles[SAFE_OFFSET(1)], 2) AS hs_tnt_25th,\n  ROUND(q.quantiles[SAFE_OFFSET(3)], 2) AS hs_tnt_75th,\n  ROUND(q.quantiles[SAFE_OFFSET(3)] - q.quantiles[SAFE_OFFSET(1)], 2) AS hs_tnt_iqr\nFROM\n  categorized_hs_tnt c\n  JOIN quantiles_per_category q\n    ON c.category = q.category\nGROUP BY\n  c.category, q.quantiles\nORDER BY\n  CASE c.category\n    WHEN 'Normal' THEN 1\n    WHEN 'Borderline' THEN 2\n    WHEN 'Myocardial injury' THEN 3\n    ELSE 4\n  END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column valuenum which is neither grouped nor aggregated at [70:25]; reason: invalidQuery, location: query, message: SELECT list expression references column valuenum which is neither grouped nor aggregated at [70:25]\n\nLocation: US\nJob ID: 16d83dc8-35d3-4a67-852e-4dd88ffef1f1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic function APPROX_QUANTILES is not supported.; reason: invalidQuery, location: query, message: Analytic function APPROX_QUANTILES is not supported.\n\nLocation: US\nJob ID: 815132b5-a0bd-4025-8f7e-deebaed13e81\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

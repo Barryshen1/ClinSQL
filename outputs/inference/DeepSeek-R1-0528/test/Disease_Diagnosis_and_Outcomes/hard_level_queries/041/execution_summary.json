@@ -1,0 +1,22 @@
+{
+  "query": "I have a 73-year-old male inpatient with intracranial hemorrhage transferred from ICU. For male patients aged 68\u201378 with ICH post\u2011ICU, report cohort size, 30\u2011day mortality, AKI and ARDS rates, composite risk score 25/50/75th percentiles, and median survival among decedents.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    adm.subject_id,\n    adm.hadm_id,\n    adm.admittime,\n    p.dod,\n    -- Calculate age at admission\n    p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year) AS admission_age,\n    -- 30-day mortality flag\n    CASE WHEN DATE_DIFF(DATE(p.dod), DATE(adm.admittime), DAY) <= 30 THEN 1 ELSE 0 END AS died_30d,\n    -- AKI diagnosis flag\n    MAX(\n      CASE WHEN (\n        (diag_aki.icd_version = 9 AND diag_aki.icd_code LIKE '584%') OR\n        (diag_aki.icd_version = 10 AND diag_aki.icd_code LIKE 'N17%')\n      ) THEN 1 ELSE 0 END\n    ) AS aki_flag,\n    -- ARDS diagnosis flag\n    MAX(\n      CASE WHEN (\n        (diag_ards.icd_version = 9 AND diag_ards.icd_code = '518.82') OR\n        (diag_ards.icd_version = 10 AND diag_ards.icd_code = 'J80')\n      ) THEN 1 ELSE 0 END\n    ) AS ards_flag,\n    -- Survival days (for decedents)\n    DATE_DIFF(DATE(p.dod), DATE(adm.admittime), DAY) AS survival_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON adm.subject_id = p.subject_id\n  -- Ensure ICU stay\n  INNER JOIN `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON adm.hadm_id = icu.hadm_id\n  -- ICH diagnosis (any position)\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag_ich\n    ON adm.hadm_id = diag_ich.hadm_id\n    AND adm.subject_id = diag_ich.subject_id\n    AND (\n      (diag_ich.icd_version = 9 AND diag_ich.icd_code LIKE '430%') OR\n      (diag_ich.icd_version = 9 AND diag_ich.icd_code LIKE '431%') OR\n      (diag_ich.icd_version = 9 AND diag_ich.icd_code LIKE '432%') OR\n      (diag_ich.icd_version = 10 AND diag_ich.icd_code LIKE 'I60%') OR\n      (diag_ich.icd_version = 10 AND diag_ich.icd_code LIKE 'I61%') OR\n      (diag_ich.icd_version = 10 AND diag_ich.icd_code LIKE 'I62%')\n    )\n  -- Left join for AKI diagnosis (to capture all admissions)\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag_aki\n    ON adm.hadm_id = diag_aki.hadm_id\n    AND adm.subject_id = diag_aki.subject_id\n    AND (\n      (diag_aki.icd_version = 9 AND diag_aki.icd_code LIKE '584%') OR\n      (diag_aki.icd_version = 10 AND diag_aki.icd_code LIKE 'N17%')\n    )\n  -- Left join for ARDS diagnosis\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag_ards\n    ON adm.hadm_id = diag_ards.hadm_id\n    AND adm.subject_id = diag_ards.subject_id\n    AND (\n      (diag_ards.icd_version = 9 AND diag_ards.icd_code = '518.82') OR\n      (diag_ards.icd_version = 10 AND diag_ards.icd_code = 'J80')\n    )\n  WHERE\n    p.gender = 'M'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM adm.admittime) - p.anchor_year)) BETWEEN 68 AND 78\n  GROUP BY adm.subject_id, adm.hadm_id, adm.admittime, p.dod, p.anchor_age, p.anchor_year\n)\n\nSELECT\n  COUNT(*) AS cohort_size,\n  ROUND(100 * AVG(died_30d), 2) AS mortality_30d_percent,\n  ROUND(100 * AVG(aki_flag), 2) AS aki_rate_percent,\n  ROUND(100 * AVG(ards_flag), 2) AS ards_rate_percent,\n  NULL AS composite_risk_score_25th,\n  NULL AS composite_risk_score_50th,\n  NULL AS composite_risk_score_75th,\n  -- Median survival among decedents (using approximate quantile)\n  (SELECT APPROX_QUANTILES(survival_days, 100)[SAFE_OFFSET(50)] \n   FROM cohort \n   WHERE survival_days IS NOT NULL) AS median_survival_days_decedents\nFROM cohort;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "DeepSeek-R1-0528",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column survival_days which is neither grouped nor aggregated at [77:19]; reason: invalidQuery, location: query, message: SELECT list expression references column survival_days which is neither grouped nor aggregated at [77:19]\n\nLocation: US\nJob ID: ddb765f5-ffca-401e-b544-30c728a74840\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

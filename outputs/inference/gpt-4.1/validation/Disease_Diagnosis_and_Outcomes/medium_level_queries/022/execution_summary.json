@@ -1,0 +1,22 @@
+{
+  "query": "For a 55-year-old man, among male patients 50\u201360 with sepsis (no septic shock), report in\u2011hospital mortality (%) and median LOS by LOS \u22647 vs >7 days and day\u20111 ICU status.",
+  "final_sql": "WITH sepsis_admissions AS (\n  -- Get admissions for male patients age 50-60 with sepsis (no septic shock)\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    p.anchor_age,\n    p.gender,\n    a.hospital_expire_flag\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    -- Sepsis diagnosis\n    JOIN (\n      SELECT\n        hadm_id\n      FROM\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n      WHERE\n        (\n          -- ICD-10 sepsis codes\n          (d.icd_version = 10 AND (\n            REGEXP_CONTAINS(icd_code, r'^A40') OR\n            REGEXP_CONTAINS(icd_code, r'^A41') OR\n            icd_code = 'R652'\n          ))\n          OR\n          -- ICD-9 sepsis codes\n          (d.icd_version = 9 AND (\n            icd_code = '99591' OR\n            icd_code = '99592'\n          ))\n        )\n        -- Exclude septic shock\n        AND hadm_id NOT IN (\n          SELECT hadm_id\n          FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n          WHERE\n            (icd_version = 10 AND icd_code = 'R6521') -- Septic shock ICD-10\n            OR (icd_version = 9 AND icd_code = '78552') -- Septic shock ICD-9\n        )\n      GROUP BY hadm_id\n    ) sepsis\n      ON a.hadm_id = sepsis.hadm_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 50 AND 60\n),\n\nfirst_icu_stays AS (\n  -- Get first ICU stay per admission\n  SELECT\n    s.subject_id,\n    s.hadm_id,\n    s.stay_id,\n    s.intime,\n    s.outtime,\n    s.los,\n    ROW_NUMBER() OVER (PARTITION BY s.hadm_id ORDER BY s.intime) AS rn\n  FROM\n    `physionet-data.mimiciv_3_1_icu.icustays` s\n)\n,\ncohort AS (\n  -- Join sepsis admissions to first ICU stay\n  SELECT\n    sa.subject_id,\n    sa.hadm_id,\n    sa.anchor_age,\n    sa.gender,\n    sa.hospital_expire_flag,\n    icu.stay_id,\n    icu.intime,\n    icu.outtime,\n    icu.los\n  FROM\n    sepsis_admissions sa\n    JOIN first_icu_stays icu\n      ON sa.hadm_id = icu.hadm_id\n  WHERE\n    icu.rn = 1\n)\n,\nvent_itemids AS (\n  -- Get itemids for mechanical ventilation from d_items\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_icu.d_items`\n  WHERE LOWER(label) LIKE '%ventilat%'\n     OR LOWER(label) LIKE '%mech%'\n     OR LOWER(label) LIKE '%respirator%'\n)\n,\nvent_status AS (\n  -- For each ICU stay, check if patient was ventilated in first 24h\n  SELECT\n    c.stay_id,\n    MAX(\n      CASE WHEN ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n           THEN 1 ELSE 0 END\n    ) AS ventilated_day1\n  FROM\n    cohort c\n    JOIN `physionet-data.mimiciv_3_1_icu.chartevents` ce\n      ON c.stay_id = ce.stay_id\n    JOIN vent_itemids vi\n      ON ce.itemid = vi.itemid\n  WHERE\n    ce.charttime BETWEEN c.intime AND DATETIME_ADD(c.intime, INTERVAL 24 HOUR)\n  GROUP BY c.stay_id\n)\n,\nfinal_cohort AS (\n  SELECT\n    c.*,\n    IFNULL(vs.ventilated_day1, 0) AS ventilated_day1,\n    CASE WHEN c.los <= 7 THEN '<=7' ELSE '>7' END AS los_group\n  FROM\n    cohort c\n    LEFT JOIN vent_status vs\n      ON c.stay_id = vs.stay_id\n)\nSELECT\n  los_group,\n  ventilated_day1,\n  COUNT(*) AS n_patients,\n  ROUND(100 * SUM(hospital_expire_flag) / COUNT(*), 1) AS mortality_percent,\n  ROUND(APPROX_QUANTILES(los, 2)[OFFSET(1)], 2) AS median_los\nFROM\n  final_cohort\nGROUP BY\n  los_group,\n  ventilated_day1\nORDER BY\n  los_group,\n  ventilated_day1 DESC;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: MEDIAN at [127:9]; reason: invalidQuery, location: query, message: Function not found: MEDIAN at [127:9]\n\nLocation: US\nJob ID: efd3a1f6-2859-4724-adfa-80bbad301bcb\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I have an 82\u2011year\u2011old man. Among male HF admissions aged 77\u201387, by day\u20111 ICU (ICU vs non\u2011ICU) and LOS 1\u20133/4\u20137/\u22658 days, give in\u2011hospital mortality (%), median LOS, and CKD/diabetes prevalence.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: male, age 77-87, HF principal diagnosis\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.gender,\n    p.anchor_age,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n    ON d.icd_code = icd.icd_code AND d.icd_version = icd.icd_version\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 77 AND 87\n    AND EXTRACT(YEAR FROM a.admittime) >= 2008\n    AND d.seq_num = 1  -- Principal diagnosis\n    AND (\n      (d.icd_version = 'ICD-10' AND d.icd_code LIKE 'I50%') OR\n      (d.icd_version = 'ICD-9' AND d.icd_code LIKE '428%')\n    )\n    AND a.dischtime IS NOT NULL\n    AND (a.deathtime IS NULL OR a.deathtime >= a.dischtime)\n    AND DATE_DIFF(a.dischtime, a.admittime, DAY) > 0  -- Exclude zero-day\n),\n\ncomorbidities AS (\n  -- Flag CKD and diabetes per hadm_id (any diagnosis, not just principal)\n  SELECT \n    d.hadm_id,\n    MAX(CASE WHEN (\n      (d.icd_version = 'ICD-10' AND d.icd_code LIKE 'N18%') OR\n      (d.icd_version = 'ICD-9' AND d.icd_code LIKE '585%')\n    ) THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN (\n      (d.icd_version = 'ICD-10' AND (d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E13%')) OR\n      (d.icd_version = 'ICD-9' AND (d.icd_code LIKE '250%' OR d.icd_code LIKE '249%'))\n    ) THEN 1 ELSE 0 END) AS has_diabetes\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  GROUP BY d.hadm_id\n),\n\nday1_icu AS (\n  -- Flag day-1 ICU: any transfer to ICU within 1 day of admit\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    MAX(CASE WHEN t.careunit IN ('CCU', 'CSRU', 'MICU', 'SICU', 'NICU', 'Neuro ICU') \n             AND t.intime >= c.admittime\n             AND t.intime <= TIMESTAMP_ADD(TIMESTAMP(c.admittime), INTERVAL 1 DAY) THEN 1 ELSE 0 END) AS day1_icu\n  FROM cohort c\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.transfers` t\n    ON c.subject_id = t.subject_id AND c.hadm_id = t.hadm_id\n  GROUP BY c.subject_id, c.hadm_id\n)\n\nSELECT \n  CASE WHEN di.day1_icu = 1 THEN 'ICU' ELSE 'non-ICU' END AS day1_status,\n  CASE \n    WHEN c.los_days BETWEEN 1 AND 3 THEN '1-3 days'\n    WHEN c.los_days BETWEEN 4 AND 7 THEN '4-7 days'\n    ELSE '>=8 days'\n  END AS los_group,\n  ROUND(AVG(CAST(c.hospital_expire_flag AS FLOAT64)) * 100, 2) AS mortality_pct,\n  ROUND(PERCENTILE_CONT(CAST(c.los_days AS FLOAT64), 0.5) IGNORE NULLS, 2) AS median_los_days,\n  ROUND(AVG(CAST(com.has_ckd AS FLOAT64)) * 100, 2) AS ckd_prevalence_pct,\n  ROUND(AVG(CAST(com.has_diabetes AS FLOAT64)) * 100, 2) AS diabetes_prevalence_pct,\n  COUNT(*) AS n_admissions\nFROM cohort c\nLEFT JOIN comorbidities com\n  ON c.hadm_id = com.hadm_id\nLEFT JOIN day1_icu di\n  ON c.hadm_id = di.hadm_id\nWHERE c.los_days >= 1  -- Ensure LOS groups populated\nGROUP BY di.day1_icu, los_group\nORDER BY day1_status, \n  CASE los_group \n    WHEN '1-3 days' THEN 1\n    WHEN '4-7 days' THEN 2\n    ELSE 3\n  END;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Syntax error: Expected \")\" but got \",\" at [70:71]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [70:71]\n\nLocation: US\nJob ID: 039ff633-f0d3-40ee-ac84-2a242eef8d37\n",
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [70:71]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [70:71]\n\nLocation: US\nJob ID: f64634a2-07c5-44e9-bbc1-7533b87137a8\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [68:71]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [68:71]\n\nLocation: US\nJob ID: 128f2d1a-0173-4c2f-a8aa-a1e3298070e0\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \",\" at [70:71]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \",\" at [70:71]\n\nLocation: US\nJob ID: 039ff633-f0d3-40ee-ac84-2a242eef8d37\n"
+    }
+  ]
+}

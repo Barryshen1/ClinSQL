@@ -1,0 +1,22 @@
+{
+  "query": "I am evaluating an 85\u2011year\u2011old female inpatient with hepatic failure. Among female inpatients aged 80\u201390 with hepatic failure, calculate a 7\u2011day medication complexity score, stratify cohort into tertiles, and report LOS, in\u2011hospital mortality and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH\n-- Define hepatic failure ICD codes\nhepatic_failure_codes AS (\n  SELECT icd_code\n  FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses`\n  WHERE long_title LIKE '%hepatic failure%'\n     OR long_title LIKE '%liver failure%'\n     OR icd_code IN ('K72.90', 'K72.91', 'K72.10', 'K72.11', 'K72.0', 'K72.9')\n),\n\n-- Identify cohort: female inpatients aged 80-90 with hepatic failure\ncohort AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p ON a.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  JOIN hepatic_failure_codes h ON d.icd_code = h.icd_code\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 80 AND 90\n    AND d.seq_num = 1  -- Primary diagnosis\n    AND a.dischtime IS NOT NULL\n),\n\n-- Calculate 7-day medication complexity score\nmed_complexity AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    -- Count distinct medications\n    COUNT(DISTINCT pr.drug) AS unique_med_count,\n    -- Sum of doses per day (simplified complexity metric)\n    SUM(pr.doses_per_24_hrs) AS total_doses_per_day,\n    -- Additional complexity factors could be added here\n    COUNT(DISTINCT pr.route) AS route_variety\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n    ON c.subject_id = pr.subject_id AND c.hadm_id = pr.hadm_id\n  WHERE\n    pr.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 7 DAY)\n  GROUP BY c.subject_id, c.hadm_id\n),\n\n-- Combine complexity metrics into a single score\ncomplexity_score AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    -- Simple weighted score (can be refined)\n    (unique_med_count * 1.0 + total_doses_per_day * 0.5 + route_variety * 0.3) AS complexity_score\n  FROM med_complexity\n),\n\n-- Stratify into tertiles\ntertile_stratification AS (\n  SELECT\n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.hospital_expire_flag,\n    cs.complexity_score,\n    NTILE(3) OVER (ORDER BY cs.complexity_score) AS complexity_tertile,\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = c.subject_id\n          AND a2.admittime > c.dischtime\n          AND a2.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 ELSE 0\n    END AS readmitted_30d\n  FROM cohort c\n  JOIN complexity_score cs ON c.subject_id = cs.subject_id AND c.hadm_id = cs.hadm_id\n)\n\n-- Final results\nSELECT\n  complexity_tertile,\n  COUNT(*) AS patient_count,\n  AVG(TIMESTAMP_DIFF(dischtime, admittime, DAY)) AS avg_los_days,\n  SUM(hospital_expire_flag) / COUNT(*) AS in_hospital_mortality_rate,\n  SUM(readmitted_30d) / COUNT(*) AS readmission_30d_rate\nFROM tertile_stratification\nGROUP BY complexity_tertile\nORDER BY complexity_tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "mistral-medium-2505",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name complexity_tertile is ambiguous at [94:3]; reason: invalidQuery, location: query, message: Column name complexity_tertile is ambiguous at [94:3]\n\nLocation: US\nJob ID: f90d479c-bdd7-491c-ad96-f2c3d9259d79\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

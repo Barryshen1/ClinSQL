@@ -1,0 +1,22 @@
+{
+  "query": "I have a 69-year-old woman. Among female patients age 64\u201374 hospitalized for AMI, what percentage had index high-sensitivity troponin T categorized as Normal (\u22640.014), Borderline (0.015\u20130.052), or Myocardial Injury (>0.052)?",
+  "final_sql": "WITH\n  -- Identify hs-TnT lab items (high-sensitivity troponin T)\n  hs_items AS (\n    SELECT itemid\n    FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n    WHERE LOWER(label) LIKE '%troponin%'\n      AND (LOWER(label) LIKE '%hs%' OR LOWER(label) LIKE '%high-sensitivity%')\n  ),\n\n  -- AMI admissions for females aged 64-74\n  ami_admissions AS (\n    SELECT DISTINCT a.hadm_id\n    FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n      ON di.hadm_id = a.hadm_id AND di.subject_id = a.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n      ON p.subject_id = a.subject_id\n    WHERE (LOWER(p.gender) IN ('f', 'female'))\n      AND p.anchor_age BETWEEN 64 AND 74\n      AND (\n        (di.icd_version = 9 AND di.icd_code LIKE '410%')\n        OR (di.icd_version = 10 AND (di.icd_code LIKE 'I21%' OR di.icd_code LIKE 'I22%'))\n      )\n  ),\n\n  -- hs-TnT lab events for those admissions\n  hs_events AS (\n    SELECT le.hadm_id, le.subject_id, le.charttime, le.valuenum\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n    JOIN hs_items AS hi ON le.itemid = hi.itemid\n    JOIN ami_admissions AS aa ON aa.hadm_id = le.hadm_id\n    WHERE le.valuenum IS NOT NULL\n  ),\n\n  -- First hs-TnT value per admission (index)\n  first_hs AS (\n    SELECT hadm_id, subject_id, charttime, valuenum,\n           ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY charttime) AS rn\n    FROM hs_events\n  ),\n\n  -- Categorize index hs-TnT value\n  categorized AS (\n    SELECT hadm_id, subject_id, valuenum,\n           CASE\n             WHEN valuenum <= 0.014 THEN 'Normal'\n             WHEN valuenum <= 0.052 THEN 'Borderline'\n             ELSE 'Myocardial Injury'\n           END AS category\n    FROM first_hs\n    WHERE rn = 1\n  ),\n\n  -- Total admissions contributing to the denominator\n  total AS (\n    SELECT COUNT(*) AS total FROM categorized\n  )\n\nSELECT\n  category,\n  COUNT(*) AS n,\n  ROUND(100.0 * COUNT(*) / t.total, 2) AS pct\nFROM categorized\nCROSS JOIN total AS t\nGROUP BY category, t.total\nORDER BY category;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references t.total which is neither grouped nor aggregated at [62:28]; reason: invalidQuery, location: query, message: SELECT list expression references t.total which is neither grouped nor aggregated at [62:28]\n\nLocation: US\nJob ID: f8b38f44-9051-4d59-a543-335fda09277e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

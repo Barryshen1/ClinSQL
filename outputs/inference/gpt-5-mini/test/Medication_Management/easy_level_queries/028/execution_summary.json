@@ -1,0 +1,16 @@
+{
+  "query": "For my 49-year-old female, among hospitalized women 44\u201354 on DAPT, what is the SD of single antiplatelet prescription duration?",
+  "final_sql": "WITH antiplatelet_presc AS (\n  -- Antiplatelet prescriptions for female patients aged 44-54, joined to admission to get adm window\n  SELECT\n    pr.subject_id,\n    pr.hadm_id,\n    LOWER(COALESCE(pr.drug, '')) AS drug,\n    pr.starttime,\n    pr.stoptime,\n    ad.admittime,\n    ad.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` ad\n    USING(subject_id, hadm_id)\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pt\n    ON pr.subject_id = pt.subject_id\n  WHERE pt.gender = 'F'\n    AND pt.anchor_age BETWEEN 44 AND 54\n    AND (\n      LOWER(pr.drug) LIKE '%aspirin%' OR\n      LOWER(pr.drug) LIKE '%clopidogrel%' OR\n      LOWER(pr.drug) LIKE '%prasugrel%' OR\n      LOWER(pr.drug) LIKE '%ticagrelor%' OR\n      LOWER(pr.drug) LIKE '%ticlopidine%' OR\n      LOWER(pr.drug) LIKE '%dipyridamole%' OR\n      LOWER(pr.drug) LIKE '%cilostazol%'\n    )\n),\ndapt_admissions AS (\n  -- Identify admissions with at least two different antiplatelet agents overlapping in time (DAPT)\n  SELECT DISTINCT a1.subject_id, a1.hadm_id\n  FROM antiplatelet_presc a1\n  JOIN antiplatelet_presc a2\n    ON a1.subject_id = a2.subject_id\n   AND a1.hadm_id = a2.hadm_id\n   AND a1.drug != a2.drug\n  WHERE\n    -- Overlap test using admission-capped intervals; handle NULL stoptime by using dischtime\n    COALESCE(a1.starttime, a1.admittime) <= COALESCE(a2.stoptime, a2.dischtime)\n    AND COALESCE(a1.stoptime, a1.dischtime) >= COALESCE(a2.starttime, a2.admittime)\n    -- Ensure positive overlap duration\n    AND TIMESTAMP_DIFF(\n          LEAST(COALESCE(a1.stoptime, a1.dischtime), COALESCE(a2.stoptime, a2.dischtime)),\n          GREATEST(COALESCE(a1.starttime, a1.admittime), COALESCE(a2.starttime, a2.admittime)),\n          SECOND\n        ) > 0\n),\ndapt_presc_durations AS (\n  -- For prescriptions within DAPT admissions, compute per-prescription duration (days),\n  -- capping to the admission window\n  SELECT\n    ap.subject_id,\n    ap.hadm_id,\n    ap.drug,\n    -- cap prescription interval to [admittime, dischtime]\n    TIMESTAMP_DIFF(\n      LEAST(COALESCE(ap.stoptime, ap.dischtime), ap.dischtime),\n      GREATEST(ap.starttime, ap.admittime),\n      DAY\n    ) AS duration_days\n  FROM antiplatelet_presc ap\n  JOIN dapt_admissions d\n    USING(subject_id, hadm_id)\n  WHERE ap.starttime IS NOT NULL\n)\nSELECT\n  -- Sample standard deviation of per-prescription durations (in days)\n  STDDEV_SAMP(duration_days) AS sd_duration_days,\n  COUNT(*) AS prescriptions_count\nFROM dapt_presc_durations\nWHERE duration_days > 0;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.25) within GROUP (ORDER BY procedure_count) AS q1, percentile_cont(0.75) within GROUP (ORDER BY procedure_count) AS q3, percentile_cont(0.95) within GROUP (ORDER BY procedure_count) AS q5, AVG(i.length_of_stay) AS avg_los, AVG(i.mortality_rate) AS avg_mortality FROM high_intensity_procedures JOIN avg_los ON TRUE JOIN avg_mortality ON TRUE;

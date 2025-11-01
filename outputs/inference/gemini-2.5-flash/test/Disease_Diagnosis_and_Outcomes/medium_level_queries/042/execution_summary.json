@@ -1,0 +1,28 @@
+{
+  "query": "For a 74-year-old man with AMI: among men 69\u201379 without shock or respiratory failure, what's in-hospital mortality by LOS (1\u20133, 4\u20137, \u22658 days)? Provide mortality %, median LOS, discharge destinations.",
+  "final_sql": "WITH AdmissionsWithDiagnosisFlags AS (\n    SELECT\n        ad.subject_id,\n        ad.hadm_id,\n        ad.admittime,\n        ad.dischtime,\n        ad.hospital_expire_flag,\n        ad.discharge_location,\n        pat.gender,\n        pat.anchor_age,\n        -- Calculate LOS in whole calendar days (number of midnights crossed)\n        DATE_DIFF(CAST(ad.dischtime AS DATE), CAST(ad.admittime AS DATE), DAY) AS los_days,\n        -- Flag for Acute Myocardial Infarction\n        MAX(CASE\n            WHEN dicd.long_title LIKE '%myocardial infarction%' THEN 1\n            ELSE 0\n        END) AS has_ami,\n        -- Flag for Shock (excluding non-medical contexts)\n        MAX(CASE\n            WHEN dicd.long_title LIKE '%shock%'\n                 AND dicd.long_title NOT LIKE '%electric shock%'\n                 AND dicd.long_title NOT LIKE '%shock wave%' THEN 1\n            ELSE 0\n        END) AS has_shock,\n        -- Flag for Respiratory Failure\n        MAX(CASE\n            WHEN dicd.long_title LIKE '%respiratory failure%' THEN 1\n            ELSE 0\n        END) AS has_resp_failure\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS ad\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON ad.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dic\n        ON ad.subject_id = dic.subject_id AND ad.hadm_id = dic.hadm_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dicd\n        ON dic.icd_code = dicd.icd_code AND dic.icd_version = dicd.icd_version\n    GROUP BY\n        ad.subject_id, ad.hadm_id, ad.admittime, ad.dischtime, ad.hospital_expire_flag, ad.discharge_location, pat.gender, pat.anchor_age\n),\n-- Step 2: Filter the cohort based on the specified criteria and categorize LOS\nCohortFiltered AS (\n    SELECT\n        hadm_id,\n        hospital_expire_flag,\n        los_days,\n        discharge_location,\n        -- Categorize LOS into required buckets\n        CASE\n            WHEN los_days >= 1 AND los_days <= 3 THEN '1-3 days'\n            WHEN los_days >= 4 AND los_days <= 7 THEN '4-7 days'\n            WHEN los_days >= 8 THEN '>=8 days'\n            ELSE 'LOS < 1 day' -- For stays less than a full calendar day\n        END AS los_category\n    FROM\n        AdmissionsWithDiagnosisFlags\n    WHERE\n        gender = 'M' -- Men\n        AND anchor_age BETWEEN 69 AND 79 -- Age range 69-79\n        AND has_ami = 1 -- With AMI diagnosis\n        AND has_shock = 0 -- Without Shock diagnosis\n        AND has_resp_failure = 0 -- Without Respiratory Failure diagnosis\n        AND los_days >= 0 -- Ensure all valid LOS are considered before categorization\n)\n-- Step 3: Aggregate results by LOS category and discharge destination\nSELECT\n    los_category,\n    discharge_location,\n    COUNT(DISTINCT c.hadm_id) AS total_admissions,\n    SUM(c.hospital_expire_flag) AS total_deaths,\n    SAFE_DIVIDE(SUM(c.hospital_expire_flag), COUNT(DISTINCT c.hadm_id)) * 100 AS mortality_percentage,\n    -- CORRECTED: Use APPROX_QUANTILES for approximate median in BigQuery\n    APPROX_QUANTILES(c.los_days, 2)[OFFSET(1)] AS median_los_days -- [OFFSET(1)] gets the 50th percentile (median)\nFROM\n    CohortFiltered AS c\nWHERE c.los_category != 'LOS < 1 day' -- Exclude admissions with LOS less than 1 day from final analysis, as the question focuses on 1-3, 4-7, >=8 days.\nGROUP BY\n    los_category, discharge_location\nORDER BY\n    los_category, discharge_location;",
+  "execution_success": true,
+  "row_count": 38,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column los_days which is neither grouped nor aggregated at [75:21]; reason: invalidQuery, location: query, message: SELECT list expression references column los_days which is neither grouped nor aggregated at [75:21]\n\nLocation: US\nJob ID: ed6b6a8e-5a2a-40e3-ae53-d450347e5a7d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 percentile_cont aggregate function is not supported.; reason: invalidQuery, location: query, message: percentile_cont aggregate function is not supported.\n\nLocation: US\nJob ID: 11762b23-00ad-49de-8fbf-32dbe2e3666d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 38,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "For my 54-year-old male, among men aged 49\u201359 whose initial Troponin T exceeded the dataset 99th-percentile ULN, report cohort size, ULN, p25, median (p50), p75 and value range.",
+  "final_sql": "WITH\n  -- Identify Troponin T measurement itemids\n  troponin_items AS (\n    SELECT itemid\n    FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n    WHERE LOWER(label) LIKE '%troponin t%'\n  ),\n\n  -- All Troponin T events with numeric values\n  initial_events AS (\n    SELECT le.subject_id, le.hadm_id, le.charttime, le.valuenum\n    FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n    JOIN troponin_items ti ON le.itemid = ti.itemid\n    WHERE le.valuenum IS NOT NULL\n  ),\n\n  -- Initial Troponin T per admission: earliest charttime for each (subject_id, hadm_id)\n  initial_first AS (\n    SELECT subject_id, hadm_id, charttime, valuenum\n    FROM (\n      SELECT\n        subject_id,\n        hadm_id,\n        charttime,\n        valuenum,\n        ROW_NUMBER() OVER (PARTITION BY subject_id, hadm_id ORDER BY charttime ASC) AS rn\n      FROM initial_events\n    )\n    WHERE rn = 1\n  ),\n\n  -- Dataset ULN: 99th percentile of all Troponin T values (using 100 quantiles)\n  ulndata AS (\n    SELECT quantiles[OFFSET(99)] AS uln\n    FROM (\n      SELECT APPROX_QUANTILES(valuenum, 100) AS quantiles\n      FROM initial_events\n    )\n  ),\n\n  -- Patients in the age/gender window\n  patients_filter AS (\n    SELECT subject_id\n    FROM `physionet-data.mimiciv_3_1_hosp.patients`\n    WHERE gender = 'M'\n      AND anchor_age BETWEEN 49 AND 59\n  ),\n\n  -- Final cohort: initial Troponin T per admission for those patients\n  final_cohort AS (\n    SELECT f.subject_id, f.hadm_id, f.charttime, f.valuenum\n    FROM initial_first f\n    JOIN patients_filter p ON f.subject_id = p.subject_id\n  ),\n\n  -- Eligible values: initial Troponin T values that exceed ULN\n  eligible_values AS (\n    SELECT fc.valuenum\n    FROM final_cohort fc\n    CROSS JOIN ulndata u\n    WHERE fc.valuenum > u.uln\n  ),\n\n  -- 25th/50th/75th percentiles using 4-quantiles on eligible values\n  quantiles4 AS (\n    SELECT APPROX_QUANTILES(valuenum, 4) AS q\n    FROM eligible_values\n  ),\n\n  -- Min / Max of eligible values\n  minmax AS (\n    SELECT MIN(valuenum) AS min_val, MAX(valuenum) AS max_val\n    FROM eligible_values\n  )\n\nSELECT\n  -- Cohort size: number of unique subjects in final cohort who exceed ULN\n  (SELECT COUNT(DISTINCT fc.subject_id)\n     FROM final_cohort fc\n     JOIN patients_filter p ON fc.subject_id = p.subject_id\n     CROSS JOIN ulndata u\n     WHERE fc.valuenum > u.uln\n  ) AS cohort_size,\n\n  -- ULN (99th percentile)\n  (SELECT uln FROM ulndata) AS uln,\n\n  -- p25, p50, p75 from eligible values\n  (SELECT q[OFFSET(1)] FROM quantiles4) AS p25,\n  (SELECT q[OFFSET(2)] FROM quantiles4) AS p50,\n  (SELECT q[OFFSET(3)] FROM quantiles4) AS p75,\n\n  -- Min and Max of eligible values\n  (SELECT min_val FROM minmax) AS min_val,\n  (SELECT max_val FROM minmax) AS max_val;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_PERCENTILE at [34:17]; reason: invalidQuery, location: query, message: Function not found: APPROX_PERCENTILE at [34:17]\n\nLocation: US\nJob ID: 6f9e79cd-f8a6-4742-8b58-52bd2ca66bac\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

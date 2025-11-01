@@ -1,0 +1,1 @@
+Note: This query uses the HOSP dataset only. The age calculation is approximate due to lack of birth date. The GLP-1 drug list is based on common generic names and may need expansion if brand names are used. The time windows are defined as [admittime, admittime+24h) for the first 24h and (dischtime-12h, dischtime] for the final 12h. Percentages are rounded to two decimal places.;

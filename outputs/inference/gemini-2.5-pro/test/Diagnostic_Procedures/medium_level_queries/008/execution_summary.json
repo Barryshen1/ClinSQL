@@ -1,0 +1,16 @@
+{
+  "query": "For my 63\u2011year\u2011old male with HHS: among male patients aged 58\u201368, what were patient and admission counts and mean radiography/CT procedures per admission for LOS 1\u20134 versus 5\u20137 days?",
+  "final_sql": "WITH\nhhs_cohort_admissions AS (\n  -- Step 1: Identify hospital admissions for male patients aged 58-68 with an HHS diagnosis.\n  SELECT DISTINCT\n    p.subject_id,\n    d.hadm_id\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` AS p\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS d\n    ON p.subject_id = d.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 58 AND 68\n    -- Filter for Hyperosmolar Hyperglycemic State (HHS) using both ICD-9 and ICD-10 codes\n    AND (\n      (d.icd_version = 9 AND d.icd_code LIKE '2502%') -- Diabetes with hyperosmolarity\n      OR (\n        d.icd_version = 10 AND (\n          d.icd_code LIKE 'E100%' OR -- T1DM with hyperosmolarity\n          d.icd_code LIKE 'E110%' OR -- T2DM with hyperosmolarity\n          d.icd_code LIKE 'E130%' OR -- Other specified DM with hyperosmolarity\n          d.icd_code LIKE 'E140%'    -- Unspecified DM with hyperosmolarity\n        )\n      )\n    )\n),\n\nradiology_counts AS (\n  -- Step 2: Count the number of radiology procedures (CPT codes 70000-79999) for each admission.\n  SELECT\n    hadm_id,\n    COUNT(*) AS num_radiology_procedures\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.hcpcsevents`\n  WHERE\n    hcpcs_cd BETWEEN '70000' AND '79999' -- Standard CPT range for radiology procedures\n  GROUP BY\n    hadm_id\n),\n\nadmissions_details AS (\n  -- Step 3: Combine cohort, admission times, and procedure counts. Calculate LOS.\n  SELECT\n    hca.subject_id,\n    hca.hadm_id,\n    -- Calculate LOS in days, rounding up to the nearest day.\n    CEIL(DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0) AS los_days,\n    -- Use COALESCE to count 0 for admissions with no radiology procedures.\n    COALESCE(rc.num_radiology_procedures, 0) AS num_radiology_procedures\n  FROM\n    hhs_cohort_admissions AS hca\n  INNER JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    ON hca.hadm_id = adm.hadm_id\n  LEFT JOIN\n    radiology_counts AS rc\n    ON hca.hadm_id = rc.hadm_id\n)\n\n-- Final Step: Group by LOS category and calculate the requested metrics.\nSELECT\n  los_group,\n  COUNT(DISTINCT subject_id) AS patient_count,\n  COUNT(DISTINCT hadm_id) AS admission_count,\n  AVG(num_radiology_procedures) AS mean_procedures_per_admission\nFROM (\n  SELECT\n    *,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4 days'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7 days'\n      ELSE NULL\n    END AS los_group\n  FROM\n    admissions_details\n)\nWHERE\n  los_group IS NOT NULL\nGROUP BY\n  los_group\nORDER BY\n  los_group;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

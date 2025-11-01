@@ -1,0 +1,22 @@
+{
+  "query": "For an 81-year-old male, among male patients aged 76\u201386 admitted with AMI, what's the distribution of first Troponin I (\u22640.04 normal; 0.04\u20130.40 borderline; \u22650.40 elevated)? Provide counts, percentages, mean, median, IQR.",
+  "final_sql": "WITH ami_hadm AS (\n  -- Identify admissions with AMI diagnosis (ICD description matching myocardial infarct / acute myocardial infarction)\n  SELECT DISTINCT d.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dic\n    ON d.icd_code = dic.icd_code\n   AND d.icd_version = dic.icd_version\n  WHERE LOWER(COALESCE(dic.long_title, '')) LIKE '%myocardial infarct%'\n     OR LOWER(COALESCE(dic.long_title, '')) LIKE '%acute myocardial infarction%'\n),\ncohort AS (\n  -- Admissions for male patients age 76-86 with AMI\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    p.gender,\n    p.anchor_age,\n    a.admittime,\n    a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  JOIN ami_hadm\n    ON a.hadm_id = ami_hadm.hadm_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 76 AND 86\n),\ntroponin_items AS (\n  -- Lab itemids that look like Troponin I (label-based match)\n  SELECT itemid\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE LOWER(label) LIKE '%troponin i%'\n     OR LOWER(label) LIKE '%troponin-i%'\n     OR LOWER(label) LIKE '%troponin i%'\n),\nfirst_troponin AS (\n  -- For each admission in the cohort, get the first troponin I lab (by charttime) during the admission\n  SELECT\n    c.hadm_id,\n    c.subject_id,\n    le.labevent_id,\n    le.charttime,\n    le.valuenum\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.labevents` le\n    ON le.hadm_id = c.hadm_id\n  JOIN troponin_items ti\n    ON le.itemid = ti.itemid\n  WHERE le.valuenum IS NOT NULL\n    -- restrict to measurements that occurred during the admission\n    AND le.charttime BETWEEN c.admittime AND c.dischtime\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY c.hadm_id ORDER BY le.charttime ASC, le.storetime ASC) = 1\n),\nquantiles AS (\n  -- approximate percentiles (0..100) for first-troponin values\n  SELECT APPROX_QUANTILES(valuenum, 100) AS qs\n  FROM first_troponin\n),\nsummary AS (\n  SELECT\n    COUNT(*) AS total_with_first_troponin,\n    SUM(CASE WHEN valuenum <= 0.04 THEN 1 ELSE 0 END) AS normal_n,\n    SUM(CASE WHEN valuenum > 0.04 AND valuenum < 0.40 THEN 1 ELSE 0 END) AS borderline_n,\n    SUM(CASE WHEN valuenum >= 0.40 THEN 1 ELSE 0 END) AS elevated_n,\n    AVG(valuenum) AS mean_troponin\n  FROM first_troponin\n)\nSELECT\n  s.total_with_first_troponin,\n  s.normal_n,\n  ROUND(100.0 * SAFE_DIVIDE(s.normal_n, s.total_with_first_troponin), 2) AS normal_pct,\n  s.borderline_n,\n  ROUND(100.0 * SAFE_DIVIDE(s.borderline_n, s.total_with_first_troponin), 2) AS borderline_pct,\n  s.elevated_n,\n  ROUND(100.0 * SAFE_DIVIDE(s.elevated_n, s.total_with_first_troponin), 2) AS elevated_pct,\n  ROUND(s.mean_troponin, 4) AS mean_troponin,\n  -- Extract median and IQR from the quantiles array (qs[OFFSET(n)] corresponds to nth percentile)\n  q.qs[OFFSET(25)] AS q1_troponin,\n  q.qs[OFFSET(50)] AS median_troponin,\n  q.qs[OFFSET(75)] AS q3_troponin,\n  q.qs[OFFSET(75)] - q.qs[OFFSET(25)] AS iqr_troponin\nFROM summary s\nCROSS JOIN quantiles q;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"AMI\" at [1:9]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"AMI\" at [1:9]\n\nLocation: US\nJob ID: ca0606a2-bde0-4656-91ad-c4fe6a3e0e1e\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

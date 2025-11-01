@@ -1,0 +1,28 @@
+{
+  "query": "I have a 76\u2011year\u2011old female inpatient with acute pancreatitis. Among female inpatients aged 71\u201381 with acute pancreatitis, compute medication complexity score over the first 72 hours, stratify into tertiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per tertile.",
+  "final_sql": "WITH cohort AS (\n  -- Base cohort: females 71-81 with primary acute pancreatitis\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    a.deathtime,\n    DATE_DIFF(a.dischtime, a.admittime, DAY) AS los_days,\n    p.anchor_age\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n    ON a.hadm_id = d.hadm_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` icd\n    ON d.icd_code = icd.icd_code \n    AND d.icd_version = icd.icd_version\n  WHERE \n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 71 AND 81\n    AND icd.icd_code LIKE 'K85.%'  -- Acute pancreatitis (ICD-10)\n    AND d.seq_num = 1  -- Primary diagnosis\n    AND (a.deathtime IS NULL OR DATETIME_DIFF(a.deathtime, a.admittime, HOUR) >= 72)\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY p.subject_id ORDER BY a.admittime) = 1  -- First matching admission per patient\n),\n\nreadmissions AS (\n  -- 30-day readmission flag\n  SELECT \n    c.*,\n    CASE \n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` r\n        WHERE r.subject_id = c.subject_id\n          AND r.hadm_id != c.hadm_id\n          AND r.admittime > c.dischtime\n          AND r.admittime <= DATETIME_ADD(c.dischtime, INTERVAL 30 DAY)\n      ) THEN 1 \n      ELSE 0 \n    END AS readmit_30d\n  FROM \n    cohort c\n),\n\nmed_orders AS (\n  -- Medication orders from ICU inputevents (preferred)\n  SELECT \n    ie.subject_id,\n    ie.hadm_id,\n    COUNT(DISTINCT ie.orderid) AS med_count\n  FROM \n    `physionet-data.mimiciv_3_1_icu.inputevents` ie\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.d_items` di\n    ON ie.itemid = di.itemid\n  INNER JOIN \n    readmissions r\n    ON ie.subject_id = r.subject_id AND ie.hadm_id = r.hadm_id\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON ie.stay_id = icu.stay_id\n  WHERE \n    di.category = 'Medications'  -- Medication administrations\n    AND ie.starttime >= r.admittime\n    AND ie.starttime <= DATETIME_ADD(r.admittime, INTERVAL 72 HOUR)\n    AND ie.orderid IS NOT NULL\n    AND (ie.statusdescription != 'Rewritten' OR ie.statusdescription IS NULL)  -- Active orders\n  GROUP BY ie.subject_id, ie.hadm_id\n\n  UNION ALL\n\n  -- Fallback: hospital prescriptions if no ICU data\n  SELECT \n    pr.subject_id,\n    pr.hadm_id,\n    COUNT(DISTINCT pr.poe_id) AS med_count\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n  INNER JOIN \n    readmissions r\n    ON pr.subject_id = r.subject_id AND pr.hadm_id = r.hadm_id\n  LEFT JOIN \n    `physionet-data.mimiciv_3_1_icu.icustays` icu\n    ON pr.hadm_id = icu.hadm_id\n  WHERE \n    icu.stay_id IS NULL  -- Only if no ICU stay\n    AND pr.starttime >= r.admittime\n    AND pr.starttime <= DATETIME_ADD(r.admittime, INTERVAL 72 HOUR)\n    AND pr.poe_id IS NOT NULL\n    AND pr.drug IS NOT NULL\n  GROUP BY pr.subject_id, pr.hadm_id\n),\n\nmed_summary AS (\n  SELECT \n    r.*,\n    COALESCE(m.med_count, 0) AS med_complexity_score\n  FROM \n    readmissions r\n  LEFT JOIN \n    med_orders m\n    ON r.subject_id = m.subject_id AND r.hadm_id = m.hadm_id\n),\n\ntertiles AS (\n  SELECT \n    *,\n    NTILE(3) OVER (ORDER BY med_complexity_score) AS complexity_tertile  -- 1=low, 2=medium, 3=high\n  FROM med_summary\n)\n\n-- Final aggregates per tertile\nSELECT \n  complexity_tertile,\n  COUNT(*) AS n_patients,\n  AVG(los_days) AS avg_los_days,\n  STDDEV(los_days) AS sd_los_days,\n  AVG(hospital_expire_flag) * 100 AS in_hosp_mortality_pct,\n  AVG(readmit_30d) * 100 AS readmit_30d_pct,\n  AVG(med_complexity_score) AS avg_med_score\nFROM tertiles\nGROUP BY complexity_tertile\nORDER BY complexity_tertile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "grok-4-fast-non-reasoning",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [10:5]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [10:5]\n\nLocation: US\nJob ID: a6b71344-3ef3-434a-832c-05707bb592e6\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name med_count_hosp not found inside m at [104:33]; reason: invalidQuery, location: query, message: Name med_count_hosp not found inside m at [104:33]\n\nLocation: US\nJob ID: 899ee0fa-06e5-47b1-a958-57705e25bae0\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

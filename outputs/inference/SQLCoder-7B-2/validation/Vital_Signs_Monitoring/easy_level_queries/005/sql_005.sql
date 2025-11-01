@@ -1,0 +1,1 @@
+SELECT percentile_cont(0.75) within GROUP (ORDER BY value) AS seventy_five_percentile FROM labevents JOIN patients ON labevents.subject_id = patients.subject_id WHERE patients.gender = 'F' AND EXTRACT(YEAR FROM age(CURRENT_DATE, patients.dob)) BETWEEN 59 AND 69 AND d_labitems.itemid = 848077;

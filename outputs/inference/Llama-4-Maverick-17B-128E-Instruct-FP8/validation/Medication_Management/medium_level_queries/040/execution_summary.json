@@ -1,0 +1,16 @@
+{
+  "query": "For my 41\u2011year\u2011old male inpatient: among males 36\u201346 with diabetes + heart failure, report prevalence (%) of antidiabetic and cardiac drug classes in first 48h versus last 12h, and absolute difference (pp).",
+  "final_sql": "WITH \n-- Step 1: Identify the cohort\ncohort AS (\n  SELECT p.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 36 AND 46\n  AND a.hadm_id IN (\n    SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_code IN (SELECT icd_code FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` WHERE long_title LIKE '%Diabetes%')\n  )\n  AND a.hadm_id IN (\n    SELECT hadm_id FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n    WHERE icd_code IN (SELECT icd_code FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` WHERE long_title LIKE '%Heart failure%')\n  )\n),\n\n-- Step 2: Analyze medication usage in the first 48 hours and last 12 hours\nmeds AS (\n  SELECT c.subject_id, c.hadm_id,\n         CASE \n           WHEN p.starttime BETWEEN c.admittime AND TIMESTAMP_ADD(c.admittime, INTERVAL 48 HOUR) THEN 'First 48h'\n           WHEN p.starttime BETWEEN TIMESTAMP_SUB(c.dischtime, INTERVAL 12 HOUR) AND c.dischtime THEN 'Last 12h'\n           ELSE 'Other'\n         END AS time_window,\n         -- Identify antidiabetic and cardiac drugs\n         CASE \n           WHEN LOWER(p.drug) LIKE '%metformin%' OR LOWER(p.drug) LIKE '%insulin%' OR LOWER(p.drug) LIKE '%glimepiride%' THEN 'Antidiabetic'\n           WHEN LOWER(p.drug) LIKE '%aspirin%' OR LOWER(p.drug) LIKE '%beta blocker%' OR LOWER(p.drug) LIKE '%ace inhibitor%' THEN 'Cardiac'\n           ELSE 'Other'\n         END AS drug_class\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.prescriptions` p ON c.hadm_id = p.hadm_id\n  WHERE p.starttime BETWEEN c.admittime AND c.dischtime\n  AND (LOWER(p.drug) LIKE '%metformin%' OR LOWER(p.drug) LIKE '%insulin%' OR LOWER(p.drug) LIKE '%glimepiride%' \n       OR LOWER(p.drug) LIKE '%aspirin%' OR LOWER(p.drug) LIKE '%beta blocker%' OR LOWER(p.drug) LIKE '%ace inhibitor%')\n),\n\n-- Step 3: Calculate prevalence\nprevalence AS (\n  SELECT drug_class, time_window, COUNT(DISTINCT hadm_id) AS num_patients\n  FROM meds\n  WHERE time_window IN ('First 48h', 'Last 12h')\n  GROUP BY drug_class, time_window\n),\n\n-- Step 4: Calculate percentages and differences\npercentages AS (\n  SELECT drug_class, \n         SUM(CASE WHEN time_window = 'First 48h' THEN num_patients ELSE 0 END) / (SELECT COUNT(*) FROM cohort) * 100 AS pct_first_48h,\n         SUM(CASE WHEN time_window = 'Last 12h' THEN num_patients ELSE 0 END) / (SELECT COUNT(*) FROM cohort) * 100 AS pct_last_12h\n  FROM prevalence\n  GROUP BY drug_class\n)\n\n-- Final output\nSELECT drug_class, \n       pct_first_48h, \n       pct_last_12h, \n       pct_last_12h - pct_first_48h AS abs_diff_pp\nFROM percentages\nORDER BY drug_class;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating a 79\u2011year\u2011old man. Among male ICU patients aged 74\u201384 admitted with upper GI bleeding, using first ICU stay, stratify first\u201172\u2011hour diagnostic intensity into quartiles and report mean procedure count, mean hospital LOS (days), and in\u2011hospital mortality per quartile.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    ie.subject_id,\n    ie.hadm_id,\n    ie.stay_id,\n    pat.gender,\n    pat.anchor_age,\n    ie.intime,\n    ie.outtime,\n    adm.admittime,\n    adm.dischtime,\n    adm.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_icu.icustays` ie\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON ie.subject_id = pat.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` adm\n    ON ie.hadm_id = adm.hadm_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 74 AND 84\n    -- First ICU stay only\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY ie.subject_id ORDER BY ie.intime) = 1\n),\nugi_bleed AS (\n  SELECT DISTINCT c.*\n  FROM cohort c\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON c.hadm_id = di.hadm_id\n  WHERE (\n    -- ICD-9 codes for Upper GI hemorrhage\n    (di.icd_version = 9 AND (\n        di.icd_code LIKE '578%' OR\n        di.icd_code LIKE '4560%' OR di.icd_code LIKE '4562%' OR\n        di.icd_code LIKE '531%' OR di.icd_code LIKE '532%' OR\n        di.icd_code LIKE '533%' OR di.icd_code LIKE '534%'\n    ))\n    OR\n    -- ICD-10 codes for Upper GI hemorrhage\n    (di.icd_version = 10 AND (\n        di.icd_code LIKE 'K25%' OR di.icd_code LIKE 'K26%' OR\n        di.icd_code LIKE 'K27%' OR di.icd_code LIKE 'K28%' OR\n        di.icd_code LIKE 'I85%' OR\n        di.icd_code LIKE 'K92%'\n    ))\n  )\n),\nproc_counts AS (\n  SELECT\n    u.subject_id,\n    u.hadm_id,\n    COUNT(*) AS procedure_count\n  FROM ugi_bleed u\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.procedures_icd` pi\n    ON u.hadm_id = pi.hadm_id\n    AND pi.chartdate >= DATE(u.intime)\n    AND pi.chartdate <= DATE(u.intime + INTERVAL 72 HOUR)\n  GROUP BY u.subject_id, u.hadm_id\n),\ncohort_with_counts AS (\n  SELECT\n    u.subject_id,\n    u.hadm_id,\n    u.stay_id,\n    u.anchor_age,\n    u.gender,\n    u.admittime,\n    u.dischtime,\n    u.hospital_expire_flag,\n    u.intime,\n    COALESCE(pc.procedure_count,0) AS procedure_count,\n    TIMESTAMP_DIFF(u.dischtime, u.admittime, DAY) AS hospital_los\n  FROM ugi_bleed u\n  LEFT JOIN proc_counts pc\n    ON u.subject_id = pc.subject_id AND u.hadm_id = pc.hadm_id\n),\nquartiled AS (\n  SELECT\n    *,\n    NTILE(4) OVER (ORDER BY procedure_count) AS quartile\n  FROM cohort_with_counts\n)\nSELECT\n  quartile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(hospital_los) AS mean_hospital_los,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) AS in_hosp_mortality_rate\nFROM quartiled\nGROUP BY quartile\nORDER BY quartile;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

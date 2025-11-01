@@ -1,0 +1,16 @@
+{
+  "query": "For a 44-year-old man: among male ICU admissions aged 39\u201349 with DKA, stratify first ICU stay diagnostic intensity (distinct procedures in first 24 h) into quintiles and report number of stays, mean/min/max procedure count, mean ICU LOS (days) and hospital mortality%",
+  "final_sql": "WITH \nfiltered_patients AS (\n  SELECT p.subject_id, p.gender, a.hadm_id, a.admittime, a.hospital_expire_flag\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE p.gender = 'M' AND p.anchor_age BETWEEN 39 AND 49\n),\ndka_patients AS (\n  SELECT DISTINCT a.hadm_id\n  FROM filtered_patients a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di ON a.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dicd ON di.icd_code = dicd.icd_code AND di.icd_version = dicd.icd_version\n  WHERE dicd.long_title LIKE '%Diabetic ketoacidosis%' OR di.icd_code IN ('E10.1', 'E11.1', 'E13.1')  \n),\nfirst_icu_stay AS (\n  SELECT subject_id, hadm_id, stay_id, intime, outtime, los,\n         ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS icu_stay_num\n  FROM `physionet-data.mimiciv_3_1_icu.icustays`\n),\nprocedure_counts AS (\n  SELECT fis.hadm_id, COUNT(DISTINCT pe.itemid) AS procedure_count, fis.los, fp.hospital_expire_flag\n  FROM first_icu_stay fis\n  JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` pe ON fis.stay_id = pe.stay_id\n  JOIN filtered_patients fp ON fis.hadm_id = fp.hadm_id\n  JOIN dka_patients dka ON fis.hadm_id = dka.hadm_id\n  WHERE fis.icu_stay_num = 1 AND pe.starttime <= fis.intime + INTERVAL 1 DAY\n  GROUP BY fis.hadm_id, fis.los, fp.hospital_expire_flag\n),\nquintiles AS (\n  SELECT hadm_id, procedure_count, los, hospital_expire_flag,\n         NTILE(5) OVER (ORDER BY procedure_count) AS quintile\n  FROM procedure_counts\n),\nstats AS (\n  SELECT q.quintile,\n         COUNT(q.hadm_id) AS num_stays,\n         AVG(q.procedure_count) AS mean_procedure_count,\n         MIN(q.procedure_count) AS min_procedure_count,\n         MAX(q.procedure_count) AS max_procedure_count,\n         AVG(q.los) AS mean_icu_los,\n         AVG(CASE WHEN q.hospital_expire_flag = 1 THEN 1 ELSE 0 END) * 100 AS hospital_mortality_pct\n  FROM quintiles q\n  GROUP BY q.quintile\n)\nSELECT * FROM stats\nORDER BY quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

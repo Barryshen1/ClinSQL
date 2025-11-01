@@ -1,0 +1,28 @@
+{
+  "query": "For a 42\u2011year\u2011old man with a postoperative ICU admission, among male inpatients aged 37\u201347, compute medication complexity over the first 72 hours, stratify into quintiles, and report LOS, in\u2011hospital mortality, and 30\u2011day readmission rates per quintile and estimate his risk.",
+  "final_sql": "WITH \n-- Filter patients of interest\npatients_of_interest AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    a.hadm_id,\n    a.admission_type,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON \n    p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 37 AND 47\n    AND a.admission_type = 'postoperative'\n),\n\n-- Identify ICU stays for these patients\nicu_stays AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    stay_id,\n    intime,\n    outtime\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays`\n  WHERE \n    hadm_id IN (SELECT hadm_id FROM patients_of_interest)\n),\n\n-- Calculate medication complexity in the first 72 hours of ICU stay\nmedication_complexity AS (\n  SELECT \n    i.hadm_id,\n    COUNT(DISTINCT p.medication) AS num_medications\n  FROM \n    `physionet-data.mimiciv_3_1_icu.icustays` i\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.pharmacy` p\n  ON \n    i.hadm_id = p.hadm_id\n  WHERE \n    p.starttime BETWEEN i.intime AND TIMESTAMP_ADD(i.intime, INTERVAL 3 DAY)\n  GROUP BY \n    i.hadm_id\n),\n\n-- Combine data for analysis\ncombined_data AS (\n  SELECT \n    poi.subject_id,\n    poi.hadm_id,\n    poi.admittime,\n    poi.dischtime,\n    poi.hospital_expire_flag,\n    COALESCE(mc.num_medications, 0) AS num_medications,\n    icu.intime AS icu_intime,\n    icu.outtime AS icu_outtime\n  FROM \n    patients_of_interest poi\n  LEFT JOIN \n    icu_stays icu\n  ON \n    poi.hadm_id = icu.hadm_id\n  LEFT JOIN \n    medication_complexity mc\n  ON \n    poi.hadm_id = mc.hadm_id\n),\n\n-- Calculate LOS, in-hospital mortality, and 30-day readmission\noutcomes AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    TIMESTAMP_DIFF(dischtime, admittime, DAY) AS los,\n    hospital_expire_flag,\n    -- Simplified 30-day readmission flag, actual implementation requires more complex logic\n    CASE \n      WHEN EXISTS (\n        SELECT 1 \n        FROM `physionet-data.mimiciv_3_1_hosp.admissions` a2\n        WHERE a2.subject_id = subject_id \n          AND a2.admittime BETWEEN TIMESTAMP_ADD(dischtime, INTERVAL 1 DAY) AND TIMESTAMP_ADD(dischtime, INTERVAL 30 DAY)\n      ) THEN 1 \n      ELSE 0 \n    END AS readmitted\n  FROM \n    combined_data\n),\n\n-- Stratify into quintiles based on medication complexity\nquintiles AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    num_medications,\n    los,\n    hospital_expire_flag,\n    readmitted,\n    NTILE(5) OVER (ORDER BY num_medications) AS quintile\n  FROM \n    outcomes\n)\n\n-- Final query\nSELECT \n  quintile,\n  AVG(num_medications) AS avg_medication_complexity,\n  AVG(los) AS avg_los,\n  SUM(hospital_expire_flag) / COUNT(*) AS in_hospital_mortality_rate,\n  AVG(readmitted) AS thirty_day_readmission_rate\nFROM \n  quintiles\nGROUP BY \n  quintile\nORDER BY \n  quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Unrecognized name: num_medications at [105:5]; reason: invalidQuery, location: query, message: Unrecognized name: num_medications at [105:5]\n\nLocation: US\nJob ID: 0fb70fa8-e94e-48ef-b714-8f279083ca6a\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [81:5]; reason: invalidQuery, location: query, message: Function not found: TIMESTAMPDIFF; Did you mean timestamp_diff? at [81:5]\n\nLocation: US\nJob ID: 0f62b4f9-0b0d-4596-a067-7d4ae891413e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: num_medications at [107:5]; reason: invalidQuery, location: query, message: Unrecognized name: num_medications at [107:5]\n\nLocation: US\nJob ID: ea2683c2-9bf8-485c-ad55-1e70a92eec9f\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Unrecognized name: num_medications at [105:5]; reason: invalidQuery, location: query, message: Unrecognized name: num_medications at [105:5]\n\nLocation: US\nJob ID: 0fb70fa8-e94e-48ef-b714-8f279083ca6a\n"
+    }
+  ]
+}

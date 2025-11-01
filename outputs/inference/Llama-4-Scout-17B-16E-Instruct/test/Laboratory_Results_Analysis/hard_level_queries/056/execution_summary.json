@@ -1,0 +1,28 @@
+{
+  "query": "I have a 60\u2011year\u2011old female with asthma exacerbation. Among female inpatients aged 55\u201365, what is the 95th percentile of the lab instability score in the first 48 hours? For that top tier, report LOS, mortality, and critical lab rate versus general inpatients.",
+  "final_sql": "WITH \n-- Filter patients of interest\npatients_of_interest AS (\n  SELECT \n    p.subject_id,\n    p.anchor_age,\n    p.gender,\n    a.admittime,\n    a.hadm_id\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON \n    p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'F' AND\n    p.anchor_age BETWEEN 55 AND 65\n),\n\n-- Get lab events in the first 48 hours\nlab_events_48hrs AS (\n  SELECT \n    lo.subject_id,\n    lo.hadm_id,\n    le.itemid,\n    le.charttime,\n    le.valuenum,\n    le.valueuom\n  FROM \n    patients_of_interest lo\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.labevents` le\n  ON \n    lo.subject_id = le.subject_id AND lo.hadm_id = le.hadm_id\n  WHERE \n    le.charttime BETWEEN lo.admittime AND TIMESTAMP_ADD(lo.admittime, INTERVAL 48 HOUR)\n),\n\n-- Calculate instability score for each patient\nlab_instability_score AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    itemid,\n    charttime,\n    valuenum,\n    LAG(valuenum) OVER (PARTITION BY subject_id, hadm_id, itemid ORDER BY charttime) AS prev_valuenum\n  FROM \n    lab_events_48hrs\n),\n\n-- Calculate absolute differences\nlab_diff AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    itemid,\n    ABS(valuenum - prev_valuenum) AS instability_score\n  FROM \n    lab_instability_score\n  WHERE \n    prev_valuenum IS NOT NULL\n),\n\n-- Average instability score per patient\npatient_instability AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    AVG(instability_score) AS avg_instability_score\n  FROM \n    lab_diff\n  GROUP BY \n    subject_id, hadm_id\n),\n\n-- Calculate 95th percentile of lab instability score\npercentile_score AS (\n  SELECT \n    APPROX_QUANTILES(avg_instability_score, 100)[OFFSET(95)] AS percentile_95\n  FROM \n    patient_instability\n),\n\n-- Patients with high lab instability score\nhigh_instability_patients AS (\n  SELECT \n    pi.subject_id,\n    pi.hadm_id,\n    a.dischtime,\n    a.deathtime,\n    CASE \n      WHEN a.deathtime IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS mortality,\n    DATEDIFF(a.dischtime, a.admittime) AS los\n  FROM \n    patient_instability pi\n  JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON \n    pi.subject_id = a.subject_id AND pi.hadm_id = a.hadm_id\n  WHERE \n    pi.avg_instability_score > (SELECT percentile_95 FROM percentile_score)\n),\n\n-- General inpatients for comparison\ngeneral_inpatients AS (\n  SELECT \n    a.subject_id,\n    a.hadm_id,\n    a.dischtime,\n    a.deathtime,\n    CASE \n      WHEN a.deathtime IS NOT NULL THEN 1 \n      ELSE 0 \n    END AS mortality,\n    DATEDIFF(a.dischtime, a.admittime) AS los\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n)\n\n-- Final comparison\nSELECT \n  'High Instability' AS patient_group,\n  AVG(los) AS avg_los,\n  AVG(mortality) AS avg_mortality,\n  COUNT(*) AS patient_count\nFROM \n  high_instability_patients\nUNION ALL\nSELECT \n  'General Inpatients' AS patient_group,\n  AVG(los) AS avg_los,\n  AVG(mortality) AS avg_mortality,\n  COUNT(*) AS patient_count\nFROM \n  general_inpatients;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [97:5]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [97:5]\n\nLocation: US\nJob ID: 5a7483ef-6609-4367-9643-6beb7a8dc8c9\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got keyword WITHIN at [56:27]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got keyword WITHIN at [56:27]\n\nLocation: US\nJob ID: facc1945-9896-497b-8ade-55a0762cf453\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Analytic functions cannot be arguments to aggregate functions at [46:5]; reason: invalidQuery, location: query, message: Analytic functions cannot be arguments to aggregate functions at [46:5]\n\nLocation: US\nJob ID: 27a1d52b-7eee-4051-84c4-70300bd45ccc\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: DATEDIFF; Did you mean date_diff? at [97:5]; reason: invalidQuery, location: query, message: Function not found: DATEDIFF; Did you mean date_diff? at [97:5]\n\nLocation: US\nJob ID: 5a7483ef-6609-4367-9643-6beb7a8dc8c9\n"
+    }
+  ]
+}

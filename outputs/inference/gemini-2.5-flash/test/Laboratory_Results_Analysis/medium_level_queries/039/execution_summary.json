@@ -1,0 +1,16 @@
+{
+  "query": "For my 92\u2011year\u2011old female patient: among female patients 87\u201397 admitted with chest pain, report counts, percentages, and mean, median, IQR of index hs\u2011TnT by category (Normal\u22640.04; Borderline 0.04\u20130.1; Injury>0.1).",
+  "final_sql": "WITH admission_cohort AS (\n    -- Step 1: Identify eligible female patients aged 87-97 admitted with chest pain\n    SELECT DISTINCT\n        adm.subject_id,\n        adm.hadm_id\n    FROM\n        `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n        ON adm.subject_id = pat.subject_id\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS diag\n        ON adm.subject_id = diag.subject_id AND adm.hadm_id = diag.hadm_id\n    WHERE\n        pat.gender = 'F'\n        AND pat.anchor_age BETWEEN 87 AND 97\n        AND diag.icd_code LIKE 'R07%' -- ICD-10 codes for chest pain\n        AND diag.seq_num = 1 -- Assuming primary diagnosis for \"admitted with chest pain\"\n),\nfirst_hs_tnt AS (\n    -- Step 2: Get the first high-sensitivity Troponin T (hs-TnT) value for each eligible admission\n    SELECT\n        ac.subject_id,\n        ac.hadm_id,\n        le.valuenum AS hs_tnt_value,\n        ROW_NUMBER() OVER (PARTITION BY ac.subject_id, ac.hadm_id ORDER BY le.charttime ASC) AS rn\n    FROM\n        admission_cohort AS ac\n    INNER JOIN\n        `physionet-data.mimiciv_3_1_hosp.labevents` AS le\n        ON ac.subject_id = le.subject_id AND ac.hadm_id = le.hadm_id\n    WHERE\n        le.itemid = 229344 -- itemid for Troponin T, High Sensitivity\n        AND le.valuenum IS NOT NULL\n        AND le.valuenum >= 0 -- Ensure valid numeric value\n)\n-- Step 3 & 4: Categorize hs-TnT levels and calculate statistics\nSELECT\n    CASE\n        WHEN tnt.hs_tnt_value <= 0.04 THEN 'Normal (<= 0.04)'\n        WHEN tnt.hs_tnt_value > 0.04 AND tnt.hs_tnt_value <= 0.1 THEN 'Borderline (0.04 - 0.1)'\n        ELSE 'Injury (> 0.1)'\n    END AS hs_tnt_category,\n    COUNT(tnt.hs_tnt_value) AS category_count,\n    ROUND(CAST(COUNT(tnt.hs_tnt_value) AS BIGNUMERIC) * 100 / (SELECT COUNT(*) FROM first_hs_tnt WHERE rn = 1), 2) AS percentage,\n    ROUND(AVG(tnt.hs_tnt_value), 4) AS mean_hs_tnt,\n    ROUND(APPROX_QUANTILES(tnt.hs_tnt_value, 4)[OFFSET(2)], 4) AS median_hs_tnt, -- 50th percentile\n    ROUND(APPROX_QUANTILES(tnt.hs_tnt_value, 4)[OFFSET(1)], 4) AS q1_hs_tnt,   -- 25th percentile\n    ROUND(APPROX_QUANTILES(tnt.hs_tnt_value, 4)[OFFSET(3)], 4) AS q3_hs_tnt,   -- 75th percentile\n    ROUND(APPROX_QUANTILES(tnt.hs_tnt_value, 4)[OFFSET(3)] - APPROX_QUANTILES(tnt.hs_tnt_value, 4)[OFFSET(1)], 4) AS iqr_hs_tnt\nFROM\n    first_hs_tnt AS tnt\nWHERE\n    tnt.rn = 1 -- Select only the first hs-TnT measurement for each admission\nGROUP BY\n    hs_tnt_category\nORDER BY\n    CASE hs_tnt_category\n        WHEN 'Normal (<= 0.04)' THEN 1\n        WHEN 'Borderline (0.04 - 0.1)' THEN 2\n        ELSE 3\n    END;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-flash",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

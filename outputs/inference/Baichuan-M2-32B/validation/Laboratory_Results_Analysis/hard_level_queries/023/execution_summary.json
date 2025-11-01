@@ -1,0 +1,29 @@
+{
+  "query": "I have a 95\u2011year\u2011old female inpatient with AMI. Among female AMI admissions aged 90\u2013100, what is the 75th\u2011percentile lab\u2011instability score in the first 48 hours? For \u2265P75 patients, report in\u2011hospital mortality, mean LOS, and critical lab rates versus all inpatients 90\u2013100.",
+  "final_sql": "WITH admissions_with_age AS (\n  SELECT \n    a.*,\n    p.gender,  -- Added to include gender from patients table\n    EXTRACT(YEAR FROM a.admittime) - (p.anchor_year - p.anchor_age) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` p \n    ON a.subject_id = p.subject_id\n),\nami_cohort AS (\n  SELECT \n    a.*\n  FROM admissions_with_age a\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d \n    ON a.subject_id = d.subject_id AND a.hadm_id = d.hadm_id\n  WHERE \n    a.gender = 'F'\n    AND a.age_at_admission BETWEEN 90 AND 100\n    AND (\n      (d.icd_version = 10 AND d.icd_code LIKE 'I21%') \n      OR \n      (d.icd_version = 9 AND d.icd_code LIKE '410%')\n    )\n),\nentire_cohort AS (\n  SELECT \n    a.*\n  FROM admissions_with_age a\n  WHERE \n    a.age_at_admission BETWEEN 90 AND 100\n),\nami_lab_events AS (\n  SELECT \n    a.hadm_id,\n    l.labevent_id,\n    CASE \n      WHEN l.ref_range_lower IS NOT NULL AND l.ref_range_upper IS NOT NULL \n           AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper) THEN 1\n      WHEN l.flag IS NOT NULL THEN 1\n      ELSE 0 \n    END AS is_abnormal\n  FROM ami_cohort a\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l \n    ON a.subject_id = l.subject_id AND a.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN a.admittime AND TIMESTAMP_ADD(a.admittime, INTERVAL 48 HOUR)\n),\nami_instability AS (\n  SELECT \n    hadm_id,\n    SUM(is_abnormal) AS instability_score\n  FROM ami_lab_events\n  GROUP BY hadm_id\n),\npercentile AS (\n  SELECT \n    APPROX_QUANTILES(instability_score, 100)[OFFSET(75)] AS p75\n  FROM ami_instability\n),\nami_p75 AS (\n  SELECT \n    a.*,\n    i.instability_score,\n    CASE WHEN i.instability_score >= (SELECT p75 FROM percentile) THEN 1 ELSE 0 END AS is_p75\n  FROM ami_cohort a\n  LEFT JOIN ami_instability i ON a.hadm_id = i.hadm_id\n),\np75_metrics AS (\n  SELECT \n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality,\n    AVG(TIMESTAMP_DIFF(\n          CASE \n            WHEN hospital_expire_flag = 1 THEN deathtime\n            ELSE dischtime \n          END, \n          admittime, \n          HOUR) / 24.0) AS mean_los,\n    AVG(instability_score) AS critical_lab_rate\n  FROM ami_p75\n  WHERE \n    is_p75 = 1\n    AND (dischtime IS NOT NULL OR hospital_expire_flag = 1)\n),\nentire_lab_events AS (\n  SELECT \n    e.hadm_id,\n    l.labevent_id,\n    CASE \n      WHEN l.ref_range_lower IS NOT NULL AND l.ref_range_upper IS NOT NULL \n           AND (l.valuenum < l.ref_range_lower OR l.valuenum > l.ref_range_upper) THEN 1\n      WHEN l.flag IS NOT NULL THEN 1\n      ELSE 0 \n    END AS is_abnormal\n  FROM entire_cohort e\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp.labevents` l \n    ON e.subject_id = l.subject_id AND e.hadm_id = l.hadm_id\n    AND l.charttime BETWEEN e.admittime AND TIMESTAMP_ADD(e.admittime, INTERVAL 48 HOUR)\n),\nentire_instability AS (\n  SELECT \n    hadm_id,\n    SUM(is_abnormal) AS instability_score\n  FROM entire_lab_events\n  GROUP BY hadm_id\n),\nentire_metrics AS (\n  SELECT \n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality,\n    AVG(TIMESTAMP_DIFF(\n          CASE \n            WHEN hospital_expire_flag = 1 THEN deathtime\n            ELSE dischtime \n          END, \n          admittime, \n          HOUR) / 24.0) AS mean_los,\n    AVG(instability_score) AS critical_lab_rate\n  FROM entire_cohort\n  LEFT JOIN entire_instability i ON entire_cohort.hadm_id = i.hadm_id\n  WHERE \n    (dischtime IS NOT NULL OR hospital_expire_flag = 1)\n)\nSELECT \n  (SELECT mortality FROM p75_metrics) AS p75_mortality,\n  (SELECT mean_los FROM p75_metrics) AS p75_mean_los,\n  (SELECT critical_lab_rate FROM p75_metrics) AS p75_critical_lab_rate,\n  (SELECT mortality FROM entire_metrics) AS entire_mortality,\n  (SELECT mean_los FROM entire_metrics) AS entire_mean_los,\n  (SELECT critical_lab_rate FROM entire_metrics) AS entire_critical_lab_rate;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Baichuan-M2-32B",
+  "model_id": "baichuan-inc/Baichuan-M2-32B",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got \"(\" at [1:10]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got \"(\" at [1:10]\n\nLocation: US\nJob ID: 0ba31320-4711-4f9e-9f6b-968a60c9c828\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name gender not found inside a at [16:7]; reason: invalidQuery, location: query, message: Name gender not found inside a at [16:7]\n\nLocation: US\nJob ID: c26a947a-7966-4c66-ac5e-6f331eef96ca\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

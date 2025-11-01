@@ -1,0 +1,28 @@
+{
+  "query": "I have a 70-year-old male patient. Among male Medicare patients aged 65\u201375 admitted from the ED with a principal diagnosis of acute respiratory failure, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent LOS >9 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    adm.subject_id, \n    adm.hadm_id, \n    adm.admittime, \n    adm.dischtime,\n    DATE_DIFF(adm.dischtime, adm.admittime, DAY) + 1 AS los, -- Add 1 to account for same-day discharges\n    -- Check for death during index admission\n    adm.deathtime IS NOT NULL AS died_in_admission,\n    -- Check for readmission within 30 days\n    EXISTS (\n      SELECT 1 \n      FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm2 \n      WHERE adm2.subject_id = adm.subject_id \n        AND adm2.admittime > adm.dischtime \n        AND adm2.admittime <= DATE_ADD(adm.dischtime, INTERVAL 30 DAY)\n    ) AS readmitted_30d,\n    ROW_NUMBER() OVER (PARTITION BY adm.subject_id ORDER BY adm.admittime) as admission_rank\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` adm\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` pat\n    ON adm.subject_id = pat.subject_id\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` diag\n    ON adm.hadm_id = diag.hadm_id\n  WHERE pat.gender = 'M'\n    AND pat.anchor_age BETWEEN 65 AND 75\n    AND adm.insurance = 'Medicare'\n    AND adm.admission_location = 'EMERGENCY ROOM'\n    AND diag.seq_num = 1\n    AND (\n      (diag.icd_version = 10 AND diag.icd_code = 'J96.00') \n      OR \n      (diag.icd_version = 9 AND diag.icd_code = '518.81')\n    )\n),\n-- Exclude index admissions where patient died and ensure first admission\ncohort_clean AS (\n  SELECT *\n  FROM cohort\n  WHERE NOT died_in_admission AND admission_rank = 1\n)\n-- Calculate metrics\nSELECT \n  -- 30-day readmission rate\n  COUNTIF(readmitted_30d) AS readmitted,\n  COUNT(*) AS total_index_admissions,\n  ROUND(COUNTIF(readmitted_30d) * 100.0 / COUNT(*), 2) AS readmission_rate_percent,\n  -- Median LOS for readmitted vs non-readmitted\n  APPROX_QUANTILES(CASE WHEN readmitted_30d THEN los END, 100)[OFFSET(50)] AS median_los_readmitted,\n  APPROX_QUANTILES(CASE WHEN NOT readmitted_30d THEN los END, 100)[OFFSET(50)] AS median_los_not_readmitted,\n  -- Percent of index admissions with LOS > 9 days\n  ROUND(COUNTIF(los > 9) * 100.0 / COUNT(*), 2) AS percent_los_gt_9_days\nFROM cohort_clean;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 723a29da-22aa-4298-be08-ad3a89200aac\n",
+  "model": "DeepSeek-V3.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected end of input but got \"(\" at [47:36]; reason: invalidQuery, location: query, message: Syntax error: Expected end of input but got \"(\" at [47:36]\n\nLocation: US\nJob ID: b9b1781b-d599-47b8-aedd-2b4bd693d2f1\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [48:3]; reason: invalidQuery, location: query, message: Function not found: APPROX_QUANTILE; Did you mean approx_quantiles? at [48:3]\n\nLocation: US\nJob ID: 2b1a7aae-8955-42b3-b922-4f1864945863\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 division by zero: 0 / 0; reason: invalidQuery, location: query, message: division by zero: 0 / 0\n\nLocation: US\nJob ID: 723a29da-22aa-4298-be08-ad3a89200aac\n"
+    }
+  ]
+}

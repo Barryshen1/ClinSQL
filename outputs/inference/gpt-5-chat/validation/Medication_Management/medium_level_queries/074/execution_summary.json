@@ -1,0 +1,16 @@
+{
+  "query": "For my 53-year-old female inpatient: among female inpatients 48\u201358 with diabetes and heart failure, what are prevalence (%) of subcutaneous GLP\u20111 starts in first 24h vs final 12h?",
+  "final_sql": "WITH cohort AS (\n  SELECT DISTINCT p.subject_id, a.hadm_id, a.admittime, a.dischtime\n  FROM `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON p.subject_id = a.subject_id\n  -- Female aged 48\u201358\n  WHERE p.gender = 'F'\n    AND p.anchor_age BETWEEN 48 AND 58\n),\ndx AS (\n  SELECT hadm_id,\n         MAX(CASE WHEN \n           (d.icd_version = 10 AND (d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E13%' OR d.icd_code LIKE 'E14%'))\n           OR (d.icd_version = 9 AND d.icd_code LIKE '250%')\n         THEN 1 ELSE 0 END) AS has_diabetes,\n         MAX(CASE WHEN \n           (d.icd_version = 10 AND d.icd_code LIKE 'I50%')\n           OR (d.icd_version = 9 AND d.icd_code LIKE '428%')\n         THEN 1 ELSE 0 END) AS has_hf\n  FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  GROUP BY hadm_id\n),\ncohort_with_conditions AS (\n  SELECT c.*\n  FROM cohort c\n  JOIN dx\n    ON c.hadm_id = dx.hadm_id\n  WHERE dx.has_diabetes = 1\n    AND dx.has_hf = 1\n),\nglp1_admin AS (\n  SELECT e.subject_id, e.hadm_id, MIN(e.charttime) AS first_glp1_time\n  FROM `physionet-data.mimiciv_3_1_hosp.emar` e\n  JOIN `physionet-data.mimiciv_3_1_hosp.emar_detail` ed\n    ON e.subject_id = ed.subject_id AND e.emar_id = ed.emar_id AND e.emar_seq = ed.emar_seq\n  WHERE LOWER(e.medication) LIKE '%liraglutide%'\n     OR LOWER(e.medication) LIKE '%semaglutide%'\n     OR LOWER(e.medication) LIKE '%dulaglutide%'\n     OR LOWER(e.medication) LIKE '%exenatide%'\n     OR LOWER(e.medication) LIKE '%albiglutide%'\n  AND LOWER(ed.route) LIKE '%subcutaneous%'\n  GROUP BY e.subject_id, e.hadm_id\n),\ncombined AS (\n  SELECT coh.*, ga.first_glp1_time\n  FROM cohort_with_conditions coh\n  LEFT JOIN glp1_admin ga\n    ON coh.subject_id = ga.subject_id AND coh.hadm_id = ga.hadm_id\n  WHERE coh.admittime IS NOT NULL AND coh.dischtime IS NOT NULL\n)\nSELECT\n  COUNT(*) AS cohort_size,\n  SUM(CASE WHEN first_glp1_time IS NOT NULL \n              AND first_glp1_time <= DATETIME_ADD(admittime, INTERVAL 24 HOUR)\n           THEN 1 ELSE 0 END) AS first_24h_count,\n  SAFE_DIVIDE(SUM(CASE WHEN first_glp1_time IS NOT NULL \n              AND first_glp1_time <= DATETIME_ADD(admittime, INTERVAL 24 HOUR)\n           THEN 1 ELSE 0 END), COUNT(*)) * 100 AS first_24h_pct,\n  SUM(CASE WHEN first_glp1_time IS NOT NULL\n              AND first_glp1_time >= DATETIME_SUB(dischtime, INTERVAL 12 HOUR)\n           THEN 1 ELSE 0 END) AS final_12h_count,\n  SAFE_DIVIDE(SUM(CASE WHEN first_glp1_time IS NOT NULL\n              AND first_glp1_time >= DATETIME_SUB(dischtime, INTERVAL 12 HOUR)\n           THEN 1 ELSE 0 END), COUNT(*)) * 100 AS final_12h_pct\nFROM combined;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-chat",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "query": "I have a 70-year-old male patient. Among male Medicare patients aged 65\u201375 admitted from the ED with a principal diagnosis of acute respiratory failure, what is the 30\u2011day readmission rate, median index LOS for readmitted vs non\u2011readmitted, and percent LOS >9 days?",
+  "final_sql": "WITH cohort AS (\n  SELECT \n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.discharge_location,\n    p.anchor_age,\n    a.insurance\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  INNER JOIN \n    `physionet-data.mimiciv_3_1_hosp.admissions` a ON p.subject_id = a.subject_id\n  WHERE \n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 65 AND 75\n    AND a.admission_location = 'EMERGENCY ROOM ADMIT'\n    AND a.insurance = 'Medicare'\n),\ndiagnosis AS (\n  SELECT \n    hadm_id,\n    icd_code\n  FROM \n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd`\n  WHERE \n    icd_version = 10  \n    AND seq_num = 1  \n    AND icd_code IN (SELECT icd_code FROM `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` WHERE long_title LIKE '%Acute respiratory failure%')\n),\ncohort_diagnosis AS (\n  SELECT \n    c.subject_id,\n    c.hadm_id,\n    c.admittime,\n    c.dischtime,\n    c.discharge_location\n  FROM \n    cohort c\n  INNER JOIN \n    diagnosis d ON c.hadm_id = d.hadm_id\n),\nreadmissions AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    LAG(dischtime) OVER (PARTITION BY subject_id ORDER BY admittime) AS prev_dischtime\n  FROM \n    cohort_diagnosis\n),\nlos_data AS (\n  SELECT \n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    DATETIME_DIFF(dischtime, admittime, DAY) AS los,\n    CASE \n      WHEN DATETIME_DIFF(admittime, LAG(dischtime) OVER (PARTITION BY subject_id ORDER BY admittime), DAY) <= 30 THEN 1\n      ELSE 0\n    END AS readmitted\n  FROM \n    readmissions\n),\nmetrics AS (\n  SELECT \n    AVG(CASE WHEN readmitted = 1 THEN 1 ELSE 0 END) AS readmission_rate,\n    APPROX_QUANTILES(DATETIME_DIFF(dischtime, admittime, DAY), 100)[OFFSET(50)] AS median_los,\n    AVG(CASE WHEN DATETIME_DIFF(dischtime, admittime, DAY) > 9 THEN 1 ELSE 0 END) AS percent_los_gt_9\n  FROM \n    los_data\n),\nreadmitted_los AS (\n  SELECT \n    readmitted,\n    APPROX_QUANTILES(DATETIME_DIFF(dischtime, admittime, DAY), 100)[OFFSET(50)] AS median_los_readmitted\n  FROM \n    los_data\n  GROUP BY \n    readmitted\n)\nSELECT \n  m.readmission_rate,\n  rl1.median_los_readmitted AS median_los_readmitted,\n  rl0.median_los_readmitted AS median_los_not_readmitted,\n  m.percent_los_gt_9\nFROM \n  metrics m\nCROSS JOIN \n  (SELECT median_los_readmitted FROM readmitted_los WHERE readmitted = 1) rl1\nCROSS JOIN \n  (SELECT median_los_readmitted FROM readmitted_los WHERE readmitted = 0) rl0;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

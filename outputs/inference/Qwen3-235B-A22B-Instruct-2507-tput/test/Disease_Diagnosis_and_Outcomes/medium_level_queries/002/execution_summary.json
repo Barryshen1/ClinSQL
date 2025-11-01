@@ -1,0 +1,28 @@
+{
+  "query": "67-year-old female with AMI: among females 62\u201372 without shock or respiratory failure, compare in\u2011hospital mortality LOS \u22645 vs >5 days; report mortality rates, CKD and diabetes prevalence, and absolute/relative mortality differences.",
+  "final_sql": "WITH patient_ages AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    -- Compute age at admission\n    (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) AS age_at_admit\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.admissions a\n    ON p.subject_id = a.subject_id\n  WHERE p.gender = 'F'\n    AND (p.anchor_age + (EXTRACT(YEAR FROM a.admittime) - p.anchor_year)) BETWEEN 62 AND 72\n),\n\n-- Get all diagnoses per admission\ndiagnoses AS (\n  SELECT\n    di.hadm_id,\n    di.icd_code,\n    di.icd_version,\n    d.long_title\n  FROM `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.d_icd_diagnoses d\n    ON di.icd_code = d.icd_code AND di.icd_version = d.icd_version\n),\n\n-- Flag admissions with AMI\nami_cohort AS (\n  SELECT\n    pa.*\n  FROM patient_ages pa\n  WHERE EXISTS (\n    SELECT 1 FROM diagnoses d\n    WHERE d.hadm_id = pa.hadm_id\n      AND d.icd_version = 10\n      AND (d.icd_code LIKE 'I21%' OR d.icd_code LIKE 'I22%')\n  )\n),\n\n-- Exclude if shock or respiratory failure\nexclusion_codes AS (\n  SELECT hadm_id\n  FROM diagnoses\n  WHERE (icd_version = 10 AND (\n    icd_code LIKE 'R57.0' OR -- cardiogenic shock\n    icd_code LIKE 'T81.1%' OR -- postprocedural shock\n    icd_code LIKE 'J96.0%' OR -- acute respiratory failure\n    icd_code LIKE 'J96.1%' OR -- chronic respiratory failure\n    icd_code LIKE 'J96.2%'    -- acute on chronic\n  ))\n),\n\n-- Final cohort: AMI, female, age 62\u201372, no shock/respiratory failure\nfinal_cohort AS (\n  SELECT ac.*\n  FROM ami_cohort ac\n  WHERE ac.hadm_id NOT IN (SELECT hadm_id FROM exclusion_codes)\n    AND ac.dischtime IS NOT NULL\n),\n\n-- Compute LOS and group\nlos_mortality AS (\n  SELECT\n    fc.hadm_id,\n    fc.hospital_expire_flag,\n    fc.los_days,\n    -- Flags for comorbidities\n    MAX(CASE WHEN d.long_title LIKE '%chronic kidney disease%' \n              OR (d.icd_code LIKE 'N18%' AND d.icd_version = 10) THEN 1 ELSE 0 END) AS has_ckd,\n    MAX(CASE WHEN d.long_title LIKE '%diabetes%' \n              OR (d.icd_code LIKE 'E10%' OR d.icd_code LIKE 'E11%' OR d.icd_code LIKE 'E12%' OR d.icd_code LIKE 'E13%' OR d.icd_code LIKE 'E14%')\n              THEN 1 ELSE 0 END) AS has_diabetes\n  FROM final_cohort fc\n  LEFT JOIN diagnoses d ON fc.hadm_id = d.hadm_id\n  GROUP BY fc.hadm_id, fc.hospital_expire_flag, fc.los_days\n),\n\n-- Group by LOS category\ngrouped_stats AS (\n  SELECT\n    CASE WHEN los_days <= 5 THEN '\u22645 days' ELSE '>5 days' END AS los_group,\n    COUNT(*) AS n,\n    AVG(CAST(hospital_expire_flag AS FLOAT64)) AS mortality_rate,\n    AVG(CAST(has_ckd AS FLOAT64)) AS ckd_prevalence,\n    AVG(CAST(has_diabetes AS FLOAT64)) AS diabetes_prevalence\n  FROM los_mortality\n  GROUP BY los_group\n)\n\n-- Final output: statistics and differences\nSELECT\n  los_group,\n  n,\n  ROUND(mortality_rate * 100, 2) AS mortality_rate_percent,\n  ROUND(ckd_prevalence * 100, 2) AS ckd_prevalence_percent,\n  ROUND(diabetes_prevalence * 100, 2) AS diabetes_prevalence_percent\nFROM grouped_stats\n\nUNION ALL\n\n-- Absolute difference\nSELECT\n  'Absolute difference' AS los_group,\n  CAST(NULL AS INT64) AS n,\n  ROUND(\n    (SELECT mortality_rate FROM grouped_stats WHERE los_group = '>5 days') -\n    (SELECT mortality_rate FROM grouped_stats WHERE los_group = '\u22645 days')\n    , 4\n  ) * 100 AS mortality_rate_percent,\n  ROUND(\n    (SELECT ckd_prevalence FROM grouped_stats WHERE los_group = '>5 days') -\n    (SELECT ckd_prevalence FROM grouped_stats WHERE los_group = '\u22645 days')\n    , 4\n  ) * 100 AS ckd_prevalence_percent,\n  ROUND(\n    (SELECT diabetes_prevalence FROM grouped_stats WHERE los_group = '>5 days') -\n    (SELECT diabetes_prevalence FROM grouped_stats WHERE los_group = '\u22645 days')\n    , 4\n  ) * 100 AS diabetes_prevalence_percent;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Name los_days not found inside fc at [72:8]; reason: invalidQuery, location: query, message: Name los_days not found inside fc at [72:8]\n\nLocation: US\nJob ID: 2ca01bcd-c2a9-4e4e-8e53-4d45aa465367\n",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Unexpected \";\" at [147:19]; reason: invalidQuery, location: query, message: Syntax error: Unexpected \";\" at [147:19]\n\nLocation: US\nJob ID: 16f6205f-1b11-4ed3-a6f2-8bae579eb38d\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hadm_id is ambiguous at [70:5]; reason: invalidQuery, location: query, message: Column name hadm_id is ambiguous at [70:5]\n\nLocation: US\nJob ID: 2bc5e41b-9a47-40db-80e9-f9cdfbed9799\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name los_days not found inside fc at [72:8]; reason: invalidQuery, location: query, message: Name los_days not found inside fc at [72:8]\n\nLocation: US\nJob ID: 2ca01bcd-c2a9-4e4e-8e53-4d45aa465367\n"
+    }
+  ]
+}

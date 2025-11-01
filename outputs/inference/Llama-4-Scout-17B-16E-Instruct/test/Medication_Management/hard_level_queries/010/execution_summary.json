@@ -1,0 +1,28 @@
+{
+  "query": "I'm managing a 66\u2011year\u2011old man hospitalized with hemorrhagic stroke. For male inpatients aged 61\u201371, stratified into quintiles by first\u201124\u2011hour medication complexity score, report per quintile: number of patients, mean complexity score, average LOS, in\u2011hospital mortality, and 30\u2011day readmission rate.",
+  "final_sql": "WITH \n  -- Calculate medication complexity score (e.g., number of unique medications within 24 hours)\n  medication_complexity AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      COUNT(DISTINCT p.drug) AS complexity_score\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.prescriptions` p\n    ON \n      a.hadm_id = p.hadm_id\n    WHERE \n      p.starttime < a.admittime + INTERVAL 1 DAY\n    GROUP BY \n      a.subject_id, a.hadm_id\n  ),\n\n  -- Patient demographics and admission details\n  patient_data AS (\n    SELECT \n      a.subject_id,\n      a.hadm_id,\n      p.anchor_age,\n      a.admittime,\n      a.dischtime,\n      a.hospital_expire_flag,\n      CASE \n        WHEN a.dischtime IS NULL THEN TIMESTAMP(CURRENT_TIMESTAMP)\n        ELSE TIMESTAMP(a.dischtime)\n      END AS discharge_time\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON \n      a.subject_id = p.subject_id\n  ),\n\n  -- LOS calculation\n  los_data AS (\n    SELECT \n      subject_id,\n      hadm_id,\n      DATE_DIFF(TIMESTAMP(discharge_time), TIMESTAMP(admittime), DAY) AS los\n    FROM \n      patient_data\n  ),\n\n  -- Combine complexity, patient data, and LOS\n  combined_data AS (\n    SELECT \n      mc.subject_id,\n      mc.hadm_id,\n      mc.complexity_score,\n      pd.anchor_age,\n      pd.dischtime,\n      pd.admittime,\n      pd.hospital_expire_flag,\n      ld.los\n    FROM \n      medication_complexity mc\n    JOIN \n      patient_data pd\n    ON \n      mc.subject_id = pd.subject_id AND mc.hadm_id = pd.hadm_id\n    JOIN \n      los_data ld\n    ON \n      mc.subject_id = ld.subject_id AND mc.hadm_id = ld.hadm_id\n  ),\n\n  -- Identify readmissions within 30 days\n  readmissions AS (\n    SELECT \n      a1.subject_id,\n      COUNT(DISTINCT a2.hadm_id) > 0 AS readmitted\n    FROM \n      `physionet-data.mimiciv_3_1_hosp.admissions` a1\n    JOIN \n      `physionet-data.mimiciv_3_1_hosp.admissions` a2\n    ON \n      a1.subject_id = a2.subject_id\n    WHERE \n      a2.admittime BETWEEN a1.dischtime AND a1.dischtime + INTERVAL 30 DAY\n    GROUP BY \n      a1.subject_id\n  )\n\n-- Final calculation and quintile stratification\nSELECT \n  NTILE(5) OVER (ORDER BY cd.complexity_score) AS quintile,\n  COUNT(DISTINCT cd.subject_id) AS num_patients,\n  AVG(cd.complexity_score) AS mean_complexity_score,\n  AVG(cd.los) AS avg_los,\n  SUM(CASE WHEN cd.hospital_expire_flag = 1 THEN 1 ELSE 0 END) / COUNT(DISTINCT cd.subject_id) AS in_hospital_mortality,\n  COALESCE(AVG(IF(r.readmitted, 1, 0)), 0) AS thirty_day_readmission_rate\nFROM \n  combined_data cd\n  LEFT JOIN readmissions r ON cd.subject_id = r.subject_id\nWHERE \n  cd.anchor_age BETWEEN 61 AND 71 AND cd.dischtime IS NOT NULL\nGROUP BY \n  quintile\nORDER BY \n  quintile;",
+  "execution_success": false,
+  "row_count": 0,
+  "final_error": "400 Column quintile contains an analytic function, which is not allowed in GROUP BY at [105:3]; reason: invalidQuery, location: query, message: Column quintile contains an analytic function, which is not allowed in GROUP BY at [105:3]\n\nLocation: US\nJob ID: 42c6072d-448c-43be-8cc6-08d4d40c9d5d\n",
+  "model": "Llama-4-Scout-17B-16E-Instruct",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 No matching signature for operator CASE; all THEN/ELSE arguments must be coercible to a common type but found: DATETIME, TIMESTAMP; actual argument types (WHEN THEN) ELSE: (BOOL TIMESTAMP) DATETIME at [29:7]; reason: invalidQuery, location: query, message: No matching signature for operator CASE; all THEN/ELSE arguments must be coercible to a common type but found: DATETIME, TIMESTAMP; actual argument types (WHEN THEN) ELSE: (BOOL TIMESTAMP) DATETIME at [29:7]\n\nLocation: US\nJob ID: dfd86caf-237e-49d8-a05e-442f5bbdc00f\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Invalid cast from BOOL to NUMERIC at [98:21]; reason: invalidQuery, location: query, message: Invalid cast from BOOL to NUMERIC at [98:21]\n\nLocation: US\nJob ID: c4b133e2-8385-4e35-906b-ada85f9fc976\n"
+    },
+    {
+      "attempt": 3,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column quintile contains an analytic function, which is not allowed in GROUP BY at [105:3]; reason: invalidQuery, location: query, message: Column quintile contains an analytic function, which is not allowed in GROUP BY at [105:3]\n\nLocation: US\nJob ID: 42c6072d-448c-43be-8cc6-08d4d40c9d5d\n"
+    }
+  ]
+}

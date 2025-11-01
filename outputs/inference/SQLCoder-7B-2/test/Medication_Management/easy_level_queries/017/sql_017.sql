@@ -1,0 +1,1 @@
+SELECT AVG(p.stoptime - p.starttime) AS average_duration FROM patients pt JOIN prescriptions p ON pt.subject_id = p.subject_id WHERE pt.gender = 'M' AND pt.age = 48 AND EXTRACT(YEAR FROM pt.admittime) BETWEEN 2015 AND 2016 AND p.drug = 'warfarin';

@@ -1,0 +1,16 @@
+{
+  "query": "I'm evaluating an 87\u2011year\u2011old man. Among male ICU patients aged 82\u201392 with cardiogenic shock, stratify first\u201124\u2011hour procedure burden into quintiles and report for each quintile mean procedure count, mean hospital LOS in days, and in\u2011hospital mortality percentage.",
+  "final_sql": "WITH\n  -- Step 1: Identify the cohort of male ICU patients, aged 82-92, with cardiogenic shock.\n  cohort AS (\n    SELECT DISTINCT\n      icu.stay_id,\n      icu.hadm_id,\n      icu.intime,\n      adm.hospital_expire_flag,\n      -- Calculate hospital LOS in days for precision\n      DATETIME_DIFF(adm.dischtime, adm.admittime, HOUR) / 24.0 AS hospital_los_days\n    FROM\n      `physionet-data.mimiciv_3_1_icu.icustays` AS icu\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.patients` AS pat\n      ON icu.subject_id = pat.subject_id\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm\n      ON icu.hadm_id = adm.hadm_id\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx\n      ON adm.hadm_id = dx.hadm_id\n    WHERE\n      pat.gender = 'M'\n      AND (EXTRACT(YEAR FROM icu.intime) - pat.anchor_year + pat.anchor_age) BETWEEN 82 AND 92\n      AND dx.icd_code IN ('785.51', 'R57.0') -- Cardiogenic Shock for ICD-9 and ICD-10\n  ),\n  -- Step 2: Count procedures within the first 24 hours for each stay in the cohort.\n  procedures_first_24h AS (\n    SELECT\n      cohort.stay_id,\n      COUNT(pe.itemid) AS procedure_count\n    FROM\n      cohort\n    INNER JOIN\n      `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n      ON cohort.stay_id = pe.stay_id\n    WHERE\n      pe.starttime BETWEEN cohort.intime AND DATETIME_ADD(cohort.intime, INTERVAL 24 HOUR)\n    GROUP BY\n      cohort.stay_id\n  ),\n  -- Step 3: Combine cohort data with procedure counts and assign quintiles.\n  stay_quintiles AS (\n    SELECT\n      cohort.hospital_los_days,\n      cohort.hospital_expire_flag,\n      COALESCE(p24.procedure_count, 0) AS procedure_count,\n      -- Stratify into 5 groups (quintiles) based on the procedure count\n      NTILE(5) OVER (\n        ORDER BY\n          COALESCE(p24.procedure_count, 0)\n      ) AS quintile\n    FROM\n      cohort\n    LEFT JOIN\n      procedures_first_24h AS p24\n      ON cohort.stay_id = p24.stay_id\n  )\n-- Step 4: Aggregate metrics for each quintile.\nSELECT\n  quintile,\n  AVG(procedure_count) AS mean_procedure_count,\n  AVG(hospital_los_days) AS mean_hospital_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hospital_mortality_percentage\nFROM\n  stay_quintiles\nGROUP BY\n  quintile\nORDER BY\n  quintile;",
+  "execution_success": true,
+  "row_count": 0,
+  "final_error": null,
+  "model": "gemini-2.5-pro",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": true,
+      "row_count": 0,
+      "error": null
+    }
+  ]
+}

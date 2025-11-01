@@ -1,0 +1,22 @@
+{
+  "query": "I have a 72\u2011yo man. Among men 67\u201377 with heart failure, what are p25/p50/p75 numbers of imaging studies per admission, by LOS 1\u20134 vs 5\u20137 days and primary vs secondary HF?",
+  "final_sql": "WITH eligible_admissions AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    DATE_DIFF(DATE(a.dischtime), DATE(a.admittime), DAY) AS los_days\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS p\n    ON a.subject_id = p.subject_id\n  WHERE p.gender = 'M'\n    AND p.anchor_age BETWEEN 67 AND 77\n    AND a.dischtime IS NOT NULL\n),\n\n-- LOS bucket per admission: 1-4 days vs 5-7 days\nlos_buckets AS (\n  SELECT\n    hadm_id,\n    CASE\n      WHEN los_days BETWEEN 1 AND 4 THEN '1-4'\n      WHEN los_days BETWEEN 5 AND 7 THEN '5-7'\n      ELSE 'OTHER'\n    END AS los_bucket\n  FROM eligible_admissions\n),\n\n-- HF classification per admission: primary vs secondary (based on HF ICD long_title)\nhf_classification AS (\n  SELECT\n    di.hadm_id,\n    CASE WHEN MIN(di.seq_num) = 1 THEN 'primary'\n         ELSE 'secondary'\n    END AS hf_group\n  FROM eligible_admissions e\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di\n    ON e.hadm_id = di.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS dld\n    ON di.icd_code = dld.icd_code AND di.icd_version = dld.icd_version\n  WHERE LOWER(dld.long_title) LIKE '%heart failure%'\n  GROUP BY di.hadm_id\n),\n\n-- Imaging counts per admission (ICU procedures that look like imaging)\nimaging_counts AS (\n  SELECT\n    e.hadm_id,\n    SUM(\n      CASE\n        WHEN LOWER(ii.label) LIKE '%ct%'        THEN 1\n        WHEN LOWER(ii.label) LIKE '%mri%'       THEN 1\n        WHEN LOWER(ii.label) LIKE '%x-ray%'     THEN 1\n        WHEN LOWER(ii.label) LIKE '%radiograph%' THEN 1\n        WHEN LOWER(ii.label) LIKE '%ultrasound%' THEN 1\n        WHEN LOWER(ii.label) LIKE '%imaging%'    THEN 1\n        ELSE 0\n      END\n    ) AS imaging_count\n  FROM eligible_admissions AS e\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` AS ic ON e.hadm_id = ic.hadm_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe\n    ON ic.hadm_id = pe.hadm_id AND ic.stay_id = pe.stay_id\n  LEFT JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS ii\n    ON pe.itemid = ii.itemid\n  GROUP BY e.hadm_id\n)\n\n-- Compute quartiles per (HF type, LOS bucket) using approximate quartiles\n, stats AS (\n  SELECT\n    hf.hf_group AS heart_failure_type,\n    lb.los_bucket AS hospital_los_days,\n    APPROX_QUANTILES(ic.imaging_count, 4) AS quantiles\n  FROM imaging_counts ic\n  JOIN hf_classification hf ON ic.hadm_id = hf.hadm_id\n  JOIN los_buckets lb ON ic.hadm_id = lb.hadm_id\n  WHERE lb.los_bucket IN ('1-4', '5-7')  -- limit to requested buckets\n  GROUP BY hf.hf_group, lb.los_bucket\n)\n\nSELECT\n  heart_failure_type,\n  hospital_los_days,\n  SAFE_CAST(quantiles[OFFSET(1)] AS INT64) AS p25,\n  SAFE_CAST(quantiles[OFFSET(2)] AS INT64) AS p50,\n  SAFE_CAST(quantiles[OFFSET(3)] AS INT64) AS p75\nFROM stats\nORDER BY heart_failure_type, hospital_los_days;",
+  "execution_success": true,
+  "row_count": 4,
+  "final_error": null,
+  "model": "gpt-5-nano",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected keyword AS but got identifier \"discharge\" at [1:8]; reason: invalidQuery, location: query, message: Syntax error: Expected keyword AS but got identifier \"discharge\" at [1:8]\n\nLocation: US\nJob ID: 49daeb7a-b43d-4c29-926a-5490cfaef463\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 4,
+      "error": null
+    }
+  ]
+}

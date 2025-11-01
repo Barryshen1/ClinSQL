@@ -1,0 +1,28 @@
+{
+  "query": "For a 44-year-old male with DKA: among male inpatients 39\u201349, what are mean risk score and 30\u2011day mortality for DKA vs all males? Compare cardiovascular and neurologic complication rates, mean survivor LOS, and the risk percentile for this matched profile.",
+  "final_sql": "WITH patients_age AS (\n  SELECT\n    p.subject_id,\n    p.gender,\n    p.anchor_age,\n    p.anchor_year,\n    DATETIME(p.anchor_year, 1, 1, 0, 0, 0) AS anchor_start\n  FROM `physionet-data.mimiciv_3_1_hosp`.patients p\n  WHERE p.gender = 'M'\n),\nadmissions_age AS (\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    pa.anchor_age + (EXTRACT(YEAR FROM a.admittime) - pa.anchor_year) AS age_at_admission\n  FROM `physionet-data.mimiciv_3_1_hosp`.admissions a\n  INNER JOIN patients_age pa ON a.subject_id = pa.subject_id\n  WHERE (pa.anchor_age + (EXTRACT(YEAR FROM a.admittime) - pa.anchor_year)) BETWEEN 39 AND 49\n),\ndka_codes AS (\n  SELECT 'E101' AS icd_code UNION ALL\n  SELECT 'E111' UNION ALL\n  SELECT 'E131'\n),\ndka_flag AS (\n  SELECT DISTINCT\n    aa.subject_id,\n    aa.hadm_id,\n    aa.admittime,\n    aa.dischtime,\n    aa.deathtime,\n    aa.hospital_expire_flag,\n    aa.age_at_admission,\n    1 AS has_dka\n  FROM admissions_age aa\n  INNER JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di ON aa.hadm_id = di.hadm_id\n  INNER JOIN dka_codes dka ON di.icd_code = dka.icd_code AND di.icd_version = 10\n),\nall_admissions AS (\n  SELECT\n    aa.subject_id,\n    aa.hadm_id,\n    aa.admittime,\n    aa.dischtime,\n    aa.deathtime,\n    aa.hospital_expire_flag,\n    aa.age_at_admission,\n    COALESCE(df.has_dka, 0) AS has_dka\n  FROM admissions_age aa\n  LEFT JOIN dka_flag df ON aa.hadm_id = df.hadm_id\n),\n-- Define complication ICD prefixes\ncv_complication_codes AS (\n  SELECT 'I21' AS prefix UNION ALL\n  SELECT 'I22' UNION ALL\n  SELECT 'I44' UNION ALL\n  SELECT 'I45' UNION ALL\n  SELECT 'I46' UNION ALL\n  SELECT 'I47' UNION ALL\n  SELECT 'I48' UNION ALL\n  SELECT 'I49' UNION ALL\n  SELECT 'I50'\n),\nneuro_complication_codes AS (\n  SELECT 'I63' AS prefix UNION ALL\n  SELECT 'G45' UNION ALL\n  SELECT 'G46' UNION ALL\n  SELECT 'R56' UNION ALL\n  SELECT 'G40' UNION ALL\n  SELECT 'F05' UNION ALL\n  SELECT 'G934'\n),\ncomplication_flags AS (\n  SELECT\n    aa.hadm_id,\n    MAX(CASE \n      WHEN EXISTS (\n        SELECT 1 FROM cv_complication_codes cvc \n        WHERE STARTS_WITH(di.icd_code, cvc.prefix)\n      ) THEN 1 ELSE 0 \n    END) AS has_cv_complication,\n    MAX(CASE \n      WHEN EXISTS (\n        SELECT 1 FROM neuro_complication_codes nc \n        WHERE STARTS_WITH(di.icd_code, nc.prefix)\n      ) THEN 1 ELSE 0 \n    END) AS has_neuro_complication\n  FROM all_admissions aa\n  LEFT JOIN `physionet-data.mimiciv_3_1_hosp`.diagnoses_icd di ON aa.hadm_id = di.hadm_id AND di.icd_version = 10\n  GROUP BY aa.hadm_id\n),\nadmissions_with_comps AS (\n  SELECT\n    aa.*,\n    COALESCE(cf.has_cv_complication, 0) AS has_cv_complication,\n    COALESCE(cf.has_neuro_complication, 0) AS has_neuro_complication,\n    -- 30-day mortality: died within 30 days of admission\n    CASE \n      WHEN aa.deathtime IS NOT NULL \n       AND DATETIME_DIFF(aa.deathtime, aa.admittime, DAY) <= 30 \n      THEN 1 ELSE 0 \n    END AS thirty_day_mortality,\n    -- Hospital LOS in days (for survivors only)\n    CASE \n      WHEN aa.hospital_expire_flag = 0 \n      THEN DATETIME_DIFF(aa.dischtime, aa.admittime, HOUR) / 24.0 \n      ELSE NULL \n    END AS los_days_survivors\n  FROM all_admissions aa\n  LEFT JOIN complication_flags cf ON aa.hadm_id = cf.hadm_id\n)\n-- Final summary statistics\nSELECT\n  CASE WHEN has_dka = 1 THEN 'DKA' ELSE 'Non-DKA' END AS group_label,\n  COUNT(*) AS n_admissions,\n  AVG(thirty_day_mortality) AS mean_thirty_day_mortality,\n  AVG(has_cv_complication) AS cv_complication_rate,\n  AVG(has_neuro_complication) AS neuro_complication_rate,\n  AVG(los_days_survivors) AS mean_los_survivors\nFROM admissions_with_comps\nGROUP BY has_dka\nORDER BY has_dka;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Expected \")\" but got \";\" at [81:186]; reason: invalidQuery, location: query, message: Syntax error: Expected \")\" but got \";\" at [81:186]\n\nLocation: US\nJob ID: 8ec45cdd-3ced-4d20-a081-fb275fcfb23e\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: Illegal input character \"\\342\" at [1:38]; reason: invalidQuery, location: query, message: Syntax error: Illegal input character \"\\342\" at [1:38]\n\nLocation: US\nJob ID: a2d9f1d9-7bb1-419b-85dd-79f9774fd328\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

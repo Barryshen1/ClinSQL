@@ -1,0 +1,22 @@
+{
+  "query": "I have a 95\u2011year\u2011old female inpatient with AMI. Among female AMI admissions aged 90\u2013100, what is the 75th\u2011percentile lab\u2011instability score in the first 48 hours? For \u2265P75 patients, report in\u2011hospital mortality, mean LOS, and critical lab rates versus all inpatients 90\u2013100.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    p.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    DATETIME_DIFF(a.dischtime, a.admittime, HOUR) / 24.0 AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  ON\n    p.subject_id = a.subject_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` d\n  ON\n    a.hadm_id = d.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` did\n  ON\n    d.icd_code = did.icd_code\n    AND d.icd_version = did.icd_version\n  WHERE\n    p.gender = 'F'\n    AND p.anchor_age BETWEEN 90 AND 100\n    AND d.seq_num = 1\n    AND (\n      (d.icd_version = 9 AND did.icd_code LIKE '410%')\n      OR\n      (d.icd_version = 10 AND (\n        did.icd_code LIKE 'I21%'\n        OR did.icd_code LIKE 'I22%'\n        OR did.icd_code = 'I252'\n      ))\n    )\n),\n\nlab_instability AS (\n  SELECT\n    c.hadm_id,\n    COUNT(*) AS lab_instability_score\n  FROM\n    cohort c\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.labevents` l\n  ON\n    c.hadm_id = l.hadm_id\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.d_labitems` d\n  ON\n    l.itemid = d.itemid\n  WHERE\n    l.charttime >= c.admittime\n    AND l.charttime <= DATETIME_ADD(c.admittime, INTERVAL 48 HOUR)\n    AND (\n      l.flag != 'normal'\n      OR l.valuenum < l.ref_range_lower\n      OR l.valuenum > l.ref_range_upper\n    )\n  GROUP BY\n    c.hadm_id\n),\n\nscore_percentile AS (\n  SELECT\n    APPROX_QUANTILES(lab_instability_score, 100)[OFFSET(75)] AS p75_score\n  FROM\n    lab_instability\n),\n\npatients_p75 AS (\n  SELECT\n    c.*,\n    COALESCE(s.lab_instability_score, 0) AS lab_instability_score\n  FROM\n    cohort c\n  LEFT JOIN\n    lab_instability s\n  ON\n    c.hadm_id = s.hadm_id\n  WHERE\n    COALESCE(s.lab_instability_score, 0) >= (\n      SELECT p75_score FROM score_percentile\n    )\n),\n\nall_cohort_metrics AS (\n  SELECT\n    'All' AS group_name,\n    AVG(hospital_expire_flag) AS mortality,\n    AVG(los_days) AS mean_los,\n    AVG(CASE WHEN COALESCE(lab_instability_score, 0) > 0 THEN 1 ELSE 0 END) AS critical_lab_rate\n  FROM (\n    SELECT\n      c.*,\n      s.lab_instability_score\n    FROM\n      cohort c\n    LEFT JOIN\n      lab_instability s\n    ON\n      c.hadm_id = s.hadm_id\n  )\n),\n\np75_metrics AS (\n  SELECT\n    'P75+' AS group_name,\n    AVG(hospital_expire_flag) AS mortality,\n    AVG(los_days) AS mean_los,\n    AVG(CASE WHEN lab_instability_score > 0 THEN 1 ELSE 0 END) AS critical_lab_rate\n  FROM\n    patients_p75\n)\n\nSELECT * FROM p75_metrics\nUNION ALL\nSELECT * FROM all_cohort_metrics\nORDER BY group_name;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Syntax error: OVER keyword must follow a function call at [69:62]; reason: invalidQuery, location: query, message: Syntax error: OVER keyword must follow a function call at [69:62]\n\nLocation: US\nJob ID: f132949c-caa5-47ff-8f7f-19424b1c6aab\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "query": "I have an 83-year-old man transferred from another hospital. Among male inpatients aged 78\u201388 transferred, report number of admissions and LOS p50/p75/p90/p95 stratified by survived vs in-hospital death, plus percentile rank of a 10-day LOS.",
+  "final_sql": "WITH cohort AS (\n  SELECT\n    a.hadm_id,\n    a.subject_id,\n    a.admittime,\n    a.dischtime,\n    a.hospital_expire_flag,\n    p.anchor_age,\n    p.gender,\n    a.admission_location,\n    -- Calculate LOS in days\n    TIMESTAMP_DIFF(a.dischtime, a.admittime, DAY) AS los_days\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN\n    `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON a.subject_id = p.subject_id\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 78 AND 88\n    AND (\n      LOWER(a.admission_location) LIKE '%transfer%'\n      OR LOWER(a.admission_location) LIKE '%other hospital%'\n    )\n    AND a.admittime IS NOT NULL\n    AND a.dischtime IS NOT NULL\n)\n, stats AS (\n  SELECT\n    hospital_expire_flag,\n    COUNT(*) AS num_admissions,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(50)] AS los_p50,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(75)] AS los_p75,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(90)] AS los_p90,\n    APPROX_QUANTILES(los_days, 100)[OFFSET(95)] AS los_p95\n  FROM\n    cohort\n  GROUP BY\n    hospital_expire_flag\n)\n, percentiles AS (\n  SELECT\n    hospital_expire_flag,\n    -- Percentile rank of 10-day LOS among this group\n    PERCENT_RANK() OVER (\n      PARTITION BY hospital_expire_flag\n      ORDER BY los_days\n    ) AS percentile_rank_10d,\n    los_days\n  FROM\n    cohort\n  WHERE\n    los_days = 10\n)\n-- Final output: join stats and percentile rank for 10-day LOS\nSELECT\n  CASE s.hospital_expire_flag\n    WHEN 0 THEN 'Survived'\n    WHEN 1 THEN 'In-hospital death'\n    ELSE 'Unknown'\n  END AS outcome,\n  s.num_admissions,\n  s.los_p50,\n  s.los_p75,\n  s.los_p90,\n  s.los_p95,\n  -- If multiple admissions with los_days=10, show average percentile rank\n  IFNULL(AVG(p.percentile_rank_10d), NULL) AS percentile_rank_10d\nFROM\n  stats s\nLEFT JOIN\n  percentiles p\n  ON s.hospital_expire_flag = p.hospital_expire_flag\nGROUP BY\n  s.hospital_expire_flag, s.num_admissions, s.los_p50, s.los_p75, s.los_p90, s.los_p95\nORDER BY\n  s.hospital_expire_flag;",
+  "execution_success": true,
+  "row_count": 2,
+  "final_error": null,
+  "model": "gpt-4.1",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Column name hospital_expire_flag is ambiguous at [57:8]; reason: invalidQuery, location: query, message: Column name hospital_expire_flag is ambiguous at [57:8]\n\nLocation: US\nJob ID: 3d61bbda-2cf0-4212-ad18-2209972a2d88\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 2,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "query": "I'm evaluating a 72-year-old man with AMI. Among male inpatients aged 67-77 with AMI, stratified into tertiles by first-24-hour medication complexity score, report per tertile: admission count, score range and mean, mean LOS (days), in-hospital mortality%, and 30-day readmission%.",
+  "final_sql": "WITH amipatients AS (\n  SELECT DISTINCT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime,\n    a.deathtime,\n    a.hospital_expire_flag,\n    i.stay_id,\n    i.intime,\n    i.outtime\n  FROM\n    physionet-data.mimiciv_3_1_hosp.admissions a\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.diagnoses_icd d\n      ON a.hadm_id = d.hadm_id\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses dd\n      ON d.icd_code = dd.icd_code AND d.icd_version = dd.icd_version\n  JOIN\n    physionet-data.mimiciv_3_1_hosp.patients p\n      ON a.subject_id = p.subject_id\n  JOIN\n    physionet-data.mimiciv_3_1_icu.icustays i\n      ON a.hadm_id = i.hadm_id\n  WHERE\n    LOWER(dd.long_title) LIKE '%acute myocardial infarction%'\n    AND p.gender = 'M'\n    AND p.anchor_age BETWEEN 67 AND 77\n),\n\nfirst_icu_stays AS (\n  SELECT\n    subject_id,\n    hadm_id,\n    admittime,\n    dischtime,\n    deathtime,\n    hospital_expire_flag,\n    stay_id,\n    intime,\n    outtime,\n    ROW_NUMBER() OVER (PARTITION BY hadm_id ORDER BY intime) AS rn\n  FROM amipatients\n),\n\nfirst24hr_meds AS (\n  SELECT\n    f.hadm_id,\n    COUNT(DISTINCT iv.itemid) AS med_complexity_score\n  FROM\n    first_icu_stays f\n  JOIN\n    physionet-data.mimiciv_3_1_icu.inputevents iv\n      ON f.stay_id = iv.stay_id\n  WHERE\n    iv.starttime >= f.intime\n    AND iv.starttime <= DATETIME_ADD(f.intime, INTERVAL 1 DAY)\n  GROUP BY\n    f.hadm_id\n),\n\nadmission_metrics AS (\n  SELECT\n    f.hadm_id,\n    f.subject_id,\n    f.intime,\n    f.outtime,\n    DATETIME_DIFF(f.outtime, f.intime, HOUR) / 24.0 AS icu_los_days,\n    f.hospital_expire_flag,\n    m.med_complexity_score,\n    -- 30-day readmission\n    CASE\n      WHEN lead_admit.admittime IS NOT NULL\n        AND DATETIME_DIFF(lead_admit.admittime, f.dischtime, DAY) BETWEEN 0 AND 30\n        AND lead_admit.hospital_expire_flag != 1 THEN 1\n      ELSE 0\n    END AS readmit_30_days\n  FROM\n    first_icu_stays f\n  JOIN\n    first24hr_meds m\n      ON f.hadm_id = m.hadm_id\n  LEFT JOIN\n    physionet-data.mimiciv_3_1_hosp.admissions lead_admit\n      ON f.subject_id = lead_admit.subject_id\n      AND lead_admit.admittime > f.dischtime\n      AND lead_admit.hospital_expire_flag != 1\n  WHERE\n    f.rn = 1\n),\n\ntertiles AS (\n  SELECT\n    *,\n    NTILE(3) OVER (ORDER BY med_complexity_score) AS tertile\n  FROM admission_metrics\n)\n\nSELECT\n  tertile,\n  COUNT(*) AS admission_count,\n  MIN(med_complexity_score) AS min_score,\n  MAX(med_complexity_score) AS max_score,\n  AVG(med_complexity_score) AS mean_score,\n  AVG(icu_los_days) AS mean_los_days,\n  AVG(CAST(hospital_expire_flag AS FLOAT64)) * 100 AS in_hosp_mortality_pct,\n  AVG(CAST(readmit_30_days AS FLOAT64)) * 100 AS readmit_30d_pct\nFROM tertiles\nGROUP BY tertile\nORDER BY tertile;",
+  "execution_success": true,
+  "row_count": 3,
+  "final_error": null,
+  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Name charttime not found inside iv at [57:8]; reason: invalidQuery, location: query, message: Name charttime not found inside iv at [57:8]\n\nLocation: US\nJob ID: f4099cbd-256a-4d6c-a175-d2992bf843ac\n"
+    },
+    {
+      "attempt": 2,
+      "success": false,
+      "row_count": 0,
+      "error": "400 Type not found: FLOAT at [107:36]; reason: invalidQuery, location: query, message: Type not found: FLOAT at [107:36]\n\nLocation: US\nJob ID: b7c16239-c682-4d49-90c2-9b777f43793d\n"
+    },
+    {
+      "attempt": 3,
+      "success": true,
+      "row_count": 3,
+      "error": null
+    }
+  ]
+}

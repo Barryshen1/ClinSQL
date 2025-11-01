@@ -1,0 +1,22 @@
+{
+  "query": "I have a 41-year-old woman; among female patients aged 36\u201346 admitted with ischemic heart disease whose initial high-sensitivity Troponin T was >ULN, what are p25, p50, p75 and min\u2013max?",
+  "final_sql": "WITH troponin_lab_items AS (\n  -- pick lab items whose label indicates Troponin T / high-sensitivity Troponin T\n  SELECT itemid, label\n  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`\n  WHERE (\n    LOWER(label) LIKE '%troponin t%' OR\n    LOWER(label) LIKE '%troponin-t%' OR\n    LOWER(label) LIKE '%hs troponin%' OR\n    LOWER(label) LIKE '%high-sensitivity troponin%' OR\n    LOWER(label) LIKE '%high sensitivity troponin%'\n  )\n),\n\nadmissions_with_ischemia AS (\n  -- admissions that have at least one diagnosis mentioning ischemia / ischemic\n  SELECT DISTINCT a.hadm_id\n  FROM `physionet-data.mimiciv_3_1_hosp.admissions` a\n  JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` di\n    ON di.hadm_id = a.hadm_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dd\n    ON di.icd_code = dd.icd_code\n       AND di.icd_version = dd.icd_version\n  WHERE LOWER(dd.long_title) LIKE '%ischemi%'\n),\n\ninitial_troponin_per_admission AS (\n  -- for each admission, find the earliest troponin T lab (within that hadm_id)\n  SELECT\n    le.subject_id,\n    le.hadm_id,\n    le.charttime,\n    le.valuenum,\n    COALESCE(SAFE_CAST(le.ref_range_upper AS FLOAT64), 14.0) AS ref_range_upper_fallback,\n    ROW_NUMBER() OVER (PARTITION BY le.hadm_id ORDER BY le.charttime, le.storetime) AS rn\n  FROM `physionet-data.mimiciv_3_1_hosp.labevents` le\n  JOIN troponin_lab_items tli\n    ON le.itemid = tli.itemid\n  JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n    ON le.subject_id = p.subject_id\n  JOIN `physionet-data.mimiciv_3_1_hosp.admissions` a\n    ON le.hadm_id = a.hadm_id\n  WHERE le.hadm_id IS NOT NULL\n    AND le.valuenum IS NOT NULL\n    -- restrict to the target demographic here to avoid extra rows\n    AND p.gender = 'F'\n    AND p.anchor_age BETWEEN 36 AND 46\n    -- only admissions with ischemic heart disease\n    AND EXISTS (\n      SELECT 1 FROM admissions_with_ischemia awi WHERE awi.hadm_id = le.hadm_id\n    )\n),\n\ninitial_troponin_over_uln AS (\n  -- keep only the initial troponin per admission and those > ULN (using fallback if needed)\n  SELECT\n    subject_id,\n    hadm_id,\n    charttime,\n    valuenum,\n    ref_range_upper_fallback\n  FROM initial_troponin_per_admission\n  WHERE rn = 1\n    AND valuenum > ref_range_upper_fallback\n)\n\nSELECT\n  stats.q[OFFSET(1)] AS p25,\n  stats.q[OFFSET(2)] AS p50,\n  stats.q[OFFSET(3)] AS p75,\n  stats.q[OFFSET(0)] AS min_value,\n  stats.q[OFFSET(4)] AS max_value,\n  stats.cnt AS n_observations\nFROM (\n  SELECT\n    APPROX_QUANTILES(valuenum, 4) AS q,\n    COUNT(*) AS cnt\n  FROM initial_troponin_over_uln\n) AS stats;",
+  "execution_success": true,
+  "row_count": 1,
+  "final_error": null,
+  "model": "gpt-5-mini",
+  "refinement_attempts": [
+    {
+      "attempt": 1,
+      "success": false,
+      "row_count": 0,
+      "error": "400 SELECT list expression references column q which is neither grouped nor aggregated at [67:3]; reason: invalidQuery, location: query, message: SELECT list expression references column q which is neither grouped nor aggregated at [67:3]\n\nLocation: US\nJob ID: af5cf9dd-6ed5-43c5-8d3b-389c0ab2071f\n"
+    },
+    {
+      "attempt": 2,
+      "success": true,
+      "row_count": 1,
+      "error": null
+    }
+  ]
+}

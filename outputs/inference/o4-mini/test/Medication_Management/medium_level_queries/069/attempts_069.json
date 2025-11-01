@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "sql": "WITH cohort_admissions AS (\n  -- Step 1: select male patients aged 48\u201358 with both T2DM and heart failure\n  SELECT\n    a.subject_id,\n    a.hadm_id,\n    a.admittime,\n    a.dischtime\n  FROM\n    `physionet-data.mimiciv_3_1_hosp.admissions` a\n    JOIN `physionet-data.mimiciv_3_1_hosp.patients` p\n      ON a.subject_id = p.subject_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` dx\n      ON a.hadm_id = dx.hadm_id\n    JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` dxd\n      ON dx.icd_code = dxd.icd_code\n      AND dx.icd_version = dxd.icd_version\n  WHERE\n    p.gender = 'M'\n    AND p.anchor_age BETWEEN 48 AND 58\n  GROUP BY\n    a.subject_id, a.hadm_id, a.admittime, a.dischtime\n  HAVING\n    -- must have at least one diabetes type 2 diagnosis\n    COUNTIF(LOWER(dxd.long_title) LIKE '%type 2 diabetes%') > 0\n    -- and at least one heart failure diagnosis\n    AND COUNTIF(LOWER(dxd.long_title) LIKE '%heart failure%') > 0\n),\nglp1_flags AS (\n  -- Step 2: flag GLP-1 receipt in first 12h and final 12h\n  SELECT\n    ca.subject_id,\n    ca.hadm_id,\n    -- first 12h window\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        WHERE pr.hadm_id = ca.hadm_id\n          AND pr.starttime BETWEEN ca.admittime AND ca.admittime + INTERVAL 12 HOUR\n          AND LOWER(pr.drug) LIKE '%exenatide%'\n          OR LOWER(pr.drug) LIKE '%liraglutide%'\n          OR LOWER(pr.drug) LIKE '%dulaglutide%'\n          OR LOWER(pr.drug) LIKE '%semaglutide%'\n      ) THEN 1 ELSE 0 END AS first12h,\n    -- last 12h window\n    CASE\n      WHEN EXISTS (\n        SELECT 1\n        FROM `physionet-data.mimiciv_3_1_hosp.prescriptions` pr\n        WHERE pr.hadm_id = ca.hadm_id\n          AND pr.starttime BETWEEN ca.dischtime - INTERVAL 12 HOUR AND ca.dischtime\n          AND LOWER(pr.drug) LIKE '%exenatide%'\n          OR LOWER(pr.drug) LIKE '%liraglutide%'\n          OR LOWER(pr.drug) LIKE '%dulaglutide%'\n          OR LOWER(pr.drug) LIKE '%semaglutide%'\n      ) THEN 1 ELSE 0 END AS last12h\n  FROM\n    cohort_admissions ca\n)\n-- Step 3: aggregate percentages and net change\nSELECT\n  COUNT(*) AS total_admissions,\n  SUM(first12h) AS n_first12h,\n  ROUND(100.0 * SUM(first12h) / COUNT(*), 2) AS pct_first12h,\n  SUM(last12h) AS n_last12h,\n  ROUND(100.0 * SUM(last12h) / COUNT(*), 2) AS pct_last12h,\n  ROUND(\n    100.0 * SUM(last12h) / COUNT(*) \n    - 100.0 * SUM(first12h) / COUNT(*),\n    2\n  ) AS pct_net_change\nFROM\n  glp1_flags;",
+      "success": true,
+      "error": null,
+      "row_count": 1
+    }
+  ],
+  "final_success": true,
+  "final_row_count": 1
+}

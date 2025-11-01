@@ -1,0 +1,1 @@
+SELECT MIN(p.systolic_blood_pressure) AS min_systolic_blood_pressure FROM patients p JOIN icustays s ON p.subject_id = s.subject_id JOIN labevents l ON s.stay_id = l.stay_id WHERE p.gender = 'F' AND p.age >= 81 AND p.age <= 91 AND l.itemid = 146051 AND l.valueuom = 'mmHg' AND l.value > 110;
