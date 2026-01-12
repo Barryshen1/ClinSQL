@@ -9,7 +9,7 @@
 </p>
 
 ## 📰 News
-- **2025-11**: Public release of the CLINSQL paper, dataset, and evaluation code.
+- **2026-01**: Public release of the CLINSQL paper, dataset, and evaluation code.
 
 ## 👋 Overview
 ![Benchmark Overview](./assets/overview.png)
