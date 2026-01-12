@@ -1,6 +1,6 @@
 <p align="center">
   <h1 style="display: inline;">
-    CLINSQL: A Challenging Benchmark for Patient-Similarity Cohort Reasoning in Clinical Text-to-SQL
+    CLINSQL: Patient-Similarity Cohort Reasoning in Clinical Text-to-SQL
   </h1>
 </p>
 
