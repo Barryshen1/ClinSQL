@@ -6,9 +6,12 @@
 
 <p align="center">
   <a href="https://huggingface.co/datasets/yifeis02/CLINSQL">🤗 Dataset</a>
+  · <a href="https://arxiv.org/abs/2601.09876">📄 Paper</a>
+  · <a href="https://github.com/Barryshen1/ClinSQL">💻 GitHub</a>
 </p>
 
 ## 📰 News
+- **2026-01**: ClinSQL has been accepted by EACL 2026 Main!
 - **2026-01**: Public release of the CLINSQL paper, dataset, and evaluation code.
 
 ## 👋 Overview
@@ -57,4 +60,15 @@ All evaluation reports are saved under `outputs/evaluation/<model>/<split>/` as:
 - **Rubrics**: Dual JSON trees (`sql_rubric_tree.json`, `results_rubric_tree.json`) guiding the LLM judge.
 
 ## ✍️ Citation
-If you use CLINSQL, please cite our paper (available soon):
+If you use CLINSQL, please cite our paper:
+```bibtex
+@misc{shen2026patientsimilaritycohortreasoningclinical,
+      title={Patient-Similarity Cohort Reasoning in Clinical Text-to-SQL}, 
+      author={Yifei Shen and Yilun Zhao and Justice Ou and Tinglin Huang and Arman Cohan},
+      year={2026},
+      eprint={2601.09876},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2601.09876}, 
+}
+```
