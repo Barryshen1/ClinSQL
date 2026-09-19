@@ -1,3 +1,5 @@
+
+
 <p align="center">
   <h1 style="display: inline;">
     Patient-Similarity Cohort Reasoning in Clinical Text-to-SQL
@@ -45,7 +47,7 @@ All generated inference files are saved under `outputs/inference/<model>/<split>
 
 ### Evaluation
 ```bash
-python evaluation/clinical_rubric_scorer.py full <model_name>
+python evaluation/clinical_rubric_scorer.py full <model_name>  # e.g., Baichuan-M2-32B
 ```
 All evaluation reports are saved under `outputs/evaluation/<model>/<split>/` as:
 - `scoring_results.json` (overall summary and per-sample scores)
